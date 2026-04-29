@@ -11583,23 +11583,38 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
     naverMarkersRef.current.forEach(m => { try { m.setMap(null); } catch (e) {} });
     naverMarkersRef.current = [];
 
+    // mapTypeId 안전 결정 — SDK 객체가 아직 준비되지 않았을 수도 있어 옵셔널 체이닝 사용
+    const _MT = naver?.maps?.MapTypeId || {};
+    const _resolveType = () => {
+      if (bgMode === "satellite" && _MT.SATELLITE) return _MT.SATELLITE;
+      if (bgMode === "blend" && _MT.HYBRID) return _MT.HYBRID;
+      return _MT.NORMAL || "normal";
+    };
+
     // 지도 초기화
-    if (!naverMapRef.current) {
-      naverMapRef.current = new naver.maps.Map(naverMapContainerRef.current, {
-        center: new naver.maps.LatLng(centerLat, centerLng),
-        zoom: 17,
-        mapTypeId: bgMode === "satellite" ? naver.maps.MapTypeId.SATELLITE :
-                    bgMode === "blend"   ? naver.maps.MapTypeId.HYBRID :
-                                           naver.maps.MapTypeId.NORMAL,
-        zoomControl: true,
-        zoomControlOptions: { position: naver.maps.Position.TOP_RIGHT },
-      });
-    } else {
-      naverMapRef.current.setMapTypeId(
-        bgMode === "satellite" ? naver.maps.MapTypeId.SATELLITE :
-        bgMode === "blend"   ? naver.maps.MapTypeId.HYBRID :
-                                 naver.maps.MapTypeId.NORMAL
-      );
+    try {
+      if (!naverMapRef.current) {
+        naverMapRef.current = new naver.maps.Map(naverMapContainerRef.current, {
+          center: new naver.maps.LatLng(centerLat, centerLng),
+          zoom: 17,
+          mapTypeId: _resolveType(),
+          zoomControl: true,
+          zoomControlOptions: { position: naver.maps.Position.TOP_RIGHT },
+        });
+      } else {
+        // setMapTypeId 호출 시 null 참조 충돌 방지를 위해 try-catch + setTimeout
+        try {
+          naverMapRef.current.setMapTypeId(_resolveType());
+        } catch (e) {
+          console.warn("[NaverMap] setMapTypeId 실패 — 일반 지도로 폴백:", e?.message);
+          try { naverMapRef.current.setMapTypeId(_MT.NORMAL || "normal"); } catch (_) {}
+        }
+      }
+    } catch (e) {
+      console.error("[NaverMap] 지도 초기화 실패 — OSM으로 폴백:", e);
+      setNaverLoadError(`네이버 지도 초기화 실패: ${e?.message || e}. OSM으로 전환합니다.`);
+      setMapProvider("osm");
+      return;
     }
 
     // 각 스팟마다 마커 생성 (상태별 색상 뱃지)
