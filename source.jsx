@@ -4797,6 +4797,35 @@ function nextId(){ return _nextId++; }
    아래 lat/lng 값을 직접 덮어쓰면 됩니다. */
 const JAMSA_CENTER = { lat: 36.6383333, lng: 127.3827778 };
 
+// ── CCTV-구역 자동 매핑 (구역 ID → 채널 배열) ──
+// 자동 매핑은 zone.name과 카메라.zone을 키워드 매칭. 수동 매핑은 localStorage에 저장됨.
+const CCTV_AUTO_MAP = {
+  farm:    [],                          // 뽕밭 (CCTV 없음)
+  gh:      [],                          // 온실창고 (CCTV 없음)
+  water:   [],                          // 물놀이장 (CCTV 없음)
+  garden:  [],                          // 텃밭/정원 (CCTV 없음)
+  storage: [9],                         // 수장고 → 창고
+  bldg:    [1, 3, 4, 5, 7, 10],        // 본관 → 입구/로비/전시실/복도/사무실
+  shop:    [11, 24, 36, 37, 38, 39, 40], // 매점/체험접수 → 식당/매표소
+  dome:    [13, 14, 15, 16, 17, 18, 19], // 누에과학관 (돔) → 누에1~7
+  field:   [6, 8, 12, 25, 26, 27],      // 검정비닐천막 → 체험장/후문/외부/애견파크
+  park:    [2, 20, 21, 22, 23],         // 주차장 → 주차장/슬로프/야외광장
+  forest:  [28, 29, 30, 31, 32, 33, 34, 35], // 산책로 → 양떼정원
+  rest:    [],                          // 쉼터 (CCTV 없음)
+  basic:   [],                          // 기본 창고 (CCTV 없음)
+};
+
+// 사용자 수동 매핑 (localStorage에 저장)
+function loadCctvMap() {
+  try {
+    const saved = JSON.parse(window.localStorage?.getItem("jamsa_cctv_zone_map") || "{}");
+    return { ...CCTV_AUTO_MAP, ...saved };
+  } catch (e) { return { ...CCTV_AUTO_MAP }; }
+}
+function saveCctvMap(map) {
+  try { window.localStorage?.setItem("jamsa_cctv_zone_map", JSON.stringify(map)); } catch (e) {}
+}
+
 const BASE_ZONES = [
   // 북쪽 라인 (박물관 입구 쪽)
   { id:"farm",    name:"뽕밭 / 농경지",       color:"#6D4C41", x:7,  y:5,  w:19, h:21, icon:"🌿", desc:"뽕나무 재배 및 농경 체험",    lat: 36.63867, lng: 127.38245 },
@@ -5385,9 +5414,32 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
     const id=nextId();
     const code=genCode(id);
     const qty=parseInt(d.qty)||0;
-    const np={id,name:d.name,cat:d.cat,loc:d.loc,qty,locs:{[d.loc]:qty},memo:d.memo||"",code};
+    const minQty=parseInt(d.minQty)||0; // 적정재고 (이하면 알림)
+    const np={
+      id, name:d.name, cat:d.cat, loc:d.loc, qty,
+      locs:{[d.loc]:qty},
+      memo:d.memo||"",
+      code,
+      photos: d.photos || [],     // 사진 여러 장
+      usage: d.usage || "",        // 사용법
+      careGuide: d.careGuide || "",// 관리 요령
+      stockSchedule: d.stockSchedule || "", // 입출고 시기
+      supplier: d.supplier || "",  // 발주처
+      minQty,                       // 적정재고
+      unit: d.unit || "개",        // 단위
+      // AI 분석 결과
+      marketPrice: d.marketPrice || null,    // 시세 정보
+      purchaseLinks: d.purchaseLinks || null,// 구매처 링크
+      aiTips: d.aiTips || null,              // 구매 팁
+      smartRecommendation: d.smartRecommendation || null, // 스마트 추천
+      usageBlocks: d.usageBlocks || null,    // 사용법 블록 (시각화)
+      careIcons: d.careIcons || null,        // 보관 픽토그램
+      monthlyPattern: d.monthlyPattern || null, // 월별 입출고 패턴
+      createdAt: new Date().toISOString(),
+      createdBy: curUser?.name || "시스템",
+    };
     setProds(p=>[...p,np]);
-    addH("추가",d.name,`${d.loc}에 ${qty}개 등록 [${code}]`,qty);
+    addH("추가",d.name,`${d.loc}에 ${qty}${np.unit} 등록 [${code}]`,qty);
     // Close current modal first, then show QR after state updates
     setModal(null);
     setTimeout(()=>setModal({type:"qr",p:np}),100);
@@ -5539,6 +5591,29 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
 
       {/* Main */}
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+        {/* 재고 부족 알림 배너 (적정재고 미만 품목) */}
+        {(() => {
+          const lowItems = prods.filter(p => p.minQty > 0 && p.qty <= p.minQty);
+          if (lowItems.length === 0) return null;
+          return (
+            <div style={{background:"linear-gradient(90deg,#fef2f2,#fff7ed)",borderBottom:"2px solid #fca5a5",padding:"10px 20px",display:"flex",alignItems:"center",gap:12,flexShrink:0}}>
+              <span style={{fontSize:18}}>⚠️</span>
+              <div style={{flex:1,fontSize:12,color:"#991b1b",fontWeight:600}}>
+                <strong>재고 부족 {lowItems.length}건</strong> · {lowItems.slice(0,3).map(p=>`${p.name}(${p.qty}/${p.minQty}${p.unit||"개"})`).join(", ")}
+                {lowItems.length>3 && ` 외 ${lowItems.length-3}건`}
+              </div>
+              <button onClick={()=>setModal({type:"lowStockAlert",items:lowItems})}
+                style={{fontSize:11,padding:"5px 10px",borderRadius:6,border:"1px solid #fca5a5",background:"#fff",cursor:"pointer",color:"#991b1b",fontWeight:700}}>
+                자세히 보기
+              </button>
+              <button onClick={()=>setModal({type:"sendLowStockNotif",items:lowItems})}
+                style={{fontSize:11,padding:"5px 10px",borderRadius:6,border:"none",background:"#dc2626",cursor:"pointer",color:"#fff",fontWeight:700}}>
+                📨 알림 발송
+              </button>
+            </div>
+          );
+        })()}
+
         {/* Header - only on non-map pages */}
         {page!=="map"&&(
         <div className="no-print" style={{background:"#fff",padding:"10px 20px",borderBottom:"1px solid #e5e7eb",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
@@ -5688,6 +5763,8 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
       {modal?.type==="edit"&&<EMdl p={modal.p} onSave={d=>{setProds(pr=>pr.map(x=>x.id===d.id?{...x,...d}:x));addH("수정",d.name,"수정",0);setModal(null);}} onClose={()=>setModal(null)}/>}
       {modal?.type==="qr"&&<QRModal p={modal.p} onClose={()=>setModal(null)}/>}
       {modal?.type==="users"&&<UserMgmt users={users} setUsers={setUsers} curUser={curUser} onClose={()=>setModal(null)}/>}
+      {modal?.type==="lowStockAlert"&&<LowStockAlertModal items={modal.items} onClose={()=>setModal(null)} onGoTo={(p)=>{setModal(null);setSelP(p);setHighlightPid(p.id);}}/>}
+      {modal?.type==="sendLowStockNotif"&&<SendLowStockNotifModal items={modal.items} onClose={()=>setModal(null)}/>}
       {showScanner&&<QRScanner onClose={()=>setShowScanner(false)} onScan={code=>{
         setShowScanner(false);
         setQrSearch(code);
@@ -5838,6 +5915,366 @@ function QRModal({p,onClose}){
 }
 
 // ========== MAP VIEW ==========
+// ============================================================
+// CCTV LIVE OVERLAY — 통합지도 위에 라이브 미니뷰 + AI 위험 감지
+// ============================================================
+function CctvLiveOverlay({ zones, cctvMap, onAlert, onOpenChannel, snapServerUrl: propUrl }) {
+  // localStorage에서 저장된 스냅샷 서버 URL 자동 로드 (시설점검 → CCTV에서 설정한 값)
+  const snapServerUrl = useMemo(() => {
+    if (propUrl) return propUrl;
+    try {
+      return window.localStorage?.getItem("jamsa_cctv_snap_server") || "http://localhost:5555";
+    } catch (e) { return "http://localhost:5555"; }
+  }, [propUrl]);
+  const [snapshots, setSnapshots] = useState({}); // {ch: {url, ts}}
+  const [analyses, setAnalyses] = useState({});   // {ch: {level, score, summary, ...}}
+  const [analyzing, setAnalyzing] = useState({}); // {ch: true/false}
+  const [enabled, setEnabled] = useState(() => {
+    try { return window.localStorage?.getItem("jamsa_cctv_overlay_on") !== "0"; }
+    catch (e) { return true; }
+  });
+  const [aiEnabled, setAiEnabled] = useState(() => {
+    try { return window.localStorage?.getItem("jamsa_cctv_ai_on") === "1"; }
+    catch (e) { return false; }
+  });
+  const [snapInterval, setSnapInterval] = useState(5000); // 5초
+  const [aiInterval, setAiInterval] = useState(60000);    // 60초 (AI는 비용 절감)
+  const [lastAlert, setLastAlert] = useState(null);
+  const aiCooldownRef = useRef({}); // {ch: lastAnalyzedAt}
+
+  // 모든 활성 채널 수집 (구역에 매핑된 것들)
+  const activeChannels = useMemo(() => {
+    const set = new Set();
+    Object.values(cctvMap || {}).forEach(arr => (arr || []).forEach(ch => set.add(ch)));
+    return Array.from(set).sort((a, b) => a - b);
+  }, [cctvMap]);
+
+  // 채널 → 구역 역매핑
+  const chToZone = useMemo(() => {
+    const map = {};
+    Object.entries(cctvMap || {}).forEach(([zid, chs]) => {
+      (chs || []).forEach(ch => { map[ch] = zid; });
+    });
+    return map;
+  }, [cctvMap]);
+
+  // 스냅샷 폴링
+  useEffect(() => {
+    if (!enabled || activeChannels.length === 0) return;
+    let stopped = false;
+    let timers = [];
+
+    const fetchSnapshot = async (ch) => {
+      try {
+        const url = `${snapServerUrl}/api/snap/${ch}?t=${Date.now()}`;
+        const res = await fetch(url, { method: "GET", mode: "cors" }).catch(() => null);
+        if (!res || !res.ok) {
+          // 백엔드 미가동 시 placeholder 유지
+          if (!snapshots[ch]) {
+            setSnapshots(s => ({ ...s, [ch]: { url: null, ts: Date.now(), error: true } }));
+          }
+          return;
+        }
+        const blob = await res.blob();
+        if (stopped) return;
+        const objUrl = URL.createObjectURL(blob);
+        setSnapshots(s => {
+          // 이전 URL 정리
+          if (s[ch]?.url) try { URL.revokeObjectURL(s[ch].url); } catch (e) {}
+          return { ...s, [ch]: { url: objUrl, ts: Date.now(), error: false } };
+        });
+      } catch (e) {
+        // 네트워크 에러는 placeholder
+      }
+    };
+
+    // 초기 1회 + 인터벌
+    activeChannels.forEach(ch => {
+      fetchSnapshot(ch);
+      const t = setInterval(() => fetchSnapshot(ch), snapInterval);
+      timers.push(t);
+    });
+
+    return () => {
+      stopped = true;
+      timers.forEach(clearInterval);
+    };
+  }, [enabled, activeChannels.join(","), snapInterval, snapServerUrl]);
+
+  // AI 분석 (스냅샷이 갱신될 때마다 일정 주기로)
+  useEffect(() => {
+    if (!aiEnabled || !enabled) return;
+    let stopped = false;
+
+    const analyzeChannel = async (ch) => {
+      const snap = snapshots[ch];
+      if (!snap || !snap.url || snap.error) return;
+      if (analyzing[ch]) return;
+      // 쿨다운 체크
+      const lastAt = aiCooldownRef.current[ch] || 0;
+      if (Date.now() - lastAt < aiInterval) return;
+      aiCooldownRef.current[ch] = Date.now();
+
+      setAnalyzing(a => ({ ...a, [ch]: true }));
+      try {
+        // blob URL → base64 dataURL 변환
+        const blob = await fetch(snap.url).then(r => r.blob());
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+
+        const cam = FAC_CCTV_CAMERAS.find(c => c.ch === ch);
+        const zid = chToZone[ch];
+        const z = zones.find(z => z.id === zid);
+
+        const fetcher = window.authFetch || ((path, opts) => fetch(path, opts));
+        const res = await fetcher("/api/cctv-ai-analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ch,
+            zone: z?.name || cam?.zone || "",
+            image: dataUrl,
+            context: cam?.name || "",
+          }),
+        });
+        if (!res.ok) throw new Error(`API ${res.status}`);
+        const data = await res.json();
+        if (stopped || !data.ok) return;
+
+        const result = data.result;
+        setAnalyses(a => ({ ...a, [ch]: result }));
+
+        // DANGER 또는 shouldNotify 시 알림
+        if (result.level === "DANGER" || result.shouldNotify) {
+          const alert = {
+            id: Date.now() + Math.random(),
+            ch,
+            zone: z?.name || cam?.zone || "",
+            cam: cam?.name || `CH${ch}`,
+            level: result.level,
+            score: result.score,
+            summary: result.summary,
+            detail: result.detail,
+            actionRequired: result.actionRequired,
+            time: new Date().toISOString(),
+          };
+          setLastAlert(alert);
+          if (onAlert) onAlert(alert);
+        }
+      } catch (e) {
+        console.warn(`[cctv-ai] ch${ch} 분석 실패:`, e.message);
+      } finally {
+        if (!stopped) setAnalyzing(a => ({ ...a, [ch]: false }));
+      }
+    };
+
+    // 스냅샷이 있는 채널 순회 분석 (한 번에 1개씩, 부하 방지)
+    let idx = 0;
+    const tickAi = async () => {
+      if (stopped) return;
+      const channels = activeChannels.filter(ch => snapshots[ch]?.url);
+      if (channels.length > 0) {
+        await analyzeChannel(channels[idx % channels.length]);
+        idx++;
+      }
+    };
+    const aiTimer = setInterval(tickAi, 8000); // 8초마다 한 채널씩
+    tickAi();
+
+    return () => {
+      stopped = true;
+      clearInterval(aiTimer);
+    };
+  }, [aiEnabled, enabled, snapshots, activeChannels.join(","), aiInterval, chToZone, zones, onAlert]);
+
+  // 설정 저장
+  useEffect(() => {
+    try { window.localStorage?.setItem("jamsa_cctv_overlay_on", enabled ? "1" : "0"); } catch (e) {}
+  }, [enabled]);
+  useEffect(() => {
+    try { window.localStorage?.setItem("jamsa_cctv_ai_on", aiEnabled ? "1" : "0"); } catch (e) {}
+  }, [aiEnabled]);
+
+  if (!enabled) {
+    return (
+      <div style={{position:"absolute",top:12,right:12,zIndex:500,background:"rgba(15,23,42,0.85)",color:"#fff",padding:"6px 10px",borderRadius:8,fontSize:11,backdropFilter:"blur(8px)",cursor:"pointer",display:"flex",alignItems:"center",gap:6}}
+        onClick={()=>setEnabled(true)}>
+        📹 CCTV 오버레이 켜기
+      </div>
+    );
+  }
+
+  // 위험 채널 카운트
+  const dangerCount = Object.values(analyses).filter(a => a.level === "DANGER").length;
+  const warningCount = Object.values(analyses).filter(a => a.level === "WARNING").length;
+  const safeCount = activeChannels.length - dangerCount - warningCount;
+
+  return (
+    <>
+      {/* 컨트롤 패널 */}
+      <div style={{position:"absolute",top:12,right:12,zIndex:500,background:"rgba(15,23,42,0.92)",color:"#fff",padding:"8px 12px",borderRadius:10,fontSize:11,backdropFilter:"blur(8px)",display:"flex",flexDirection:"column",gap:6,minWidth:180}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,paddingBottom:6,borderBottom:"1px solid rgba(255,255,255,0.15)"}}>
+          <span style={{fontWeight:700,display:"flex",alignItems:"center",gap:6}}>
+            <span style={{width:8,height:8,background:"#22c55e",borderRadius:"50%",animation:"naverPulse 2s infinite"}}></span>
+            CCTV 라이브
+          </span>
+          <button onClick={()=>setEnabled(false)} style={{background:"none",border:"none",color:"rgba(255,255,255,0.6)",cursor:"pointer",fontSize:14,padding:0,lineHeight:1}}>×</button>
+        </div>
+        <div style={{fontSize:10,color:"rgba(255,255,255,0.7)"}}>
+          {activeChannels.length}대 라이브 · {Math.round(snapInterval/1000)}초 갱신
+        </div>
+        <div style={{display:"flex",gap:6,fontSize:10}}>
+          {dangerCount > 0 && <span style={{color:"#fca5a5"}}>🔴 위험 {dangerCount}</span>}
+          {warningCount > 0 && <span style={{color:"#fcd34d"}}>🟡 주의 {warningCount}</span>}
+          <span style={{color:"#86efac"}}>🟢 정상 {safeCount}</span>
+        </div>
+        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:10,color:"rgba(255,255,255,0.85)",cursor:"pointer"}}>
+          <input type="checkbox" checked={aiEnabled} onChange={e=>setAiEnabled(e.target.checked)} style={{width:12,height:12}}/>
+          🤖 Claude AI 위험 분석 {aiEnabled && <span style={{color:"#fcd34d"}}>(과금 발생)</span>}
+        </label>
+      </div>
+
+      {/* 위험 알림 배너 */}
+      {lastAlert && (
+        <div style={{position:"absolute",top:12,left:12,right:220,zIndex:600,padding:"10px 14px",background:lastAlert.level==="DANGER"?"rgba(220,38,38,0.95)":"rgba(245,158,11,0.95)",color:"#fff",borderRadius:8,display:"flex",alignItems:"center",gap:10,backdropFilter:"blur(4px)",animation:"naverPulse 2s infinite"}}>
+          <span style={{fontSize:18}}>{lastAlert.level==="DANGER"?"🚨":"⚠️"}</span>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:12,fontWeight:700}}>CH{lastAlert.ch} {lastAlert.zone} — {lastAlert.summary} (위험도 {lastAlert.score}%)</div>
+            <div style={{fontSize:10,opacity:0.9,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{lastAlert.detail || lastAlert.actionRequired}</div>
+          </div>
+          <button onClick={()=>{onOpenChannel && onOpenChannel(lastAlert.ch); setLastAlert(null);}} style={{fontSize:11,padding:"5px 10px",background:"#fff",color:lastAlert.level==="DANGER"?"#991b1b":"#854f0b",border:"none",borderRadius:5,fontWeight:700,cursor:"pointer"}}>확인</button>
+          <button onClick={()=>setLastAlert(null)} style={{fontSize:11,padding:"5px 8px",background:"rgba(255,255,255,0.2)",color:"#fff",border:"1px solid rgba(255,255,255,0.3)",borderRadius:5,cursor:"pointer"}}>닫기</button>
+        </div>
+      )}
+
+      {/* 미니뷰 그리드 (지도 하단에 가로 스크롤로) */}
+      <div style={{position:"absolute",bottom:50,left:12,right:12,zIndex:400,display:"flex",gap:6,overflowX:"auto",padding:"4px 0",scrollbarWidth:"thin"}}>
+        {activeChannels.map(ch => {
+          const cam = FAC_CCTV_CAMERAS.find(c => c.ch === ch);
+          if (!cam) return null;
+          const snap = snapshots[ch];
+          const ana = analyses[ch];
+          const zid = chToZone[ch];
+          const z = zones.find(z => z.id === zid);
+          const level = ana?.level || "SAFE";
+          const borderColor = level === "DANGER" ? "#dc2626" : level === "WARNING" ? "#f59e0b" : "rgba(255,255,255,0.6)";
+          const animation = level === "DANGER" ? "naverPulse 1.2s infinite" : level === "WARNING" ? "naverPulse 1.6s infinite" : "none";
+
+          return (
+            <div key={ch}
+              onClick={()=>onOpenChannel && onOpenChannel(ch)}
+              style={{position:"relative",flex:"0 0 110px",height:74,borderRadius:6,overflow:"hidden",border:`1.5px solid ${borderColor}`,background:"#0f172a",cursor:"pointer",animation,transition:"transform 0.15s"}}
+              onMouseEnter={e=>{e.currentTarget.style.transform="scale(1.08)";e.currentTarget.style.zIndex="500";}}
+              onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.zIndex="";}}
+              title={`CH${ch} ${cam.name} · ${z?.name || cam.zone}\n${ana?.summary || '분석 대기'}`}>
+              {snap?.url && !snap.error ? (
+                <img src={snap.url} alt={cam.name} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>{e.currentTarget.style.display="none";}}/>
+              ) : (
+                <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",color:"rgba(255,255,255,0.4)",fontSize:18}}>
+                  📷
+                </div>
+              )}
+              {/* 스캔 라인 */}
+              {snap?.url && !snap.error && (
+                <div style={{position:"absolute",left:0,right:0,height:14,background:"linear-gradient(180deg,transparent,rgba(34,211,238,0.4),transparent)",pointerEvents:"none",animation:"cctvScan 2.4s linear infinite"}}/>
+              )}
+              {/* 오버레이 */}
+              <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",justifyContent:"space-between",padding:"3px 5px",background:"linear-gradient(180deg,rgba(0,0,0,0.5),transparent 30%,transparent 70%,rgba(0,0,0,0.55))",pointerEvents:"none"}}>
+                <div style={{display:"flex",alignItems:"center",gap:3,fontSize:9,color:"#fff",fontWeight:700}}>
+                  <span style={{width:5,height:5,borderRadius:"50%",background:"#ef4444",animation:"blink 1.6s infinite"}}/>
+                  CH{ch} {cam.name.slice(0,5)}
+                </div>
+                <div style={{fontSize:9,color:"#fff",fontWeight:600,textShadow:"0 0 2px rgba(0,0,0,0.8)"}}>
+                  {analyzing[ch] ? "🤖 분석 중..." : (ana?.summary?.slice(0,16) || (snap?.error ? "연결 끊김" : "정상"))}
+                </div>
+              </div>
+              {/* 위험 배지 */}
+              {level !== "SAFE" && (
+                <div style={{position:"absolute",top:-6,right:-6,background:level==="DANGER"?"#dc2626":"#f59e0b",color:"#fff",border:"1.5px solid #fff",width:18,height:18,borderRadius:"50%",fontSize:10,fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  {level === "DANGER" ? "!" : "?"}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {activeChannels.length === 0 && (
+          <div style={{padding:"20px",color:"rgba(255,255,255,0.6)",fontSize:11,textAlign:"center",width:"100%"}}>
+            매핑된 CCTV가 없습니다. 구역 편집에서 CCTV를 연결하세요.
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+// CCTV 매핑 편집 모달
+function CctvMappingModal({ zones, cctvMap, onSave, onClose }) {
+  const [localMap, setLocalMap] = useState({ ...cctvMap });
+  const [filter, setFilter] = useState("");
+
+  const toggleChannel = (zoneId, ch) => {
+    setLocalMap(m => {
+      const arr = m[zoneId] || [];
+      const newArr = arr.includes(ch) ? arr.filter(x => x !== ch) : [...arr, ch].sort((a,b)=>a-b);
+      return { ...m, [zoneId]: newArr };
+    });
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1100,padding:16}} onClick={onClose}>
+      <div style={{background:"#fff",borderRadius:12,maxWidth:900,width:"100%",maxHeight:"85vh",overflow:"hidden",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
+        <div style={{padding:"14px 18px",borderBottom:"1px solid #e5e7eb",display:"flex",alignItems:"center",justifyContent:"space-between",background:"linear-gradient(90deg,#1e3a8a,#3b82f6)"}}>
+          <div style={{color:"#fff"}}>
+            <div style={{fontSize:15,fontWeight:800}}>📹 CCTV ↔ 구역 매핑 편집</div>
+            <div style={{fontSize:11,opacity:0.9,marginTop:2}}>각 구역에 표시할 CCTV 채널을 선택하세요</div>
+          </div>
+          <button onClick={onClose} style={{background:"rgba(255,255,255,0.2)",border:"none",cursor:"pointer",fontSize:18,color:"#fff",borderRadius:6,width:28,height:28}}>×</button>
+        </div>
+        <div style={{padding:"10px 18px",borderBottom:"1px solid #f1f3f5",background:"#f8fafc"}}>
+          <input className="inp" placeholder="구역 또는 채널명 검색..." value={filter} onChange={e=>setFilter(e.target.value)} style={{fontSize:12,padding:7,width:"100%"}}/>
+        </div>
+        <div style={{flex:1,overflow:"auto",padding:14}}>
+          {zones.filter(z => !filter || z.name.includes(filter)).map(z => {
+            const assignedChs = localMap[z.id] || [];
+            return (
+              <div key={z.id} style={{marginBottom:12,padding:12,border:"1px solid #e5e7eb",borderRadius:8,background:"#fff"}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{fontSize:18}}>{z.icon}</span>
+                    <span style={{fontSize:13,fontWeight:700}}>{z.name}</span>
+                    <span style={{fontSize:10,color:"#94a3b8"}}>({assignedChs.length}대 연결)</span>
+                  </div>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(120px,1fr))",gap:4}}>
+                  {FAC_CCTV_CAMERAS.filter(c => !filter || c.name.includes(filter) || `CH${c.ch}`.includes(filter)).map(cam => {
+                    const checked = assignedChs.includes(cam.ch);
+                    return (
+                      <label key={cam.ch} style={{display:"flex",alignItems:"center",gap:5,padding:"5px 8px",border:`1px solid ${checked?"#2563eb":"#e5e7eb"}`,borderRadius:5,cursor:"pointer",background:checked?"#dbeafe":"#fff",fontSize:11}}>
+                        <input type="checkbox" checked={checked} onChange={()=>toggleChannel(z.id, cam.ch)} style={{width:12,height:12}}/>
+                        <span style={{fontWeight:600}}>CH{cam.ch}</span>
+                        <span style={{color:"#64748b"}}>{cam.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{padding:12,borderTop:"1px solid #e5e7eb",background:"#f8fafc",display:"flex",gap:8,justifyContent:"flex-end"}}>
+          <button onClick={()=>setLocalMap({...CCTV_AUTO_MAP})} style={{fontSize:12,padding:"7px 12px",borderRadius:6,border:"1px solid #d1d5db",background:"#fff",cursor:"pointer"}}>↺ 자동 매핑으로 초기화</button>
+          <button onClick={onClose} style={{fontSize:12,padding:"7px 12px",borderRadius:6,border:"1px solid #d1d5db",background:"#fff",cursor:"pointer"}}>취소</button>
+          <button onClick={()=>{onSave(localMap);onClose();}} style={{fontSize:12,padding:"7px 14px",borderRadius:6,border:"none",background:"#2563eb",color:"#fff",fontWeight:700,cursor:"pointer"}}>💾 저장</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone,zonePhotos,zones,customZones=[],facActions=[],onCreateZone,onDeleteCustomZone,onAddInventoryToZone,onCreateFacAction,switchToFacility,userCtx}){
   // Use passed zones if provided, else fall back to static ZONES
   const baseZones = zones || ZONES;
@@ -5850,6 +6287,11 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
   const [drawMode, setDrawMode] = useState(false);
   const [drawPreview, setDrawPreview] = useState(null); // {lat, lng, x%, y%}
   const [newZoneForm, setNewZoneForm] = useState(null); // { x%, y%, lat, lng }
+
+  // CCTV 매핑 (구역 → 채널 배열)
+  const [cctvMap, setCctvMap] = useState(() => loadCctvMap());
+  const [showCctvMapping, setShowCctvMapping] = useState(false);
+  const [cctvAlerts, setCctvAlerts] = useState([]); // 위험 알림 히스토리
 
   // ── ZONE ICON EDITING ──
   // Permission: default ADMIN + MANAGER allowed, stored per-user so admin can grant to others
@@ -6596,10 +7038,37 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
         onCreateFacAction={onCreateFacAction}
         switchToFacility={switchToFacility}
       />}
+
+      {/* CCTV 라이브 오버레이 — 모든 활성 채널 라이브뷰 + Claude AI 위험 감지 */}
+      <CctvLiveOverlay
+        zones={zones}
+        cctvMap={cctvMap}
+        onAlert={(alert)=>{
+          // 알림 히스토리 누적 (최근 50건)
+          setCctvAlerts(prev => [alert, ...prev].slice(0, 50));
+        }}
+        onOpenChannel={(ch)=>{
+          // 큰 화면으로 보기 — 향후 구현
+          const cam = FAC_CCTV_CAMERAS.find(c => c.ch === ch);
+          if (cam) alert(`CH${ch} ${cam.name} (${cam.zone})\n\n자세한 화면을 보려면 [시설점검] → [CCTV] 메뉴로 이동하세요.`);
+        }}
+      />
+
+      {/* CCTV 매핑 편집 버튼 (지도 좌하단) */}
+      {currentUserCanEdit && (
+        <button
+          onClick={()=>setShowCctvMapping(true)}
+          style={{position:"absolute",bottom:14,left:14,zIndex:500,padding:"8px 12px",background:"rgba(15,23,42,0.92)",color:"#fff",border:"none",borderRadius:8,fontSize:11,fontWeight:600,cursor:"pointer",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",gap:6}}
+          title="구역과 CCTV 매핑 편집">
+          📹⚙️ CCTV 매핑
+        </button>
+      )}
+      {showCctvMapping && <CctvMappingModal zones={zones} cctvMap={cctvMap} onSave={(m)=>{setCctvMap(m);saveCctvMap(m);}} onClose={()=>setShowCctvMapping(false)}/>}
+
       {newZoneForm && <NewZoneModal pos={newZoneForm} onSave={(z)=>{onCreateZone && onCreateZone(z);setNewZoneForm(null);}} onClose={()=>setNewZoneForm(null)}/>}
       {showApiKeyModal && <NaverApiKeyModal currentId={naverClientId} currentProvider={mapProvider} onSave={(id,provider)=>{saveNaverClientId(id);setMapProvider(provider);setShowApiKeyModal(false);setNaverLoadError(null);setNaverLoaded(false);if(naverMapRef.current){naverMapRef.current=null;}}} onClose={()=>setShowApiKeyModal(false)}/>}
       {showPermsModal && <ZoneEditPermsModal currentPerms={editPermissions} onSave={(perms)=>{setEditPermissions(perms);setShowPermsModal(false);}} onClose={()=>setShowPermsModal(false)}/>}
-      <style>{`@keyframes jamsaUserPulse{0%,100%{box-shadow:0 0 0 6px rgba(37,99,235,0.25),0 4px 12px rgba(0,0,0,0.4)}50%{box-shadow:0 0 0 14px rgba(37,99,235,0.08),0 4px 12px rgba(0,0,0,0.4)}}@keyframes naverUserPulse{0%,100%{box-shadow:0 0 0 4px rgba(37,99,235,0.3)}50%{box-shadow:0 0 0 10px rgba(37,99,235,0.1)}}@keyframes naverSpin{to{transform:rotate(360deg)}}@keyframes urgentPulse{0%,100%{filter:drop-shadow(0 0 0 rgba(220,38,38,0.6));transform:scale(1)}50%{filter:drop-shadow(0 0 8px rgba(220,38,38,0.8));transform:scale(1.08)}}@keyframes editPulse{0%,100%{border-color:rgba(37,99,235,0.9);opacity:1}50%{border-color:rgba(37,99,235,0.3);opacity:0.6}}`}</style>
+      <style>{`@keyframes jamsaUserPulse{0%,100%{box-shadow:0 0 0 6px rgba(37,99,235,0.25),0 4px 12px rgba(0,0,0,0.4)}50%{box-shadow:0 0 0 14px rgba(37,99,235,0.08),0 4px 12px rgba(0,0,0,0.4)}}@keyframes naverUserPulse{0%,100%{box-shadow:0 0 0 4px rgba(37,99,235,0.3)}50%{box-shadow:0 0 0 10px rgba(37,99,235,0.1)}}@keyframes naverPulse{0%,100%{opacity:1}50%{opacity:0.7}}@keyframes naverSpin{to{transform:rotate(360deg)}}@keyframes urgentPulse{0%,100%{filter:drop-shadow(0 0 0 rgba(220,38,38,0.6));transform:scale(1)}50%{filter:drop-shadow(0 0 8px rgba(220,38,38,0.8));transform:scale(1.08)}}@keyframes editPulse{0%,100%{border-color:rgba(37,99,235,0.9);opacity:1}50%{border-color:rgba(37,99,235,0.3);opacity:0.6}}@keyframes cctvScan{0%{transform:translateY(-100%)}100%{transform:translateY(800%)}}@keyframes blink{0%,50%{opacity:1}51%,100%{opacity:0.3}}`}</style>
     </div>
   );
 }
@@ -7530,6 +7999,176 @@ function ZonePhotoCard({ph,zoneName,zoneId,onDel}){
   );
 }
 
+// ========== LOW STOCK ALERT MODAL (재고 부족 상세) ==========
+function LowStockAlertModal({ items, onClose, onGoTo }) {
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}} onClick={onClose}>
+      <div style={{background:"#fff",borderRadius:12,maxWidth:720,width:"100%",maxHeight:"85vh",overflow:"hidden",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
+        <div style={{padding:"14px 18px",borderBottom:"1px solid #e5e7eb",display:"flex",alignItems:"center",justifyContent:"space-between",background:"linear-gradient(90deg,#fef2f2,#fff7ed)"}}>
+          <div>
+            <div style={{fontSize:16,fontWeight:800,color:"#991b1b"}}>⚠️ 재고 부족 알림 ({items.length}건)</div>
+            <div style={{fontSize:11,color:"#7c2d12",marginTop:2}}>적정재고 이하로 떨어진 품목입니다.</div>
+          </div>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",fontSize:20,color:"#94a3b8"}}>×</button>
+        </div>
+        <div style={{flex:1,overflow:"auto",padding:14}}>
+          {items.map(p => (
+            <div key={p.id} style={{padding:"10px 12px",border:"1px solid #fecaca",borderRadius:8,marginBottom:8,background:"#fff7ed",display:"flex",alignItems:"center",gap:12}}>
+              <div style={{flexShrink:0,fontSize:24}}>{p.qty===0?"🚨":"⚠️"}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:800,color:"#0f172a"}}>{p.name}</div>
+                <div style={{fontSize:11,color:"#64748b",marginTop:2}}>📍 {p.loc} · 카테고리 {p.cat}</div>
+                {p.supplier && <div style={{fontSize:10,color:"#94a3b8",marginTop:2}}>발주처: {p.supplier}</div>}
+              </div>
+              <div style={{textAlign:"center",flexShrink:0}}>
+                <div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>현재/적정</div>
+                <div style={{fontSize:18,fontWeight:900,color:p.qty===0?"#dc2626":"#ea580c"}}>{p.qty}/{p.minQty}</div>
+                <div style={{fontSize:9,color:"#94a3b8"}}>{p.unit||"개"}</div>
+              </div>
+              <button onClick={()=>onGoTo(p)} style={{padding:"6px 10px",borderRadius:6,border:"none",background:"#2563eb",color:"#fff",cursor:"pointer",fontSize:11,fontWeight:700,flexShrink:0}}>이동</button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== SEND LOW STOCK NOTIFICATION MODAL (알림 발송) ==========
+function SendLowStockNotifModal({ items, onClose }) {
+  const [channels, setChannels] = useState({ kakao: true, sms: false, email: true });
+  const [recipients, setRecipients] = useState({ phone: "", email: "" });
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(null);
+
+  const buildMessage = () => {
+    const lines = items.map(p => `• ${p.name} (현재 ${p.qty}/${p.minQty}${p.unit||"개"}) - ${p.loc}`);
+    return `[잠사박물관 재고 알림]\n적정재고 미만 ${items.length}건:\n\n${lines.join("\n")}\n\n발주 검토 부탁드립니다.`;
+  };
+
+  const sendNotif = async () => {
+    if (!channels.kakao && !channels.sms && !channels.email) {
+      return alert("최소 1개 채널을 선택해 주세요.");
+    }
+    if ((channels.kakao || channels.sms) && !recipients.phone) {
+      return alert("카카오톡/SMS 발송에는 전화번호가 필요합니다.");
+    }
+    if (channels.email && !recipients.email) {
+      return alert("이메일 발송에는 이메일 주소가 필요합니다.");
+    }
+    setSending(true);
+    const message = buildMessage();
+    const results = [];
+
+    // 실제 환경에서는 백엔드 API 호출 필요. 여기서는 mailto: 와 클립보드 복사로 폴백.
+    try {
+      // 1. 클립보드 복사 (모든 채널 공통)
+      try { await navigator.clipboard.writeText(message); results.push("✅ 메시지를 클립보드에 복사했습니다."); }
+      catch(e) {}
+
+      // 2. 이메일: mailto 링크
+      if (channels.email && recipients.email) {
+        const subject = encodeURIComponent(`[잠사박물관] 재고 부족 알림 ${items.length}건`);
+        const body = encodeURIComponent(message);
+        window.open(`mailto:${recipients.email}?subject=${subject}&body=${body}`);
+        results.push(`📧 이메일 앱이 열렸습니다 (${recipients.email})`);
+      }
+
+      // 3. 카카오톡/SMS: 백엔드 연동 필요. 여기선 안내만.
+      if (channels.kakao && recipients.phone) {
+        results.push(`💬 카카오톡 알림톡: ${recipients.phone} - 백엔드 연동(Ppurio API)이 필요합니다. 메시지가 클립보드에 복사되었으니 수동 발송 가능합니다.`);
+      }
+      if (channels.sms && recipients.phone) {
+        results.push(`📱 SMS: ${recipients.phone} - 백엔드 연동(Ppurio API)이 필요합니다. 메시지가 클립보드에 복사되었으니 수동 발송 가능합니다.`);
+      }
+
+      setSent(results);
+    } catch (err) {
+      alert(`발송 실패: ${err.message}`);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}} onClick={onClose}>
+      <div style={{background:"#fff",borderRadius:12,maxWidth:560,width:"100%",maxHeight:"85vh",overflow:"hidden",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
+        <div style={{padding:"14px 18px",borderBottom:"1px solid #e5e7eb",display:"flex",alignItems:"center",justifyContent:"space-between",background:"linear-gradient(90deg,#dc2626,#ea580c)"}}>
+          <div style={{color:"#fff"}}>
+            <div style={{fontSize:15,fontWeight:800}}>📨 재고 부족 알림 발송</div>
+            <div style={{fontSize:11,opacity:0.9,marginTop:2}}>{items.length}건 발주 알림</div>
+          </div>
+          <button onClick={onClose} style={{background:"rgba(255,255,255,0.2)",border:"none",cursor:"pointer",fontSize:18,color:"#fff",borderRadius:6,width:28,height:28}}>×</button>
+        </div>
+        <div style={{flex:1,overflow:"auto",padding:18}}>
+          {sent ? (
+            <div>
+              <div style={{padding:14,background:"#dcfce7",borderRadius:8,marginBottom:12,border:"1px solid #86efac"}}>
+                <div style={{fontSize:13,fontWeight:800,color:"#166534",marginBottom:8}}>✅ 발송 처리 완료</div>
+                {sent.map((r,i)=>(
+                  <div key={i} style={{fontSize:11,color:"#166534",marginBottom:4,lineHeight:1.4}}>{r}</div>
+                ))}
+              </div>
+              <button onClick={onClose} style={{width:"100%",padding:10,borderRadius:8,border:"none",background:"#2563eb",color:"#fff",fontWeight:700,fontSize:13,cursor:"pointer"}}>닫기</button>
+            </div>
+          ) : (
+            <>
+              {/* 채널 선택 */}
+              <div style={{marginBottom:14}}>
+                <label style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:6,display:"block"}}>발송 채널 선택</label>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                  {[
+                    {key:"kakao",label:"💬 카카오톡 알림톡"},
+                    {key:"sms",label:"📱 SMS (Ppurio)"},
+                    {key:"email",label:"📧 이메일"}
+                  ].map(c=>(
+                    <label key={c.key} style={{display:"inline-flex",alignItems:"center",gap:6,padding:"8px 12px",border:`2px solid ${channels[c.key]?"#2563eb":"#d1d5db"}`,borderRadius:8,cursor:"pointer",background:channels[c.key]?"#dbeafe":"#fff",fontSize:12,fontWeight:600}}>
+                      <input type="checkbox" checked={channels[c.key]} onChange={e=>setChannels(s=>({...s,[c.key]:e.target.checked}))}/>
+                      {c.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* 수신처 */}
+              {(channels.kakao || channels.sms) && (
+                <div style={{marginBottom:10}}>
+                  <label style={{fontSize:11,fontWeight:700,color:"#475569"}}>전화번호 (카카오톡/SMS)</label>
+                  <input className="inp" value={recipients.phone} onChange={e=>setRecipients(s=>({...s,phone:e.target.value}))} placeholder="010-1234-5678" style={{fontSize:12,padding:7,marginTop:4}}/>
+                </div>
+              )}
+              {channels.email && (
+                <div style={{marginBottom:14}}>
+                  <label style={{fontSize:11,fontWeight:700,color:"#475569"}}>이메일 주소</label>
+                  <input className="inp" value={recipients.email} onChange={e=>setRecipients(s=>({...s,email:e.target.value}))} placeholder="example@jamsa.com" style={{fontSize:12,padding:7,marginTop:4}}/>
+                </div>
+              )}
+
+              {/* 미리보기 */}
+              <div style={{marginBottom:14}}>
+                <label style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:6,display:"block"}}>발송 메시지 미리보기</label>
+                <div style={{padding:10,background:"#f8fafc",border:"1px solid #e5e7eb",borderRadius:8,fontSize:11,color:"#475569",whiteSpace:"pre-wrap",fontFamily:"monospace",maxHeight:160,overflow:"auto"}}>{buildMessage()}</div>
+              </div>
+
+              {/* 안내 */}
+              <div style={{padding:10,background:"#fef3c7",borderRadius:8,fontSize:10,color:"#92400e",marginBottom:14}}>
+                💡 카카오톡 알림톡과 SMS는 Ppurio API 백엔드 연동이 필요합니다. 현재는 메시지를 클립보드에 복사하여 수동 발송이 가능합니다. 이메일은 기본 메일 앱이 자동으로 열립니다.
+              </div>
+
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={onClose} style={{flex:1,padding:10,borderRadius:8,border:"1px solid #d1d5db",background:"#fff",cursor:"pointer",fontSize:12,fontWeight:600}}>취소</button>
+                <button onClick={sendNotif} disabled={sending} style={{flex:2,padding:10,borderRadius:8,border:"none",background:sending?"#94a3b8":"linear-gradient(135deg,#dc2626,#ea580c)",color:"#fff",cursor:sending?"wait":"pointer",fontSize:12,fontWeight:700}}>
+                  {sending ? "🔄 발송 중..." : "📨 발송하기"}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ========== ZONE BOTTOM ==========
 function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDel,onShowQR,highlightPid,doAddPhoto,doDelPhoto,zonePhotos,doAddZonePhoto,doDelZonePhoto,allProds,allZonePhotos,onAddFacAction,can}){
   const [qPid,setQPid]=useState(null);
@@ -7539,7 +8178,21 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
   const [qMemo,setQMemo]=useState("");
   const [showAdd,setShowAdd]=useState(false);
   const [showInvAi,setShowInvAi]=useState(false);
-  const [nN,setNN]=useState("");const [nC,setNC]=useState(CATS[0]);const [nL,setNL]=useState(allLocs[0]);const [nQ,setNQ]=useState("0");
+  // 등록 폼 필드 (확장된 풀 폼)
+  const [nN,setNN]=useState("");
+  const [nC,setNC]=useState(CATS[0]);
+  const [nL,setNL]=useState(allLocs[0]);
+  const [nQ,setNQ]=useState("0");
+  const [nMinQty,setNMinQty]=useState("5");
+  const [nUnit,setNUnit]=useState("개");
+  const [nSupplier,setNSupplier]=useState("");
+  const [nUsage,setNUsage]=useState("");
+  const [nCareGuide,setNCareGuide]=useState("");
+  const [nStockSchedule,setNStockSchedule]=useState("");
+  const [nMemo,setNMemo]=useState("");
+  const [nPhotos,setNPhotos]=useState([]); // 사진 여러 장
+  const [aiAnalyzing,setAiAnalyzing]=useState(false);
+  const [aiResult,setAiResult]=useState(null);
 
   const tq=prods.reduce((s,p)=>s+p.qty,0);
   const ac={"입고":"#22c55e","출고":"#ef4444","조정":"#8b5cf6","추가":"#6366f1","삭제":"#f87171","수정":"#f59e0b"};
@@ -7561,7 +8214,109 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
     else doAdj(qPid,qLoc,q,qMemo);
     setQPid(null);setQAct(null);setQQty("");
   };
-  const submitAdd=()=>{if(!nN.trim())return alert("제품명");doAdd({name:nN.trim(),cat:nC,loc:nL,qty:nQ,memo:""});setNN("");setNQ("0");setShowAdd(false);};
+
+  // 등록 폼 사진 추가 (제한 없음)
+  const addNewPhoto = (e) => {
+    const files = e.target.files;
+    if (!files || !files.length) return;
+    Array.from(files).forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        setNPhotos(prev => [...prev, { id: Date.now() + Math.random(), url: ev.target.result, name: file.name }]);
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = "";
+  };
+  const removeNewPhoto = (id) => setNPhotos(prev => prev.filter(p => p.id !== id));
+
+  // AI 분석: 사진 + 제품명 → 정보 자동 추출 + 시세/구매처 검색
+  // 백엔드 API(/api/inventory-ai-analyze) 경유 — 보안상 ANTHROPIC_API_KEY 노출 방지
+  const runAiAnalysis = async () => {
+    if (nPhotos.length === 0 && !nN.trim()) {
+      return alert("사진을 1장 이상 올리거나 제품명을 입력해 주세요.");
+    }
+    setAiAnalyzing(true);
+    setAiResult(null);
+    try {
+      // 사진을 base64 dataURL 그대로 전달 (백엔드에서 파싱)
+      const photosPayload = nPhotos.slice(0, 4).map(ph => ph.url).filter(Boolean);
+
+      // window.authFetch가 자동으로 Bearer 토큰 + CORS 처리
+      const fetcher = window.authFetch || ((path, opts) => fetch(path, opts));
+      const response = await fetcher("/api/inventory-ai-analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productName: nN.trim() || null,
+          zoneName: zone.name,
+          category: nC,
+          photos: photosPayload,
+        })
+      });
+
+      if (!response.ok) {
+        let errMsg = `요청 실패 (${response.status})`;
+        try {
+          const errData = await response.json();
+          errMsg = errData.message || errData.error || errMsg;
+        } catch(e) {}
+        throw new Error(errMsg);
+      }
+
+      const data = await response.json();
+      if (!data.ok || !data.result) {
+        throw new Error("백엔드에서 유효한 응답을 받지 못했습니다.");
+      }
+
+      const parsed = data.result;
+      setAiResult(parsed);
+
+      // 결과를 폼에 자동 채우기
+      if (parsed.name && !nN.trim()) setNN(parsed.name);
+      if (parsed.cat && CATS.includes(parsed.cat)) setNC(parsed.cat);
+      if (parsed.usage) setNUsage(parsed.usage);
+      if (parsed.careGuide) setNCareGuide(parsed.careGuide);
+      if (parsed.stockSchedule) setNStockSchedule(parsed.stockSchedule);
+      if (parsed.minQty) setNMinQty(String(parsed.minQty));
+      if (parsed.unit) setNUnit(parsed.unit);
+      if (parsed.supplier) setNSupplier(parsed.supplier);
+    } catch (err) {
+      alert(`AI 분석 실패: ${err.message}\n\n수동으로 입력해 주세요.`);
+    } finally {
+      setAiAnalyzing(false);
+    }
+  };
+
+  const submitAdd=()=>{
+    if(!nN.trim())return alert("제품명을 입력해 주세요.");
+    doAdd({
+      name: nN.trim(),
+      cat: nC,
+      loc: nL,
+      qty: nQ,
+      minQty: nMinQty,
+      unit: nUnit,
+      supplier: nSupplier.trim(),
+      usage: nUsage.trim(),
+      careGuide: nCareGuide.trim(),
+      stockSchedule: nStockSchedule.trim(),
+      memo: nMemo.trim(),
+      photos: nPhotos.map(p => ({ id: p.id, url: p.url, date: new Date().toISOString() })),
+      // AI 분석 결과 (시세 + 구매처 + 시각화 데이터)
+      marketPrice: aiResult?.marketPrice || null,
+      purchaseLinks: aiResult?.purchaseLinks || null,
+      aiTips: aiResult?.tips || null,
+      smartRecommendation: aiResult?.smartRecommendation || null,
+      usageBlocks: aiResult?.usageBlocks || null,
+      careIcons: aiResult?.careIcons || null,
+      monthlyPattern: aiResult?.monthlyPattern || null,
+    });
+    // 폼 초기화
+    setNN(""); setNQ("0"); setNMinQty("5"); setNUnit("개");
+    setNSupplier(""); setNUsage(""); setNCareGuide(""); setNStockSchedule(""); setNMemo("");
+    setNPhotos([]); setAiResult(null); setShowAdd(false);
+  };
 
   return(
     <div ref={scrollRef} style={{borderTop:`3px solid ${zone.color}`,background:"#fff",animation:"fadeUp 0.2s ease"}}>
@@ -7604,14 +8359,234 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
         )}
       </div>
 
-      {/* Quick add */}
+      {/* Quick add — 풀 폼 (사진/사용법/관리요령/입출고시기/AI분석) */}
       {showAdd&&(
-        <div style={{padding:"10px 20px",borderBottom:"1px solid #e5e7eb",background:"#f8fafc",display:"flex",gap:6,alignItems:"flex-end",flexWrap:"wrap"}}>
-          <div style={{flex:"1 1 140px"}}><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>제품명</label><input className="inp" value={nN} onChange={e=>setNN(e.target.value)} style={{fontSize:12,padding:7}} autoFocus/></div>
-          <div style={{flex:"0 0 110px"}}><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>카테고리</label><select className="sel" value={nC} onChange={e=>setNC(e.target.value)} style={{fontSize:11,padding:6}}>{CATS.map(c=><option key={c}>{c}</option>)}</select></div>
-          <div style={{flex:"0 0 130px"}}><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>위치</label><select className="sel" value={nL} onChange={e=>setNL(e.target.value)} style={{fontSize:11,padding:6}}>{allLocs.map(l=><option key={l}>{l}</option>)}</select></div>
-          <div style={{flex:"0 0 70px"}}><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>수량</label><input className="inp" type="number" value={nQ} onChange={e=>setNQ(e.target.value)} style={{fontSize:12,padding:7,textAlign:"center"}}/></div>
-          <button className="btn bp" onClick={submitAdd} style={{fontSize:12,padding:"8px 18px"}}>등록 (QR자동생성)</button>
+        <div style={{padding:"14px 20px",borderBottom:"1px solid #e5e7eb",background:"#f8fafc"}}>
+          {/* 사진 업로드 영역 */}
+          <div style={{marginBottom:12}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+              <label style={{fontSize:11,fontWeight:700,color:"#475569"}}>📸 제품 사진 ({nPhotos.length}장)</label>
+              <div style={{display:"flex",gap:6}}>
+                <button onClick={runAiAnalysis} disabled={aiAnalyzing}
+                  style={{fontSize:11,padding:"6px 12px",borderRadius:8,border:"none",cursor:aiAnalyzing?"wait":"pointer",color:"#fff",fontWeight:700,background:aiAnalyzing?"#94a3b8":"linear-gradient(135deg,#7c3aed,#2563eb)",display:"inline-flex",alignItems:"center",gap:4}}>
+                  {aiAnalyzing ? "🔄 분석 중..." : "🤖 AI 자동 입력"}
+                </button>
+                <label style={{fontSize:11,padding:"6px 12px",borderRadius:8,border:"1px solid #d1d5db",cursor:"pointer",background:"#fff",fontWeight:600}}>
+                  📷 사진 추가
+                  <input type="file" accept="image/*" multiple capture="environment" onChange={addNewPhoto} style={{display:"none"}}/>
+                </label>
+              </div>
+            </div>
+            {nPhotos.length>0 && (
+              <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:4}}>
+                {nPhotos.map(ph=>(
+                  <div key={ph.id} style={{position:"relative",flex:"0 0 80px",height:80,borderRadius:6,overflow:"hidden",border:"2px solid #e5e7eb"}}>
+                    <img src={ph.url} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                    <button onClick={()=>removeNewPhoto(ph.id)} style={{position:"absolute",top:2,right:2,width:18,height:18,borderRadius:"50%",border:"none",background:"rgba(220,38,38,0.9)",color:"#fff",fontSize:10,cursor:"pointer",fontWeight:900}}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {aiResult && (() => {
+              // 시세 슬라이더 평균 위치 계산
+              const mp = aiResult.marketPrice || {};
+              const range = (mp.max||0) - (mp.min||0);
+              const avgPos = range > 0 ? Math.round(((mp.avg - mp.min) / range) * 100) : 50;
+              // 월별 패턴 max값으로 정규화
+              const monthly = aiResult.monthlyPattern || [];
+              const maxIntake = Math.max(1, ...monthly.map(m=>m.intake||0));
+              const maxOuttake = Math.max(1, ...monthly.map(m=>m.outtake||0));
+              const maxAll = Math.max(maxIntake, maxOuttake);
+              const badgeColors = {
+                green: {bg:"#dcfce7", color:"#166534"},
+                blue: {bg:"#dbeafe", color:"#1e40af"},
+                amber: {bg:"#fef3c7", color:"#78350f"},
+                purple: {bg:"#ede9fe", color:"#5b21b6"},
+                red: {bg:"#fee2e2", color:"#991b1b"},
+              };
+              return (
+                <div style={{marginTop:10,border:"1px solid #c4b5fd",borderRadius:10,overflow:"hidden",background:"#fff"}}>
+                  <div style={{padding:"10px 14px",background:"linear-gradient(90deg,#ede9fe,#dbeafe)",color:"#26215C",fontSize:13,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:"1px solid #c4b5fd"}}>
+                    <span>✨ AI 분석 결과</span>
+                    <span style={{fontSize:11,color:"#534AB7",fontWeight:500}}>{aiResult.name || nN || "제품"} · 방금 분석</span>
+                  </div>
+
+                  {/* 시세 슬라이더 */}
+                  {mp.min !== undefined && (
+                    <div style={{padding:"14px",borderBottom:"1px solid #f1f3f5"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+                        <span style={{fontSize:11,fontWeight:700,color:"#475569"}}>💰 시세 분포 ({mp.unit||"단위"} 기준)</span>
+                        <span style={{fontSize:10,color:"#94a3b8"}}>최저~최고: {((mp.max-mp.min)||0).toLocaleString()}원 폭</span>
+                      </div>
+                      <div style={{position:"relative",height:60,margin:"0 12px"}}>
+                        <div style={{position:"absolute",top:24,left:0,right:0,height:6,background:"linear-gradient(90deg,#97C459 0%,#378ADD 50%,#E24B4A 100%)",borderRadius:3}}></div>
+                        {/* 최저 */}
+                        <div style={{position:"absolute",top:18,left:"0%",transform:"translateX(-50%)",width:18,height:18,borderRadius:"50%",background:"#639922",border:"2px solid #fff",boxShadow:"0 0 0 1px #639922"}}></div>
+                        <div style={{position:"absolute",top:38,left:"0%",transform:"translateX(-50%)",textAlign:"center",minWidth:60}}>
+                          <div style={{fontSize:9,color:"#173404",fontWeight:700}}>최저</div>
+                          <div style={{fontSize:11,fontWeight:800,color:"#173404"}}>{(mp.min||0).toLocaleString()}원</div>
+                        </div>
+                        {/* 평균 */}
+                        <div style={{position:"absolute",top:16,left:`${avgPos}%`,transform:"translateX(-50%)",width:22,height:22,borderRadius:"50%",background:"#185FA5",border:"3px solid #fff",boxShadow:"0 0 0 1px #185FA5"}}></div>
+                        <div style={{position:"absolute",top:40,left:`${avgPos}%`,transform:"translateX(-50%)",textAlign:"center",minWidth:60}}>
+                          <div style={{fontSize:9,color:"#042C53",fontWeight:700}}>평균</div>
+                          <div style={{fontSize:12,fontWeight:900,color:"#042C53"}}>{(mp.avg||0).toLocaleString()}원</div>
+                        </div>
+                        {/* 최고 */}
+                        <div style={{position:"absolute",top:18,left:"100%",transform:"translateX(-50%)",width:18,height:18,borderRadius:"50%",background:"#A32D2D",border:"2px solid #fff",boxShadow:"0 0 0 1px #A32D2D"}}></div>
+                        <div style={{position:"absolute",top:38,left:"100%",transform:"translateX(-50%)",textAlign:"center",minWidth:60}}>
+                          <div style={{fontSize:9,color:"#501313",fontWeight:700}}>최고</div>
+                          <div style={{fontSize:11,fontWeight:800,color:"#501313"}}>{(mp.max||0).toLocaleString()}원</div>
+                        </div>
+                      </div>
+                      {mp.note && (
+                        <div style={{marginTop:8,display:"inline-flex",alignItems:"center",gap:6,padding:"5px 10px",background:"#EAF3DE",borderRadius:100,fontSize:10,color:"#173404",fontWeight:600}}>
+                          🏷️ {mp.note}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 구매처 카드 */}
+                  {aiResult.purchaseLinks && aiResult.purchaseLinks.length > 0 && (
+                    <div style={{padding:"14px",borderBottom:"1px solid #f1f3f5"}}>
+                      <div style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:8}}>🛒 추천 구매처</div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+                        {aiResult.purchaseLinks.slice(0,4).map((link,i)=>{
+                          const bc = badgeColors[link.badgeColor] || badgeColors.blue;
+                          return (
+                            <a key={i} href={link.url} target="_blank" rel="noopener noreferrer"
+                              style={{textDecoration:"none",padding:"8px 10px",background:"#fff",border:"1px solid #e5e7eb",borderRadius:8,display:"flex",flexDirection:"column",gap:5,transition:"all 0.15s"}}
+                              onMouseEnter={e=>{e.currentTarget.style.borderColor="#2563eb";e.currentTarget.style.transform="translateY(-1px)";}}
+                              onMouseLeave={e=>{e.currentTarget.style.borderColor="#e5e7eb";e.currentTarget.style.transform="";}}>
+                              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                                <span style={{fontSize:12,fontWeight:700,color:"#0f172a"}}>🔗 {link.name}</span>
+                                {link.badge && <span style={{fontSize:9,padding:"2px 6px",background:bc.bg,color:bc.color,borderRadius:4,fontWeight:700}}>{link.badge}</span>}
+                              </div>
+                              <div style={{display:"flex",alignItems:"baseline",gap:3}}>
+                                <span style={{fontSize:14,fontWeight:800,color:"#0f172a"}}>
+                                  {link.priceRange ? `${link.priceRange}원` : (link.price ? `${link.price.toLocaleString()}원` : "—")}
+                                </span>
+                              </div>
+                              {link.tags && (
+                                <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+                                  {link.tags.slice(0,2).map((t,j)=>(
+                                    <span key={j} style={{fontSize:9,padding:"1px 5px",background:"#f1f5f9",color:"#475569",borderRadius:3}}>{t}</span>
+                                  ))}
+                                </div>
+                              )}
+                            </a>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 사용법 블록 */}
+                  {aiResult.usageBlocks && aiResult.usageBlocks.length > 0 && (
+                    <div style={{padding:"14px",borderBottom:"1px solid #f1f3f5"}}>
+                      <div style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:8}}>📖 사용법 요약</div>
+                      <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.min(aiResult.usageBlocks.length,3)},1fr)`,gap:6}}>
+                        {aiResult.usageBlocks.slice(0,3).map((b,i)=>{
+                          const colors = [
+                            {bg:"#E6F1FB",label:"#042C53",desc:"#185FA5"},
+                            {bg:"#E1F5EE",label:"#04342C",desc:"#0F6E56"},
+                            {bg:"#FCEBEB",label:"#501313",desc:"#A32D2D"},
+                          ][i] || {bg:"#f1f5f9",label:"#0f172a",desc:"#475569"};
+                          return (
+                            <div key={i} style={{padding:"10px 6px",background:colors.bg,borderRadius:8,textAlign:"center"}}>
+                              <div style={{fontSize:22,marginBottom:3}}>{b.icon}</div>
+                              <div style={{fontSize:10,fontWeight:700,color:colors.label}}>{b.label}</div>
+                              <div style={{fontSize:10,color:colors.desc,marginTop:2}}>{b.desc}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 보관 픽토그램 */}
+                  {aiResult.careIcons && aiResult.careIcons.length > 0 && (
+                    <div style={{padding:"14px",borderBottom:"1px solid #f1f3f5"}}>
+                      <div style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:8}}>🧹 보관 요령</div>
+                      <div style={{display:"grid",gridTemplateColumns:`repeat(${aiResult.careIcons.length},1fr)`,gap:5}}>
+                        {aiResult.careIcons.map((c,i)=>(
+                          <div key={i} style={{padding:"8px 4px",background:"#f8fafc",borderRadius:8,textAlign:"center"}}>
+                            <div style={{fontSize:18}}>{c.icon}</div>
+                            <div style={{fontSize:9,color:"#475569",marginTop:2,fontWeight:600}}>{c.desc}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 월별 입출고 캘린더 */}
+                  {monthly.length > 0 && (
+                    <div style={{padding:"14px",borderBottom:"1px solid #f1f3f5"}}>
+                      <div style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:8}}>📅 입출고 캘린더</div>
+                      <div style={{display:"flex",gap:3,alignItems:"stretch",height:60,marginBottom:6}}>
+                        {monthly.map((m,i)=>{
+                          const inH = (m.intake/maxAll)*100;
+                          const outH = (m.outtake/maxAll)*100;
+                          const isOutHigh = m.outtake > 70;
+                          const isInHigh = m.intake > 70;
+                          return (
+                            <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center"}}>
+                              <div style={{flex:1,display:"flex",alignItems:"flex-end",justifyContent:"center",gap:2,width:"100%"}}>
+                                <div style={{width:8,height:`${inH}%`,background:isInHigh?"#639922":"#bbf7d0",borderRadius:"2px 2px 0 0"}} title={`${m.month}월 입고추천 ${m.intake}%`}></div>
+                                <div style={{width:8,height:`${outH}%`,background:isOutHigh?"#dc2626":"#fecaca",borderRadius:"2px 2px 0 0"}} title={`${m.month}월 소진예상 ${m.outtake}%`}></div>
+                              </div>
+                              <div style={{fontSize:9,color:isOutHigh||isInHigh?"#0f172a":"#94a3b8",marginTop:3,fontWeight:isOutHigh||isInHigh?700:500}}>{m.month}월</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div style={{display:"flex",gap:14,paddingTop:6,borderTop:"1px dashed #e5e7eb"}}>
+                        <span style={{fontSize:9,color:"#475569",display:"inline-flex",alignItems:"center",gap:4}}><span style={{width:8,height:8,background:"#639922",borderRadius:2}}></span>입고 추천</span>
+                        <span style={{fontSize:9,color:"#475569",display:"inline-flex",alignItems:"center",gap:4}}><span style={{width:8,height:8,background:"#dc2626",borderRadius:2}}></span>소진 다발</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 스마트 추천 */}
+                  {(aiResult.smartRecommendation || aiResult.tips) && (
+                    <div style={{padding:"12px 14px",background:"linear-gradient(90deg,#FAEEDA,#FAC775)",display:"flex",alignItems:"center",gap:10}}>
+                      <span style={{fontSize:22,flexShrink:0}}>💡</span>
+                      <div style={{fontSize:11,color:"#412402",lineHeight:1.5}}>
+                        {aiResult.smartRecommendation && <div><strong>추천:</strong> {aiResult.smartRecommendation}</div>}
+                        {aiResult.tips && <div style={{marginTop:aiResult.smartRecommendation?4:0}}>{aiResult.tips}</div>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* 기본 정보 */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:10}}>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>제품명 *</label><input className="inp" value={nN} onChange={e=>setNN(e.target.value)} style={{fontSize:12,padding:7}} placeholder="예: 8mm 디폼 블럭"/></div>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>카테고리</label><select className="sel" value={nC} onChange={e=>setNC(e.target.value)} style={{fontSize:11,padding:6}}>{CATS.map(c=><option key={c}>{c}</option>)}</select></div>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>위치</label><select className="sel" value={nL} onChange={e=>setNL(e.target.value)} style={{fontSize:11,padding:6}}>{allLocs.map(l=><option key={l}>{l}</option>)}</select></div>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>수량</label><input className="inp" type="number" value={nQ} onChange={e=>setNQ(e.target.value)} style={{fontSize:12,padding:7,textAlign:"center"}}/></div>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>단위</label><input className="inp" value={nUnit} onChange={e=>setNUnit(e.target.value)} style={{fontSize:12,padding:7}} placeholder="개/박스/세트"/></div>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>적정재고 ⚠️</label><input className="inp" type="number" value={nMinQty} onChange={e=>setNMinQty(e.target.value)} style={{fontSize:12,padding:7,textAlign:"center"}} title="이 수량 이하로 떨어지면 알림"/></div>
+            <div style={{gridColumn:"1 / -1"}}><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>발주처/공급사</label><input className="inp" value={nSupplier} onChange={e=>setNSupplier(e.target.value)} style={{fontSize:12,padding:7}} placeholder="예: 청주문구 / 02-1234-5678"/></div>
+          </div>
+
+          {/* 상세 정보 (사용법 / 관리요령 / 입출고시기) */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr",gap:8,marginBottom:10}}>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>📖 사용법</label><textarea className="inp" value={nUsage} onChange={e=>setNUsage(e.target.value)} style={{fontSize:12,padding:7,minHeight:50,resize:"vertical"}} placeholder="제품 사용 방법, 주의사항"/></div>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>🧹 관리/보관 요령</label><textarea className="inp" value={nCareGuide} onChange={e=>setNCareGuide(e.target.value)} style={{fontSize:12,padding:7,minHeight:50,resize:"vertical"}} placeholder="보관 환경, 정리 방법, 주기적 점검사항"/></div>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>📅 입출고 시기</label><textarea className="inp" value={nStockSchedule} onChange={e=>setNStockSchedule(e.target.value)} style={{fontSize:12,padding:7,minHeight:40,resize:"vertical"}} placeholder="예: 봄철 행사 전 대량 입고, 여름 성수기 출고 다수"/></div>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>📝 추가 메모</label><input className="inp" value={nMemo} onChange={e=>setNMemo(e.target.value)} style={{fontSize:12,padding:7}} placeholder="기타 참고사항"/></div>
+          </div>
+
+          {/* 등록 / 취소 */}
+          <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
+            <button onClick={()=>{setShowAdd(false);setAiResult(null);}} style={{fontSize:12,padding:"8px 14px",borderRadius:8,border:"1px solid #d1d5db",background:"#fff",cursor:"pointer"}}>취소</button>
+            <button className="btn bp" onClick={submitAdd} style={{fontSize:12,padding:"8px 18px"}}>💾 등록 (QR 자동생성)</button>
+          </div>
         </div>
       )}
 
