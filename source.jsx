@@ -11347,12 +11347,39 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   };
 
   // 네이버 지도 연동
+  // 헬퍼: ID에서 따옴표/공백/JSON wrapping 자동 제거
+  const _sanitizeNaverId = (raw) => {
+    if (!raw) return "";
+    let v = String(raw).trim();
+    // JSON.stringify로 저장된 경우 ("h2nolnhw7h" 같은 형태) 파싱
+    try {
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1);
+      }
+    } catch (e) {}
+    // 모든 따옴표 종류 제거 + 공백 제거
+    v = v.replace(/["'`\s]+/g, "").trim();
+    return v;
+  };
+
   const [naverClientId, setNaverClientId] = useState(() => {
-    try { return window.localStorage?.getItem("jamsa_naver_client_id") || ""; } catch (e) { return ""; }
+    try {
+      const raw = window.localStorage?.getItem("jamsa_naver_client_id") || "";
+      const cleaned = _sanitizeNaverId(raw);
+      // 정리된 값이 원본과 다르면 깨끗한 값으로 다시 저장
+      if (cleaned !== raw && cleaned) {
+        try { window.localStorage?.setItem("jamsa_naver_client_id", cleaned); } catch (e) {}
+        console.log(`[NaverMap] Client ID 자동 정리: "${raw}" → "${cleaned}"`);
+      }
+      return cleaned;
+    } catch (e) { return ""; }
   });
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [mapProvider, setMapProvider] = useState(() => {
-    try { return window.localStorage?.getItem("jamsa_naver_client_id") ? "naver" : "osm"; } catch (e) { return "osm"; }
+    try {
+      const raw = window.localStorage?.getItem("jamsa_naver_client_id") || "";
+      return _sanitizeNaverId(raw) ? "naver" : "osm";
+    } catch (e) { return "osm"; }
   });
   const [bgMode, setBgMode] = useState("satellite"); // satellite | plan | blend
   const [naverLoaded, setNaverLoaded] = useState(false);
@@ -11362,9 +11389,10 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   const naverMarkersRef = useRef([]);
 
   const saveNaverClientId = (id) => {
-    setNaverClientId(id);
-    try { window.localStorage?.setItem("jamsa_naver_client_id", id); } catch (e) {}
-    if (id) setMapProvider("naver");
+    const cleaned = _sanitizeNaverId(id);
+    setNaverClientId(cleaned);
+    try { window.localStorage?.setItem("jamsa_naver_client_id", cleaned); } catch (e) {}
+    if (cleaned) setMapProvider("naver");
     else setMapProvider("osm");
   };
 
