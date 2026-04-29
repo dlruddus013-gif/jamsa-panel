@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https: data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://cdn.jsdelivr.net https://unpkg.com https://oapi.map.naver.com https://openapi.map.naver.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: https: blob:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://oapi.map.naver.com https://openapi.map.naver.com https://naveropenapi.apigw.ntruss.com https://*.map.naver.com https://*.map.naver.net https://*.pstatic.net; font-src 'self' data: https://cdn.jsdelivr.net; frame-src 'self' https://www.openstreetmap.org https://*.map.naver.com;">
+  <title>한국잠사박물관 통합관리 시스템</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext x='50' y='75' font-size='80' text-anchor='middle'%3E🏛️%3C/text%3E%3C/svg%3E">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; font-family: 'Pretendard', 'Noto Sans KR', -apple-system, sans-serif; background: #f5f5f5; overflow: hidden; }
+
+    #loading { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: white; z-index: 9999; }
+    #loading.hidden { display: none; }
+    #loading .logo { font-size: 64px; }
+    #loading .title { font-size: 18px; font-weight: 700; }
+    #loading .sub { font-size: 12px; opacity: 0.6; }
+    #loading .spinner { width: 36px; height: 36px; border-radius: 50%; border: 3px solid rgba(255,255,255,0.1); border-top-color: #3b82f6; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .status-stack { position: fixed; bottom: 12px; right: 12px; z-index: 9000; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+    .status-pill { padding: 5px 10px; border-radius: 16px; font-size: 11px; font-weight: 600; background: rgba(15, 23, 42, 0.85); color: #fff; backdrop-filter: blur(8px); display: flex; align-items: center; gap: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+    .status-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; }
+    .status-pill[data-state="online"] .dot, .status-pill[data-state="ok"] .dot, .status-pill[data-state="idle"] .dot { background: #10b981; box-shadow: 0 0 6px #10b981; }
+    .status-pill[data-state="offline"] .dot, .status-pill[data-state="error"] .dot { background: #ef4444; }
+    .status-pill[data-state="pending"] .dot, .status-pill[data-state="syncing"] .dot { background: #fbbf24; animation: pulse 1s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    #globalSearch { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 8500; width: 360px; background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); border-radius: 24px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); display: flex; align-items: center; padding: 4px 4px 4px 14px; transition: all 0.2s; }
+    #globalSearch:focus-within { width: 480px; box-shadow: 0 6px 20px rgba(59,91,219,0.18); }
+    #globalSearch input { flex: 1; border: none; outline: none; background: transparent; font-size: 13px; padding: 7px 0; color: #0f172a; font-family: inherit; }
+    #globalSearch input::placeholder { color: #94a3b8; }
+    #globalSearch .icon { width: 14px; height: 14px; opacity: 0.5; margin-right: 8px; }
+    #globalSearch .shortcut { font-size: 10px; color: #64748b; padding: 2px 6px; background: rgba(0,0,0,0.05); border-radius: 4px; margin-right: 6px; font-family: ui-monospace, monospace; }
+
+    #searchResults { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); z-index: 8400; width: 540px; max-height: 60vh; overflow: auto; background: white; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.18); display: none; padding: 8px; }
+    #searchResults.active { display: block; }
+    .sr-row { padding: 10px 12px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; }
+    .sr-row:hover { background: #f1f5f9; }
+    .sr-coll { font-size: 10px; padding: 2px 8px; border-radius: 4px; background: #dbeafe; color: #1e40af; font-weight: 600; flex-shrink: 0; min-width: 80px; text-align: center; }
+    .sr-preview { font-size: 13px; color: #0f172a; font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sr-empty { padding: 24px; text-align: center; color: #94a3b8; font-size: 13px; }
+    .sr-header { padding: 8px 12px; font-size: 11px; color: #64748b; font-weight: 600; border-bottom: 0.5px solid #e2e8f0; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <div class="logo">🏛️</div>
+    <div class="title">한국잠사박물관 통합관리 시스템</div>
+    <div class="spinner"></div>
+    <div class="sub" id="loadingMsg">시스템 초기화 중...</div>
+  </div>
+
+  <div id="globalSearch">
+    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="11" cy="11" r="8"></circle>
+      <path d="m21 21-4.3-4.3"></path>
+    </svg>
+    <input id="searchInput" type="text" placeholder="재고/시설/조치/이력 전체 검색... (Ctrl+K)" autocomplete="off">
+    <span class="shortcut">⌘K</span>
+  </div>
+  <div id="searchResults"></div>
+
+  <div id="root"></div>
+
+  <div class="status-stack">
+    <div class="status-pill" id="authBadge" data-state="offline" title="인증 상태">
+      <span class="dot"></span>
+      <span class="auth-txt">🔓 미로그인</span>
+    </div>
+    <div class="status-pill" id="syncBadge" data-state="idle" title="클라우드 동기화">
+      <span class="dot"></span>
+      <span class="sync-txt">클라우드 ✓</span>
+    </div>
+    <div class="status-pill" id="backendBadge" data-state="offline" title="CCTV 5555 (옵션)" style="display:none;">
+      <span class="dot"></span>
+      <span id="backendStatus">CCTV 확인...</span>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      const msgs = ['시스템 초기화 중...', '인증 확인...', '데이터 동기화...', '거의 완료...'];
+      let i = 0;
+      const msgEl = document.getElementById('loadingMsg');
+      const interval = setInterval(() => {
+        i = (i + 1) % msgs.length;
+        if (msgEl && !msgEl.textContent.includes('완료') && !msgEl.textContent.includes('필요') && !msgEl.textContent.includes('실패')) {
+          msgEl.textContent = msgs[i];
+        }
+      }, 700);
+      window.__hideLoading = () => {
+        clearInterval(interval);
+        const el = document.getElementById('loading');
+        if (el) {
+          el.style.transition = 'opacity 0.3s';
+          el.style.opacity = '0';
+          setTimeout(() => el.classList.add('hidden'), 300);
+        }
+      };
+    })();
+
+    // CCTV 5555 백엔드 상태 (BACKEND_URL 설정된 경우만)
+    setTimeout(() => {
+      if (!window.BACKEND_URL) return;
+      const badge = document.getElementById('backendBadge');
+      const status = document.getElementById('backendStatus');
+      badge.style.display = 'flex';
+      const check = async () => {
+        try {
+          const res = await fetch(window.BACKEND_URL + '/api/status', { signal: AbortSignal.timeout?.(3000), mode: 'no-cors' });
+          badge.dataset.state = 'online';
+          status.textContent = 'CCTV ●';
+        } catch (e) {
+          badge.dataset.state = 'offline';
+          status.textContent = 'CCTV 끊김';
+        }
+      };
+      check();
+      setInterval(check, 15000);
+    }, 2000);
+
+    // 글로벌 검색
+    (function() {
+      const input = document.getElementById('searchInput');
+      const results = document.getElementById('searchResults');
+      let timer = null;
+      const LABELS = {
+        'jamsa_inv_prods': '📦 재고', 'jamsa_inv_hist': '📜 이력',
+        'jamsa_custom_zones': '📍 구역', 'jamsa_fac_inspections': '🛠 점검',
+        'jamsa_fac_actions': '✓ 조치', 'jamsa_audit_log': '📋 활동',
+        'jamsa_worklogs': '📒 일지',
+      };
+      const search = async (q) => {
+        if (!q) { results.classList.remove('active'); return; }
+        if (!window.authFetch) { return; }
+        try {
+          const res = await window.authFetch('/api/search?q=' + encodeURIComponent(q) + '&limit=30');
+          if (!res.ok) {
+            results.innerHTML = '<div class="sr-empty">' + (res.status === 401 ? '로그인 필요' : '검색 실패') + '</div>';
+            results.classList.add('active'); return;
+          }
+          const data = await res.json();
+          const matches = data.matches || [];
+          if (matches.length === 0) {
+            results.innerHTML = '<div class="sr-empty">"' + q + '" 결과 없음</div>';
+            results.classList.add('active'); return;
+          }
+          const grouped = {};
+          matches.forEach(m => { (grouped[m.collection] = grouped[m.collection] || []).push(m); });
+          let html = '<div class="sr-header">' + matches.length + '건</div>';
+          for (const [coll, items] of Object.entries(grouped)) {
+            const label = LABELS[coll] || coll.replace('jamsa_', '');
+            items.slice(0, 6).forEach(m => {
+              const e = (m.preview || '').replace(/</g, '&lt;');
+              html += '<div class="sr-row" onclick="window.__openItem(\'' + coll + '\',' + m.index + ')"><span class="sr-coll">' + label + '</span><span class="sr-preview">' + e + '</span></div>';
+            });
+            if (items.length > 6) html += '<div class="sr-row" style="opacity:0.6"><span class="sr-coll">' + label + '</span><span class="sr-preview">...외 ' + (items.length - 6) + '건</span></div>';
+          }
+          results.innerHTML = html;
+          results.classList.add('active');
+        } catch (e) {
+          results.innerHTML = '<div class="sr-empty">오류: ' + e.message + '</div>';
+          results.classList.add('active');
+        }
+      };
+      window.__openItem = (coll, idx) => {
+        results.classList.remove('active'); input.value = '';
+        try {
+          const data = JSON.parse(localStorage.getItem(coll) || '[]');
+          const item = Array.isArray(data) ? data[idx] : data[idx];
+          alert('[' + coll + ' #' + idx + ']\n\n' + JSON.stringify(item, null, 2).slice(0, 600));
+        } catch (e) { alert(e.message); }
+      };
+      input.addEventListener('input', e => { clearTimeout(timer); timer = setTimeout(() => search(e.target.value.trim()), 200); });
+      input.addEventListener('keydown', e => { if (e.key === 'Escape') { input.value = ''; results.classList.remove('active'); input.blur(); } });
+      document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); input.focus(); input.select(); } });
+      document.addEventListener('click', e => { if (!e.target.closest('#globalSearch') && !e.target.closest('#searchResults')) results.classList.remove('active'); });
+    })();
+  </script>
+  <script type="module" src="/app.bundle.js"></script>
+  <script>setTimeout(() => window.__hideLoading?.(), 1500);</script>
+</body>
+</html>

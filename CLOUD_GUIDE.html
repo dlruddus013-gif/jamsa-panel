@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>클라우드 배포 가이드</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Pretendard', -apple-system, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+    min-height: 100vh; color: #0f172a;
+    padding: 40px 20px;
+  }
+  .container { max-width: 900px; margin: 0 auto; }
+
+  .hero {
+    background: white;
+    border-radius: 16px;
+    padding: 40px;
+    text-align: center;
+    margin-bottom: 24px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.2);
+  }
+  .hero h1 { font-size: 32px; font-weight: 700; margin-bottom: 8px;
+    background: linear-gradient(135deg, #3b5bdb, #1e40af);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .hero .sub { color: #64748b; font-size: 15px; }
+  .hero .icon { font-size: 56px; margin-bottom: 12px; display: block; }
+
+  .progress {
+    display: flex; gap: 8px; margin: 24px 0;
+    background: white; padding: 12px; border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  }
+  .progress-step {
+    flex: 1; height: 6px; background: #e2e8f0;
+    border-radius: 3px; transition: all 0.3s;
+  }
+  .progress-step.done { background: linear-gradient(90deg, #10b981, #059669); }
+
+  .step-card {
+    background: white;
+    border-radius: 12px;
+    padding: 28px;
+    margin-bottom: 16px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+    transition: transform 0.2s;
+  }
+  .step-card:hover { transform: translateY(-2px); }
+
+  .step-head {
+    display: flex; align-items: center; gap: 16px;
+    margin-bottom: 16px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #f1f5f9;
+  }
+  .step-icon {
+    width: 48px; height: 48px;
+    background: linear-gradient(135deg, #3b5bdb, #1e40af);
+    color: white; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 20px;
+    flex-shrink: 0;
+  }
+  .step-head h2 { font-size: 20px; flex: 1; }
+  .step-time {
+    background: #f0f9ff; color: #0369a1;
+    padding: 4px 12px; border-radius: 20px;
+    font-size: 12px; font-weight: 600;
+  }
+
+  .action {
+    background: #f8fafc;
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 12px 0;
+    border-left: 4px solid #3b5bdb;
+    font-size: 14px;
+  }
+
+  .open-btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: #3b5bdb; color: white;
+    padding: 10px 20px; border-radius: 8px;
+    text-decoration: none; font-weight: 600;
+    margin: 8px 6px 8px 0; font-size: 14px;
+    transition: all 0.2s;
+    border: none; cursor: pointer; font-family: inherit;
+  }
+  .open-btn:hover { background: #1e40af; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(59,91,219,0.3); }
+
+  .copy-box {
+    background: #1e293b; color: #fbbf24;
+    padding: 12px 16px; border-radius: 8px;
+    font-family: ui-monospace, SF Mono, monospace;
+    font-size: 13px;
+    margin: 8px 0;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px;
+  }
+  .copy-box code { flex: 1; word-break: break-all; }
+  .copy-btn {
+    background: #fbbf24; color: #1e293b;
+    border: none; padding: 6px 12px; border-radius: 6px;
+    font-weight: 700; cursor: pointer; font-size: 11px;
+    flex-shrink: 0;
+  }
+  .copy-btn:hover { background: #f59e0b; }
+  .copy-btn.copied { background: #10b981; color: white; }
+
+  .checkbox {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 0; cursor: pointer;
+    font-size: 14px;
+    user-select: none;
+  }
+  .checkbox input { width: 18px; height: 18px; cursor: pointer; }
+  .checkbox.done { text-decoration: line-through; opacity: 0.5; }
+
+  .env-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 13px; margin: 12px 0;
+  }
+  .env-table th, .env-table td {
+    padding: 8px 12px; text-align: left;
+    border-bottom: 1px solid #e2e8f0;
+  }
+  .env-table th { background: #f8fafc; }
+  .env-table code {
+    background: #fef3c7; padding: 2px 6px;
+    border-radius: 4px; font-size: 12px;
+  }
+
+  .tip {
+    background: #fef3c7;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 13px; color: #78350f;
+    margin: 8px 0;
+    border-left: 4px solid #f59e0b;
+  }
+  .alert {
+    background: #fee2e2; padding: 10px 14px;
+    border-radius: 8px; font-size: 13px; color: #991b1b;
+    margin: 8px 0;
+    border-left: 4px solid #ef4444;
+  }
+  .success {
+    background: #d1fae5; padding: 10px 14px;
+    border-radius: 8px; font-size: 13px; color: #065f46;
+    margin: 8px 0;
+    border-left: 4px solid #10b981;
+  }
+
+  .reveal-files {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #f1f5f9; color: #475569;
+    padding: 6px 12px; border-radius: 6px;
+    font-size: 12px; cursor: pointer; border: none;
+    font-family: inherit;
+  }
+  .reveal-files:hover { background: #e2e8f0; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="hero">
+    <span class="icon">☁️</span>
+    <h1>클라우드 배포 가이드</h1>
+    <div class="sub">박물관 외부에서도 접근 가능하게 — 30분 완성</div>
+  </div>
+
+  <div class="progress">
+    <div class="progress-step" id="p1"></div>
+    <div class="progress-step" id="p2"></div>
+    <div class="progress-step" id="p3"></div>
+    <div class="progress-step" id="p4"></div>
+    <div class="progress-step" id="p5"></div>
+  </div>
+
+  <!-- Step 1 -->
+  <div class="step-card">
+    <div class="step-head">
+      <div class="step-icon">1</div>
+      <h2>Supabase 가입 + 프로젝트 생성</h2>
+      <div class="step-time">5분</div>
+    </div>
+
+    <p>데이터베이스 + 사용자 인증을 무료로 제공하는 서비스입니다.</p>
+
+    <div class="action">
+      <strong>① 가입 페이지로 이동</strong><br>
+      <button class="open-btn" onclick="openExt('https://supabase.com/dashboard/sign-up'); markDone('s1')">
+        🔗 Supabase 가입하기
+      </button>
+      → GitHub 또는 이메일로 가입
+    </div>
+
+    <div class="action">
+      <strong>② 새 프로젝트 만들기</strong>
+      <ul style="margin: 8px 0 0 20px; font-size: 14px;">
+        <li>Name: <code>jamsa-museum</code></li>
+        <li>Database Password: 강한 비밀번호 (메모장에 따로 저장!)</li>
+        <li>Region: <strong>Northeast Asia (Seoul)</strong> ⭐</li>
+        <li>Plan: <strong>Free</strong></li>
+      </ul>
+    </div>
+
+    <label class="checkbox" data-step="1">
+      <input type="checkbox" onchange="updateProgress()">
+      <span>Supabase 프로젝트 생성 완료</span>
+    </label>
+  </div>
+
+  <!-- Step 2 -->
+  <div class="step-card">
+    <div class="step-head">
+      <div class="step-icon">2</div>
+      <h2>SQL 스키마 한 번 실행</h2>
+      <div class="step-time">2분</div>
+    </div>
+
+    <p>데이터 테이블/검색함수/보안 정책을 한 번에 설치합니다.</p>
+
+    <div class="action">
+      <strong>① Supabase 대시보드에서 좌측 SQL Editor 클릭</strong>
+    </div>
+
+    <div class="action">
+      <strong>② 같은 폴더의 schema.sql 파일 열기</strong><br>
+      <button class="reveal-files" onclick="openFile('schema.sql')">📄 schema.sql 열기</button>
+      → 메모장에서 <strong>Ctrl+A → Ctrl+C</strong> (전체 복사)
+    </div>
+
+    <div class="action">
+      <strong>③ SQL Editor에 붙여넣고 Run</strong><br>
+      Ctrl+V → 우하단 <strong>Run ▶</strong> 클릭<br>
+      <span class="success" style="display:inline-block;margin-top:8px;">✅ "Success" 메시지 확인</span>
+    </div>
+
+    <div class="action">
+      <strong>④ Authentication → Providers → Email 활성화</strong><br>
+      "Confirm email" <strong>끄기</strong> (즉시 가입 가능)<br>
+      Save 클릭
+    </div>
+
+    <label class="checkbox">
+      <input type="checkbox" onchange="updateProgress()">
+      <span>SQL 실행 완료 + Email Provider 활성화</span>
+    </label>
+  </div>
+
+  <!-- Step 3 -->
+  <div class="step-card">
+    <div class="step-head">
+      <div class="step-icon">3</div>
+      <h2>환경변수 3개 복사</h2>
+      <div class="step-time">2분</div>
+    </div>
+
+    <p>Vercel 배포 시 필요합니다. 메모장에 따로 모아두세요.</p>
+
+    <div class="action">
+      <strong>Supabase 대시보드 → Project Settings (⚙) → API</strong>
+    </div>
+
+    <table class="env-table">
+      <tr><th>변수명</th><th>위치</th></tr>
+      <tr>
+        <td><code>SUPABASE_URL</code></td>
+        <td>Project URL (https://xxxxx.supabase.co)</td>
+      </tr>
+      <tr>
+        <td><code>SUPABASE_ANON_KEY</code></td>
+        <td>Project API keys → <code>anon public</code></td>
+      </tr>
+      <tr>
+        <td><code>SUPABASE_SERVICE_ROLE_KEY</code></td>
+        <td>Project API keys → <code>service_role</code> (Reveal 클릭)</td>
+      </tr>
+    </table>
+
+    <div class="alert">
+      🔒 <strong>service_role key는 절대 GitHub/공개 위치에 올리지 마세요.</strong> 누출 시 모든 데이터 노출됩니다.
+    </div>
+
+    <label class="checkbox">
+      <input type="checkbox" onchange="updateProgress()">
+      <span>3개 키 메모장에 복사 완료</span>
+    </label>
+  </div>
+
+  <!-- Step 4 -->
+  <div class="step-card">
+    <div class="step-head">
+      <div class="step-icon">4</div>
+      <h2>GitHub + Vercel 배포</h2>
+      <div class="step-time">10분</div>
+    </div>
+
+    <p><strong>GitHub Desktop 사용이 가장 쉬움 (명령어 없이 클릭만):</strong></p>
+
+    <div class="action">
+      <strong>① GitHub Desktop 설치</strong><br>
+      <button class="open-btn" onclick="openExt('https://desktop.github.com/')">
+        🔗 GitHub Desktop 다운로드
+      </button>
+      → 설치 → GitHub 가입/로그인
+    </div>
+
+    <div class="action">
+      <strong>② 이 폴더를 GitHub에 올리기</strong>
+      <ul style="margin: 8px 0 0 20px; font-size: 14px;">
+        <li>GitHub Desktop 실행</li>
+        <li><strong>File → Add local repository</strong></li>
+        <li>이 <code>cloud-setup/</code> 폴더 선택</li>
+        <li><strong>Publish repository</strong> 클릭</li>
+        <li><strong>Private 체크</strong> ⭐ → Publish</li>
+      </ul>
+    </div>
+
+    <div class="action">
+      <strong>③ Vercel 가입 + 배포</strong><br>
+      <button class="open-btn" onclick="openExt('https://vercel.com/signup')">
+        🔗 Vercel 가입
+      </button>
+      <strong>"Continue with GitHub"</strong> 선택<br><br>
+
+      가입 후:
+      <ul style="margin: 8px 0 0 20px; font-size: 14px;">
+        <li><strong>Add New → Project</strong></li>
+        <li>방금 만든 GitHub 저장소 선택 → <strong>Import</strong></li>
+        <li><strong>Environment Variables 펼치기</strong> → 4개 추가:
+          <table class="env-table" style="margin-top:8px;">
+            <tr><td><code>SUPABASE_URL</code></td><td>3단계 1번 값</td></tr>
+            <tr><td><code>SUPABASE_ANON_KEY</code></td><td>3단계 2번 값</td></tr>
+            <tr><td><code>SUPABASE_SERVICE_ROLE_KEY</code></td><td>3단계 3번 값</td></tr>
+            <tr><td><code>ORG_ID</code></td><td><code>jamsa</code></td></tr>
+          </table>
+        </li>
+        <li>하단 <strong>Deploy</strong> ▶ → 1-2분 대기</li>
+      </ul>
+    </div>
+
+    <div class="success">
+      🎉 배포 완료 시 <code>https://your-project.vercel.app</code> 같은 URL이 발급됩니다.
+    </div>
+
+    <label class="checkbox">
+      <input type="checkbox" onchange="updateProgress()">
+      <span>Vercel URL 발급 받음</span>
+    </label>
+  </div>
+
+  <!-- Step 5 -->
+  <div class="step-card">
+    <div class="step-head">
+      <div class="step-icon">5</div>
+      <h2>첫 가입 = 자동 admin</h2>
+      <div class="step-time">3분</div>
+    </div>
+
+    <p>발급받은 URL 접속 → 로그인 화면 → 계정 만들기</p>
+
+    <div class="action">
+      <strong>이메일 + 비밀번호</strong> (8자 이상) 입력 → <strong>계정 만들기</strong> 클릭
+    </div>
+
+    <div class="success">
+      ✅ 첫 가입자는 자동으로 <strong>admin</strong> 권한 부여됨 (DB 트리거 작동)
+    </div>
+
+    <div class="tip">
+      💡 추가 직원 가입 시 자동으로 <strong>viewer</strong> 권한.<br>
+      권한 변경은 Supabase SQL Editor에서:
+      <div class="copy-box">
+        <code id="role-sql">update memberships set role = 'manager' where user_id = (select id from auth.users where email = 'user@example.com');</code>
+        <button class="copy-btn" onclick="copyText('role-sql', this)">복사</button>
+      </div>
+      역할: <strong>admin</strong> > manager > inspector > viewer
+    </div>
+
+    <label class="checkbox">
+      <input type="checkbox" onchange="updateProgress()">
+      <span>로그인 성공 + 패널 화면 진입</span>
+    </label>
+  </div>
+
+  <!-- 완료 -->
+  <div class="step-card" id="finalCard" style="background: linear-gradient(135deg, #10b981, #059669); color: white; display: none;">
+    <h2 style="text-align:center; font-size: 24px; margin-bottom: 16px;">🎉 클라우드 배포 완료!</h2>
+    <p style="text-align:center; font-size: 16px; opacity: 0.95;">
+      이제 박물관 외부에서도 안전하게 접근할 수 있습니다.<br>
+      모든 데이터는 Supabase에 자동 저장되고, 변경사항은 모든 기기에 실시간 동기화됩니다.
+    </p>
+  </div>
+
+  <div style="text-align: center; margin-top: 32px;">
+    <a href="HELP.html" class="open-btn" style="background: #64748b;">← 메인 도움말로</a>
+  </div>
+
+</div>
+
+<script>
+  // 외부 링크 열기 (Windows에서 기본 브라우저로)
+  function openExt(url) { window.open(url, '_blank', 'noopener'); }
+
+  // 같은 폴더 파일 열기
+  function openFile(name) {
+    // file:// 프로토콜에서는 같은 폴더 파일 직접 못 여는 경우 있어서, 단순 안내
+    alert('이 폴더의 ' + name + ' 파일을 메모장으로 열어주세요.\n\n파일 위치: ' + window.location.pathname.replace(/[^\/]+$/, '') + name);
+  }
+
+  // 텍스트 복사
+  function copyText(id, btn) {
+    const text = document.getElementById(id).textContent;
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = '✓ 복사됨';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = '복사';
+        btn.classList.remove('copied');
+      }, 2000);
+    });
+  }
+
+  // 진행 표시
+  function updateProgress() {
+    const checks = document.querySelectorAll('.checkbox input[type=checkbox]');
+    let done = 0;
+    checks.forEach((c, i) => {
+      const lbl = c.closest('.checkbox');
+      if (c.checked) {
+        lbl.classList.add('done');
+        done++;
+      } else {
+        lbl.classList.remove('done');
+      }
+    });
+    for (let i = 1; i <= 5; i++) {
+      const p = document.getElementById('p' + i);
+      if (p) {
+        if (i <= done) p.classList.add('done');
+        else p.classList.remove('done');
+      }
+    }
+    document.getElementById('finalCard').style.display = done === 5 ? 'block' : 'none';
+  }
+
+  function markDone(id) {
+    // 외부 링크 클릭 시 자동 체크는 안 함 (실제 가입 완료해야 체크해야 의미 있음)
+  }
+</script>
+</body>
+</html>

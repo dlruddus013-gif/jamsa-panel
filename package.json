@@ -1,0 +1,20 @@
+{
+  "name": "jamsa-integrated-panel",
+  "version": "1.0.0",
+  "description": "한국잠사박물관 통합관리 시스템 (Vercel + Supabase)",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild entry.jsx --bundle --minify --loader:.jsx=jsx --loader:.js=jsx --jsx=automatic --define:process.env.NODE_ENV=\"\\\"production\\\"\" --target=es2020 --outfile=public/app.bundle.js",
+    "dev": "esbuild entry.jsx --bundle --watch --loader:.jsx=jsx --loader:.js=jsx --jsx=automatic --target=es2020 --outfile=public/app.bundle.js",
+    "vercel-build": "npm run build"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.23.1"
+  }
+}
