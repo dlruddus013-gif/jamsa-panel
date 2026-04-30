@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#A32D2D">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="잠사박물관 직원">
+<link rel="manifest" href="/staff-manifest.json">
+<link rel="apple-touch-icon" href="/staff-icon-192.png">
+<title>한국잠사박물관 직원 추적</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f4f8; overflow: hidden; }
+body { display: flex; flex-direction: column; }
+.header { background: linear-gradient(135deg, #A32D2D, #C84141); color: white; padding: 16px 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+.header h1 { font-size: 18px; font-weight: 700; }
+.header .sub { font-size: 12px; opacity: 0.9; margin-top: 2px; }
+.main { flex: 1; overflow-y: auto; padding: 16px; }
+.card { background: white; border-radius: 16px; padding: 16px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+.card h2 { font-size: 13px; font-weight: 700; color: #475569; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+.status-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #f1f5f9; font-size: 13px; }
+.status-row:last-child { border-bottom: none; }
+.status-row .label { color: #64748b; }
+.status-row .value { font-weight: 700; color: #0f172a; }
+.status-row .value.ok { color: #16a34a; }
+.status-row .value.warn { color: #ea580c; }
+.status-row .value.error { color: #dc2626; }
+.big-btn { width: 100%; padding: 18px; border: none; border-radius: 16px; font-size: 16px; font-weight: 800; color: white; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.1); transition: all 0.15s; }
+.big-btn:active { transform: scale(0.98); }
+.btn-start { background: linear-gradient(135deg, #16a34a, #15803d); }
+.btn-stop { background: linear-gradient(135deg, #dc2626, #b91c1c); }
+.btn-secondary { background: white; color: #0f172a; border: 1.5px solid #e2e8f0; padding: 12px; border-radius: 12px; font-size: 13px; font-weight: 700; cursor: pointer; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.dot.green { background: #22c55e; animation: pulse 2s infinite; }
+.dot.gray { background: #94a3b8; }
+.dot.red { background: #ef4444; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.beacon-item { display: flex; align-items: center; gap: 8px; padding: 8px; background: #f8fafc; border-radius: 8px; margin-bottom: 6px; font-size: 12px; }
+.beacon-rssi { margin-left: auto; font-weight: 700; color: #0f172a; }
+.beacon-rssi.strong { color: #16a34a; }
+.beacon-rssi.medium { color: #ea580c; }
+.beacon-rssi.weak { color: #dc2626; }
+.alert-banner { background: linear-gradient(135deg, #fef3c7, #fde68a); border-left: 4px solid #f59e0b; padding: 12px; border-radius: 8px; margin-bottom: 12px; font-size: 12px; color: #78350f; }
+.error-banner { background: #fee2e2; border-left: 4px solid #dc2626; padding: 12px; border-radius: 8px; margin-bottom: 12px; font-size: 12px; color: #7f1d1d; }
+.success-banner { background: #d1fae5; border-left: 4px solid #16a34a; padding: 12px; border-radius: 8px; margin-bottom: 12px; font-size: 12px; color: #064e3b; }
+.bottom-nav { background: white; padding: 12px 16px; border-top: 1px solid #e2e8f0; display: flex; gap: 8px; }
+.tab-btn { flex: 1; padding: 10px; border-radius: 10px; border: none; background: #f1f5f9; font-size: 12px; font-weight: 700; color: #64748b; cursor: pointer; }
+.tab-btn.active { background: #A32D2D; color: white; }
+.input { width: 100%; padding: 10px 12px; border: 1.5px solid #e2e8f0; border-radius: 10px; font-size: 14px; }
+.divider { height: 1px; background: #e2e8f0; margin: 8px 0; }
+.timer { font-family: monospace; font-size: 32px; font-weight: 800; color: #16a34a; text-align: center; padding: 20px 0; }
+.empty { text-align: center; padding: 40px 20px; color: #94a3b8; }
+.empty-icon { font-size: 48px; opacity: 0.3; }
+.kakao-btn { background: #FEE500; color: #000; }
+.staff-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+.staff-pick label { background: #f8fafc; padding: 12px; border-radius: 10px; text-align: center; cursor: pointer; border: 1.5px solid #e2e8f0; transition: all 0.15s; }
+.staff-pick label:active { transform: scale(0.98); }
+.staff-pick input { display: none; }
+.staff-pick input:checked + .staff-info { color: #A32D2D; }
+.staff-pick label:has(input:checked) { background: #fef2f2; border-color: #A32D2D; }
+.staff-name { font-size: 13px; font-weight: 700; }
+.staff-role { font-size: 10px; color: #94a3b8; margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🛡️ 잠사박물관 직원 추적</h1>
+  <div class="sub" id="subtitle">로그인하여 근무 시작</div>
+</div>
+
+<div class="main" id="main">
+  <!-- 로그인 화면 -->
+  <div id="login-view">
+    <div class="card">
+      <h2>👤 본인 선택</h2>
+      <div class="staff-pick" id="staff-list">
+        <!-- 동적 생성 -->
+      </div>
+    </div>
+    <div class="card">
+      <h2>🔐 또는 카카오톡으로 로그인</h2>
+      <button class="big-btn kakao-btn" onclick="kakaoLogin()">💬 카카오톡 로그인</button>
+      <p style="font-size: 11px; color: #94a3b8; margin-top: 8px; text-align: center;">
+        카카오톡 ID로 자동 인식 (관리자가 사전 등록 필요)
+      </p>
+    </div>
+  </div>
+
+  <!-- 메인 화면 -->
+  <div id="tracking-view" style="display:none">
+    <div class="card">
+      <h2>📍 위치 추적 상태</h2>
+      <div class="status-row">
+        <span class="label">📱 직원</span>
+        <span class="value" id="my-name">-</span>
+      </div>
+      <div class="status-row">
+        <span class="label">🛰️ GPS</span>
+        <span class="value" id="gps-status"><span class="dot gray"></span>대기</span>
+      </div>
+      <div class="status-row">
+        <span class="label">📡 BLE 비콘</span>
+        <span class="value" id="ble-status"><span class="dot gray"></span>대기</span>
+      </div>
+      <div class="status-row">
+        <span class="label">🌐 서버 연결</span>
+        <span class="value" id="server-status"><span class="dot gray"></span>대기</span>
+      </div>
+      <div class="status-row">
+        <span class="label">📍 현재 추정 위치</span>
+        <span class="value" id="my-location">-</span>
+      </div>
+      <div class="status-row">
+        <span class="label">⏱️ 마지막 갱신</span>
+        <span class="value" id="last-update">-</span>
+      </div>
+    </div>
+
+    <div class="card" id="timer-card" style="display:none">
+      <h2>⏱️ 근무 시간</h2>
+      <div class="timer" id="work-timer">00:00:00</div>
+    </div>
+
+    <div class="card" id="beacon-card" style="display:none">
+      <h2>📡 감지된 비콘</h2>
+      <div id="beacon-list">
+        <div class="empty">
+          <div class="empty-icon">📡</div>
+          <p style="margin-top:8px;font-size:12px">비콘 신호 대기 중...</p>
+        </div>
+      </div>
+    </div>
+
+    <button class="big-btn btn-start" id="action-btn" onclick="toggleTracking()">
+      ▶️ 근무 시작
+    </button>
+
+    <div style="margin-top: 12px; display: grid; gap: 8px;">
+      <button class="btn-secondary" onclick="testGPS()">🧪 GPS 테스트</button>
+      <button class="btn-secondary" onclick="testBLE()">🧪 BLE 비콘 테스트</button>
+      <button class="btn-secondary" onclick="logout()">🚪 로그아웃</button>
+    </div>
+  </div>
+</div>
+
+<div class="bottom-nav" id="bottom-nav" style="display:none">
+  <button class="tab-btn active" onclick="switchTab('home')">🏠 홈</button>
+  <button class="tab-btn" onclick="switchTab('alerts')">🚨 알림</button>
+  <button class="tab-btn" onclick="switchTab('me')">👤 나</button>
+</div>
+
+<script>
+// ============== 설정 ==============
+const SERVER_URL = window.location.origin; // 같은 도메인 사용 (Vercel 배포 URL)
+const GPS_INTERVAL = 30 * 1000;  // 30초마다 GPS 전송
+const BLE_INTERVAL = 5 * 1000;   // 5초마다 BLE 스캔
+
+// 박물관 직원 명단 (실제로는 서버에서 가져옴)
+const STAFF_LIST = [
+  { id: "u1", name: "이경연", role: "대표" },
+  { id: "u2", name: "김안전", role: "안전관리" },
+  { id: "u3", name: "박교육", role: "교육담당" },
+  { id: "u4", name: "최운영", role: "운영팀" },
+  { id: "u5", name: "정직원", role: "운영팀" },
+];
+
+// 박물관 비콘 매핑 (실제로는 Supabase에서 가져옴)
+const BEACONS = {
+  "BCN-01": { name: "주차장", lat: 36.6420, lng: 127.4885 },
+  "BCN-02": { name: "정문", lat: 36.6422, lng: 127.4887 },
+  "BCN-03": { name: "본관 입구", lat: 36.6424, lng: 127.4889 },
+  "BCN-04": { name: "전시실 1", lat: 36.6425, lng: 127.4890 },
+  "BCN-05": { name: "전시실 2", lat: 36.6426, lng: 127.4891 },
+  "BCN-09": { name: "키즈카페", lat: 36.6428, lng: 127.4893 },
+  "BCN-10": { name: "양떼정원", lat: 36.6430, lng: 127.4895 },
+  "BCN-11": { name: "눈썰매장", lat: 36.6432, lng: 127.4897 },
+};
+
+// ============== 상태 ==============
+let currentUser = null;
+let tracking = false;
+let gpsTimer = null;
+let bleTimer = null;
+let workStartTime = null;
+let timerInterval = null;
+let lastGPSPosition = null;
+let detectedBeacons = {};
+
+// ============== 초기화 ==============
+window.addEventListener('load', () => {
+  renderStaffList();
+  
+  // 자동 로그인 (이전 세션 복구)
+  const savedUser = localStorage.getItem('staff_user');
+  if (savedUser) {
+    try {
+      currentUser = JSON.parse(savedUser);
+      showTrackingView();
+    } catch (e) {}
+  }
+  
+  // PWA 설치 안내
+  registerServiceWorker();
+});
+
+function renderStaffList() {
+  const list = document.getElementById('staff-list');
+  list.innerHTML = STAFF_LIST.map(s => `
+    <label>
+      <input type="radio" name="staff" value="${s.id}" onchange="loginAs('${s.id}')">
+      <div class="staff-info">
+        <div class="staff-name">${s.name}</div>
+        <div class="staff-role">${s.role}</div>
+      </div>
+    </label>
+  `).join('');
+}
+
+function loginAs(staffId) {
+  const staff = STAFF_LIST.find(s => s.id === staffId);
+  if (!staff) return;
+  currentUser = staff;
+  localStorage.setItem('staff_user', JSON.stringify(staff));
+  showTrackingView();
+}
+
+async function kakaoLogin() {
+  // 카카오톡 SDK 연동 (실제로는 카카오 JS SDK 필요)
+  alert("카카오톡 로그인 기능 안내:\n\n" +
+        "관리자가 사전에 직원의 카카오톡 ID를 시스템에 등록해두면, " +
+        "이 버튼 클릭 시 자동 인식됩니다.\n\n" +
+        "현재는 데모 모드 - 첫 번째 직원으로 로그인됩니다.");
+  loginAs(STAFF_LIST[0].id);
+}
+
+function showTrackingView() {
+  document.getElementById('login-view').style.display = 'none';
+  document.getElementById('tracking-view').style.display = 'block';
+  document.getElementById('bottom-nav').style.display = 'flex';
+  document.getElementById('my-name').textContent = `${currentUser.name} (${currentUser.role})`;
+  document.getElementById('subtitle').textContent = `${currentUser.name}님 환영합니다`;
+}
+
+function logout() {
+  if (tracking) stopTracking();
+  localStorage.removeItem('staff_user');
+  currentUser = null;
+  document.getElementById('login-view').style.display = 'block';
+  document.getElementById('tracking-view').style.display = 'none';
+  document.getElementById('bottom-nav').style.display = 'none';
+  document.getElementById('subtitle').textContent = '로그인하여 근무 시작';
+}
+
+// ============== GPS 추적 ==============
+async function startGPSTracking() {
+  if (!navigator.geolocation) {
+    setStatus('gps-status', 'red', 'GPS 미지원');
+    return false;
+  }
+
+  // 권한 요청
+  try {
+    const result = await new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, {
+        enableHighAccuracy: true, timeout: 10000, maximumAge: 0
+      });
+    });
+    lastGPSPosition = result;
+    setStatus('gps-status', 'green', `정상 (정확도 ${Math.round(result.coords.accuracy)}m)`);
+  } catch (e) {
+    setStatus('gps-status', 'red', '권한 거부 또는 오류');
+    showError('GPS 권한이 필요합니다. 설정 → 사이트 권한에서 허용해 주세요.');
+    return false;
+  }
+
+  // 30초마다 위치 갱신
+  gpsTimer = setInterval(async () => {
+    try {
+      const pos = await new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true, timeout: 5000, maximumAge: 10000
+        });
+      });
+      lastGPSPosition = pos;
+      sendLocationToServer({
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        accuracy: pos.coords.accuracy,
+        source: 'gps'
+      });
+      setStatus('gps-status', 'green', `정상 (${Math.round(pos.coords.accuracy)}m)`);
+    } catch (e) {
+      setStatus('gps-status', 'warn', 'GPS 신호 약함');
+    }
+  }, GPS_INTERVAL);
+
+  return true;
+}
+
+// ============== BLE 비콘 스캔 ==============
+async function startBLEScanning() {
+  // Web Bluetooth API 지원 체크
+  if (!navigator.bluetooth) {
+    setStatus('ble-status', 'red', '미지원 (Chrome/Edge 필요)');
+    return false;
+  }
+
+  try {
+    // 사용자 액션으로 BLE 스캔 시작 (브라우저 정책)
+    const supportsLEScan = 'requestLEScan' in navigator.bluetooth;
+    
+    if (supportsLEScan) {
+      // Chrome 89+: 백그라운드 스캔 가능
+      const scan = await navigator.bluetooth.requestLEScan({
+        acceptAllAdvertisements: true,
+        keepRepeatedDevices: true
+      });
+
+      navigator.bluetooth.addEventListener('advertisementreceived', handleBeaconAd);
+      setStatus('ble-status', 'green', '스캔 중');
+      document.getElementById('beacon-card').style.display = 'block';
+      return true;
+    } else {
+      // 폴백: 단일 디바이스 선택
+      setStatus('ble-status', 'warn', '제한된 모드 (1회 스캔)');
+      const device = await navigator.bluetooth.requestDevice({
+        acceptAllDevices: true
+      });
+      console.log('[BLE] 선택된 디바이스:', device.name);
+      return true;
+    }
+  } catch (e) {
+    console.error('[BLE] 에러:', e);
+    setStatus('ble-status', 'red', '오류 또는 권한 거부');
+    showError('BLE 비콘 스캔에는 Chrome/Edge 브라우저와 BLE 권한이 필요합니다. GPS만으로도 추적은 작동합니다.');
+    return false;
+  }
+}
+
+function handleBeaconAd(event) {
+  const id = event.device.id || event.device.name;
+  if (!id) return;
+
+  // 알려진 비콘인지 확인
+  const beacon = BEACONS[id] || Object.values(BEACONS).find(b => b.name.includes(event.device.name));
+  if (!beacon) return; // 박물관 비콘 아니면 무시
+
+  // RSSI → 거리 추정 (간이 공식)
+  const rssi = event.rssi || -100;
+  const distance = Math.pow(10, (-69 - rssi) / 20);
+
+  detectedBeacons[id] = {
+    id,
+    name: beacon.name,
+    rssi,
+    distance: Math.round(distance * 10) / 10,
+    lastSeen: Date.now(),
+    lat: beacon.lat,
+    lng: beacon.lng
+  };
+
+  renderBeaconList();
+
+  // 가장 가까운 비콘으로 위치 보정
+  const closest = Object.values(detectedBeacons).sort((a, b) => a.distance - b.distance)[0];
+  if (closest && closest.distance < 10) {
+    sendLocationToServer({
+      lat: closest.lat,
+      lng: closest.lng,
+      accuracy: closest.distance,
+      source: 'beacon',
+      beaconId: closest.id,
+      beaconName: closest.name
+    });
+    document.getElementById('my-location').textContent = `📡 ${closest.name} (${closest.distance}m)`;
+  }
+}
+
+function renderBeaconList() {
+  const beacons = Object.values(detectedBeacons)
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, 5);
+
+  const list = document.getElementById('beacon-list');
+  if (beacons.length === 0) {
+    list.innerHTML = `<div class="empty"><div class="empty-icon">📡</div><p style="margin-top:8px;font-size:12px">비콘 신호 대기 중...</p></div>`;
+    return;
+  }
+
+  list.innerHTML = beacons.map(b => {
+    const cls = b.distance < 5 ? 'strong' : b.distance < 15 ? 'medium' : 'weak';
+    return `
+      <div class="beacon-item">
+        <span>📡</span>
+        <strong>${b.name}</strong>
+        <span class="beacon-rssi ${cls}">${b.distance}m</span>
+      </div>
+    `;
+  }).join('');
+}
+
+// ============== 서버 전송 ==============
+async function sendLocationToServer(location) {
+  if (!currentUser) return;
+  
+  try {
+    const res = await fetch(`${SERVER_URL}/api/staff-location-update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        staffId: currentUser.id,
+        staffName: currentUser.name,
+        ...location,
+        timestamp: new Date().toISOString()
+      })
+    });
+    
+    if (res.ok) {
+      setStatus('server-status', 'green', '연결됨');
+      document.getElementById('last-update').textContent = new Date().toLocaleTimeString('ko-KR');
+      
+      // GPS면 위치 표시
+      if (location.source === 'gps') {
+        document.getElementById('my-location').textContent = `🛰️ GPS (${Math.round(location.accuracy)}m)`;
+      }
+    } else {
+      setStatus('server-status', 'warn', `오류 ${res.status}`);
+    }
+  } catch (e) {
+    setStatus('server-status', 'red', '연결 끊김');
+    console.error('[server] 전송 실패:', e);
+  }
+}
+
+// ============== 추적 시작/중지 ==============
+async function toggleTracking() {
+  if (tracking) {
+    stopTracking();
+  } else {
+    await startTracking();
+  }
+}
+
+async function startTracking() {
+  const btn = document.getElementById('action-btn');
+  btn.textContent = '⏳ 시작 중...';
+  btn.disabled = true;
+
+  // 1. GPS 시작
+  const gpsOk = await startGPSTracking();
+  
+  // 2. BLE 시작 (실패해도 GPS만으로 진행)
+  await startBLEScanning();
+
+  // 3. 첫 위치 즉시 전송
+  if (gpsOk && lastGPSPosition) {
+    sendLocationToServer({
+      lat: lastGPSPosition.coords.latitude,
+      lng: lastGPSPosition.coords.longitude,
+      accuracy: lastGPSPosition.coords.accuracy,
+      source: 'gps'
+    });
+  }
+
+  tracking = true;
+  workStartTime = Date.now();
+  document.getElementById('timer-card').style.display = 'block';
+  startTimer();
+  
+  btn.textContent = '⏹️ 근무 종료';
+  btn.disabled = false;
+  btn.classList.remove('btn-start');
+  btn.classList.add('btn-stop');
+  
+  showSuccess('근무 시작! 위치가 실시간으로 추적됩니다. 백그라운드에서도 작동하려면 화면이 꺼지지 않게 설정하세요.');
+}
+
+function stopTracking() {
+  tracking = false;
+  if (gpsTimer) clearInterval(gpsTimer);
+  if (bleTimer) clearInterval(bleTimer);
+  if (timerInterval) clearInterval(timerInterval);
+  
+  if (navigator.bluetooth && navigator.bluetooth.removeEventListener) {
+    navigator.bluetooth.removeEventListener('advertisementreceived', handleBeaconAd);
+  }
+
+  setStatus('gps-status', 'gray', '대기');
+  setStatus('ble-status', 'gray', '대기');
+  setStatus('server-status', 'gray', '대기');
+  
+  const btn = document.getElementById('action-btn');
+  btn.textContent = '▶️ 근무 시작';
+  btn.classList.add('btn-start');
+  btn.classList.remove('btn-stop');
+  
+  document.getElementById('timer-card').style.display = 'none';
+  document.getElementById('beacon-card').style.display = 'none';
+  detectedBeacons = {};
+  
+  // 근무 종료 알림
+  if (workStartTime) {
+    const duration = Math.floor((Date.now() - workStartTime) / 1000);
+    const h = Math.floor(duration / 3600);
+    const m = Math.floor((duration % 3600) / 60);
+    showSuccess(`근무 종료! 총 ${h}시간 ${m}분 근무하셨습니다.`);
+  }
+}
+
+function startTimer() {
+  timerInterval = setInterval(() => {
+    if (!workStartTime) return;
+    const elapsed = Math.floor((Date.now() - workStartTime) / 1000);
+    const h = String(Math.floor(elapsed / 3600)).padStart(2, '0');
+    const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0');
+    const s = String(elapsed % 60).padStart(2, '0');
+    document.getElementById('work-timer').textContent = `${h}:${m}:${s}`;
+  }, 1000);
+}
+
+// ============== 테스트 함수 ==============
+async function testGPS() {
+  if (!navigator.geolocation) {
+    alert('이 기기는 GPS를 지원하지 않습니다.');
+    return;
+  }
+  
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      alert(`✅ GPS 테스트 성공\n\n위도: ${pos.coords.latitude.toFixed(6)}\n경도: ${pos.coords.longitude.toFixed(6)}\n정확도: ${Math.round(pos.coords.accuracy)}m\n\n구글지도에서 확인:\nhttps://maps.google.com/?q=${pos.coords.latitude},${pos.coords.longitude}`);
+    },
+    (err) => {
+      alert(`❌ GPS 테스트 실패\n\n${err.message}\n\n해결: 설정 → 위치 → 권한 허용`);
+    },
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
+}
+
+async function testBLE() {
+  if (!navigator.bluetooth) {
+    alert('❌ 이 브라우저는 BLE를 지원하지 않습니다.\n\n해결책:\n• Chrome 또는 Edge 브라우저 사용\n• Safari (iOS)는 미지원');
+    return;
+  }
+  
+  try {
+    const device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true
+    });
+    alert(`✅ BLE 연결 성공\n\n디바이스: ${device.name || '이름 없음'}\nID: ${device.id}\n\n근처에 박물관 비콘이 있다면 자동 감지됩니다.`);
+  } catch (e) {
+    alert(`❌ BLE 테스트 실패\n\n${e.message}`);
+  }
+}
+
+// ============== UI 헬퍼 ==============
+function setStatus(elId, color, text) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  const cls = color === 'green' ? 'ok' : color === 'warn' ? 'warn' : color === 'red' ? 'error' : '';
+  el.className = `value ${cls}`;
+  el.innerHTML = `<span class="dot ${color}"></span>${text}`;
+}
+
+function showSuccess(msg) {
+  const banner = document.createElement('div');
+  banner.className = 'success-banner';
+  banner.textContent = '✅ ' + msg;
+  document.getElementById('main').insertBefore(banner, document.getElementById('main').firstChild);
+  setTimeout(() => banner.remove(), 5000);
+}
+
+function showError(msg) {
+  const banner = document.createElement('div');
+  banner.className = 'error-banner';
+  banner.textContent = '❌ ' + msg;
+  document.getElementById('main').insertBefore(banner, document.getElementById('main').firstChild);
+  setTimeout(() => banner.remove(), 8000);
+}
+
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  // 탭별 화면 전환 (간단한 데모)
+  if (tab === 'alerts') alert('🚨 알림: 받은 사고 호출 알림 목록이 여기 표시됩니다.');
+  if (tab === 'me') alert(`👤 내 정보\n\n${currentUser.name} (${currentUser.role})\n\n오늘 근무: ${workStartTime ? '진행 중' : '미시작'}`);
+}
+
+// ============== Service Worker (PWA) ==============
+function registerServiceWorker() {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/staff-sw.js').catch(e => console.log('SW 등록 실패:', e));
+  }
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,43 @@
+{
+  "name": "한국잠사박물관 직원 추적",
+  "short_name": "잠사 직원",
+  "description": "직원 위치 추적 및 사고 대응 시스템",
+  "start_url": "/staff.html",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#A32D2D",
+  "background_color": "#f0f4f8",
+  "icons": [
+    {
+      "src": "/staff-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/staff-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["business", "productivity"],
+  "lang": "ko-KR",
+  "dir": "ltr",
+  "prefer_related_applications": false,
+  "shortcuts": [
+    {
+      "name": "근무 시작",
+      "short_name": "출근",
+      "url": "/staff.html?action=start",
+      "icons": [{ "src": "/staff-icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "사고 신고",
+      "short_name": "신고",
+      "url": "/staff.html?action=report",
+      "icons": [{ "src": "/staff-icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}
