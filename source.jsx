@@ -6296,7 +6296,17 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
   const [gpsZone, setGpsZone] = useState(null);
   const [userLoc, setUserLoc] = useState(null);
   const [locating, setLocating] = useState(false);
-  const [bgMode, setBgMode] = useState("plan"); // "plan" | "satellite" | "blend"
+  const [bgMode, setBgMode] = useState(() => {
+    // 사용자가 마지막으로 선택한 모드 기억 (없으면 위성)
+    try {
+      const saved = window.localStorage?.getItem("jamsa_inv_bg_mode");
+      return ["plan", "satellite", "blend"].includes(saved) ? saved : "satellite";
+    } catch (e) { return "satellite"; }
+  });
+  const changeBgMode = (m) => {
+    setBgMode(m);
+    try { window.localStorage?.setItem("jamsa_inv_bg_mode", m); } catch (e) {}
+  };
   const [showGpsInfo, setShowGpsInfo] = useState(false);
   // Zone creation mode
   const [drawMode, setDrawMode] = useState(false);
@@ -6735,7 +6745,7 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
             {k:"blend", l:"🔀 합성", tip:"위성지도 + 배치도 겹침"},
             {k:"satellite", l:"🛰️ 위성지도", tip:"실제 위성사진만"},
           ].map(m => (
-            <button key={m.k} onClick={()=>setBgMode(m.k)} title={m.tip}
+            <button key={m.k} onClick={()=>changeBgMode(m.k)} title={m.tip}
               style={{padding:"5px 12px",border:"none",borderRight:m.k==="satellite"?"none":"1px solid #cbd5e1",background:bgMode===m.k?"linear-gradient(135deg,#2563eb,#7c3aed)":"#fff",color:bgMode===m.k?"#fff":"#475569",fontSize:11,fontWeight:700,cursor:"pointer"}}>
               {m.l}
             </button>
@@ -7043,7 +7053,7 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
         )}
       </div>
 
-      {tip&&hZone&&!usingGps&&<Tip zone={allZones.find(z=>z.id===hZone)} prods={zProds(hZone)} hist={zHist(hZone)} x={tip.x} y={tip.y} cRef={mapWrap} photos={zonePhotos[hZone]||[]}/>}
+      {tip&&hZone&&<Tip zone={allZones.find(z=>z.id===hZone)} prods={zProds(hZone)} hist={zHist(hZone)} x={tip.x} y={tip.y} cRef={mapWrap} photos={zonePhotos[hZone]||[]}/>}
       {gpsZone && <GpsZoneModal zone={gpsZone} userLoc={userLoc} dist={distFromZone(gpsZone)} onClose={()=>setGpsZone(null)}
         onGoInventory={()=>{setSelZone(gpsZone.id);setGpsZone(null);}}
         onDeleteCustom={gpsZone.custom && onDeleteCustomZone ? ()=>{onDeleteCustomZone(gpsZone.id);setGpsZone(null);} : null}
@@ -7859,32 +7869,64 @@ function GpsZoneModal({ zone, userLoc, dist, onClose, onGoInventory, onDeleteCus
 function Tip({zone,prods,hist,x,y,cRef,photos}){
   if(!zone)return null;
   const tq=prods.reduce((s,p)=>s+p.qty,0);
-  const top5=[...prods].sort((a,b)=>b.qty-a.qty).slice(0,5);
+  // 전체 재고 정렬 (재고 많은 순) - 스크롤로 모두 표시
+  const sortedProds=[...prods].sort((a,b)=>b.qty-a.qty);
   const ac={"입고":"#22c55e","출고":"#ef4444","조정":"#8b5cf6","추가":"#6366f1"};
   const cw=cRef?.current?.offsetWidth||800;const ch=cRef?.current?.offsetHeight||600;
   const hasPhotos=photos&&photos.length>0;
+  // 박스 크기 키움 (320 x 최대 480)
+  const TIP_W = 320;
+  const TIP_MAX_H = 480;
   let left=x+20,topY=y-20;
-  if(left+300>cw)left=x-310;if(topY+380>ch)topY=ch-390;if(topY<10)topY=10;if(left<10)left=10;
+  if(left+TIP_W>cw)left=x-TIP_W-10;if(topY+TIP_MAX_H>ch)topY=ch-TIP_MAX_H-10;if(topY<10)topY=10;if(left<10)left=10;
   return(
-    <div style={{position:"absolute",left,top:topY,background:"#fff",borderRadius:12,width:280,boxShadow:`0 8px 28px rgba(0,0,0,0.18)`,pointerEvents:"none",zIndex:100,animation:"tipIn 0.1s ease",overflow:"hidden"}}>
-      <div style={{padding:"10px 14px",background:`linear-gradient(135deg,${zone.color}12,${zone.color}06)`,borderBottom:`1px solid ${zone.color}15`}}>
-        <div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:20}}>{zone.icon}</span><div><div style={{fontSize:13,fontWeight:800}}>{zone.name}</div><div style={{fontSize:10,color:"#64748b"}}>{zone.desc}</div></div></div>
-        <div style={{display:"flex",gap:8,marginTop:8}}>
-          <div style={{background:"#fff",borderRadius:7,padding:"3px 0",flex:1,textAlign:"center",border:"1px solid #e5e7eb"}}><div style={{fontSize:9,color:"#94a3b8"}}>품목</div><div style={{fontSize:16,fontWeight:900,color:zone.color}}>{prods.length}</div></div>
-          <div style={{background:"#fff",borderRadius:7,padding:"3px 0",flex:1,textAlign:"center",border:"1px solid #e5e7eb"}}><div style={{fontSize:9,color:"#94a3b8"}}>재고</div><div style={{fontSize:16,fontWeight:900,color:tq===0?"#ef4444":zone.color}}>{tq.toLocaleString()}</div></div>
+    <div style={{position:"absolute",left,top:topY,background:"#fff",borderRadius:12,width:TIP_W,maxHeight:TIP_MAX_H,boxShadow:`0 8px 28px rgba(0,0,0,0.25)`,pointerEvents:"auto",zIndex:100,animation:"tipIn 0.1s ease",overflow:"hidden",display:"flex",flexDirection:"column",border:`2px solid ${zone.color}30`}}>
+      {/* 헤더 - 고정 */}
+      <div style={{padding:"12px 14px",background:`linear-gradient(135deg,${zone.color}15,${zone.color}06)`,borderBottom:`1px solid ${zone.color}20`,flexShrink:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:24}}>{zone.icon}</span><div style={{flex:1,minWidth:0}}><div style={{fontSize:14,fontWeight:800,color:"#0f172a"}}>{zone.name}</div><div style={{fontSize:10,color:"#64748b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{zone.desc}</div></div></div>
+        <div style={{display:"flex",gap:8,marginTop:10}}>
+          <div style={{background:"#fff",borderRadius:8,padding:"4px 0",flex:1,textAlign:"center",border:"1px solid #e5e7eb"}}><div style={{fontSize:9,color:"#94a3b8",fontWeight:600}}>품목 수</div><div style={{fontSize:18,fontWeight:900,color:zone.color}}>{prods.length}</div></div>
+          <div style={{background:"#fff",borderRadius:8,padding:"4px 0",flex:1,textAlign:"center",border:"1px solid #e5e7eb"}}><div style={{fontSize:9,color:"#94a3b8",fontWeight:600}}>총 재고</div><div style={{fontSize:18,fontWeight:900,color:tq===0?"#ef4444":zone.color}}>{tq.toLocaleString()}</div></div>
         </div>
       </div>
-      {/* Zone photos preview */}
+      {/* 사진 미리보기 - 고정 */}
       {hasPhotos&&(
-        <div style={{padding:"6px 10px",borderBottom:"1px solid #f1f3f5",display:"flex",gap:4,overflow:"hidden"}}>
+        <div style={{padding:"6px 10px",borderBottom:"1px solid #f1f3f5",display:"flex",gap:4,overflow:"hidden",flexShrink:0}}>
           {photos.slice(0,3).map(ph=>(
-            <img key={ph.id} src={ph.url} alt="" style={{width:82,height:56,objectFit:"cover",borderRadius:6,border:"1px solid #e5e7eb"}}/>
+            <img key={ph.id} src={ph.url} alt="" style={{width:90,height:60,objectFit:"cover",borderRadius:6,border:"1px solid #e5e7eb"}}/>
           ))}
-          {photos.length>3&&<div style={{width:40,height:56,borderRadius:6,background:"#f1f3f5",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#94a3b8",fontWeight:700}}>+{photos.length-3}</div>}
+          {photos.length>3&&<div style={{width:42,height:60,borderRadius:6,background:"#f1f3f5",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#94a3b8",fontWeight:700}}>+{photos.length-3}</div>}
         </div>
       )}
-      {top5.length>0&&<div style={{padding:"6px 14px"}}>{top5.map(p=><div key={p.id} style={{display:"flex",justifyContent:"space-between",padding:"2px 0"}}><span style={{fontSize:11,color:"#334155"}}>{p.name}</span><span style={{fontSize:12,fontWeight:800,color:p.qty===0?"#ef4444":"#0f172a"}}>{p.qty}</span></div>)}</div>}
-      <div style={{padding:"3px 14px 7px",textAlign:"center"}}><span style={{fontSize:9,color:"#94a3b8"}}>클릭 → 상세</span></div>
+      {/* 재고 목록 - 스크롤 */}
+      {sortedProds.length>0?(
+        <div style={{padding:"4px 0",overflowY:"auto",flex:1,minHeight:0}}>
+          <div style={{padding:"4px 14px 4px",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,background:"#fff",zIndex:1,borderBottom:"1px solid #f1f5f9"}}>
+            <span style={{fontSize:10,fontWeight:700,color:"#64748b"}}>📦 재고 목록 ({sortedProds.length}개)</span>
+            <span style={{fontSize:9,color:"#94a3b8"}}>↕ 스크롤</span>
+          </div>
+          {sortedProds.map(p=>(
+            <div key={p.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 14px",borderBottom:"1px solid #f8fafc"}}>
+              <span style={{fontSize:12,color:"#334155",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1,marginRight:8}}>
+                {p.qty===0&&<span style={{color:"#ef4444",marginRight:4}}>⚠</span>}
+                {p.name}
+              </span>
+              <span style={{fontSize:13,fontWeight:800,color:p.qty===0?"#ef4444":p.qty<5?"#f59e0b":"#0f172a",flexShrink:0}}>
+                {p.qty.toLocaleString()}
+                {p.unit&&<span style={{fontSize:10,color:"#94a3b8",marginLeft:2}}>{p.unit}</span>}
+              </span>
+            </div>
+          ))}
+        </div>
+      ):(
+        <div style={{padding:"20px 14px",textAlign:"center",color:"#94a3b8",fontSize:11,flex:1}}>
+          📭 등록된 재고 없음
+        </div>
+      )}
+      {/* 푸터 - 고정 */}
+      <div style={{padding:"6px 14px 8px",textAlign:"center",borderTop:"1px solid #f1f5f9",background:"#fafafa",flexShrink:0}}>
+        <span style={{fontSize:10,color:"#64748b",fontWeight:600}}>👆 클릭하여 상세 보기 / 추가 등록</span>
+      </div>
     </div>
   );
 }
@@ -13969,6 +14011,19 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
     catch (e) { return {}; }
   });
 
+  // CCTV 매핑 (구역 → 채널 배열) - InventoryModule과 동일한 키 사용
+  const [cctvMap, setCctvMap] = useState(() => {
+    try {
+      const saved = JSON.parse(window.localStorage?.getItem("jamsa_cctv_zone_map") || "null");
+      return saved || (typeof CCTV_AUTO_MAP !== "undefined" ? { ...CCTV_AUTO_MAP } : {});
+    } catch (e) {
+      return typeof CCTV_AUTO_MAP !== "undefined" ? { ...CCTV_AUTO_MAP } : {};
+    }
+  });
+
+  // CCTV 알림 히스토리
+  const [cctvAlerts, setCctvAlerts] = useState([]);
+
   // Persistence helpers
   const saveCustomZones = (newZones) => {
     setCustomZones(newZones);
@@ -14406,6 +14461,23 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
               bgMode={bgMode} onChangeBgMode={changeBgMode} />
           )}
 
+          {/* CCTV 라이브 오버레이 — 모든 활성 채널 라이브뷰 + Claude AI 위험 감지 */}
+          <CctvLiveOverlay
+            zones={allZones.filter(z => !zoneCustomizations[z.id]?._deleted)}
+            cctvMap={cctvMap}
+            onAlert={(alert) => {
+              setCctvAlerts(prev => [alert, ...prev].slice(0, 50));
+            }}
+            onOpenChannel={(ch) => {
+              const cam = (typeof FAC_CCTV_CAMERAS !== "undefined" ? FAC_CCTV_CAMERAS : []).find(c => c.ch === ch);
+              if (cam) {
+                alert(`CH${ch} ${cam.name} (${cam.zone})\n\n자세한 화면을 보려면 [시설점검] → [CCTV] 메뉴로 이동하세요.`);
+              } else {
+                alert(`CH${ch}\n\n자세한 화면은 [시설점검] → [CCTV] 메뉴에서 확인하세요.`);
+              }
+            }}
+          />
+
           {/* 지도 우하단 범례 */}
           <div style={{ position: "absolute", bottom: 12, left: 12, background: "rgba(255,255,255,0.95)", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", fontSize: 10, boxShadow: "0 4px 12px rgba(0,0,0,0.1)", zIndex: 10 }}>
             <div style={{ fontWeight: 800, color: "#0f172a", marginBottom: 6, fontSize: 11 }}>📍 스팟 상태 범례</div>
@@ -14705,33 +14777,39 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
   const [leafletLoaded, setLeafletLoaded] = React.useState(false);
   const [leafletError, setLeafletError] = React.useState(false);
 
-  // Leaflet CDN 동적 로드
+  // Leaflet은 index.html에서 미리 로드됨 - 그래도 안 됐을 때만 동적 로드
   React.useEffect(() => {
     if (window.L) { setLeafletLoaded(true); return; }
 
-    // CSS
-    if (!document.getElementById("leaflet-css")) {
-      const link = document.createElement("link");
-      link.id = "leaflet-css";
-      link.rel = "stylesheet";
-      link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
-      document.head.appendChild(link);
-    }
-
-    // JS
-    if (!document.getElementById("leaflet-js")) {
-      const script = document.createElement("script");
-      script.id = "leaflet-js";
-      script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
-      script.onload = () => setLeafletLoaded(true);
-      script.onerror = () => setLeafletError(true);
-      document.body.appendChild(script);
-
-      // 8초 타임아웃
-      setTimeout(() => {
-        if (!window.L) setLeafletError(true);
-      }, 8000);
-    }
+    // 폴백: index.html이 아직 안 끝났다면 폴링
+    let elapsed = 0;
+    const check = setInterval(() => {
+      elapsed += 200;
+      if (window.L) {
+        setLeafletLoaded(true);
+        clearInterval(check);
+      } else if (elapsed >= 8000) {
+        // 8초 후에도 없으면 직접 로드 시도
+        clearInterval(check);
+        if (!document.getElementById("leaflet-css")) {
+          const link = document.createElement("link");
+          link.id = "leaflet-css";
+          link.rel = "stylesheet";
+          link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+          document.head.appendChild(link);
+        }
+        if (!document.getElementById("leaflet-js")) {
+          const script = document.createElement("script");
+          script.id = "leaflet-js";
+          script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+          script.onload = () => setLeafletLoaded(true);
+          script.onerror = () => setLeafletError(true);
+          document.body.appendChild(script);
+          setTimeout(() => { if (!window.L) setLeafletError(true); }, 8000);
+        }
+      }
+    }, 200);
+    return () => clearInterval(check);
   }, []);
 
   // 지도 초기화 (Leaflet 로드 후 1회)
