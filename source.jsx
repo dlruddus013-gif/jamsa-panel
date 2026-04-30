@@ -508,64 +508,64 @@ const facCompressPhoto = (file, maxSize = 800) => new Promise((resolve, reject) 
  * OSHA-style hazard detection. Output can be registered as a facility
  * 보완과제 (시정조치) with legal reference attached.
  * ───────────────────────────────────────────────────────────── */
-const analyzeSafetyHazardAI = async (photoDataUrl, facName) => {
-  const seedStr = String(photoDataUrl || "").slice(-60) + "|" + (facName || "");
-  let seed = 0;
-  for (let i = 0; i < seedStr.length; i++) seed = ((seed << 5) - seed + seedStr.charCodeAt(i)) | 0;
-  const rnd = (n) => { seed = (seed * 16807) % 2147483647; return Math.abs(seed) % n; };
+// 안전 위험성 평가 — 백엔드 /api/safety-ai-analyze 경유 (Claude API)
+const analyzeSafetyHazardAI = async (photoDataUrl, facName, facType) => {
+  if (!photoDataUrl) throw new Error("사진이 필요합니다.");
 
-  const SCENARIOS = [
-    {
-      hazards: "바닥 물기 및 배선 노출로 인한 미끄러짐/감전 위험. 작업자의 안전모 미착용 상태 감지.",
-      solution: "1. 즉시 바닥 건조 및 미끄럼 주의 표지판 설치\n2. 노출된 케이블 절연 덮개 씌움\n3. 해당 구역 작업자 전원 안전모 및 작업화 착용 의무화 지시",
-      severity: "URGENT",
-      legalRef: "산업안전보건법 제38조 (안전조치) 및 제39조 (보건조치)",
-      type: "위험성 평가 및 시정조치",
-      materials: ["안전모 5개", "작업화 3켤레", "케이블 절연 덮개 2m", "미끄럼 주의 표지판 2개"],
-    },
-    {
-      hazards: "소화기 점검표 미부착 및 비상구 유도등 일부 소등. 피난 동선상 적재물 방치.",
-      solution: "1. 소화기 점검표 즉시 부착 (월별 기록)\n2. 유도등 점등 확인 및 고장품 교체\n3. 피난 통로상 적재물 제거 및 통행폭 1.2m 확보",
-      severity: "HIGH",
-      legalRef: "화재의 예방 및 안전관리에 관한 법률 제17조 (소방시설 점검)",
-      type: "소방안전 시정조치",
-      materials: ["소화기 점검표 양식 10매", "비상구 유도등 LED 2개", "반사 테이프 1롤"],
-    },
-    {
-      hazards: "체험 시설 안전난간 연결부 볼트 이완 추정. 체험객 추락 위험 중등도.",
-      solution: "1. 해당 시설 일시 운영 중단 공지\n2. 토크렌치로 전 체결부 재조임\n3. 재개장 전 시설 안전점검 체크리스트 재실행",
-      severity: "HIGH",
-      legalRef: "어린이놀이시설 안전관리법 제15조 (안전점검)",
-      type: "놀이시설 안전점검",
-      materials: ["M10 볼트 10개", "방청제 300ml", "안전 고정 케이블 5m"],
-    },
-    {
-      hazards: "주방 조리대 주변 방화장갑 미비치, 가스 차단밸브 라벨 변색으로 가시성 저하.",
-      solution: "1. 방화장갑 2벌 즉시 비치 (조리대 인근)\n2. 가스 차단밸브 라벨 재부착 (형광/반사지)\n3. 주 1회 가스 누출 점검 기록 양식 게시",
-      severity: "MEDIUM",
-      legalRef: "식품위생법 제88조 (집단급식소의 위생관리)",
-      type: "위생·소방안전",
-      materials: ["방화장갑 2벌", "형광 라벨 스티커 20매", "가스 누출 점검 양식 12매"],
-    },
-    {
-      hazards: "전반적 정돈 상태 양호. 다만 개인보호구(PPE) 보관함 잠금장치 미작동.",
-      solution: "1. PPE 보관함 자물쇠 교체\n2. PPE 사용 기록대장 비치\n3. 다음 정기점검 시 재확인",
-      severity: "MEDIUM",
-      legalRef: "산업안전보건기준에 관한 규칙 제32조 (보호구의 지급)",
-      type: "예방점검",
-      materials: ["보관함 자물쇠 1개", "PPE 사용 기록대장 1권"],
-    },
-  ];
+  const fetcher = (typeof window !== "undefined" && window.authFetch) ? window.authFetch : ((path, opts) => fetch(path, opts));
 
-  await new Promise(r => setTimeout(r, 1500));
-  const sc = SCENARIOS[rnd(SCENARIOS.length)];
+  const response = await fetcher("/api/safety-ai-analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      image: photoDataUrl,
+      zoneName: facName || "",
+      zoneType: facType || "",
+    }),
+  });
+
+  if (!response.ok) {
+    let errMsg = `API 요청 실패 (${response.status})`;
+    try { const j = await response.json(); errMsg = j.message || j.error || errMsg; } catch (e) {}
+    throw new Error(errMsg);
+  }
+
+  const data = await response.json();
+  if (!data.ok || !data.result) throw new Error("백엔드에서 유효한 응답을 받지 못했습니다.");
+
+  const r = data.result;
+
+  // 기존 UI 호환을 위한 매핑 (severity, hazards, solution, type, materials, legalRef)
+  const sevMap = { "긴급": "URGENT", "높음": "HIGH", "보통": "MEDIUM", "낮음": "LOW" };
   return {
-    hazards: `[${facName || "현장"}] ` + sc.hazards,
-    solution: sc.solution,
-    severity: sc.severity,
-    legalRef: sc.legalRef,
-    type: sc.type,
-    materials: sc.materials || [],
+    // 기존 필드 (호환성)
+    hazards: (r.발견내용 || []).join("\n• ") ? `• ${(r.발견내용 || []).join("\n• ")}` : "특이사항 없음",
+    solution: [
+      ...(r.즉시조치 || []).map(s => `[즉시] ${s}`),
+      ...(r.단기조치 || []).map(s => `[단기] ${s}`),
+      ...(r.장기조치 || []).map(s => `[장기] ${s}`),
+    ].join("\n"),
+    severity: sevMap[r.위험도] || "MEDIUM",
+    legalRef: r.관련법규 || "",
+    type: (r.위험유형 && r.위험유형[0]) || "안전점검",
+    materials: [],
+    // 새 필드 (확장)
+    score: r.위험점수,
+    riskTypes: r.위험유형 || [],
+    placeGuess: r.장소추정,
+    findings: r.발견내용 || [],
+    findingsLocation: r.발견_위치 || [],
+    immediate: r.즉시조치 || [],
+    shortTerm: r.단기조치 || [],
+    longTerm: r.장기조치 || [],
+    department: r.담당부서,
+    deadline: r.조치기한,
+    taskTitle: r.보완과제제목,
+    rephotoGuide: r.재촬영가이드,
+    estCost: r.예상비용,
+    relatedLaw: r.관련법규,
+    similarCaseWarning: r.유사사례경고,
+    raw: r,
   };
 };
 
@@ -5096,18 +5096,33 @@ function InvAiAnalysisModal({ prods, zones, defaultZoneId, zonePhotos, onClose, 
           {imgSrc ? (
             <div>
               <img src={imgSrc} alt="uploaded" style={{ maxHeight: 200, maxWidth: "100%", objectFit: "contain", margin: "0 auto", borderRadius: 8, display: "block" }} />
-              <label style={{ cursor: "pointer", display: "inline-block", marginTop: 10, fontSize: 11, color: "#3b82f6", fontWeight: 600 }}>
-                📷 다른 사진으로 교체
-                <input type="file" accept="image/*" capture="environment" onChange={handleFile} style={{ display: "none" }} />
-              </label>
+              <div style={{ display: "inline-flex", gap: 6, marginTop: 10, flexWrap: "wrap", justifyContent: "center" }}>
+                <label style={{ cursor: "pointer", fontSize: 11, color: "#3b82f6", fontWeight: 600, padding: "5px 10px", border: "1px solid #93c5fd", borderRadius: 6 }}>
+                  📷 다시 촬영
+                  <input type="file" accept="image/*" capture="environment" onChange={handleFile} style={{ display: "none" }} />
+                </label>
+                <label style={{ cursor: "pointer", fontSize: 11, color: "#3b82f6", fontWeight: 600, padding: "5px 10px", border: "1px solid #93c5fd", borderRadius: 6 }}>
+                  🖼️ 파일 선택
+                  <input type="file" accept="image/*" onChange={handleFile} style={{ display: "none" }} />
+                </label>
+              </div>
             </div>
           ) : (
-            <label style={{ cursor: "pointer", display: "block", padding: "10px 0", color: "#64748b", fontSize: 14 }}>
+            <div>
               <div style={{ fontSize: 30, marginBottom: 6 }}>📷</div>
-              <div style={{ fontWeight: 600, color: "#475569" }}>(선택) 창고 현장 사진 업로드</div>
-              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>사진을 올리면 동선 및 적재 상태까지 분석합니다</div>
-              <input type="file" accept="image/*" capture="environment" onChange={handleFile} style={{ display: "none" }} />
-            </label>
+              <div style={{ fontWeight: 600, color: "#475569", fontSize: 14 }}>(선택) 창고 현장 사진 업로드</div>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4, marginBottom: 10 }}>사진을 올리면 동선 및 적재 상태까지 분석합니다</div>
+              <div style={{ display: "inline-flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
+                <label style={{ cursor: "pointer", fontSize: 12, color: "#fff", background: "#3b82f6", fontWeight: 600, padding: "7px 14px", borderRadius: 6 }}>
+                  📷 촬영
+                  <input type="file" accept="image/*" capture="environment" onChange={handleFile} style={{ display: "none" }} />
+                </label>
+                <label style={{ cursor: "pointer", fontSize: 12, color: "#3b82f6", background: "#fff", fontWeight: 600, padding: "7px 14px", borderRadius: 6, border: "1px solid #93c5fd" }}>
+                  🖼️ 파일 선택
+                  <input type="file" accept="image/*" onChange={handleFile} style={{ display: "none" }} />
+                </label>
+              </div>
+            </div>
           )}
         </div>
 
@@ -8371,9 +8386,15 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
                   style={{fontSize:11,padding:"6px 12px",borderRadius:8,border:"none",cursor:aiAnalyzing?"wait":"pointer",color:"#fff",fontWeight:700,background:aiAnalyzing?"#94a3b8":"linear-gradient(135deg,#7c3aed,#2563eb)",display:"inline-flex",alignItems:"center",gap:4}}>
                   {aiAnalyzing ? "🔄 분석 중..." : "🤖 AI 자동 입력"}
                 </button>
-                <label style={{fontSize:11,padding:"6px 12px",borderRadius:8,border:"1px solid #d1d5db",cursor:"pointer",background:"#fff",fontWeight:600}}>
-                  📷 사진 추가
+                <label style={{fontSize:11,padding:"6px 10px",borderRadius:8,border:"1px solid #d1d5db",cursor:"pointer",background:"#fff",fontWeight:600,display:"inline-flex",alignItems:"center",gap:3}}
+                  title="카메라로 직접 촬영">
+                  📷 촬영
                   <input type="file" accept="image/*" multiple capture="environment" onChange={addNewPhoto} style={{display:"none"}}/>
+                </label>
+                <label style={{fontSize:11,padding:"6px 10px",borderRadius:8,border:"1px solid #d1d5db",cursor:"pointer",background:"#fff",fontWeight:600,display:"inline-flex",alignItems:"center",gap:3}}
+                  title="갤러리/내 파일에서 선택 (여러 장 가능)">
+                  🖼️ 파일
+                  <input type="file" accept="image/*" multiple onChange={addNewPhoto} style={{display:"none"}}/>
                 </label>
               </div>
             </div>
@@ -9687,6 +9708,1186 @@ function SafeTrainingModal({ onClose, onSave }) {
   );
 }
 
+// ========== INCIDENT NOTIFY MODAL (알림 발송) ==========
+function IncidentNotifyModal({ incident, onClose }) {
+  const [recipients, setRecipients] = useState([
+    { name: "이경연 대표", phone: "010-1234-5678", email: "ceo@jamsamuseum.co.kr", checked: true },
+    { name: "안전관리자", phone: "010-2345-6789", email: "safety@jamsamuseum.co.kr", checked: true },
+    { name: "시설팀장", phone: "010-3456-7890", email: "fac@jamsamuseum.co.kr", checked: false },
+  ]);
+  const [channels, setChannels] = useState({ kakao: true, email: true, sms: false });
+  const [sending, setSending] = useState(false);
+  const [results, setResults] = useState(null);
+
+  const toggleRecipient = (i) => {
+    setRecipients(prev => prev.map((r, idx) => idx === i ? {...r, checked: !r.checked} : r));
+  };
+  const addRecipient = () => {
+    const name = prompt("수신자 이름");
+    if (!name) return;
+    const phone = prompt("전화번호 (예: 010-1234-5678)") || "";
+    const email = prompt("이메일") || "";
+    setRecipients(prev => [...prev, { name, phone, email, checked: true }]);
+  };
+
+  const send = async () => {
+    const selected = recipients.filter(r => r.checked);
+    if (selected.length === 0) return alert("수신자를 1명 이상 선택하세요");
+    const channelList = Object.entries(channels).filter(([k,v]) => v).map(([k]) => k);
+    if (channelList.length === 0) return alert("발송 채널을 1개 이상 선택하세요");
+
+    setSending(true);
+    try {
+      const fetcher = window.authFetch || ((p,o)=>fetch(p,o));
+      const res = await fetcher("/api/incident-notify", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ incident, recipients: selected, channels: channelList })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || `API ${res.status}`);
+      setResults(data);
+    } catch (e) {
+      alert("알림 발송 실패: " + e.message);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1100,padding:16}} onClick={onClose}>
+      <div className="bg-white rounded-xl max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col" onClick={e=>e.stopPropagation()}>
+        <div className="p-4 border-b bg-gradient-to-r from-blue-600 to-cyan-600 text-white flex justify-between">
+          <div>
+            <div className="text-sm font-bold">📨 사고 알림 발송</div>
+            <div className="text-xs opacity-90">{incident.type} · {incident.location}</div>
+          </div>
+          <button onClick={onClose} className="bg-white/20 rounded w-7 h-7 text-lg leading-none">×</button>
+        </div>
+        <div className="flex-1 overflow-auto p-4 space-y-3">
+          <div>
+            <div className="text-xs font-bold text-gray-600 mb-1.5">수신자 선택</div>
+            <div className="space-y-1">
+              {recipients.map((r, i)=>(
+                <label key={i} className="flex items-center gap-2 p-2 bg-gray-50 rounded text-sm cursor-pointer">
+                  <input type="checkbox" checked={r.checked} onChange={()=>toggleRecipient(i)} className="w-4 h-4"/>
+                  <span className="font-bold">{r.name}</span>
+                  <span className="text-xs text-gray-500 ml-auto">{r.phone || r.email}</span>
+                </label>
+              ))}
+            </div>
+            <button onClick={addRecipient} className="text-xs text-blue-600 mt-2">+ 수신자 추가</button>
+          </div>
+          <div>
+            <div className="text-xs font-bold text-gray-600 mb-1.5">발송 채널</div>
+            <div className="flex gap-2">
+              <label className={`flex-1 p-2 rounded border-2 text-center cursor-pointer ${channels.kakao?'bg-yellow-50 border-yellow-400':'bg-white border-gray-200'}`}>
+                <input type="checkbox" checked={channels.kakao} onChange={e=>setChannels(c=>({...c,kakao:e.target.checked}))} className="hidden"/>
+                <div className="text-xl">💬</div>
+                <div className="text-xs font-bold">카카오톡</div>
+              </label>
+              <label className={`flex-1 p-2 rounded border-2 text-center cursor-pointer ${channels.email?'bg-blue-50 border-blue-400':'bg-white border-gray-200'}`}>
+                <input type="checkbox" checked={channels.email} onChange={e=>setChannels(c=>({...c,email:e.target.checked}))} className="hidden"/>
+                <div className="text-xl">📧</div>
+                <div className="text-xs font-bold">이메일</div>
+              </label>
+              <label className={`flex-1 p-2 rounded border-2 text-center cursor-pointer ${channels.sms?'bg-emerald-50 border-emerald-400':'bg-white border-gray-200'}`}>
+                <input type="checkbox" checked={channels.sms} onChange={e=>setChannels(c=>({...c,sms:e.target.checked}))} className="hidden"/>
+                <div className="text-xl">📱</div>
+                <div className="text-xs font-bold">SMS</div>
+              </label>
+            </div>
+          </div>
+
+          {results && (
+            <div className="bg-emerald-50 border border-emerald-300 rounded p-3 text-xs">
+              <div className="font-bold text-emerald-800 mb-1">✅ 발송 결과</div>
+              <div>성공 {results.summary.success}건 / 실패 {results.summary.failed}건 / 전체 {results.summary.total}건</div>
+              <div className="mt-1 space-y-0.5">
+                {(results.results||[]).map((r,i)=>(
+                  <div key={i} className={r.ok?'text-emerald-700':'text-red-700'}>
+                    {r.ok?'✓':'✗'} {r.recipient || r.phone || r.email} - {r.channel}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="p-3 border-t bg-gray-50 flex gap-2 justify-end">
+          <button onClick={onClose} className="text-xs px-3 py-2 border rounded bg-white">닫기</button>
+          <button onClick={send} disabled={sending} className="text-xs px-4 py-2 bg-blue-600 text-white rounded font-bold disabled:bg-gray-400">
+            {sending ? "🔄 발송 중..." : "📨 즉시 발송"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== INCIDENT DISPATCH MODAL (가까운 직원 호출) ==========
+function IncidentDispatchModal({ incident, facilities, onClose }) {
+  const [loading, setLoading] = useState(false);
+  const [autoSend, setAutoSend] = useState(false);
+  const [maxDistance, setMaxDistance] = useState(200);
+  const [result, setResult] = useState(null);
+
+  const fac = facilities.find(f => f.id === incident.facId);
+  // 박물관 기본 좌표 (청주 잠사박물관 근처)
+  const lat = fac?.lat || 36.6424;
+  const lng = fac?.lng || 127.4890;
+
+  const findStaff = async () => {
+    setLoading(true);
+    try {
+      const fetcher = window.authFetch || ((p,o)=>fetch(p,o));
+      const res = await fetcher("/api/incident-dispatch", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+          incidentId: incident.id,
+          location: fac?.name || incident.location,
+          lat, lng, maxDistance, autoSend
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || `API ${res.status}`);
+      setResult(data);
+    } catch (e) {
+      alert("직원 호출 실패: " + e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1100,padding:16}} onClick={onClose}>
+      <div className="bg-white rounded-xl max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col" onClick={e=>e.stopPropagation()}>
+        <div className="p-4 border-b bg-gradient-to-r from-emerald-600 to-teal-600 text-white flex justify-between">
+          <div>
+            <div className="text-sm font-bold">🚑 가까운 직원 호출</div>
+            <div className="text-xs opacity-90">{fac?.name || incident.location}</div>
+          </div>
+          <button onClick={onClose} className="bg-white/20 rounded w-7 h-7 text-lg leading-none">×</button>
+        </div>
+        <div className="flex-1 overflow-auto p-4 space-y-3">
+          <div>
+            <div className="text-xs font-bold text-gray-600 mb-1.5">검색 반경</div>
+            <div className="flex gap-2">
+              {[50, 100, 200, 500].map(d=>(
+                <button key={d} onClick={()=>setMaxDistance(d)} className={`flex-1 text-xs font-bold py-2 rounded ${maxDistance===d?'bg-emerald-600 text-white':'bg-white border border-gray-300'}`}>
+                  {d}m
+                </button>
+              ))}
+            </div>
+          </div>
+          <label className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded cursor-pointer">
+            <input type="checkbox" checked={autoSend} onChange={e=>setAutoSend(e.target.checked)} className="w-4 h-4"/>
+            <span className="text-xs">
+              <strong>가까운 3명에게 자동 호출 SMS 발송</strong> (체크 안 하면 목록만 표시)
+            </span>
+          </label>
+
+          {result && (
+            <div className="space-y-2">
+              <div className="text-xs font-bold text-gray-700">📍 반경 {result.maxDistance}m 내 활성 직원 ({result.nearbyStaff.length}명)</div>
+              {result.nearbyStaff.length === 0 ? (
+                <div className="text-sm text-gray-500 p-3 bg-gray-50 rounded text-center">
+                  {result.message || "검색 반경 내 직원이 없습니다"}
+                </div>
+              ) : (
+                result.nearbyStaff.map((s, i)=>(
+                  <div key={s.id} className="flex items-center gap-3 p-3 bg-emerald-50 border border-emerald-200 rounded">
+                    <div className="bg-emerald-600 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm">
+                      {i+1}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-bold">{s.name} <span className="text-xs text-gray-500">{s.role}</span></div>
+                      <div className="text-xs text-gray-500">{s.phone} · {s.lastSeenAgo}분 전 위치 확인</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-lg font-black text-emerald-600">{s.distance}m</div>
+                    </div>
+                  </div>
+                ))
+              )}
+              {result.dispatched && result.dispatched.length > 0 && (
+                <div className="bg-blue-50 border border-blue-200 rounded p-3">
+                  <div className="text-xs font-bold text-blue-800 mb-1">📨 자동 발송 결과</div>
+                  {result.dispatched.map((d,i)=>(
+                    <div key={i} className={`text-xs ${d.sent?'text-blue-700':'text-red-700'}`}>
+                      {d.sent?'✓':'✗'} {d.name} ({d.phone}) - {d.distance}m
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="p-3 border-t bg-gray-50 flex gap-2 justify-end">
+          <button onClick={onClose} className="text-xs px-3 py-2 border rounded bg-white">닫기</button>
+          <button onClick={findStaff} disabled={loading} className="text-xs px-4 py-2 bg-emerald-600 text-white rounded font-bold disabled:bg-gray-400">
+            {loading ? "🔄 검색 중..." : (autoSend ? "🚨 검색 + 자동 호출" : "🔍 직원 검색")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== EDUCATION TRACKING (직원 안전교육 이수) ==========
+function EducationTrackingPage({ trainings, currentUser }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [recordModal, setRecordModal] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const fetcher = window.authFetch || ((p,o)=>fetch(p,o));
+      const res = await fetcher("/api/education-tracking");
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const d = await res.json();
+      if (d.ok) setData(d);
+    } catch (e) {
+      console.warn("[edu] 조회 실패:", e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const statusColors = {
+    completed: "bg-emerald-100 text-emerald-700",
+    expiring_soon: "bg-amber-100 text-amber-700",
+    expired: "bg-red-100 text-red-700",
+    overdue: "bg-red-200 text-red-900",
+  };
+  const statusLabels = {
+    completed: "✓ 이수", expiring_soon: "⚠ 만료임박",
+    expired: "✗ 만료", overdue: "✗ 미이수",
+  };
+
+  if (loading) return <div className="p-8 text-center text-gray-500">교육 이수 현황 불러오는 중...</div>;
+  if (!data) return (
+    <div className="p-8 text-center">
+      <button onClick={load} className="bg-blue-600 text-white text-xs font-bold px-4 py-2 rounded">새로고침</button>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-gradient-to-r from-violet-50 to-pink-50 border border-violet-200 rounded-xl p-4 text-sm text-violet-900">
+        🎓 <strong>직원 안전교육 이수 추적</strong> — 산업안전보건법, 어린이놀이시설법 등 법정 의무 교육 자동 추적. 만료 임박 시 알림.
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+        <div className="bg-white p-3 rounded-xl border text-center">
+          <div className="text-xs text-gray-500 font-bold">전체 직원</div>
+          <div className="text-2xl font-black">{data.overall.totalStaff}명</div>
+        </div>
+        <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 text-center">
+          <div className="text-xs text-emerald-700 font-bold">이수율</div>
+          <div className="text-2xl font-black text-emerald-700">{data.overall.completionRate}%</div>
+        </div>
+        <div className="bg-amber-50 p-3 rounded-xl border border-amber-200 text-center">
+          <div className="text-xs text-amber-700 font-bold">만료임박</div>
+          <div className="text-2xl font-black text-amber-700">{data.overall.expiringCount}건</div>
+        </div>
+        <div className="bg-red-50 p-3 rounded-xl border border-red-200 text-center">
+          <div className="text-xs text-red-700 font-bold">미이수/만료</div>
+          <div className="text-2xl font-black text-red-700">{data.overall.expiredCount}건</div>
+        </div>
+        <div className="bg-blue-50 p-3 rounded-xl border border-blue-200 text-center">
+          <div className="text-xs text-blue-700 font-bold">위험직원</div>
+          <div className="text-2xl font-black text-blue-700">{data.overall.highRiskCount}명</div>
+        </div>
+      </div>
+
+      {data.upcomingExpirations && data.upcomingExpirations.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+          <div className="text-sm font-bold text-amber-900 mb-2">⚠️ 곧 만료될 교육 ({data.upcomingExpirations.length}건)</div>
+          <div className="space-y-1">
+            {data.upcomingExpirations.slice(0, 5).map((e, i)=>(
+              <div key={i} className="text-xs flex justify-between bg-white p-2 rounded">
+                <span><strong>{e.staff}</strong> · {e.training}</span>
+                <span className="text-amber-700 font-bold">D-{e.daysLeft}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="p-3 border-b flex justify-between items-center">
+          <div className="text-sm font-bold">직원별 이수 현황 매트릭스</div>
+          <button onClick={()=>setRecordModal(true)} className="text-xs bg-blue-600 text-white font-bold px-3 py-1.5 rounded">
+            + 교육 이수 기록
+          </button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="text-xs w-full">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="p-2 text-left whitespace-nowrap">직원</th>
+                <th className="p-2 text-center whitespace-nowrap">이수율</th>
+                {(data.requiredTrainings || []).map(t=>(
+                  <th key={t.code} className="p-2 text-center whitespace-nowrap" title={t.law}>
+                    {t.name.split(' ')[0]}
+                    <div className="text-[9px] font-normal text-gray-500">{t.cycle === 'annual' ? '연1회' : t.cycle === 'biannual' ? '반기' : t.cycle === 'quarterly' ? '분기' : t.cycle}</div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {(data.summary || []).map(s=>(
+                <tr key={s.staff.id} className="border-t hover:bg-gray-50">
+                  <td className="p-2">
+                    <div className="font-bold">{s.staff.name}</div>
+                    <div className="text-[10px] text-gray-500">{s.staff.position}</div>
+                  </td>
+                  <td className="p-2 text-center">
+                    <span className={`font-black ${s.stats.completionRate >= 80 ? 'text-emerald-600' : s.stats.completionRate >= 50 ? 'text-amber-600' : 'text-red-600'}`}>
+                      {s.stats.completionRate}%
+                    </span>
+                  </td>
+                  {s.trainings.map((t, i)=>(
+                    <td key={i} className="p-2 text-center">
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${statusColors[t.status]}`} title={t.expiresAt ? `만료: ${new Date(t.expiresAt).toLocaleDateString('ko-KR')}` : ''}>
+                        {statusLabels[t.status]}
+                      </span>
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-800">
+        💡 <strong>법정 교육 안내:</strong> 산업안전보건법 제29조에 따라 정기교육(분기 3시간), 관리감독자교육(반기 8시간), 채용시교육(8시간) 등이 의무입니다. 위반 시 과태료 부과될 수 있습니다.
+      </div>
+
+      {recordModal && <EducationRecordModal trainings={data.requiredTrainings} staff={data.summary?.map(s=>s.staff) || []} onClose={()=>setRecordModal(false)} onSaved={()=>{setRecordModal(false); load();}}/>}
+    </div>
+  );
+}
+
+function EducationRecordModal({ trainings, staff, onClose, onSaved }) {
+  const [code, setCode] = useState(trainings?.[0]?.code || "");
+  const [completedAt, setCompletedAt] = useState(new Date().toISOString().slice(0,10));
+  const [hours, setHours] = useState(2);
+  const [instructor, setInstructor] = useState("");
+  const [attendees, setAttendees] = useState([]);
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    if (!code || !completedAt) return alert("필수 입력");
+    if (attendees.length === 0) return alert("참석자를 선택하세요");
+    setSaving(true);
+    try {
+      const fetcher = window.authFetch || ((p,o)=>fetch(p,o));
+      const res = await fetcher("/api/education-tracking", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ code, completedAt, hours, instructor, attendees, notes })
+      });
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      onSaved();
+    } catch (e) {
+      alert("저장 실패: " + e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1100,padding:16}} onClick={onClose}>
+      <div className="bg-white rounded-xl max-w-md w-full" onClick={e=>e.stopPropagation()}>
+        <div className="p-4 border-b bg-blue-600 text-white flex justify-between">
+          <div className="font-bold text-sm">📚 교육 이수 기록</div>
+          <button onClick={onClose} className="bg-white/20 rounded w-7 h-7 text-lg leading-none">×</button>
+        </div>
+        <div className="p-4 space-y-3">
+          <div>
+            <label className="text-xs font-bold">교육 종류 *</label>
+            <select value={code} onChange={e=>setCode(e.target.value)} className="w-full text-sm border rounded p-2 mt-1">
+              {(trainings || []).map(t=><option key={t.code} value={t.code}>{t.name}</option>)}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs font-bold">이수일</label>
+              <input type="date" value={completedAt} onChange={e=>setCompletedAt(e.target.value)} className="w-full text-sm border rounded p-2 mt-1"/>
+            </div>
+            <div>
+              <label className="text-xs font-bold">시간(h)</label>
+              <input type="number" value={hours} onChange={e=>setHours(parseFloat(e.target.value))} className="w-full text-sm border rounded p-2 mt-1"/>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-bold">강사</label>
+            <input value={instructor} onChange={e=>setInstructor(e.target.value)} className="w-full text-sm border rounded p-2 mt-1" placeholder="강사명"/>
+          </div>
+          <div>
+            <label className="text-xs font-bold">참석자 *</label>
+            <div className="border rounded p-2 mt-1 max-h-40 overflow-auto space-y-1">
+              {(staff || []).map(s=>(
+                <label key={s.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" checked={attendees.includes(s.id)} onChange={e=>{
+                    if (e.target.checked) setAttendees(prev=>[...prev, s.id]);
+                    else setAttendees(prev=>prev.filter(x=>x!==s.id));
+                  }}/>
+                  {s.name} <span className="text-xs text-gray-500">{s.position}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-bold">메모</label>
+            <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2} className="w-full text-sm border rounded p-2 mt-1"/>
+          </div>
+        </div>
+        <div className="p-3 border-t bg-gray-50 flex gap-2 justify-end">
+          <button onClick={onClose} className="text-xs px-3 py-2 border rounded bg-white">취소</button>
+          <button onClick={save} disabled={saving} className="text-xs px-4 py-2 bg-blue-600 text-white rounded font-bold">
+            {saving ? "저장 중..." : "💾 저장"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== ANNUAL STATS PAGE (연간 안전 통계) ==========
+function AnnualStatsPage({ hazardLogs, incidents, trainings, dailyChecks, facilities }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [year, setYear] = useState(new Date().getFullYear());
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const fetcher = window.authFetch || ((p,o)=>fetch(p,o));
+      const res = await fetcher("/api/safety-annual-stats", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ year, hazardLogs, incidents, trainings, dailyChecks })
+      });
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const d = await res.json();
+      if (d.ok) setData(d);
+    } catch (e) {
+      console.warn("[stats] 조회 실패:", e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, [year]);
+
+  if (loading) return <div className="p-8 text-center text-gray-500">통계 분석 중...</div>;
+  if (!data) return <div className="p-8 text-center"><button onClick={load} className="bg-blue-600 text-white text-xs font-bold px-4 py-2 rounded">불러오기</button></div>;
+
+  const monthLabels = Array.from({length:12}, (_,i)=>`${i+1}월`);
+  const maxHazard = Math.max(...data.monthlyHazards.map(m=>m.total), 1);
+  const maxIncident = Math.max(...data.monthlyIncidents.map(m=>m.total), 1);
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4 flex justify-between items-center">
+        <div className="text-sm text-blue-900">
+          📊 <strong>{year}년 연간 안전 통계</strong> — 월별 추이, 위험 유형 분포, 구역별 비교
+        </div>
+        <select value={year} onChange={e=>setYear(parseInt(e.target.value))} className="text-sm border rounded px-2 py-1">
+          {[year-2, year-1, year, year+1].map(y=><option key={y} value={y}>{y}년</option>)}
+        </select>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        <div className="bg-white p-4 rounded-xl border text-center">
+          <div className="text-xs text-gray-500 font-bold">총 위험성평가</div>
+          <div className="text-2xl font-black text-red-600">{data.kpis.totalHazards}</div>
+          {data.kpis.hazardTrend !== null && (
+            <div className={`text-[10px] font-bold mt-1 ${data.kpis.hazardTrend > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+              전년 대비 {data.kpis.hazardTrend > 0 ? '+' : ''}{data.kpis.hazardTrend}%
+            </div>
+          )}
+        </div>
+        <div className="bg-white p-4 rounded-xl border text-center">
+          <div className="text-xs text-gray-500 font-bold">총 사고건수</div>
+          <div className="text-2xl font-black text-orange-600">{data.kpis.totalIncidents}</div>
+          {data.kpis.incidentTrend !== null && (
+            <div className={`text-[10px] font-bold mt-1 ${data.kpis.incidentTrend > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+              전년 대비 {data.kpis.incidentTrend > 0 ? '+' : ''}{data.kpis.incidentTrend}%
+            </div>
+          )}
+        </div>
+        <div className="bg-white p-4 rounded-xl border text-center">
+          <div className="text-xs text-gray-500 font-bold">아차사고</div>
+          <div className="text-2xl font-black text-amber-600">{data.kpis.totalNearMiss}</div>
+        </div>
+        <div className="bg-white p-4 rounded-xl border text-center">
+          <div className="text-xs text-gray-500 font-bold">긴급 위험</div>
+          <div className="text-2xl font-black text-red-700">{data.kpis.urgentCount}</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-white rounded-xl border p-4">
+          <div className="text-sm font-bold mb-3">📈 월별 위험성평가 추이</div>
+          <div className="flex items-end gap-1 h-32">
+            {data.monthlyHazards.map((m, i)=>(
+              <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                <div className="w-full flex flex-col-reverse" style={{height:'100%'}}>
+                  {m.urgent > 0 && <div style={{height:`${(m.urgent/maxHazard)*100}%`, background:'#dc2626'}}/>}
+                  {m.high > 0 && <div style={{height:`${(m.high/maxHazard)*100}%`, background:'#ea580c'}}/>}
+                  {m.medium > 0 && <div style={{height:`${(m.medium/maxHazard)*100}%`, background:'#facc15'}}/>}
+                  {m.low > 0 && <div style={{height:`${(m.low/maxHazard)*100}%`, background:'#22c55e'}}/>}
+                </div>
+                <div className="text-[9px] text-gray-500">{i+1}</div>
+                {m.total > 0 && <div className="text-[9px] font-bold">{m.total}</div>}
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-3 text-[9px] mt-2 justify-center">
+            <span><span className="inline-block w-2 h-2 bg-red-600 mr-1"></span>긴급</span>
+            <span><span className="inline-block w-2 h-2 bg-orange-600 mr-1"></span>높음</span>
+            <span><span className="inline-block w-2 h-2 bg-yellow-400 mr-1"></span>보통</span>
+            <span><span className="inline-block w-2 h-2 bg-green-500 mr-1"></span>낮음</span>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border p-4">
+          <div className="text-sm font-bold mb-3">📉 월별 사고 추이</div>
+          <div className="flex items-end gap-1 h-32">
+            {data.monthlyIncidents.map((m, i)=>(
+              <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                <div className="w-full flex flex-col-reverse" style={{height:'100%'}}>
+                  {m.real > 0 && <div style={{height:`${(m.real/maxIncident)*100}%`, background:'#ea580c'}}/>}
+                  {m.nearMiss > 0 && <div style={{height:`${(m.nearMiss/maxIncident)*100}%`, background:'#fbbf24'}}/>}
+                </div>
+                <div className="text-[9px] text-gray-500">{i+1}</div>
+                {m.total > 0 && <div className="text-[9px] font-bold">{m.total}</div>}
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-3 text-[9px] mt-2 justify-center">
+            <span><span className="inline-block w-2 h-2 bg-orange-600 mr-1"></span>실제 사고</span>
+            <span><span className="inline-block w-2 h-2 bg-amber-400 mr-1"></span>아차사고</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-white rounded-xl border p-4">
+          <div className="text-sm font-bold mb-3">⚡ 위험 유형 분포 TOP10</div>
+          {data.topRiskTypes.length === 0 ? <div className="text-xs text-gray-400 p-4 text-center">데이터 없음</div> :
+            <div className="space-y-1">
+              {data.topRiskTypes.slice(0,10).map(t=>{
+                const max = data.topRiskTypes[0].count;
+                return (
+                  <div key={t.type} className="flex items-center gap-2 text-xs">
+                    <div className="w-16 font-bold">{t.type}</div>
+                    <div className="flex-1 bg-gray-100 rounded h-5 relative overflow-hidden">
+                      <div className="bg-red-500 h-full" style={{width:`${(t.count/max)*100}%`}}/>
+                      <span className="absolute right-1 top-0.5 text-[10px] font-bold">{t.count}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          }
+        </div>
+
+        <div className="bg-white rounded-xl border p-4">
+          <div className="text-sm font-bold mb-3">🗺️ 구역별 위험도 TOP10</div>
+          {data.topZones.length === 0 ? <div className="text-xs text-gray-400 p-4 text-center">데이터 없음</div> :
+            <div className="space-y-1">
+              {data.topZones.map((z, i)=>{
+                const fac = facilities.find(f=>f.id===z.zone);
+                return (
+                  <div key={z.zone} className="flex items-center gap-2 p-2 bg-gray-50 rounded text-xs">
+                    <span className="font-bold w-5 text-gray-500">#{i+1}</span>
+                    <span className="flex-1 font-bold">{fac?.name || z.zone}</span>
+                    <span className="text-red-600">위험 {z.hazards}</span>
+                    <span className="text-orange-600">사고 {z.incidents}</span>
+                    {z.urgent > 0 && <span className="bg-red-600 text-white px-1 rounded">긴급 {z.urgent}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          }
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== INCIDENT RECORD (사고/아차사고 기록) ==========
+function IncidentRecordPage({ incidents, setIncidents, facilities, showForm, setShowForm, onAddFacAction }) {
+  const [filter, setFilter] = useState("all"); // all|incident|nearmiss
+  const [notifyTarget, setNotifyTarget] = useState(null);   // 알림 발송 모달 대상
+  const [dispatchTarget, setDispatchTarget] = useState(null); // 직원 호출 모달 대상
+  const filtered = incidents.filter(i => filter === "all" || (filter === "nearmiss" ? i.isNearMiss : !i.isNearMiss));
+
+  const sevColors = {
+    "치명": "bg-red-200 text-red-900 border-red-400",
+    "중대": "bg-orange-200 text-orange-900 border-orange-400",
+    "중간": "bg-yellow-200 text-yellow-900 border-yellow-400",
+    "경미": "bg-green-200 text-green-900 border-green-400",
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-gradient-to-r from-red-50 to-orange-50 border border-red-200 rounded-xl p-4 text-sm text-red-900">
+        🚨 <strong>사고 / 아차사고 기록</strong> — 실제 사고뿐 아니라 사고 날 뻔한 상황도 기록하면 재발방지에 큰 도움이 됩니다.
+        AI가 응급조치/보호자 안내문/재발방지 과제를 자동 생성합니다.
+      </div>
+
+      <div className="flex justify-between items-center gap-2 flex-wrap">
+        <div className="flex gap-1.5">
+          {[{k:"all",l:`전체 (${incidents.length})`},{k:"incident",l:`사고 (${incidents.filter(i=>!i.isNearMiss).length})`},{k:"nearmiss",l:`아차사고 (${incidents.filter(i=>i.isNearMiss).length})`}].map(f=>(
+            <button key={f.k} onClick={()=>setFilter(f.k)} className={`text-xs font-bold px-3 py-1.5 rounded-lg ${filter===f.k?"bg-red-600 text-white":"bg-white border border-gray-300 text-gray-600"}`}>{f.l}</button>
+          ))}
+        </div>
+        <button onClick={()=>setShowForm(true)} className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-3 py-2 rounded-lg flex items-center gap-1">
+          🚨 사고 접수
+        </button>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+          <div className="text-5xl mb-3 opacity-40">📋</div>
+          <p className="text-sm text-gray-500">기록된 사고가 없습니다</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {filtered.map(inc => {
+            const fac = facilities.find(f => f.id === inc.facId);
+            return (
+              <div key={inc.id} className="bg-white rounded-xl border border-gray-200 p-4">
+                <div className="flex items-start gap-3">
+                  {inc.photos?.[0] && <img src={inc.photos[0]} alt="" className="w-20 h-20 object-cover rounded border flex-shrink-0" />}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap gap-1.5 items-center mb-2">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${sevColors[inc.ai?.severity] || 'bg-gray-100 text-gray-700'}`}>{inc.ai?.severity || '검토중'}</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-red-100 text-red-700">{inc.type}</span>
+                      {inc.isNearMiss && <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-700">아차사고</span>}
+                      {inc.ai?.cctvNeeded && <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-violet-100 text-violet-700">📹 CCTV 확인 필요</span>}
+                      {inc.ai?.reportToAgency && <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-100 text-blue-700">📑 {inc.ai.reportToAgency}</span>}
+                      <span className="text-[10px] text-gray-400 ml-auto">{new Date(inc.recordedAt).toLocaleString('ko-KR')}</span>
+                    </div>
+                    <div className="text-sm font-bold mb-1">{fac?.name || inc.location} {inc.victim ? `· ${inc.victim}` : ''}</div>
+                    <div className="text-xs text-gray-600 mb-2">{inc.description}</div>
+                    {inc.ai?.reportSummary && (
+                      <div className="text-xs bg-gray-50 p-2 rounded mb-2">
+                        <strong>AI 요약:</strong> {inc.ai.reportSummary}
+                      </div>
+                    )}
+                    {inc.ai?.firstAid?.length > 0 && (
+                      <div className="text-xs text-emerald-700 mb-1"><strong>응급조치:</strong> {inc.ai.firstAid.join(', ')}</div>
+                    )}
+                    {inc.ai?.guardianNotice && (
+                      <div className="text-xs bg-blue-50 border border-blue-200 rounded p-2 mb-1">
+                        <strong className="text-blue-700">📞 보호자 안내문:</strong>
+                        <div className="text-blue-800 mt-0.5">{inc.ai.guardianNotice}</div>
+                      </div>
+                    )}
+                    <div className="flex gap-1.5 mt-2 flex-wrap">
+                      <button onClick={()=>setNotifyTarget(inc)} className="text-[10px] font-bold px-2.5 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100">
+                        📨 알림 발송
+                      </button>
+                      <button onClick={()=>setDispatchTarget(inc)} className="text-[10px] font-bold px-2.5 py-1 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100">
+                        🚑 가까운 직원 호출
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {notifyTarget && <IncidentNotifyModal incident={notifyTarget} onClose={()=>setNotifyTarget(null)}/>}
+      {dispatchTarget && <IncidentDispatchModal incident={dispatchTarget} facilities={facilities} onClose={()=>setDispatchTarget(null)}/>}
+
+      {showForm && <IncidentFormModal facilities={facilities} onClose={()=>setShowForm(false)} onSave={(rec)=>{
+        setIncidents(prev=>[rec,...prev]);
+        // AI 결과의 재발방지 항목들을 보완과제로 자동 등록
+        if (rec.ai?.prevention && onAddFacAction) {
+          rec.ai.prevention.forEach(p=>{
+            onAddFacAction({
+              id: "a"+Date.now()+Math.random(),
+              facId: rec.facId || null,
+              title: `[사고재발방지] ${p.조치}`,
+              type: "사고재발방지",
+              desc: `사고 일시: ${rec.time}\n장소: ${rec.location}\n조치: ${p.조치}\n담당: ${p.담당}`,
+              sev: rec.ai.severity === "치명" || rec.ai.severity === "중대" ? "URGENT" : "HIGH",
+              status: "TODO",
+              due: p.기한 || "1주일 이내",
+              department: p.담당,
+              source: "incident",
+              photo: rec.photos?.[0] || null,
+            });
+          });
+        }
+        setShowForm(false);
+      }}/>}
+    </div>
+  );
+}
+
+// ========== INCIDENT FORM MODAL ==========
+function IncidentFormModal({ facilities, onClose, onSave }) {
+  const [type, setType] = useState("낙상");
+  const [isNearMiss, setIsNearMiss] = useState(false);
+  const [facId, setFacId] = useState("");
+  const [location, setLocation] = useState("");
+  const [victim, setVictim] = useState("");
+  const [time, setTime] = useState(new Date().toISOString().slice(0,16));
+  const [description, setDescription] = useState("");
+  const [photos, setPhotos] = useState([]);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [aiResult, setAiResult] = useState(null);
+
+  const TYPES = ['낙상','충돌','끼임','화상','물림','미끄럼','시설파손','민원','아차사고','기타'];
+
+  const handlePhoto = async (e) => {
+    const files = Array.from(e.target.files || []);
+    for (const f of files) {
+      try {
+        const dataUrl = await facCompressPhoto(f);
+        setPhotos(prev=>[...prev,dataUrl]);
+      } catch (err) {}
+    }
+    e.target.value = "";
+  };
+
+  const runAI = async () => {
+    if (!type) return alert("사고 유형을 선택하세요");
+    setAnalyzing(true);
+    try {
+      const fetcher = window.authFetch || ((p,o)=>fetch(p,o));
+      const fac = facilities.find(f=>f.id===facId);
+      const res = await fetcher("/api/incident-ai-analyze", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+          type, location: fac?.name || location, victim, time, description, photos, isNearMiss
+        })
+      });
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const data = await res.json();
+      if (!data.ok) throw new Error("분석 실패");
+      setAiResult(data.result);
+    } catch (e) {
+      alert("AI 분석 실패: "+e.message);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const handleSave = () => {
+    if (!type) return alert("사고 유형 필수");
+    if (!description) return alert("상황 설명 필수");
+    onSave({
+      id: "inc"+Date.now(),
+      type, isNearMiss, facId, location, victim, time, description, photos,
+      ai: aiResult,
+      recordedAt: new Date().toISOString(),
+    });
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1100,padding:16}} onClick={onClose}>
+      <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col" onClick={e=>e.stopPropagation()}>
+        <div className="p-4 border-b bg-gradient-to-r from-red-600 to-orange-600 text-white flex items-center justify-between">
+          <div>
+            <div className="text-sm font-bold">🚨 사고 접수</div>
+            <div className="text-xs opacity-90">AI가 응급조치/보호자안내/재발방지 자동 생성</div>
+          </div>
+          <button onClick={onClose} className="bg-white/20 rounded w-7 h-7 text-lg leading-none">×</button>
+        </div>
+        <div className="flex-1 overflow-auto p-4 space-y-3">
+          <div className="flex gap-2">
+            <label className={`flex-1 text-xs font-bold px-3 py-2 rounded-lg border-2 cursor-pointer text-center ${!isNearMiss?'bg-red-100 border-red-500 text-red-800':'bg-white border-gray-300'}`}>
+              <input type="radio" checked={!isNearMiss} onChange={()=>setIsNearMiss(false)} className="hidden"/>
+              🚨 실제 사고
+            </label>
+            <label className={`flex-1 text-xs font-bold px-3 py-2 rounded-lg border-2 cursor-pointer text-center ${isNearMiss?'bg-amber-100 border-amber-500 text-amber-800':'bg-white border-gray-300'}`}>
+              <input type="radio" checked={isNearMiss} onChange={()=>setIsNearMiss(true)} className="hidden"/>
+              ⚠️ 아차사고 (날 뻔)
+            </label>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs font-bold text-gray-600">사고 유형 *</label>
+              <select value={type} onChange={e=>setType(e.target.value)} className="w-full text-sm border rounded p-2 mt-1">
+                {TYPES.map(t=><option key={t}>{t}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-bold text-gray-600">발생 시각 *</label>
+              <input type="datetime-local" value={time} onChange={e=>setTime(e.target.value)} className="w-full text-sm border rounded p-2 mt-1"/>
+            </div>
+            <div>
+              <label className="text-xs font-bold text-gray-600">발생 구역</label>
+              <select value={facId} onChange={e=>setFacId(e.target.value)} className="w-full text-sm border rounded p-2 mt-1">
+                <option value="">-- 구역 선택 --</option>
+                {facilities.map(f=><option key={f.id} value={f.id}>{f.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-bold text-gray-600">정확한 위치</label>
+              <input value={location} onChange={e=>setLocation(e.target.value)} placeholder="예: 출입구 계단" className="w-full text-sm border rounded p-2 mt-1"/>
+            </div>
+            <div className="col-span-2">
+              <label className="text-xs font-bold text-gray-600">피해자 정보 (개인정보 주의)</label>
+              <input value={victim} onChange={e=>setVictim(e.target.value)} placeholder="예: 6세 남아 (보호자 동반)" className="w-full text-sm border rounded p-2 mt-1"/>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-bold text-gray-600">상황 설명 *</label>
+            <textarea value={description} onChange={e=>setDescription(e.target.value)} rows={3} placeholder="언제, 어디서, 어떻게 발생했는지 객관적으로" className="w-full text-sm border rounded p-2 mt-1"/>
+          </div>
+          <div>
+            <label className="text-xs font-bold text-gray-600">현장 사진 ({photos.length}장)</label>
+            <div className="flex gap-2 mt-1">
+              <label className="text-xs bg-white border border-gray-300 rounded px-3 py-2 cursor-pointer font-bold">
+                📷 촬영
+                <input type="file" accept="image/*" capture="environment" multiple onChange={handlePhoto} className="hidden"/>
+              </label>
+              <label className="text-xs bg-white border border-gray-300 rounded px-3 py-2 cursor-pointer font-bold">
+                🖼️ 파일
+                <input type="file" accept="image/*" multiple onChange={handlePhoto} className="hidden"/>
+              </label>
+            </div>
+            {photos.length > 0 && (
+              <div className="flex gap-1 mt-2 overflow-x-auto">
+                {photos.map((p,i)=>(
+                  <div key={i} className="relative flex-shrink-0">
+                    <img src={p} className="w-16 h-16 object-cover rounded border"/>
+                    <button onClick={()=>setPhotos(prev=>prev.filter((_,idx)=>idx!==i))} className="absolute top-0 right-0 bg-red-500 text-white w-5 h-5 rounded-full text-xs">×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {!aiResult && (
+            <button onClick={runAI} disabled={analyzing} className="w-full bg-gradient-to-r from-red-600 to-orange-600 text-white py-2.5 rounded-lg font-bold text-sm">
+              {analyzing ? "🔄 AI 분석 중..." : "🤖 AI로 응급조치/보호자안내/재발방지 자동 생성"}
+            </button>
+          )}
+
+          {aiResult && (
+            <div className="border-2 border-green-300 rounded-lg overflow-hidden">
+              <div className="p-3 bg-green-50 flex justify-between items-center">
+                <div className="text-sm font-bold text-green-800">✅ AI 분석 완료 — 심각도: {aiResult.severity}</div>
+              </div>
+              <div className="p-3 space-y-2 text-xs">
+                {aiResult.causes?.length > 0 && <div><strong>사고 원인:</strong> {aiResult.causes.join(', ')}</div>}
+                {aiResult.firstAid?.length > 0 && <div className="bg-red-50 p-2 rounded"><strong className="text-red-700">🚑 응급조치:</strong> {aiResult.firstAid.join(', ')}</div>}
+                {aiResult.guardianNotice && <div className="bg-blue-50 p-2 rounded"><strong className="text-blue-700">📞 보호자 안내문:</strong><br/>{aiResult.guardianNotice}</div>}
+                {aiResult.prevention?.length > 0 && (
+                  <div>
+                    <strong>🛡️ 재발방지 (자동 보완과제 등록):</strong>
+                    <ul className="ml-4 list-disc">
+                      {aiResult.prevention.map((p,i)=><li key={i}>{p.조치} <span className="text-gray-500">({p.담당}, {p.기한})</span></li>)}
+                    </ul>
+                  </div>
+                )}
+                {aiResult.legalNotice && <div className="bg-amber-50 p-2 rounded"><strong className="text-amber-700">⚖️ 법적 유의사항:</strong> {aiResult.legalNotice}</div>}
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="p-3 border-t bg-gray-50 flex gap-2 justify-end">
+          <button onClick={onClose} className="text-xs px-3 py-2 border border-gray-300 rounded bg-white">취소</button>
+          <button onClick={handleSave} className="text-xs px-3 py-2 bg-emerald-600 text-white rounded font-bold">💾 저장 + 보완과제 자동 등록</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== DAILY CHECKLIST (일일 시설점검) ==========
+function DailyChecklistPage({ dailyChecks, setDailyChecks, facilities, currentUser }) {
+  const today = new Date().toISOString().slice(0,10);
+  const [activePeriod, setActivePeriod] = useState("opening"); // opening|noon|closing
+
+  const PERIODS = {
+    opening: { label: "🌅 개장 전", color: "amber", time: "08:00-09:30" },
+    noon: { label: "🌞 점심", color: "blue", time: "12:00-13:00" },
+    closing: { label: "🌙 마감", color: "violet", time: "17:00-18:00" }
+  };
+
+  const CHECK_ITEMS = {
+    opening: [
+      "출입구/매표소 청소 상태", "공기질 환기", "조명 점등 확인",
+      "비상구 통로 확보", "소화기 점검표 확인", "키즈카페 매트/안전바 점검",
+      "양떼정원 울타리 잠금", "체험 도구 정돈", "직원 안전모/장갑 비치"
+    ],
+    noon: [
+      "점심시간 식당 위생 점검", "냉난방기 작동 확인", "쓰레기통 비움",
+      "키즈카페 인원 혼잡도", "주차장 차량 정렬", "음수대 청결"
+    ],
+    closing: [
+      "전체 조명 소등", "가스 차단", "출입문 잠금",
+      "CCTV 정상 작동 확인", "당일 점검표 작성", "다음날 준비물 확인",
+      "쓰레기 분리수거", "체험 도구 보관"
+    ]
+  };
+
+  const todayChecks = dailyChecks.filter(c => c.date === today);
+  const periodCheck = todayChecks.find(c => c.period === activePeriod);
+  const items = CHECK_ITEMS[activePeriod];
+  const checked = periodCheck?.checked || {};
+
+  const toggleItem = (item) => {
+    const newChecked = { ...checked, [item]: !checked[item] };
+    if (periodCheck) {
+      setDailyChecks(prev => prev.map(c => c.id === periodCheck.id ? {...c, checked: newChecked, updatedAt: new Date().toISOString()} : c));
+    } else {
+      setDailyChecks(prev => [...prev, {
+        id: "chk"+Date.now(), date: today, period: activePeriod,
+        checked: newChecked, by: currentUser?.name || "익명",
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+      }]);
+    }
+  };
+
+  const completedCount = items.filter(i => checked[i]).length;
+  const completionRate = Math.round((completedCount / items.length) * 100);
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-gradient-to-r from-emerald-50 to-blue-50 border border-emerald-200 rounded-xl p-4 text-sm text-emerald-900">
+        📋 <strong>일일 시설점검</strong> — 개장 전·점심·마감 시점에 모바일로 빠르게 체크하세요. 미완료 항목은 자동으로 다음 날까지 누적됩니다.
+      </div>
+
+      <div className="flex gap-2">
+        {Object.entries(PERIODS).map(([k, p]) => {
+          const c = todayChecks.find(c => c.period === k);
+          const items_ = CHECK_ITEMS[k];
+          const done = c ? items_.filter(i => c.checked?.[i]).length : 0;
+          const rate = Math.round((done / items_.length) * 100);
+          return (
+            <button key={k} onClick={()=>setActivePeriod(k)}
+              className={`flex-1 p-3 rounded-xl border-2 ${activePeriod===k?`bg-${p.color}-100 border-${p.color}-500`:'bg-white border-gray-200'}`}>
+              <div className="text-sm font-bold">{p.label}</div>
+              <div className="text-[10px] text-gray-500">{p.time}</div>
+              <div className="text-xs font-bold mt-1">{done}/{items_.length} ({rate}%)</div>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-200 p-4">
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="font-bold text-sm">{PERIODS[activePeriod].label} 점검 항목</h3>
+          <span className="text-xs text-gray-500">{completedCount}/{items.length} 완료 · {completionRate}%</span>
+        </div>
+        <div className="h-2 bg-gray-200 rounded-full overflow-hidden mb-4">
+          <div style={{width:`${completionRate}%`}} className="h-full bg-emerald-500 transition-all"></div>
+        </div>
+        <div className="space-y-1.5">
+          {items.map(item => (
+            <label key={item} className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer ${checked[item]?'bg-emerald-50':'bg-gray-50 hover:bg-gray-100'}`}>
+              <input type="checkbox" checked={!!checked[item]} onChange={()=>toggleItem(item)} className="w-5 h-5"/>
+              <span className={`text-sm ${checked[item]?'text-emerald-700 line-through':'text-gray-800'}`}>{item}</span>
+              {checked[item] && <span className="ml-auto text-[10px] text-emerald-600 font-bold">✓</span>}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {dailyChecks.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <h3 className="font-bold text-sm mb-3">📊 최근 7일 점검 이력</h3>
+          <div className="space-y-1">
+            {dailyChecks.slice(-7).reverse().map(c => {
+              const items_ = CHECK_ITEMS[c.period];
+              const done = items_.filter(i => c.checked?.[i]).length;
+              return (
+                <div key={c.id} className="flex justify-between items-center text-xs py-2 border-b last:border-0">
+                  <div>
+                    <strong>{c.date}</strong> · {PERIODS[c.period].label} · {c.by}
+                  </div>
+                  <span className={`font-bold ${done===items_.length?'text-emerald-600':done>0?'text-amber-600':'text-red-600'}`}>{done}/{items_.length}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ========== MONTHLY REPORT CARD (월간 안전 리포트) ==========
+function MonthlyReportCard({ report, setReport, generating, setGenerating, hazardLogs, incidents, trainings, facilities }) {
+  const month = new Date().toISOString().slice(0,7);
+
+  const generateReport = async () => {
+    setGenerating(true);
+    try {
+      const zoneRisks = facilities.map(f => {
+        const cnt = hazardLogs.filter(l => l.facId === f.id).length;
+        return { zone: f.name, count: cnt };
+      }).filter(z => z.count > 0).sort((a,b)=>b.count-a.count);
+
+      const fetcher = window.authFetch || ((p,o)=>fetch(p,o));
+      const res = await fetcher("/api/safety-monthly-report", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+          month, hazardLogs: hazardLogs.slice(0,20), incidents: incidents.slice(0,20),
+          completedActions: [], pendingActions: [],
+          trainings: trainings.filter(t=>t.date?.startsWith(month)),
+          zoneRisks
+        })
+      });
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const data = await res.json();
+      if (!data.ok) throw new Error("리포트 생성 실패");
+      setReport({ ...data.result, month, generatedAt: data.generatedAt });
+    } catch (e) {
+      alert("리포트 생성 실패: "+e.message);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const printReport = () => {
+    const win = window.open('', '_blank');
+    if (!win) return alert("팝업이 차단되었습니다. 팝업 허용 후 재시도하세요.");
+    win.document.write(`
+      <html><head><meta charset="utf-8"><title>${month} 안전 리포트</title>
+      <style>
+        body { font-family: 'Pretendard', sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; line-height: 1.8; }
+        h1 { color: #dc2626; border-bottom: 3px solid #dc2626; padding-bottom: 10px; }
+        h2 { color: #ea580c; margin-top: 30px; }
+        .summary { background: #fef3c7; padding: 16px; border-radius: 8px; }
+        .kpi { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; margin: 20px 0; }
+        .kpi-item { background: #f3f4f6; padding: 12px; border-radius: 8px; text-align: center; }
+        .kpi-num { font-size: 24px; font-weight: 800; color: #dc2626; }
+        .kpi-label { font-size: 11px; color: #6b7280; }
+        ul { padding-left: 20px; }
+        @media print { body { padding: 20px; } }
+      </style></head><body>
+      <h1>🛡️ ${month} 월간 안전 리포트</h1>
+      <div class="summary"><strong>📋 경영진 요약</strong><p>${report.executiveSummary || ''}</p></div>
+      <div class="kpi">
+        <div class="kpi-item"><div class="kpi-num">${report.kpis?.totalHazards || 0}</div><div class="kpi-label">위험성평가</div></div>
+        <div class="kpi-item"><div class="kpi-num">${report.kpis?.incidentCount || 0}</div><div class="kpi-label">사고건수</div></div>
+        <div class="kpi-item"><div class="kpi-num">${report.kpis?.trainingCompletion || '-'}</div><div class="kpi-label">교육이수율</div></div>
+        <div class="kpi-item"><div class="kpi-num">${report.kpis?.actionCompletionRate || '-'}</div><div class="kpi-label">조치완료율</div></div>
+      </div>
+      <h2>🔥 주요 위험 구역 TOP5</h2>
+      <ul>${(report.topRiskZones||[]).map(z=>`<li><strong>${z.zone}</strong>: ${z.count}건 - ${z.summary || ''}</li>`).join('')}</ul>
+      <h2>📊 사고 분석</h2>
+      <p>${report.incidentAnalysis || ''}</p>
+      <h2>✅ 예방 성과</h2>
+      <ul>${(report.preventionAchievements||[]).map(a=>`<li>${a}</li>`).join('')}</ul>
+      <h2>🚧 개선 필요 사항</h2>
+      <ul>${(report.improvementsNeeded||[]).map(a=>`<li>${a}</li>`).join('')}</ul>
+      <h2>📅 다음 달 계획</h2>
+      <ul>${(report.nextMonthPlan||[]).map(a=>`<li>${a}</li>`).join('')}</ul>
+      <h2>⚖️ 법규 준수 현황</h2>
+      <p>${report.complianceStatus || ''}</p>
+      <h2>💌 대표이사 메시지</h2>
+      <div style="background:#fef3c7;padding:16px;border-radius:8px;font-style:italic;">${report.ceoMessage || ''}</div>
+      <div style="margin-top:40px;text-align:right;color:#6b7280;font-size:11px;">생성일: ${new Date(report.generatedAt).toLocaleString('ko-KR')}<br/>한국잠사박물관 안전관리</div>
+      </body></html>
+    `);
+    win.document.close();
+    setTimeout(()=>win.print(), 500);
+  };
+
+  if (!report) {
+    return (
+      <div className="bg-gradient-to-r from-violet-50 to-pink-50 border-2 border-violet-200 rounded-xl p-5">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <div className="text-sm font-bold text-violet-900">📊 {month} 월간 안전 리포트</div>
+            <div className="text-xs text-violet-700 mt-1">위험성평가 {hazardLogs.length}건, 사고기록 {incidents.length}건, 교육 {trainings.filter(t=>t.date?.startsWith(month)).length}건의 데이터로 자동 작성</div>
+          </div>
+          <button onClick={generateReport} disabled={generating}
+            className="bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold px-4 py-2.5 rounded-lg">
+            {generating ? "🔄 작성 중..." : "🤖 AI 리포트 자동 생성"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white border-2 border-violet-300 rounded-xl overflow-hidden">
+      <div className="p-4 bg-gradient-to-r from-violet-600 to-pink-600 text-white flex justify-between items-center">
+        <div>
+          <div className="text-sm font-bold">📊 {report.month} 월간 안전 리포트</div>
+          <div className="text-xs opacity-90">{new Date(report.generatedAt).toLocaleString('ko-KR')} 생성</div>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={printReport} className="bg-white/20 text-white text-xs font-bold px-3 py-1.5 rounded">🖨️ 인쇄/PDF</button>
+          <button onClick={()=>setReport(null)} className="bg-white/20 text-white text-xs font-bold px-3 py-1.5 rounded">↺ 재작성</button>
+        </div>
+      </div>
+      <div className="p-4 space-y-4">
+        {report.executiveSummary && (
+          <div className="bg-amber-50 border border-amber-200 rounded p-3">
+            <div className="text-xs font-bold text-amber-900 mb-1">📋 경영진 요약</div>
+            <div className="text-sm text-amber-800">{report.executiveSummary}</div>
+          </div>
+        )}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <div className="bg-gray-50 p-3 rounded text-center">
+            <div className="text-xs text-gray-500 font-bold">위험성평가</div>
+            <div className="text-xl font-black text-red-600">{report.kpis?.totalHazards || 0}</div>
+          </div>
+          <div className="bg-gray-50 p-3 rounded text-center">
+            <div className="text-xs text-gray-500 font-bold">사고건수</div>
+            <div className="text-xl font-black text-orange-600">{report.kpis?.incidentCount || 0}</div>
+          </div>
+          <div className="bg-gray-50 p-3 rounded text-center">
+            <div className="text-xs text-gray-500 font-bold">교육이수율</div>
+            <div className="text-xl font-black text-emerald-600">{report.kpis?.trainingCompletion || '-'}</div>
+          </div>
+          <div className="bg-gray-50 p-3 rounded text-center">
+            <div className="text-xs text-gray-500 font-bold">조치완료율</div>
+            <div className="text-xl font-black text-blue-600">{report.kpis?.actionCompletionRate || '-'}</div>
+          </div>
+        </div>
+        {report.topRiskZones?.length > 0 && (
+          <div>
+            <div className="text-xs font-bold text-gray-600 mb-1">🔥 주요 위험 구역 TOP5</div>
+            <div className="space-y-1">
+              {report.topRiskZones.slice(0,5).map((z,i)=>(
+                <div key={i} className="flex items-center gap-2 text-xs bg-red-50 p-2 rounded">
+                  <span className="font-bold text-red-700">#{i+1}</span>
+                  <span className="font-bold flex-1">{z.zone}</span>
+                  <span className="text-red-700">{z.count}건</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {report.ceoMessage && (
+          <div className="bg-violet-50 border border-violet-200 rounded p-3 italic">
+            <div className="text-xs font-bold text-violet-700 mb-1">💌 대표이사 메시지</div>
+            <div className="text-sm text-violet-900">{report.ceoMessage}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction }) {
   const user = userCtx;
   const [page, setPage] = useState("dashboard");
@@ -9695,6 +10896,29 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction }) {
   const [aiLog, setAiLog] = useState([]); // registered AI diagnoses
   const [sigs, setSigs] = useState({ assessor: null, safeMgr: null, approver: null });
   const [showTrainingModal, setShowTrainingModal] = useState(false);
+
+  // 사고/아차사고 기록
+  const [incidents, setIncidents] = useState(() => {
+    try { return JSON.parse(window.localStorage?.getItem("jamsa_incidents") || "[]"); }
+    catch (e) { return []; }
+  });
+  useEffect(() => {
+    try { window.localStorage?.setItem("jamsa_incidents", JSON.stringify(incidents)); } catch (e) {}
+  }, [incidents]);
+  const [showIncidentForm, setShowIncidentForm] = useState(false);
+
+  // 일일 점검표
+  const [dailyChecks, setDailyChecks] = useState(() => {
+    try { return JSON.parse(window.localStorage?.getItem("jamsa_daily_checks") || "[]"); }
+    catch (e) { return []; }
+  });
+  useEffect(() => {
+    try { window.localStorage?.setItem("jamsa_daily_checks", JSON.stringify(dailyChecks)); } catch (e) {}
+  }, [dailyChecks]);
+
+  // 월간 리포트
+  const [monthlyReport, setMonthlyReport] = useState(null);
+  const [generatingReport, setGeneratingReport] = useState(false);
 
   const handleSaveTraining = (newTraining) => {
     setTrainings(prev => [newTraining, ...prev]);
@@ -9724,8 +10948,10 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction }) {
     if (!aiImg) return alert("현장 사진을 업로드하세요.");
     setAnalyzing(true);
     try {
-      const fname = facilities.find(f => f.id === aiFac)?.name;
-      const res = await analyzeSafetyHazardAI(aiImg, fname);
+      const fac = facilities.find(f => f.id === aiFac);
+      const fname = fac?.name;
+      const ftype = fac?.type || fac?.code;
+      const res = await analyzeSafetyHazardAI(aiImg, fname, ftype);
       setAiResult(res);
     } catch (err) {
       alert("AI 분석 실패: " + err.message);
@@ -9738,18 +10964,36 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction }) {
     if (!aiResult) return;
     const fac = facilities.find(f => f.id === aiFac);
     const dueOffset = aiResult.severity === "URGENT" ? 1 : aiResult.severity === "HIGH" ? 3 : 7;
+
+    // 새 백엔드의 풍부한 정보로 보완과제 만들기
+    const title = aiResult.taskTitle || `[AI 안전진단] ${fac?.name ?? "현장"} ${aiResult.type}`;
+    const descParts = [];
+    if (aiResult.placeGuess) descParts.push(`[장소 추정] ${aiResult.placeGuess}`);
+    if (aiResult.findings && aiResult.findings.length > 0) descParts.push(`[발견사항]\n${aiResult.findings.map(f=>`• ${f}`).join("\n")}`);
+    if (aiResult.immediate && aiResult.immediate.length > 0) descParts.push(`[즉시조치]\n${aiResult.immediate.map(s=>`• ${s}`).join("\n")}`);
+    if (aiResult.shortTerm && aiResult.shortTerm.length > 0) descParts.push(`[단기조치 - 1주]\n${aiResult.shortTerm.map(s=>`• ${s}`).join("\n")}`);
+    if (aiResult.longTerm && aiResult.longTerm.length > 0) descParts.push(`[장기조치]\n${aiResult.longTerm.map(s=>`• ${s}`).join("\n")}`);
+    if (aiResult.estCost) descParts.push(`[예상비용] ${aiResult.estCost}`);
+    if (aiResult.relatedLaw) descParts.push(`[관련법규] ${aiResult.relatedLaw}`);
+    if (aiResult.similarCaseWarning) descParts.push(`[유사사례경고] ${aiResult.similarCaseWarning}`);
+    if (aiResult.rephotoGuide) descParts.push(`[조치후 재촬영] ${aiResult.rephotoGuide}`);
+
     const action = {
       id: "a" + Date.now() + Math.random(),
       facId: aiFac || null,
       inspId: null,
-      title: `[AI 안전진단] ${fac?.name ?? "현장"} ${aiResult.type}`,
+      title,
       type: aiResult.type,
-      desc: `[위험요소]\n${aiResult.hazards}\n\n[시정조치]\n${aiResult.solution}\n\n[법적 근거] ${aiResult.legalRef}`,
+      desc: descParts.join("\n\n") || aiResult.hazards,
       sev: aiResult.severity,
       rec: aiResult.solution,
       status: "TODO",
       due: _facD(dueOffset),
       assignee: null,
+      department: aiResult.department || null,
+      deadlineHint: aiResult.deadline || null,
+      score: aiResult.score || null,
+      riskTypes: aiResult.riskTypes || [],
       memo: null,
       ai: aiResult,
       photo: aiImg,
@@ -9757,7 +11001,7 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction }) {
     };
     if (onAddFacAction) onAddFacAction(action);
     setAiLog(prev => [{ id: action.id, at: new Date().toISOString(), facId: aiFac, photo: aiImg, result: aiResult }, ...prev]);
-    alert(`위험성 평가 일지에 기록되었으며, 시설점검 보완과제로 자동 등록되었습니다.\n심각도: ${aiResult.severity} · 기한: ${dueOffset}일`);
+    alert(`✅ 위험성 평가 등록 완료\n\n• 위험도: ${aiResult.severity} (점수 ${aiResult.score || '-'})\n• 보완과제: ${title}\n• 담당부서: ${aiResult.department || '미지정'}\n• 기한: ${aiResult.deadline || `${dueOffset}일 이내`}\n\n시설점검 → 보완과제 메뉴에서 확인하세요.`);
     // Reset for next analysis
     setAiImg(null); setAiResult(null); setAiFac("");
   };
@@ -9779,8 +11023,13 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction }) {
         <nav className="flex-1 p-2 space-y-0.5">
           {[
             { id: "dashboard", label: "안전 대시보드", icon: "🛡️" },
-            { id: "education", label: "직원 교육 일지", icon: "📚" },
-            { id: "hazard", label: "AI 위험성 평가", icon: "🤖" }
+            { id: "hazard", label: "AI 위험성 평가", icon: "🤖" },
+            { id: "tasks", label: "보완조치 관리", icon: "🔧" },
+            { id: "incident", label: "사고/아차사고 기록", icon: "🚨" },
+            { id: "checklist", label: "일일 시설점검", icon: "📋" },
+            { id: "education", label: "직원 안전교육", icon: "📚" },
+            { id: "riskmap", label: "구역별 위험지도", icon: "🗺️" },
+            { id: "annual", label: "연간 안전 통계", icon: "📈" }
           ].map(m => (
             <button key={m.id} onClick={() => setPage(m.id)}
               className={`w-full text-left px-3 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${page === m.id ? "bg-red-50 text-red-700" : "text-gray-600 hover:bg-gray-100"}`}>
@@ -9806,22 +11055,43 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction }) {
           {page === "dashboard" && "🛡️ 종합 안전 대시보드"}
           {page === "education" && "📚 법정 의무 및 직무 안전 교육 일지"}
           {page === "hazard" && "🤖 시설 작업 환경 AI 위험성 평가"}
+          {page === "tasks" && "🔧 보완조치 관리"}
+          {page === "incident" && "🚨 사고 / 아차사고 기록"}
+          {page === "checklist" && "📋 일일 시설점검"}
+          {page === "riskmap" && "🗺️ 구역별 위험지도"}
+          {page === "annual" && "📈 연간 안전 통계"}
         </div>
 
         {page === "dashboard" && (
           <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm">
-                <div className="text-xs text-gray-500 font-bold mb-1">이번 달 안전 교육 이수</div>
-                <div className="text-2xl font-black text-emerald-600">{completedThisMonth}건</div>
+            {/* 월간 리포트 자동 생성 */}
+            <MonthlyReportCard
+              report={monthlyReport}
+              setReport={setMonthlyReport}
+              generating={generatingReport}
+              setGenerating={setGeneratingReport}
+              hazardLogs={aiLog}
+              incidents={incidents}
+              trainings={trainings}
+              facilities={facilities}
+            />
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                <div className="text-[10px] text-gray-500 font-bold mb-1">이번 달 교육</div>
+                <div className="text-xl font-black text-emerald-600">{completedThisMonth}건</div>
               </div>
-              <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm">
-                <div className="text-xs text-gray-500 font-bold mb-1">진행 예정 교육</div>
-                <div className="text-2xl font-black text-blue-600">{scheduledCount}건</div>
+              <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                <div className="text-[10px] text-gray-500 font-bold mb-1">예정 교육</div>
+                <div className="text-xl font-black text-blue-600">{scheduledCount}건</div>
               </div>
-              <div className={`p-5 rounded-xl border shadow-sm ${hazardCount > 0 ? "bg-red-50 border-red-200" : "bg-white border-gray-200"}`}>
-                <div className={`text-xs font-bold mb-1 ${hazardCount > 0 ? "text-red-600" : "text-gray-500"}`}>발견된 위험 요소 (조치 필요)</div>
-                <div className={`text-2xl font-black ${hazardCount > 0 ? "text-red-600" : "text-gray-400"}`}>{hazardCount}건</div>
+              <div className={`p-4 rounded-xl border shadow-sm ${hazardCount > 0 ? "bg-red-50 border-red-200" : "bg-white border-gray-200"}`}>
+                <div className={`text-[10px] font-bold mb-1 ${hazardCount > 0 ? "text-red-600" : "text-gray-500"}`}>위험 요소</div>
+                <div className={`text-xl font-black ${hazardCount > 0 ? "text-red-600" : "text-gray-400"}`}>{hazardCount}건</div>
+              </div>
+              <div className={`p-4 rounded-xl border shadow-sm ${incidents.length > 0 ? "bg-orange-50 border-orange-200" : "bg-white border-gray-200"}`}>
+                <div className={`text-[10px] font-bold mb-1 ${incidents.length > 0 ? "text-orange-700" : "text-gray-500"}`}>사고 기록</div>
+                <div className={`text-xl font-black ${incidents.length > 0 ? "text-orange-700" : "text-gray-400"}`}>{incidents.length}건</div>
               </div>
             </div>
 
@@ -9884,22 +11154,112 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction }) {
           </div>
         )}
 
-        {page === "education" && (
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <div className="p-4 border-b flex justify-between items-center bg-gray-50">
-              <span className="font-bold text-sm text-gray-700">교육 수료 내역 ({trainings.length}건)</span>
-              <button type="button" onClick={() => setShowTrainingModal(true)}
-                className="bg-gray-900 text-white px-3 py-1.5 rounded-lg text-xs font-bold">+ 새 교육 일지 작성</button>
+        {page === "tasks" && (
+          <div className="space-y-4">
+            <div className="bg-gradient-to-r from-orange-50 to-red-50 border border-orange-200 rounded-xl p-4 text-sm text-orange-900">
+              🔧 <strong>보완조치 관리</strong> — AI 위험성 평가에서 등록된 보완과제와 시설점검에서 발견된 미조치 사항을 통합 관리합니다.
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-white border-b">
-                  <tr>{["분류", "교육명", "일자", "강사", "이수 인원", "상태"].map(h => <th key={h} className="p-3 text-left font-bold text-gray-500 text-xs">{h}</th>)}</tr>
-                </thead>
-                <tbody>
-                  {trainings.map(t => {
-                    const sigCount = t.signatures ? t.signatures.filter(a => a.sign).length : 0;
-                    const typeCss = FAC_SAFE_TRAIN_TYPES[t.type]?.c || "bg-gray-100 text-gray-600";
+            <div className="bg-white rounded-xl border border-gray-200 p-6 text-center">
+              <div className="text-5xl mb-3">🚧</div>
+              <p className="text-sm text-gray-600 mb-3">보완과제 통합 대시보드 — 현재 시설점검 메뉴의 [보완과제] 탭에서 모든 과제를 확인할 수 있습니다.</p>
+              <p className="text-xs text-gray-400">상위 메뉴 [시설점검 → 보완과제]에서 즉시 확인 가능</p>
+            </div>
+          </div>
+        )}
+
+        {page === "incident" && (
+          <IncidentRecordPage
+            incidents={incidents}
+            setIncidents={setIncidents}
+            facilities={facilities}
+            showForm={showIncidentForm}
+            setShowForm={setShowIncidentForm}
+            onAddFacAction={onAddFacAction}
+          />
+        )}
+
+        {page === "checklist" && (
+          <DailyChecklistPage
+            dailyChecks={dailyChecks}
+            setDailyChecks={setDailyChecks}
+            facilities={facilities}
+            currentUser={user}
+          />
+        )}
+
+        {page === "riskmap" && (
+          <div className="space-y-4">
+            <div className="bg-gradient-to-r from-violet-50 to-pink-50 border border-violet-200 rounded-xl p-4 text-sm text-violet-900">
+              🗺️ <strong>구역별 위험지도</strong> — 시설 전체를 구역별로 나누고 위험도를 색상으로 표시합니다.
+            </div>
+            {(() => {
+              // AI 위험성 평가 로그 기반 구역별 위험도 집계
+              const zoneRisks = {};
+              aiLog.forEach(log => {
+                const facId = log.facId || "etc";
+                if (!zoneRisks[facId]) zoneRisks[facId] = { count: 0, urgent: 0, high: 0, medium: 0, low: 0 };
+                zoneRisks[facId].count++;
+                const sev = log.result?.severity;
+                if (sev === "URGENT") zoneRisks[facId].urgent++;
+                else if (sev === "HIGH") zoneRisks[facId].high++;
+                else if (sev === "MEDIUM") zoneRisks[facId].medium++;
+                else zoneRisks[facId].low++;
+              });
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {facilities.map(f => {
+                    const r = zoneRisks[f.id] || { count: 0, urgent: 0, high: 0, medium: 0, low: 0 };
+                    const level = r.urgent > 0 ? "긴급" : r.high > 0 ? "높음" : r.medium > 0 ? "보통" : r.count > 0 ? "낮음" : "정상";
+                    const colors = {
+                      "긴급": "bg-red-100 border-red-400 text-red-900",
+                      "높음": "bg-orange-100 border-orange-400 text-orange-900",
+                      "보통": "bg-yellow-100 border-yellow-400 text-yellow-900",
+                      "낮음": "bg-green-100 border-green-400 text-green-900",
+                      "정상": "bg-white border-gray-200 text-gray-600",
+                    };
+                    return (
+                      <div key={f.id} className={`p-4 rounded-xl border-2 ${colors[level]}`}>
+                        <div className="flex justify-between items-start mb-2">
+                          <div className="font-bold text-sm">{f.name}</div>
+                          <span className="text-xs font-bold px-2 py-0.5 rounded bg-white">{level}</span>
+                        </div>
+                        <div className="text-xs space-y-0.5 opacity-80">
+                          <div>총 점검: {r.count}건</div>
+                          {r.urgent > 0 && <div>🔴 긴급 {r.urgent}건</div>}
+                          {r.high > 0 && <div>🟠 높음 {r.high}건</div>}
+                          {r.medium > 0 && <div>🟡 보통 {r.medium}건</div>}
+                          {r.low > 0 && <div>🟢 낮음 {r.low}건</div>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+            <div className="bg-white rounded-xl border border-gray-200 p-4 text-xs text-gray-500">
+              💡 AI 위험성 평가에서 점검을 등록하면 이 지도에 자동 반영됩니다. 구역별 점검 빈도와 위험도를 한눈에 파악하세요.
+            </div>
+          </div>
+        )}
+
+        {page === "education" && (
+          <div className="space-y-4">
+            <EducationTrackingPage trainings={trainings} currentUser={user}/>
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              <div className="p-4 border-b flex justify-between items-center bg-gray-50">
+                <span className="font-bold text-sm text-gray-700">📋 교육 일지 ({trainings.length}건)</span>
+                <button type="button" onClick={() => setShowTrainingModal(true)}
+                  className="bg-gray-900 text-white px-3 py-1.5 rounded-lg text-xs font-bold">+ 새 교육 일지 작성</button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-white border-b">
+                    <tr>{["분류", "교육명", "일자", "강사", "이수 인원", "상태"].map(h => <th key={h} className="p-3 text-left font-bold text-gray-500 text-xs">{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {trainings.map(t => {
+                      const sigCount = t.signatures ? t.signatures.filter(a => a.sign).length : 0;
+                      const typeCss = FAC_SAFE_TRAIN_TYPES[t.type]?.c || "bg-gray-100 text-gray-600";
                     return (
                       <tr key={t.id} className="border-b last:border-0 hover:bg-gray-50">
                         <td className="p-3 text-xs"><span className={`px-2 py-1 rounded font-bold ${typeCss}`}>{t.type}</span></td>
@@ -9922,12 +11282,23 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction }) {
               </table>
             </div>
           </div>
+          </div>
         )}
 
         {showTrainingModal && (
           <SafeTrainingModal
             onClose={() => setShowTrainingModal(false)}
             onSave={handleSaveTraining}
+          />
+        )}
+
+        {page === "annual" && (
+          <AnnualStatsPage
+            hazardLogs={aiLog}
+            incidents={incidents}
+            trainings={trainings}
+            dailyChecks={dailyChecks}
+            facilities={facilities}
           />
         )}
 
@@ -9943,22 +11314,37 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction }) {
                 {facilities.map(f => <option key={f.id} value={f.id}>[{f.code}] {f.name}</option>)}
               </select>
 
-              <div className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center mb-4 bg-gray-50">
+              <div className="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center mb-4 bg-gray-50">
                 {aiImg ? (
                   <div>
                     <img src={aiImg} alt="hazard" className="max-h-64 mx-auto rounded-lg shadow-sm" />
-                    <label className="cursor-pointer inline-block mt-3 text-xs text-blue-600 font-bold">
-                      📷 다른 사진으로 교체
-                      <input type="file" accept="image/*" capture="environment" onChange={handleAiPhoto} className="hidden" />
-                    </label>
+                    <div className="inline-flex gap-2 mt-3 flex-wrap justify-center">
+                      <label className="cursor-pointer text-xs text-blue-600 font-bold px-3 py-1.5 border border-blue-300 rounded-lg">
+                        📷 다시 촬영
+                        <input type="file" accept="image/*" capture="environment" onChange={handleAiPhoto} className="hidden" />
+                      </label>
+                      <label className="cursor-pointer text-xs text-blue-600 font-bold px-3 py-1.5 border border-blue-300 rounded-lg">
+                        🖼️ 파일 선택
+                        <input type="file" accept="image/*" onChange={handleAiPhoto} className="hidden" />
+                      </label>
+                    </div>
                   </div>
                 ) : (
-                  <label className="cursor-pointer flex flex-col items-center justify-center">
-                    <span className="text-4xl mb-2">📸</span>
-                    <span className="text-sm font-bold text-gray-600">작업 현장 사진 업로드</span>
-                    <span className="text-xs text-gray-400 mt-1">클릭하여 이미지 파일 선택</span>
-                    <input type="file" accept="image/*" capture="environment" onChange={handleAiPhoto} className="hidden" />
-                  </label>
+                  <div className="py-4">
+                    <div className="text-4xl mb-2">📸</div>
+                    <div className="text-sm font-bold text-gray-600 mb-1">작업 현장 사진 업로드</div>
+                    <div className="text-xs text-gray-400 mb-4">사진을 올리면 AI가 12가지 위험 유형을 자동 평가합니다</div>
+                    <div className="inline-flex gap-2 flex-wrap justify-center">
+                      <label className="cursor-pointer text-xs text-white bg-red-600 hover:bg-red-700 font-bold px-4 py-2 rounded-lg">
+                        📷 촬영
+                        <input type="file" accept="image/*" capture="environment" onChange={handleAiPhoto} className="hidden" />
+                      </label>
+                      <label className="cursor-pointer text-xs text-red-600 bg-white border border-red-300 hover:bg-red-50 font-bold px-4 py-2 rounded-lg">
+                        🖼️ 파일 선택
+                        <input type="file" accept="image/*" onChange={handleAiPhoto} className="hidden" />
+                      </label>
+                    </div>
+                  </div>
                 )}
               </div>
 
@@ -9971,34 +11357,147 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction }) {
               {analyzing && (
                 <div className="text-center py-6 text-red-600 font-bold">
                   <div className="inline-block w-5 h-5 border-[3px] border-red-600 border-t-transparent rounded-full animate-spin mr-2 align-middle"></div>
-                  안전 위협 요소 및 법정 준수 여부 스캔 중...
+                  Claude AI가 산업안전 기준으로 분석 중... (5-15초)
                 </div>
               )}
 
               {aiResult && (() => {
-                const sevBg = aiResult.severity === "URGENT" ? "bg-red-50 border-red-200" : aiResult.severity === "HIGH" ? "bg-orange-50 border-orange-200" : "bg-yellow-50 border-yellow-200";
-                const sevFg = aiResult.severity === "URGENT" ? "text-red-800" : aiResult.severity === "HIGH" ? "text-orange-800" : "text-yellow-800";
+                const sevBg = aiResult.severity === "URGENT" ? "bg-red-50 border-red-300" : aiResult.severity === "HIGH" ? "bg-orange-50 border-orange-300" : aiResult.severity === "MEDIUM" ? "bg-yellow-50 border-yellow-300" : "bg-green-50 border-green-300";
+                const sevFg = aiResult.severity === "URGENT" ? "text-red-800" : aiResult.severity === "HIGH" ? "text-orange-800" : aiResult.severity === "MEDIUM" ? "text-yellow-800" : "text-green-800";
+                const sevLabel = aiResult.severity === "URGENT" ? "긴급 (즉시조치)" : aiResult.severity === "HIGH" ? "높음 (24h 이내)" : aiResult.severity === "MEDIUM" ? "보통 (1주 이내)" : "낮음 (정기점검)";
+                const score = aiResult.score || 0;
+                const scoreColor = score >= 80 ? "#dc2626" : score >= 60 ? "#ea580c" : score >= 40 ? "#ca8a04" : "#16a34a";
                 return (
-                  <div className={`mt-6 border rounded-xl p-5 ${sevBg}`}>
-                    <div className="flex justify-between items-center mb-4">
-                      <h4 className={`font-black text-lg flex items-center gap-2 ${sevFg}`}>⚠️ AI 안전 진단 결과</h4>
-                      <span className={`text-xs font-bold px-2 py-1 rounded bg-white border ${sevFg}`}>{aiResult.severity}</span>
-                    </div>
-
-                    <div className="mb-4">
-                      <div className={`text-xs font-bold mb-1 ${sevFg}`}>식별된 위험 요소</div>
-                      <div className="text-sm bg-white p-3 rounded-lg border border-gray-200">{aiResult.hazards}</div>
-                    </div>
-
-                    <div className="mb-4">
-                      <div className="text-xs font-bold text-emerald-700 mb-1">권장 시정 조치 (TBM 연계)</div>
-                      <div className="text-sm bg-white p-3 rounded-lg border border-emerald-100 whitespace-pre-line">{aiResult.solution}</div>
-                    </div>
-
-                    <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-200 flex-wrap gap-2">
-                      <div className="text-xs text-gray-600">
-                        <strong>관련 법규:</strong> {aiResult.legalRef}
+                  <div className={`mt-6 border-2 rounded-xl overflow-hidden ${sevBg}`}>
+                    {/* 헤더 — 위험도 + 점수 */}
+                    <div className={`p-4 border-b border-current ${sevFg}`} style={{borderColor:'rgba(0,0,0,0.1)'}}>
+                      <div className="flex justify-between items-center mb-2">
+                        <h4 className={`font-black text-lg flex items-center gap-2`}>⚠️ AI 안전 진단 결과</h4>
+                        <span className={`text-xs font-bold px-3 py-1.5 rounded bg-white shadow-sm`}>{sevLabel}</span>
                       </div>
+                      {/* 위험점수 게이지 */}
+                      <div className="flex items-center gap-3 mt-3">
+                        <div className="text-xs font-bold whitespace-nowrap">위험 점수</div>
+                        <div className="flex-1 h-3 bg-white rounded-full overflow-hidden border">
+                          <div style={{width:`${score}%`, height:'100%', background:scoreColor, transition:'width 0.5s'}}></div>
+                        </div>
+                        <div className="text-lg font-black" style={{color:scoreColor}}>{score}</div>
+                      </div>
+                    </div>
+
+                    {/* 본문 */}
+                    <div className="p-4 space-y-3 bg-white">
+                      {/* 장소 추정 */}
+                      {aiResult.placeGuess && (
+                        <div className="flex gap-2 items-center text-sm">
+                          <span className="text-xs font-bold text-gray-500 whitespace-nowrap">📍 장소</span>
+                          <span className="font-bold">{aiResult.placeGuess}</span>
+                        </div>
+                      )}
+
+                      {/* 위험 유형 칩 */}
+                      {aiResult.riskTypes && aiResult.riskTypes.length > 0 && (
+                        <div>
+                          <div className="text-xs font-bold text-gray-500 mb-1.5">⚡ 위험 유형</div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {aiResult.riskTypes.map((t,i)=>(
+                              <span key={i} className="text-xs font-bold px-2.5 py-1 rounded-full bg-red-100 text-red-700 border border-red-200">{t}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 발견 내용 */}
+                      {aiResult.findings && aiResult.findings.length > 0 && (
+                        <div>
+                          <div className="text-xs font-bold text-gray-500 mb-1.5">🔍 발견 내용</div>
+                          <ul className="text-sm space-y-1 pl-1">
+                            {aiResult.findings.map((f,i)=>(
+                              <li key={i} className="flex gap-1.5"><span className="text-red-500 flex-shrink-0">•</span>{f}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* 조치 — 즉시/단기/장기 3분할 */}
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                        {aiResult.immediate && aiResult.immediate.length > 0 && (
+                          <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                            <div className="text-xs font-black text-red-700 mb-1.5">🔥 즉시 조치</div>
+                            <ul className="text-xs text-red-800 space-y-1">
+                              {aiResult.immediate.map((s,i)=><li key={i} className="flex gap-1"><span>•</span>{s}</li>)}
+                            </ul>
+                          </div>
+                        )}
+                        {aiResult.shortTerm && aiResult.shortTerm.length > 0 && (
+                          <div className="bg-orange-50 border border-orange-200 rounded-lg p-3">
+                            <div className="text-xs font-black text-orange-700 mb-1.5">📅 단기 조치 (1주)</div>
+                            <ul className="text-xs text-orange-800 space-y-1">
+                              {aiResult.shortTerm.map((s,i)=><li key={i} className="flex gap-1"><span>•</span>{s}</li>)}
+                            </ul>
+                          </div>
+                        )}
+                        {aiResult.longTerm && aiResult.longTerm.length > 0 && (
+                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                            <div className="text-xs font-black text-blue-700 mb-1.5">🏗️ 장기 조치</div>
+                            <ul className="text-xs text-blue-800 space-y-1">
+                              {aiResult.longTerm.map((s,i)=><li key={i} className="flex gap-1"><span>•</span>{s}</li>)}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 메타 정보 — 담당부서, 기한, 비용 */}
+                      <div className="grid grid-cols-3 gap-2 pt-2 border-t border-gray-100">
+                        {aiResult.department && (
+                          <div className="text-center p-2 bg-gray-50 rounded-lg">
+                            <div className="text-[10px] text-gray-500 font-bold">담당부서</div>
+                            <div className="text-xs font-bold mt-0.5">{aiResult.department}</div>
+                          </div>
+                        )}
+                        {aiResult.deadline && (
+                          <div className="text-center p-2 bg-gray-50 rounded-lg">
+                            <div className="text-[10px] text-gray-500 font-bold">조치기한</div>
+                            <div className="text-xs font-bold mt-0.5">{aiResult.deadline}</div>
+                          </div>
+                        )}
+                        {aiResult.estCost && (
+                          <div className="text-center p-2 bg-gray-50 rounded-lg">
+                            <div className="text-[10px] text-gray-500 font-bold">예상비용</div>
+                            <div className="text-xs font-bold mt-0.5">{aiResult.estCost}</div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 유사 사례 경고 */}
+                      {aiResult.similarCaseWarning && (
+                        <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                          <div className="text-xs font-bold text-amber-800 mb-1">💡 유사 사례 경고</div>
+                          <div className="text-xs text-amber-700">{aiResult.similarCaseWarning}</div>
+                        </div>
+                      )}
+
+                      {/* 재촬영 가이드 */}
+                      {aiResult.rephotoGuide && (
+                        <div className="p-3 bg-violet-50 border border-violet-200 rounded-lg">
+                          <div className="text-xs font-bold text-violet-800 mb-1">📷 조치 후 재촬영 가이드</div>
+                          <div className="text-xs text-violet-700">{aiResult.rephotoGuide}</div>
+                        </div>
+                      )}
+
+                      {/* 관련 법규 */}
+                      {aiResult.relatedLaw && (
+                        <div className="text-xs text-gray-600 pt-2 border-t border-gray-100">
+                          <strong>📖 관련 법규:</strong> {aiResult.relatedLaw}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 액션 버튼 */}
+                    <div className="p-4 bg-gray-50 border-t flex gap-2 justify-end flex-wrap">
+                      <button onClick={()=>{setAiImg(null);setAiResult(null);}} className="text-xs text-gray-600 font-bold px-3 py-2 border border-gray-300 rounded-lg bg-white hover:bg-gray-50">
+                        취소
+                      </button>
                       <button onClick={registerAiResult}
                         className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-xs font-bold">
                         📋 일지 기록 + 보완과제 자동 등록
@@ -12313,8 +13812,12 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   const [selectedZone, setSelectedZone] = useState(null);
   const [filterMode, setFilterMode] = useState("all"); // all | urgent | stock | facility
   const [viewMode, setViewMode] = useState(() => {
-    // 사용자 마지막 뷰 모드 기억
-    try { return window.localStorage?.getItem("jamsa_home_view_mode") || "map"; } catch (e) { return "map"; }
+    // 사용자 마지막 뷰 모드 기억 (단, 'map'이 아닌 값이면 일단 map으로 시작)
+    try {
+      const saved = window.localStorage?.getItem("jamsa_home_view_mode");
+      // 첫 화면은 항상 map. 'card'는 사용자가 명시적으로 선택해야 함
+      return saved === "card" ? "card" : "map";
+    } catch (e) { return "map"; }
   });
   const changeViewMode = (m) => {
     setViewMode(m);
@@ -12353,15 +13856,69 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   const [mapProvider, setMapProvider] = useState(() => {
     try {
       const raw = window.localStorage?.getItem("jamsa_naver_client_id") || "";
-      return _sanitizeNaverId(raw) ? "naver" : "osm";
+      const cleaned = _sanitizeNaverId(raw);
+      // Client ID가 있으면 naver, 없으면 osm (OSM은 항상 작동)
+      return cleaned ? "naver" : "osm";
     } catch (e) { return "osm"; }
   });
-  const [bgMode, setBgMode] = useState("satellite"); // satellite | plan | blend
+  const [bgMode, setBgMode] = useState(() => {
+    // 사용자가 마지막으로 선택한 배경 모드 기억 (없으면 위성)
+    try {
+      const saved = window.localStorage?.getItem("jamsa_home_bg_mode");
+      return ["plan", "satellite", "blend"].includes(saved) ? saved : "satellite";
+    } catch (e) { return "satellite"; }
+  });
+  const changeBgMode = (m) => {
+    setBgMode(m);
+    try { window.localStorage?.setItem("jamsa_home_bg_mode", m); } catch (e) {}
+  };
   const [naverLoaded, setNaverLoaded] = useState(false);
   const [naverLoadError, setNaverLoadError] = useState(null);
   const naverMapRef = useRef(null);
   const naverMapContainerRef = useRef(null);
   const naverMarkersRef = useRef([]);
+
+  // 자동 복구 0: 첫 로딩 시 viewMode 강제 정리 (한 번만)
+  useEffect(() => {
+    try {
+      const initFlag = window.localStorage?.getItem("jamsa_map_init_v2");
+      if (!initFlag) {
+        // 새 버전 첫 실행 — 위성 모드 + 지도 뷰로 초기화
+        window.localStorage?.setItem("jamsa_home_view_mode", "map");
+        window.localStorage?.setItem("jamsa_home_bg_mode", "satellite");
+        window.localStorage?.setItem("jamsa_map_init_v2", "1");
+        setViewMode("map");
+        setBgMode("satellite");
+      }
+    } catch (e) {}
+  }, []);
+
+  // 자동 복구 1: Client ID 비어있으면 즉시 OSM (네이버 시도 자체 안 함)
+  useEffect(() => {
+    if (!naverClientId && mapProvider === "naver") {
+      setMapProvider("osm");
+    }
+  }, [naverClientId, mapProvider]);
+
+  // 자동 복구 2: 네이버 SDK 로딩 8초 타임아웃 후 OSM으로 자동 전환 (이전 15초 → 8초)
+  useEffect(() => {
+    if (mapProvider !== "naver" || naverLoaded || naverLoadError) return;
+    const timer = setTimeout(() => {
+      if (!window.naver?.maps?.Map) {
+        console.warn("[map] 네이버 SDK 로딩 실패 → OSM으로 자동 전환");
+        setMapProvider("osm");
+      }
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [mapProvider, naverLoaded, naverLoadError]);
+
+  // 자동 복구 3: 네이버 에러 발생하면 즉시 OSM 전환
+  useEffect(() => {
+    if (naverLoadError && mapProvider === "naver") {
+      console.warn("[map] 네이버 SDK 에러 감지 → OSM 전환:", naverLoadError);
+      setMapProvider("osm");
+    }
+  }, [naverLoadError, mapProvider]);
 
   const saveNaverClientId = (id) => {
     const cleaned = _sanitizeNaverId(id);
@@ -12370,6 +13927,29 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
     if (cleaned) setMapProvider("naver");
     else setMapProvider("osm");
   };
+
+  // 디버깅용 글로벌 함수 — 브라우저 콘솔에서 호출 가능
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.__resetMap = () => {
+      try {
+        window.localStorage.removeItem("jamsa_home_view_mode");
+        window.localStorage.removeItem("jamsa_naver_client_id");
+      } catch (e) {}
+      setViewMode("map");
+      setMapProvider("osm");
+      setNaverLoaded(false);
+      setNaverLoadError(null);
+      console.log("[__resetMap] 지도 초기화 완료. 새로고침 권장");
+    };
+    window.__forceMap = () => { setViewMode("map"); console.log("[__forceMap] viewMode = map"); };
+    window.__useOsm = () => { setMapProvider("osm"); console.log("[__useOsm] OSM 일반 지도로 전환"); };
+    return () => {
+      delete window.__resetMap;
+      delete window.__forceMap;
+      delete window.__useOsm;
+    };
+  }, []);
 
   // Read inventory products from localStorage (InventoryModule persists there)
   const inventoryProds = useMemo(() => {
@@ -12755,19 +14335,19 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           <>
             {/* 지도 타입 전환 */}
             <div style={{ display: "flex", gap: 2, padding: 2, background: "#f1f5f9", borderRadius: 8 }}>
-              <button onClick={() => setBgMode("satellite")}
+              <button onClick={() => changeBgMode("satellite")}
                 style={{ padding: "6px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 700,
                   background: bgMode === "satellite" ? "#2563eb" : "transparent",
                   color: bgMode === "satellite" ? "#fff" : "#64748b" }}>
                 🛰️ 위성
               </button>
-              <button onClick={() => setBgMode("blend")}
+              <button onClick={() => changeBgMode("blend")}
                 style={{ padding: "6px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 700,
                   background: bgMode === "blend" ? "#2563eb" : "transparent",
                   color: bgMode === "blend" ? "#fff" : "#64748b" }}>
                 🔀 하이브리드
               </button>
-              <button onClick={() => setBgMode("plan")}
+              <button onClick={() => changeBgMode("plan")}
                 style={{ padding: "6px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 700,
                   background: bgMode === "plan" ? "#2563eb" : "transparent",
                   color: bgMode === "plan" ? "#fff" : "#64748b" }}>
@@ -12815,11 +14395,15 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
             <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 12, background: "#f8fafc" }}>
               <div style={{ fontSize: 40 }}>🗺️</div>
               <div style={{ fontSize: 13, color: "#64748b", fontWeight: 700 }}>네이버 지도 로딩 중...</div>
-              <div style={{ fontSize: 11, color: "#94a3b8" }}>최대 10초 소요</div>
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>최대 15초 소요. 실패 시 일반 지도로 자동 전환됩니다</div>
+              <button onClick={() => setMapProvider("osm")} style={{ marginTop: 8, padding: "6px 14px", background: "#3b82f6", color: "#fff", border: 0, borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                지금 일반 지도로 보기
+              </button>
             </div>
           ) : (
             <OsmFallbackMap zoneStatus={filteredStatus} onSelectZone={setSelectedZone}
-              onOpenApiKey={() => setShowApiKeyModal(true)} hasError={!!naverLoadError} errorMsg={naverLoadError} />
+              onOpenApiKey={() => setShowApiKeyModal(true)} hasError={!!naverLoadError} errorMsg={naverLoadError}
+              bgMode={bgMode} onChangeBgMode={changeBgMode} />
           )}
 
           {/* 지도 우하단 범례 */}
@@ -13109,11 +14693,246 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
 }
 
 /* ─── OSM FALLBACK MAP (네이버 API 키 없거나 오류 시) ─── */
-function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, errorMsg }) {
-  // 박물관 영역 경계
-  const LAT_MIN = 36.6378, LAT_MAX = 36.6391, LNG_MIN = 127.3823, LNG_MAX = 127.3835;
+function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, errorMsg, bgMode = "satellite", onChangeBgMode }) {
+  // 박물관 영역 경계 (한국잠사박물관 청주 - 정확한 좌표)
+  const LAT_MIN = 36.6378, LAT_MAX = 36.6395, LNG_MIN = 127.4880, LNG_MAX = 127.4905;
+  const LAT_CENTER = (LAT_MIN + LAT_MAX) / 2;
+  const LNG_CENTER = (LNG_MIN + LNG_MAX) / 2;
+
+  const mapContainerRef = React.useRef(null);
+  const leafletMapRef = React.useRef(null);
+  const tileLayersRef = React.useRef({});
+  const [leafletLoaded, setLeafletLoaded] = React.useState(false);
+  const [leafletError, setLeafletError] = React.useState(false);
+
+  // Leaflet CDN 동적 로드
+  React.useEffect(() => {
+    if (window.L) { setLeafletLoaded(true); return; }
+
+    // CSS
+    if (!document.getElementById("leaflet-css")) {
+      const link = document.createElement("link");
+      link.id = "leaflet-css";
+      link.rel = "stylesheet";
+      link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+      document.head.appendChild(link);
+    }
+
+    // JS
+    if (!document.getElementById("leaflet-js")) {
+      const script = document.createElement("script");
+      script.id = "leaflet-js";
+      script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+      script.onload = () => setLeafletLoaded(true);
+      script.onerror = () => setLeafletError(true);
+      document.body.appendChild(script);
+
+      // 8초 타임아웃
+      setTimeout(() => {
+        if (!window.L) setLeafletError(true);
+      }, 8000);
+    }
+  }, []);
+
+  // 지도 초기화 (Leaflet 로드 후 1회)
+  React.useEffect(() => {
+    if (!leafletLoaded || !mapContainerRef.current || leafletMapRef.current) return;
+    const L = window.L;
+
+    const map = L.map(mapContainerRef.current, {
+      center: [LAT_CENTER, LNG_CENTER],
+      zoom: 17,
+      zoomControl: true,
+      attributionControl: true,
+    });
+
+    // 위성 타일 (ESRI World Imagery - 무료, 인증 불필요)
+    const satelliteLayer = L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      {
+        attribution: "Tiles © Esri",
+        maxZoom: 19,
+      }
+    );
+
+    // 일반 타일 (OSM)
+    const planLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "© OpenStreetMap",
+      maxZoom: 19,
+    });
+
+    // 라벨 오버레이 (위성에 도로/지명 표시)
+    const labelsLayer = L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+      { attribution: "Tiles © Esri", maxZoom: 19 }
+    );
+
+    tileLayersRef.current = { satelliteLayer, planLayer, labelsLayer };
+
+    // 초기 모드 적용
+    if (bgMode === "satellite") {
+      satelliteLayer.addTo(map);
+      labelsLayer.addTo(map);
+    } else if (bgMode === "blend") {
+      satelliteLayer.addTo(map);
+      labelsLayer.addTo(map);
+      planLayer.addTo(map).setOpacity(0.4);
+    } else {
+      planLayer.addTo(map);
+    }
+
+    leafletMapRef.current = map;
+
+    return () => {
+      map.remove();
+      leafletMapRef.current = null;
+    };
+  }, [leafletLoaded]);
+
+  // bgMode 변경 시 타일 전환
+  React.useEffect(() => {
+    if (!leafletMapRef.current || !tileLayersRef.current.satelliteLayer) return;
+    const map = leafletMapRef.current;
+    const { satelliteLayer, planLayer, labelsLayer } = tileLayersRef.current;
+
+    // 모든 레이어 제거 후 다시 추가
+    map.removeLayer(satelliteLayer);
+    map.removeLayer(planLayer);
+    map.removeLayer(labelsLayer);
+
+    if (bgMode === "satellite") {
+      satelliteLayer.addTo(map);
+      labelsLayer.addTo(map);
+    } else if (bgMode === "blend") {
+      satelliteLayer.addTo(map);
+      labelsLayer.addTo(map);
+      planLayer.addTo(map).setOpacity(0.4);
+    } else {
+      planLayer.addTo(map);
+    }
+  }, [bgMode]);
+
+  // 마커 동기화
+  const markersRef = React.useRef([]);
+  React.useEffect(() => {
+    if (!leafletMapRef.current || !window.L) return;
+    const L = window.L;
+    const map = leafletMapRef.current;
+
+    // 기존 마커 제거
+    markersRef.current.forEach(m => map.removeLayer(m));
+    markersRef.current = [];
+
+    // 새 마커 추가
+    zoneStatus.forEach(s => {
+      const z = s.zone;
+      if (!z.lat || !z.lng) return;
+      const badgeNum = s.openActions.length + (s.lowStock > 0 ? s.lowStock : 0);
+      const isPulse = s.status === "urgent";
+
+      const html = `
+        <div style="position:relative;cursor:pointer;${isPulse ? 'animation:homePinPulse 1.5s infinite;' : ''}">
+          <div style="background:${z.color};border:3px solid #fff;border-radius:50% 50% 50% 0;width:36px;height:36px;transform:rotate(-45deg);box-shadow:0 4px 10px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;">
+            <div style="transform:rotate(45deg);font-size:16px;">${z.icon}</div>
+          </div>
+          ${badgeNum > 0 ? `<div style="position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:${s.statusColor};color:#fff;font-size:9px;font-weight:900;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-sizing:border-box;box-shadow:0 2px 4px rgba(0,0,0,0.3);">${badgeNum}</div>` : ''}
+          <div style="position:absolute;top:40px;left:50%;transform:translateX(-50%);background:rgba(255,255,255,0.95);padding:2px 6px;border-radius:4px;font-size:9px;font-weight:700;color:#0f172a;white-space:nowrap;border:1px solid #e5e7eb;box-shadow:0 1px 3px rgba(0,0,0,0.1);">${z.name || z.id}</div>
+        </div>
+      `;
+
+      const icon = L.divIcon({
+        html,
+        className: "jamsa-zone-marker",
+        iconSize: [44, 60],
+        iconAnchor: [22, 36],
+      });
+
+      const marker = L.marker([z.lat, z.lng], { icon })
+        .addTo(map)
+        .on("click", () => onSelectZone(s));
+      markersRef.current.push(marker);
+    });
+  }, [zoneStatus, leafletLoaded]);
+
+  return (
+    <div style={{ position: "absolute", inset: 0, background: "#1e293b" }}>
+      {/* Leaflet 지도 */}
+      {leafletLoaded && !leafletError && (
+        <div ref={mapContainerRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
+      )}
+
+      {/* 로딩 중 */}
+      {!leafletLoaded && !leafletError && (
+        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 12, background: "linear-gradient(135deg, #1e3a8a, #312e81)" }}>
+          <div style={{ fontSize: 40 }}>🛰️</div>
+          <div style={{ fontSize: 13, color: "#fff", fontWeight: 700 }}>{bgMode === "satellite" ? "위성 지도" : "지도"} 로딩 중...</div>
+          <div style={{ fontSize: 11, color: "#cbd5e1" }}>최대 8초 소요</div>
+          <div style={{ width: 36, height: 36, borderRadius: "50%", border: "3px solid rgba(255,255,255,0.2)", borderTopColor: "#60a5fa", animation: "spin 0.8s linear infinite" }} />
+        </div>
+      )}
+
+      {/* Leaflet 로드 실패 폴백 */}
+      {leafletError && (
+        <div style={{ position: "absolute", inset: 0, backgroundImage: `linear-gradient(rgba(34,197,94,0.15) 1px, transparent 1px), linear-gradient(90deg, rgba(34,197,94,0.15) 1px, transparent 1px)`, backgroundSize: "40px 40px", background: "linear-gradient(135deg, #1e3a8a, #312e81)" }}>
+          <div style={{ position: "absolute", top: "40%", left: "50%", transform: "translate(-50%, -50%)", textAlign: "center", color: "#fff", padding: 20 }}>
+            <div style={{ fontSize: 48, marginBottom: 8 }}>🏛️</div>
+            <div style={{ fontSize: 16, fontWeight: 800 }}>한국잠사박물관</div>
+            <div style={{ fontSize: 12, color: "#cbd5e1", marginTop: 4 }}>청주시 청원구 양청4길 30</div>
+            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 12 }}>지도 라이브러리 로드 실패. 인터넷 연결을 확인하세요.</div>
+            <button onClick={() => location.reload()} style={{ marginTop: 12, padding: "6px 14px", background: "#3b82f6", color: "#fff", border: 0, borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+              새로고침
+            </button>
+          </div>
+          {/* 폴백 마커 (퍼센트 기반) */}
+          <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
+            {zoneStatus.map(s => {
+              const z = s.zone;
+              if (!z.lat || !z.lng) return null;
+              const left = `${((z.lng - LNG_MIN) / (LNG_MAX - LNG_MIN)) * 100}%`;
+              const top = `${((LAT_MAX - z.lat) / (LAT_MAX - LAT_MIN)) * 100}%`;
+              return (
+                <div key={z.id} onClick={() => onSelectZone(s)}
+                  style={{ position: "absolute", left, top, transform: "translate(-50%, -100%)", pointerEvents: "auto", cursor: "pointer" }}>
+                  <div style={{ background: z.color, border: "3px solid #fff", borderRadius: "50% 50% 50% 0",
+                    width: 36, height: 36, transform: "rotate(-45deg)", boxShadow: "0 4px 10px rgba(0,0,0,0.4)",
+                    display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <div style={{ transform: "rotate(45deg)", fontSize: 16 }}>{z.icon}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* 좌상단: 모드 안내 배지 */}
+      {leafletLoaded && !leafletError && (
+        <div style={{ position: "absolute", top: 12, left: 12, background: "rgba(15,23,42,0.85)", color: "#fff", padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, zIndex: 400, backdropFilter: "blur(8px)" }}>
+          {bgMode === "satellite" ? "🛰️ 위성 (ESRI)" : bgMode === "blend" ? "🔀 하이브리드" : "🗾 일반 (OSM)"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── (구버전 OSM iframe 폴백 - 더는 사용 안 함, 보존용) ─── */
+function OsmFallbackMapLegacy({ zoneStatus, onSelectZone, onOpenApiKey, hasError, errorMsg }) {
+  // 박물관 영역 경계 (한국잠사박물관 청주 - 정확한 좌표)
+  const LAT_MIN = 36.6378, LAT_MAX = 36.6395, LNG_MIN = 127.4880, LNG_MAX = 127.4905;
   const bbox = `${LNG_MIN},${LAT_MIN},${LNG_MAX},${LAT_MAX}`;
   const osmUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik`;
+
+  const [iframeError, setIframeError] = React.useState(false);
+  const [iframeLoaded, setIframeLoaded] = React.useState(false);
+
+  // 5초 안에 iframe 로드 안 되면 에러로 간주
+  React.useEffect(() => {
+    if (iframeLoaded) return;
+    const timer = setTimeout(() => {
+      if (!iframeLoaded) setIframeError(true);
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [iframeLoaded]);
 
   // Normalize lat/lng to 0-100% within bbox
   const pct = (z) => ({
@@ -13122,10 +14941,26 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
   });
 
   return (
-    <div style={{ position: "absolute", inset: 0, background: "#e5e7eb" }}>
+    <div style={{ position: "absolute", inset: 0, background: "linear-gradient(135deg, #e0f2fe, #fef3c7)" }}>
       {/* OSM 임베드 (배경) */}
-      <iframe src={osmUrl} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: 0, filter: "saturate(0.8) brightness(0.95)" }} title="OpenStreetMap" />
+      {!iframeError && (
+        <iframe src={osmUrl}
+          onLoad={() => setIframeLoaded(true)}
+          onError={() => setIframeError(true)}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: 0, filter: "saturate(0.8) brightness(0.95)" }}
+          title="OpenStreetMap" />
+      )}
 
+      {/* iframe 실패 시 격자 배경 */}
+      {iframeError && (
+        <div style={{ position: "absolute", inset: 0, backgroundImage: `linear-gradient(rgba(34,197,94,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(34,197,94,0.1) 1px, transparent 1px)`, backgroundSize: "40px 40px" }}>
+          <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", textAlign: "center", color: "#0f172a" }}>
+            <div style={{ fontSize: 48, marginBottom: 8 }}>🏛️</div>
+            <div style={{ fontSize: 16, fontWeight: 800 }}>한국잠사박물관</div>
+            <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>청주시 청원구 양청4길 30</div>
+          </div>
+        </div>
+      )}
       {/* 마커 오버레이 */}
       <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
         {zoneStatus.map(s => {
