@@ -6770,8 +6770,26 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
   const planOpacity = bgMode === "plan" ? 1 : (bgMode === "blend" ? 0.55 : 0.25);
   const satelliteOpacity = bgMode === "plan" ? 0 : (bgMode === "blend" ? 0.8 : 1);
 
+  // 사이드바 토글 상태 (localStorage 기억)
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    try { return window.localStorage?.getItem("jamsa_inv_sidebar") !== "0"; }
+    catch (e) { return true; }
+  });
+  const toggleSidebar = () => {
+    setSidebarOpen(prev => {
+      const next = !prev;
+      try { window.localStorage?.setItem("jamsa_inv_sidebar", next ? "1" : "0"); } catch (e) {}
+      return next;
+    });
+  };
+  const [sidebarSearch, setSidebarSearch] = useState("");
+  const [sidebarFilter, setSidebarFilter] = useState("all"); // all | low | zero
+  const [detailModal, setDetailModal] = useState(null); // { zone, prod }
+
   return(
-    <div style={{position:"relative",width:"100%",flexShrink:0}}>
+    <div style={{position:"relative",width:"100%",flexShrink:0,display:"flex",gap:0}}>
+      {/* 좌측: 지도 영역 */}
+      <div style={{flex:1,position:"relative",minWidth:0}}>
       {/* Top toolbar */}
       <div style={{display:"flex",gap:6,padding:"8px 10px",background:"#f8fafc",borderBottom:"1px solid #e5e7eb",alignItems:"center",flexWrap:"wrap"}}>
         <span style={{fontSize:11,fontWeight:700,color:"#475569"}}>🗺️ 통합 시설지도</span>
@@ -7029,28 +7047,6 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
                 {editPosMode && <span style={{fontSize:8,marginLeft:4,color:"#7c2d12",fontWeight:900}}>↔ 드래그</span>}
               </div>
               <div style={{fontSize:usingGps?13:16,fontWeight:900,color:isClosest?"#fff":(q===0?"#ef4444":z.color),lineHeight:1.2}}>{q.toLocaleString()}</div>
-
-              {/* 호버 시 재고 리스트 (편집 모드 X일 때만) */}
-              {isHovered && !editPosMode && sortedProds.length > 0 && (
-                <div style={{
-                  marginTop: 6, paddingTop: 6, borderTop: `1px solid ${z.color}30`,
-                  maxHeight: 180, overflowY: "auto", textAlign: "left",
-                  whiteSpace: "normal",
-                }}>
-                  <div style={{fontSize:8,fontWeight:700,color:"#64748b",marginBottom:3}}>📦 재고 ({sortedProds.length})</div>
-                  {sortedProds.map(p => (
-                    <div key={p.id} style={{display:"flex",justifyContent:"space-between",fontSize:9,padding:"1px 0",borderBottom:"1px dotted #f1f5f9"}}>
-                      <span style={{color:"#334155",overflow:"hidden",textOverflow:"ellipsis",maxWidth:130}}>
-                        {p.qty===0 && <span style={{color:"#ef4444"}}>⚠</span>}
-                        {p.name}
-                      </span>
-                      <span style={{fontWeight:800,color:p.qty===0?"#ef4444":p.qty<5?"#f59e0b":"#0f172a",marginLeft:6}}>
-                        {p.qty}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>);
           })}
 
@@ -7222,6 +7218,224 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
       {showApiKeyModal && <NaverApiKeyModal currentId={naverClientId} currentProvider={mapProvider} onSave={(id,provider)=>{saveNaverClientId(id);setMapProvider(provider);setShowApiKeyModal(false);setNaverLoadError(null);setNaverLoaded(false);if(naverMapRef.current){naverMapRef.current=null;}}} onClose={()=>setShowApiKeyModal(false)}/>}
       {showPermsModal && <ZoneEditPermsModal currentPerms={editPermissions} onSave={(perms)=>{setEditPermissions(perms);setShowPermsModal(false);}} onClose={()=>setShowPermsModal(false)}/>}
       <style>{`@keyframes jamsaUserPulse{0%,100%{box-shadow:0 0 0 6px rgba(37,99,235,0.25),0 4px 12px rgba(0,0,0,0.4)}50%{box-shadow:0 0 0 14px rgba(37,99,235,0.08),0 4px 12px rgba(0,0,0,0.4)}}@keyframes naverUserPulse{0%,100%{box-shadow:0 0 0 4px rgba(37,99,235,0.3)}50%{box-shadow:0 0 0 10px rgba(37,99,235,0.1)}}@keyframes naverPulse{0%,100%{opacity:1}50%{opacity:0.7}}@keyframes naverSpin{to{transform:rotate(360deg)}}@keyframes urgentPulse{0%,100%{filter:drop-shadow(0 0 0 rgba(220,38,38,0.6));transform:scale(1)}50%{filter:drop-shadow(0 0 8px rgba(220,38,38,0.8));transform:scale(1.08)}}@keyframes editPulse{0%,100%{border-color:rgba(37,99,235,0.9);opacity:1}50%{border-color:rgba(37,99,235,0.3);opacity:0.6}}@keyframes cctvScan{0%{transform:translateY(-100%)}100%{transform:translateY(800%)}}@keyframes blink{0%,50%{opacity:1}51%,100%{opacity:0.3}}`}</style>
+      </div>{/* /지도 영역 */}
+
+      {/* 우측: 전체 재고 사이드바 */}
+      {sidebarOpen ? (
+        <div style={{width:320,flexShrink:0,background:"#fff",borderLeft:"1px solid #e5e7eb",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+          {/* 헤더 + 검색 + 필터 */}
+          <div style={{padding:"10px 12px",borderBottom:"1px solid #e5e7eb",flexShrink:0,background:"#fafafa"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+              <span style={{fontSize:13,fontWeight:800,color:"#0f172a"}}>📦 전체 재고</span>
+              <button onClick={toggleSidebar} title="사이드바 접기"
+                style={{padding:"3px 8px",borderRadius:4,border:"1px solid #cbd5e1",background:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",color:"#64748b"}}>
+                ▶ 접기
+              </button>
+            </div>
+            <input type="text" value={sidebarSearch} onChange={e=>setSidebarSearch(e.target.value)}
+              placeholder="제품명 검색..."
+              style={{width:"100%",padding:"6px 10px",fontSize:12,border:"1px solid #cbd5e1",borderRadius:6,outline:"none",boxSizing:"border-box"}} />
+            <div style={{display:"flex",gap:4,marginTop:6}}>
+              {[
+                {k:"all",l:"전체",c:"#3b82f6"},
+                {k:"low",l:"⚠ 부족 (<10)",c:"#f59e0b"},
+                {k:"zero",l:"⚠ 0개",c:"#ef4444"},
+              ].map(f=>(
+                <button key={f.k} onClick={()=>setSidebarFilter(f.k)}
+                  style={{flex:1,padding:"4px 6px",fontSize:10,fontWeight:700,
+                    border:`1px solid ${sidebarFilter===f.k?f.c:"#cbd5e1"}`,
+                    background:sidebarFilter===f.k?f.c:"#fff",
+                    color:sidebarFilter===f.k?"#fff":"#64748b",
+                    borderRadius:5,cursor:"pointer"}}>
+                  {f.l}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 리스트 (스크롤) */}
+          <div style={{flex:1,overflowY:"auto",padding:6}}>
+            {(() => {
+              const q = sidebarSearch.trim().toLowerCase();
+              let totalShown = 0;
+              const groups = allZones.filter(z => !z.custom || usingGps).map(z => {
+                const zItems = (zProds(z.id) || []).filter(p => {
+                  if (q && !p.name.toLowerCase().includes(q)) return false;
+                  if (sidebarFilter === "low" && p.qty >= 10) return false;
+                  if (sidebarFilter === "zero" && p.qty !== 0) return false;
+                  return true;
+                });
+                totalShown += zItems.length;
+                return { z, items: zItems, totalQty: zProds(z.id).reduce((s,p)=>s+p.qty,0), totalCount: zProds(z.id).length };
+              }).filter(g => g.items.length > 0);
+
+              if (totalShown === 0) {
+                return <div style={{textAlign:"center",padding:30,fontSize:11,color:"#94a3b8"}}>
+                  {q ? "검색 결과 없음" : "표시할 재고 없음"}
+                </div>;
+              }
+
+              return groups.map(({z,items,totalQty,totalCount}) => (
+                <div key={z.id} style={{marginBottom:8,borderRadius:6,padding:4}}>
+                  {/* 구역 헤더 (sticky) */}
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                    padding:"5px 8px",fontSize:11,fontWeight:800,color:z.color,
+                    borderBottom:`1px solid ${z.color}30`,marginBottom:4,
+                    position:"sticky",top:0,background:"#fff",zIndex:1}}>
+                    <span style={{cursor:"pointer"}} onClick={()=>{setHZone(z.id);setSelZone(z.id);}}>
+                      {z.icon} {z.name}
+                    </span>
+                    <span style={{color:"#94a3b8",fontWeight:600,fontSize:10}}>
+                      {totalCount}품 · {totalQty.toLocaleString()}
+                    </span>
+                  </div>
+                  {/* 재고 항목들 */}
+                  {items.map(p => (
+                    <div key={p.id}
+                      onClick={()=>setDetailModal({zone:z, prod:p})}
+                      style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                        padding:"5px 8px",fontSize:11,cursor:"pointer",borderRadius:4,
+                        transition:"background 0.1s"}}
+                      onMouseEnter={e=>e.currentTarget.style.background="#f1f5f9"}
+                      onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{color:"#0f172a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                          {p.qty===0 && <span style={{color:"#ef4444"}}>⚠ </span>}
+                          {p.name}
+                        </div>
+                        {p.cat && <div style={{fontSize:9,color:"#94a3b8",marginTop:1}}>{p.cat}</div>}
+                      </div>
+                      <span style={{fontWeight:800,fontSize:12,marginLeft:8,flexShrink:0,
+                        color:p.qty===0?"#ef4444":(p.qty<10?"#f59e0b":"#0f172a")}}>
+                        {p.qty.toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ));
+            })()}
+          </div>
+        </div>
+      ) : (
+        <button onClick={toggleSidebar}
+          style={{position:"absolute",right:0,top:60,zIndex:600,padding:"8px 6px",
+            background:"rgba(15,23,42,0.92)",color:"#fff",border:"none",
+            borderRadius:"6px 0 0 6px",fontSize:11,fontWeight:700,cursor:"pointer",
+            writingMode:"vertical-rl",textOrientation:"mixed",height:120,
+            boxShadow:"-2px 0 8px rgba(0,0,0,0.15)"}}
+          title="전체 재고 보기">
+          📦 전체 재고 ◀
+        </button>
+      )}
+
+      {/* 재고 항목 상세 모달 */}
+      {detailModal && (
+        <InventoryDetailModal
+          zone={detailModal.zone}
+          prod={detailModal.prod}
+          allHist={zHist(detailModal.zone.id).filter(h => h.pid === detailModal.prod.id)}
+          onClose={() => setDetailModal(null)}
+          onAction={(type) => {
+            // 기존 ZoneBottom 모달 열기
+            setSelZone(detailModal.zone.id);
+            // TODO: pid를 highlightPid로 설정하고 입고/출고 모달 열기
+            setDetailModal(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ─── 재고 항목 상세 모달 (사이드바 클릭 → 입고/출고/이력) ─── */
+function InventoryDetailModal({ zone, prod, allHist = [], onClose, onAction }) {
+  if (!zone || !prod) return null;
+  const sortedHist = [...allHist].sort((a,b) => (b.at || 0) - (a.at || 0)).slice(0, 20);
+  const ac = {"입고":"#22c55e","출고":"#ef4444","조정":"#8b5cf6","추가":"#6366f1"};
+  return (
+    <div style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+      onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{background:"#fff",borderRadius:14,width:520,maxWidth:"95vw",maxHeight:"85vh",display:"flex",flexDirection:"column",overflow:"hidden",boxShadow:"0 20px 60px rgba(0,0,0,0.4)"}}>
+        {/* 헤더 */}
+        <div style={{padding:"14px 18px",background:`linear-gradient(135deg,${zone.color}22,${zone.color}08)`,borderBottom:`2px solid ${zone.color}30`,flexShrink:0}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:11,color:"#64748b",fontWeight:700,marginBottom:2}}>
+                📍 {zone.icon} {zone.name}
+              </div>
+              <div style={{fontSize:18,fontWeight:900,color:"#0f172a",lineHeight:1.3}}>
+                {prod.qty===0 && <span style={{color:"#ef4444"}}>⚠ </span>}
+                {prod.name}
+              </div>
+              {prod.cat && <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>분류: {prod.cat}</div>}
+            </div>
+            <button onClick={onClose} style={{background:"none",border:"none",fontSize:24,cursor:"pointer",color:"#94a3b8",lineHeight:1,padding:0}}>×</button>
+          </div>
+          <div style={{display:"flex",gap:10,alignItems:"center"}}>
+            <div style={{padding:"6px 14px",background:prod.qty===0?"#fee2e2":"#fff",borderRadius:8,border:`1px solid ${prod.qty===0?"#fecaca":zone.color}40`}}>
+              <span style={{fontSize:10,color:"#64748b"}}>현재 재고</span>
+              <div style={{fontSize:22,fontWeight:900,color:prod.qty===0?"#ef4444":zone.color,lineHeight:1}}>
+                {prod.qty.toLocaleString()}
+                {prod.unit && <span style={{fontSize:12,color:"#94a3b8",marginLeft:4}}>{prod.unit}</span>}
+              </div>
+            </div>
+            {prod.loc && <div style={{fontSize:11,color:"#475569"}}>📌 {prod.loc}</div>}
+          </div>
+        </div>
+
+        {/* 액션 버튼들 */}
+        <div style={{padding:"12px 18px",borderBottom:"1px solid #f1f5f9",flexShrink:0,display:"flex",gap:6,flexWrap:"wrap"}}>
+          <button onClick={()=>onAction("in")}
+            style={{padding:"7px 14px",background:"#dcfce7",color:"#16a34a",border:"1px solid #86efac",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+            📥 입고
+          </button>
+          <button onClick={()=>onAction("out")}
+            style={{padding:"7px 14px",background:"#fee2e2",color:"#dc2626",border:"1px solid #fca5a5",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+            📤 출고
+          </button>
+          <button onClick={()=>onAction("adj")}
+            style={{padding:"7px 14px",background:"#ede9fe",color:"#7c3aed",border:"1px solid #c4b5fd",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+            🔧 조정
+          </button>
+          <button onClick={()=>onAction("qr")}
+            style={{padding:"7px 14px",background:"#f1f5f9",color:"#475569",border:"1px solid #cbd5e1",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+            🏷️ QR
+          </button>
+          <button onClick={()=>onAction("edit")}
+            style={{padding:"7px 14px",background:"#f1f5f9",color:"#475569",border:"1px solid #cbd5e1",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+            ✏️ 수정
+          </button>
+        </div>
+
+        {/* 이력 */}
+        <div style={{flex:1,overflowY:"auto",padding:"12px 18px"}}>
+          <div style={{fontSize:11,fontWeight:800,color:"#64748b",marginBottom:8}}>📜 최근 이력 (최대 20건)</div>
+          {sortedHist.length === 0 ? (
+            <div style={{textAlign:"center",padding:20,color:"#94a3b8",fontSize:11}}>
+              이력 없음
+            </div>
+          ) : sortedHist.map((h,i) => (
+            <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",borderBottom:"1px solid #f1f5f9",fontSize:11}}>
+              <span style={{padding:"2px 8px",borderRadius:4,background:`${ac[h.act]||"#64748b"}22`,color:ac[h.act]||"#64748b",fontWeight:800,fontSize:10,minWidth:36,textAlign:"center"}}>
+                {h.act}
+              </span>
+              <span style={{flex:1,color:"#334155"}}>
+                {h.qty > 0 ? `+${h.qty}` : h.qty}
+                {h.note && <span style={{color:"#94a3b8",marginLeft:6}}>· {h.note}</span>}
+              </span>
+              <span style={{fontSize:10,color:"#94a3b8",fontFamily:"monospace"}}>
+                {h.at ? new Date(h.at).toLocaleDateString("ko-KR",{month:"2-digit",day:"2-digit"}) + " " + new Date(h.at).toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"}) : "-"}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {/* 푸터 */}
+        <div style={{padding:"10px 18px",background:"#fafafa",borderTop:"1px solid #e5e7eb",fontSize:11,color:"#94a3b8",textAlign:"center",flexShrink:0}}>
+          입고/출고 등 작업은 해당 버튼 클릭 시 구역 상세 화면이 열립니다
+        </div>
+      </div>
     </div>
   );
 }
