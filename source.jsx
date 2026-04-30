@@ -5933,7 +5933,7 @@ function QRModal({p,onClose}){
 // ============================================================
 // CCTV LIVE OVERLAY — 통합지도 위에 라이브 미니뷰 + AI 위험 감지
 // ============================================================
-function CctvLiveOverlay({ zones, cctvMap, onAlert, onOpenChannel, snapServerUrl: propUrl }) {
+function CctvLiveOverlay({ zones, cctvMap, onAlert, onOpenChannel, snapServerUrl: propUrl, onSnapshotsChange }) {
   // localStorage에서 저장된 스냅샷 서버 URL 자동 로드 (시설점검 → CCTV에서 설정한 값)
   const snapServerUrl = useMemo(() => {
     if (propUrl) return propUrl;
@@ -6113,6 +6113,13 @@ function CctvLiveOverlay({ zones, cctvMap, onAlert, onOpenChannel, snapServerUrl
   useEffect(() => {
     try { window.localStorage?.setItem("jamsa_cctv_ai_on", aiEnabled ? "1" : "0"); } catch (e) {}
   }, [aiEnabled]);
+
+  // 스냅샷/분석 결과를 부모에게 전달 (스팟 옆 미니창 표시용)
+  useEffect(() => {
+    if (onSnapshotsChange) {
+      onSnapshotsChange({ snapshots, analyses, chToZone, enabled });
+    }
+  }, [snapshots, analyses, chToZone, enabled, onSnapshotsChange]);
 
   if (!enabled) {
     return (
@@ -6296,7 +6303,17 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
   const [gpsZone, setGpsZone] = useState(null);
   const [userLoc, setUserLoc] = useState(null);
   const [locating, setLocating] = useState(false);
-  const [bgMode, setBgMode] = useState("plan"); // "plan" | "satellite" | "blend"
+  const [bgMode, setBgMode] = useState(() => {
+    // 사용자가 마지막으로 선택한 모드 기억 (없으면 위성)
+    try {
+      const saved = window.localStorage?.getItem("jamsa_inv_bg_mode");
+      return ["plan", "satellite", "blend"].includes(saved) ? saved : "satellite";
+    } catch (e) { return "satellite"; }
+  });
+  const changeBgMode = (m) => {
+    setBgMode(m);
+    try { window.localStorage?.setItem("jamsa_inv_bg_mode", m); } catch (e) {}
+  };
   const [showGpsInfo, setShowGpsInfo] = useState(false);
   // Zone creation mode
   const [drawMode, setDrawMode] = useState(false);
@@ -6735,7 +6752,7 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
             {k:"blend", l:"🔀 합성", tip:"위성지도 + 배치도 겹침"},
             {k:"satellite", l:"🛰️ 위성지도", tip:"실제 위성사진만"},
           ].map(m => (
-            <button key={m.k} onClick={()=>setBgMode(m.k)} title={m.tip}
+            <button key={m.k} onClick={()=>changeBgMode(m.k)} title={m.tip}
               style={{padding:"5px 12px",border:"none",borderRight:m.k==="satellite"?"none":"1px solid #cbd5e1",background:bgMode===m.k?"linear-gradient(135deg,#2563eb,#7c3aed)":"#fff",color:bgMode===m.k?"#fff":"#475569",fontSize:11,fontWeight:700,cursor:"pointer"}}>
               {m.l}
             </button>
@@ -7043,7 +7060,7 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
         )}
       </div>
 
-      {tip&&hZone&&!usingGps&&<Tip zone={allZones.find(z=>z.id===hZone)} prods={zProds(hZone)} hist={zHist(hZone)} x={tip.x} y={tip.y} cRef={mapWrap} photos={zonePhotos[hZone]||[]}/>}
+      {tip&&hZone&&<Tip zone={allZones.find(z=>z.id===hZone)} prods={zProds(hZone)} hist={zHist(hZone)} x={tip.x} y={tip.y} cRef={mapWrap} photos={zonePhotos[hZone]||[]}/>}
       {gpsZone && <GpsZoneModal zone={gpsZone} userLoc={userLoc} dist={distFromZone(gpsZone)} onClose={()=>setGpsZone(null)}
         onGoInventory={()=>{setSelZone(gpsZone.id);setGpsZone(null);}}
         onDeleteCustom={gpsZone.custom && onDeleteCustomZone ? ()=>{onDeleteCustomZone(gpsZone.id);setGpsZone(null);} : null}
@@ -7859,32 +7876,64 @@ function GpsZoneModal({ zone, userLoc, dist, onClose, onGoInventory, onDeleteCus
 function Tip({zone,prods,hist,x,y,cRef,photos}){
   if(!zone)return null;
   const tq=prods.reduce((s,p)=>s+p.qty,0);
-  const top5=[...prods].sort((a,b)=>b.qty-a.qty).slice(0,5);
+  // 전체 재고 정렬 (재고 많은 순) - 스크롤로 모두 표시
+  const sortedProds=[...prods].sort((a,b)=>b.qty-a.qty);
   const ac={"입고":"#22c55e","출고":"#ef4444","조정":"#8b5cf6","추가":"#6366f1"};
   const cw=cRef?.current?.offsetWidth||800;const ch=cRef?.current?.offsetHeight||600;
   const hasPhotos=photos&&photos.length>0;
+  // 박스 크기 키움 (320 x 최대 480)
+  const TIP_W = 320;
+  const TIP_MAX_H = 480;
   let left=x+20,topY=y-20;
-  if(left+300>cw)left=x-310;if(topY+380>ch)topY=ch-390;if(topY<10)topY=10;if(left<10)left=10;
+  if(left+TIP_W>cw)left=x-TIP_W-10;if(topY+TIP_MAX_H>ch)topY=ch-TIP_MAX_H-10;if(topY<10)topY=10;if(left<10)left=10;
   return(
-    <div style={{position:"absolute",left,top:topY,background:"#fff",borderRadius:12,width:280,boxShadow:`0 8px 28px rgba(0,0,0,0.18)`,pointerEvents:"none",zIndex:100,animation:"tipIn 0.1s ease",overflow:"hidden"}}>
-      <div style={{padding:"10px 14px",background:`linear-gradient(135deg,${zone.color}12,${zone.color}06)`,borderBottom:`1px solid ${zone.color}15`}}>
-        <div style={{display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:20}}>{zone.icon}</span><div><div style={{fontSize:13,fontWeight:800}}>{zone.name}</div><div style={{fontSize:10,color:"#64748b"}}>{zone.desc}</div></div></div>
-        <div style={{display:"flex",gap:8,marginTop:8}}>
-          <div style={{background:"#fff",borderRadius:7,padding:"3px 0",flex:1,textAlign:"center",border:"1px solid #e5e7eb"}}><div style={{fontSize:9,color:"#94a3b8"}}>품목</div><div style={{fontSize:16,fontWeight:900,color:zone.color}}>{prods.length}</div></div>
-          <div style={{background:"#fff",borderRadius:7,padding:"3px 0",flex:1,textAlign:"center",border:"1px solid #e5e7eb"}}><div style={{fontSize:9,color:"#94a3b8"}}>재고</div><div style={{fontSize:16,fontWeight:900,color:tq===0?"#ef4444":zone.color}}>{tq.toLocaleString()}</div></div>
+    <div style={{position:"absolute",left,top:topY,background:"#fff",borderRadius:12,width:TIP_W,maxHeight:TIP_MAX_H,boxShadow:`0 8px 28px rgba(0,0,0,0.25)`,pointerEvents:"auto",zIndex:100,animation:"tipIn 0.1s ease",overflow:"hidden",display:"flex",flexDirection:"column",border:`2px solid ${zone.color}30`}}>
+      {/* 헤더 - 고정 */}
+      <div style={{padding:"12px 14px",background:`linear-gradient(135deg,${zone.color}15,${zone.color}06)`,borderBottom:`1px solid ${zone.color}20`,flexShrink:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:24}}>{zone.icon}</span><div style={{flex:1,minWidth:0}}><div style={{fontSize:14,fontWeight:800,color:"#0f172a"}}>{zone.name}</div><div style={{fontSize:10,color:"#64748b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{zone.desc}</div></div></div>
+        <div style={{display:"flex",gap:8,marginTop:10}}>
+          <div style={{background:"#fff",borderRadius:8,padding:"4px 0",flex:1,textAlign:"center",border:"1px solid #e5e7eb"}}><div style={{fontSize:9,color:"#94a3b8",fontWeight:600}}>품목 수</div><div style={{fontSize:18,fontWeight:900,color:zone.color}}>{prods.length}</div></div>
+          <div style={{background:"#fff",borderRadius:8,padding:"4px 0",flex:1,textAlign:"center",border:"1px solid #e5e7eb"}}><div style={{fontSize:9,color:"#94a3b8",fontWeight:600}}>총 재고</div><div style={{fontSize:18,fontWeight:900,color:tq===0?"#ef4444":zone.color}}>{tq.toLocaleString()}</div></div>
         </div>
       </div>
-      {/* Zone photos preview */}
+      {/* 사진 미리보기 - 고정 */}
       {hasPhotos&&(
-        <div style={{padding:"6px 10px",borderBottom:"1px solid #f1f3f5",display:"flex",gap:4,overflow:"hidden"}}>
+        <div style={{padding:"6px 10px",borderBottom:"1px solid #f1f3f5",display:"flex",gap:4,overflow:"hidden",flexShrink:0}}>
           {photos.slice(0,3).map(ph=>(
-            <img key={ph.id} src={ph.url} alt="" style={{width:82,height:56,objectFit:"cover",borderRadius:6,border:"1px solid #e5e7eb"}}/>
+            <img key={ph.id} src={ph.url} alt="" style={{width:90,height:60,objectFit:"cover",borderRadius:6,border:"1px solid #e5e7eb"}}/>
           ))}
-          {photos.length>3&&<div style={{width:40,height:56,borderRadius:6,background:"#f1f3f5",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#94a3b8",fontWeight:700}}>+{photos.length-3}</div>}
+          {photos.length>3&&<div style={{width:42,height:60,borderRadius:6,background:"#f1f3f5",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#94a3b8",fontWeight:700}}>+{photos.length-3}</div>}
         </div>
       )}
-      {top5.length>0&&<div style={{padding:"6px 14px"}}>{top5.map(p=><div key={p.id} style={{display:"flex",justifyContent:"space-between",padding:"2px 0"}}><span style={{fontSize:11,color:"#334155"}}>{p.name}</span><span style={{fontSize:12,fontWeight:800,color:p.qty===0?"#ef4444":"#0f172a"}}>{p.qty}</span></div>)}</div>}
-      <div style={{padding:"3px 14px 7px",textAlign:"center"}}><span style={{fontSize:9,color:"#94a3b8"}}>클릭 → 상세</span></div>
+      {/* 재고 목록 - 스크롤 */}
+      {sortedProds.length>0?(
+        <div style={{padding:"4px 0",overflowY:"auto",flex:1,minHeight:0}}>
+          <div style={{padding:"4px 14px 4px",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,background:"#fff",zIndex:1,borderBottom:"1px solid #f1f5f9"}}>
+            <span style={{fontSize:10,fontWeight:700,color:"#64748b"}}>📦 재고 목록 ({sortedProds.length}개)</span>
+            <span style={{fontSize:9,color:"#94a3b8"}}>↕ 스크롤</span>
+          </div>
+          {sortedProds.map(p=>(
+            <div key={p.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 14px",borderBottom:"1px solid #f8fafc"}}>
+              <span style={{fontSize:12,color:"#334155",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1,marginRight:8}}>
+                {p.qty===0&&<span style={{color:"#ef4444",marginRight:4}}>⚠</span>}
+                {p.name}
+              </span>
+              <span style={{fontSize:13,fontWeight:800,color:p.qty===0?"#ef4444":p.qty<5?"#f59e0b":"#0f172a",flexShrink:0}}>
+                {p.qty.toLocaleString()}
+                {p.unit&&<span style={{fontSize:10,color:"#94a3b8",marginLeft:2}}>{p.unit}</span>}
+              </span>
+            </div>
+          ))}
+        </div>
+      ):(
+        <div style={{padding:"20px 14px",textAlign:"center",color:"#94a3b8",fontSize:11,flex:1}}>
+          📭 등록된 재고 없음
+        </div>
+      )}
+      {/* 푸터 - 고정 */}
+      <div style={{padding:"6px 14px 8px",textAlign:"center",borderTop:"1px solid #f1f5f9",background:"#fafafa",flexShrink:0}}>
+        <span style={{fontSize:10,color:"#64748b",fontWeight:600}}>👆 클릭하여 상세 보기 / 추가 등록</span>
+      </div>
     </div>
   );
 }
@@ -13982,6 +14031,9 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   // CCTV 알림 히스토리
   const [cctvAlerts, setCctvAlerts] = useState([]);
 
+  // CCTV 스냅샷 데이터 (스팟 옆 미니창 표시용)
+  const [cctvSnapshotData, setCctvSnapshotData] = useState({ snapshots: {}, analyses: {}, chToZone: {}, enabled: true });
+
   // Persistence helpers
   const saveCustomZones = (newZones) => {
     setCustomZones(newZones);
@@ -14416,13 +14468,15 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           ) : (
             <OsmFallbackMap zoneStatus={filteredStatus} onSelectZone={setSelectedZone}
               onOpenApiKey={() => setShowApiKeyModal(true)} hasError={!!naverLoadError} errorMsg={naverLoadError}
-              bgMode={bgMode} onChangeBgMode={changeBgMode} />
+              bgMode={bgMode} onChangeBgMode={changeBgMode}
+              cctvSnapshotData={cctvSnapshotData} />
           )}
 
           {/* CCTV 라이브 오버레이 — 모든 활성 채널 라이브뷰 + Claude AI 위험 감지 */}
           <CctvLiveOverlay
             zones={allZones.filter(z => !zoneCustomizations[z.id]?._deleted)}
             cctvMap={cctvMap}
+            onSnapshotsChange={setCctvSnapshotData}
             onAlert={(alert) => {
               setCctvAlerts(prev => [alert, ...prev].slice(0, 50));
             }}
@@ -14723,7 +14777,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
 }
 
 /* ─── OSM FALLBACK MAP (네이버 API 키 없거나 오류 시) ─── */
-function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, errorMsg, bgMode = "satellite", onChangeBgMode }) {
+function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, errorMsg, bgMode = "satellite", onChangeBgMode, cctvSnapshotData = null }) {
   // 박물관 영역 경계 (한국잠사박물관 청주 - 정확한 좌표)
   const LAT_MIN = 36.6378, LAT_MAX = 36.6395, LNG_MIN = 127.4880, LNG_MAX = 127.4905;
   const LAT_CENTER = (LAT_MIN + LAT_MAX) / 2;
@@ -14859,12 +14913,56 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
     markersRef.current.forEach(m => map.removeLayer(m));
     markersRef.current = [];
 
+    // 구역 → CCTV 채널 역매핑 (cctvSnapshotData에서 추출)
+    const snaps = cctvSnapshotData?.snapshots || {};
+    const ana = cctvSnapshotData?.analyses || {};
+    const chToZone = cctvSnapshotData?.chToZone || {};
+    const cctvEnabled = cctvSnapshotData?.enabled !== false;
+    const zoneToCh = {};
+    Object.entries(chToZone).forEach(([ch, zid]) => {
+      if (!zoneToCh[zid]) zoneToCh[zid] = [];
+      zoneToCh[zid].push(parseInt(ch, 10));
+    });
+
     // 새 마커 추가
     zoneStatus.forEach(s => {
       const z = s.zone;
       if (!z.lat || !z.lng) return;
       const badgeNum = s.openActions.length + (s.lowStock > 0 ? s.lowStock : 0);
       const isPulse = s.status === "urgent";
+
+      // 이 구역에 매핑된 첫 번째 채널 (CCTV 미니창용)
+      const channels = (zoneToCh[z.id] || []).sort((a, b) => a - b);
+      const firstCh = channels[0];
+      const snap = firstCh ? snaps[firstCh] : null;
+      const chAna = firstCh ? ana[firstCh] : null;
+      const showCctvMini = cctvEnabled && firstCh && snap?.url && !snap?.error;
+
+      // 위험도별 테두리 색상
+      let cctvBorderColor = "rgba(255,255,255,0.9)";
+      let cctvAnimation = "";
+      if (chAna?.level === "DANGER") {
+        cctvBorderColor = "#dc2626";
+        cctvAnimation = "animation:cctvDangerPulse 1.2s infinite;";
+      } else if (chAna?.level === "WARNING") {
+        cctvBorderColor = "#f59e0b";
+        cctvAnimation = "animation:cctvWarnPulse 1.6s infinite;";
+      }
+
+      // CCTV 미니창 HTML (있으면 핀 오른쪽에)
+      const cctvHtml = showCctvMini ? `
+        <div class="jamsa-cctv-mini" style="position:absolute;left:42px;top:-6px;width:88px;height:60px;border-radius:6px;overflow:hidden;border:2px solid ${cctvBorderColor};${cctvAnimation}box-shadow:0 4px 12px rgba(0,0,0,0.35);background:#0f172a;cursor:pointer;pointer-events:auto;">
+          <img src="${snap.url}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none'"/>
+          <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.6),transparent);padding:2px 4px;font-size:8px;color:#fff;font-weight:700;">CH${firstCh}${channels.length > 1 ? ` +${channels.length-1}` : ''}</div>
+          ${chAna?.level === "DANGER" || chAna?.level === "WARNING" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:${chAna.level === "DANGER" ? "rgba(220,38,38,0.95)" : "rgba(245,158,11,0.95)"};padding:1px 4px;font-size:8px;color:#fff;font-weight:800;">${chAna.level === "DANGER" ? "🚨 위험" : "⚠️ 주의"} ${chAna.score || ""}%</div>` : ''}
+          <div style="position:absolute;top:0;right:0;width:6px;height:6px;background:#22c55e;border-radius:50%;margin:3px;box-shadow:0 0 4px #22c55e;animation:cctvLiveBlink 1.5s infinite;"></div>
+        </div>
+      ` : (cctvEnabled && firstCh ? `
+        <div style="position:absolute;left:42px;top:-6px;width:88px;height:60px;border-radius:6px;overflow:hidden;border:2px dashed rgba(255,255,255,0.5);background:rgba(15,23,42,0.7);display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);">
+          <div style="font-size:18px;">📷</div>
+          <div style="font-size:8px;font-weight:700;margin-top:2px;">CH${firstCh}</div>
+        </div>
+      ` : '');
 
       const html = `
         <div style="position:relative;cursor:pointer;${isPulse ? 'animation:homePinPulse 1.5s infinite;' : ''}">
@@ -14873,13 +14971,17 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
           </div>
           ${badgeNum > 0 ? `<div style="position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:${s.statusColor};color:#fff;font-size:9px;font-weight:900;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-sizing:border-box;box-shadow:0 2px 4px rgba(0,0,0,0.3);">${badgeNum}</div>` : ''}
           <div style="position:absolute;top:40px;left:50%;transform:translateX(-50%);background:rgba(255,255,255,0.95);padding:2px 6px;border-radius:4px;font-size:9px;font-weight:700;color:#0f172a;white-space:nowrap;border:1px solid #e5e7eb;box-shadow:0 1px 3px rgba(0,0,0,0.1);">${z.name || z.id}</div>
+          ${cctvHtml}
         </div>
       `;
+
+      // 아이콘 사이즈 — CCTV 미니창 있으면 더 넓게
+      const iconWidth = showCctvMini || (cctvEnabled && firstCh) ? 132 : 44;
 
       const icon = L.divIcon({
         html,
         className: "jamsa-zone-marker",
-        iconSize: [44, 60],
+        iconSize: [iconWidth, 60],
         iconAnchor: [22, 36],
       });
 
@@ -14888,10 +14990,19 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
         .on("click", () => onSelectZone(s));
       markersRef.current.push(marker);
     });
-  }, [zoneStatus, leafletLoaded]);
+  }, [zoneStatus, leafletLoaded, cctvSnapshotData]);
 
   return (
     <div style={{ position: "absolute", inset: 0, background: "#1e293b" }}>
+      {/* CCTV 미니창 애니메이션 */}
+      <style>{`
+        @keyframes cctvDangerPulse { 0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,0.7),0 4px 12px rgba(0,0,0,0.35)} 50%{box-shadow:0 0 0 8px rgba(220,38,38,0),0 4px 12px rgba(0,0,0,0.35)} }
+        @keyframes cctvWarnPulse { 0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,0.7),0 4px 12px rgba(0,0,0,0.35)} 50%{box-shadow:0 0 0 6px rgba(245,158,11,0),0 4px 12px rgba(0,0,0,0.35)} }
+        @keyframes cctvLiveBlink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+        .jamsa-cctv-mini:hover { transform:scale(1.4); z-index:1000; }
+        .jamsa-cctv-mini { transition:transform 0.15s; transform-origin:left center; }
+      `}</style>
+
       {/* Leaflet 지도 */}
       {leafletLoaded && !leafletError && (
         <div ref={mapContainerRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
