@@ -54,10 +54,12 @@ async function boot() {
     supabase.auth.onAuthStateChange((_event, s) => {
       session = s;
       window.__authToken = s?.access_token || null;
+      window.__supabaseUserEmail = s?.user?.email || null;
       updateAuthBadge();
     });
 
     window.__authToken = session?.access_token || null;
+    window.__supabaseUserEmail = session?.user?.email || null;
     window.__supabase = supabase;
 
     // CCTV 백엔드 URL
@@ -78,17 +80,40 @@ async function boot() {
       return;
     }
 
-    setMsg('데이터 동기화 중...');
-    await hydrateFromBackend();
+    // ⚡ 핵심 개선: localStorage에 캐시된 데이터로 React 즉시 마운트
+    // 백엔드 동기화는 백그라운드에서 진행 (사용자는 즉시 화면 봄)
+    setMsg('화면 준비 중...');
   } else {
     setMsg('로컬 모드 (Supabase 미설정)');
   }
 
   updateAuthBadge();
+  await mountReactApp();
+}
 
-  // 3) React 마운트
-  const root = ReactDOM.createRoot(document.getElementById('root'));
-  root.render(React.createElement(App));
+// React 앱 마운트 (boot + 로그인 후 재호출 가능)
+let _reactRoot = null;
+async function mountReactApp() {
+  // 3) React 마운트 (이미 있으면 재사용)
+  if (!_reactRoot) {
+    _reactRoot = ReactDOM.createRoot(document.getElementById('root'));
+  }
+  _reactRoot.render(React.createElement(App));
+
+  // 4) 백그라운드에서 클라우드 데이터 동기화 (UI 블록 X)
+  if (supabase && session) {
+    setTimeout(async () => {
+      const updated = await hydrateFromBackend();
+      if (updated && updated > 0) {
+        const syncBadge = document.getElementById('syncBadge');
+        if (syncBadge) {
+          const txt = syncBadge.querySelector('.sync-txt');
+          if (txt) txt.textContent = `클라우드 ✓ (${updated}건 갱신)`;
+          setTimeout(() => { if (txt) txt.textContent = '클라우드 ✓'; }, 5000);
+        }
+      }
+    }, 100);
+  }
 }
 
 // ════════════════════════════════════════════════
@@ -108,37 +133,66 @@ async function authFetch(path, opts = {}) {
 window.authFetch = authFetch;
 
 // ════════════════════════════════════════════════
-//  Supabase 백엔드 sync
+//  Supabase 백엔드 sync (일괄 API로 1번 호출)
 // ════════════════════════════════════════════════
 async function hydrateFromBackend() {
   if (!supabase || !session) return;
   try {
-    const res = await authFetch('/api/keys');
+    // 한 번의 호출로 모든 데이터 가져오기 (이전: 30-50번 → 이후: 1번)
+    const res = await authFetch('/api/data-bulk');
     if (!res.ok) {
-      console.warn('[hydrate] keys fetch failed:', res.status);
-      return;
+      // 폴백: 기존 방식 (병렬)
+      console.warn('[hydrate] bulk failed, fallback to parallel:', res.status);
+      return await hydrateFromBackendLegacy();
     }
-    const keys = await res.json();
+    const result = await res.json();
+    if (!result.ok || !result.data) return 0;
+
     let loaded = 0;
-    for (const meta of keys) {
-      const key = meta.key;
-      if (!key.startsWith(SYNC_PREFIX)) continue;
-      try {
-        const r = await authFetch('/api/data/' + encodeURIComponent(key));
-        if (r.ok) {
-          const data = await r.json();
-          const remoteStr = JSON.stringify(data);
-          const localStr = localStorage.getItem(key);
-          if (localStr !== remoteStr) {
-            _origSetItem(key, remoteStr);
-            loaded++;
-          }
-        }
-      } catch (e) {}
+    for (const [key, data] of Object.entries(result.data)) {
+      const remoteStr = JSON.stringify(data);
+      const localStr = localStorage.getItem(key);
+      if (localStr !== remoteStr) {
+        _origSetItem(key, remoteStr);
+        loaded++;
+      }
     }
     return loaded;
   } catch (e) {
     console.warn('[hydrate] failed:', e);
+    return 0;
+  }
+}
+
+// 폴백: 병렬 fetch
+async function hydrateFromBackendLegacy() {
+  if (!supabase || !session) return;
+  try {
+    const res = await authFetch('/api/keys');
+    if (!res.ok) return 0;
+    const keys = await res.json();
+    const validKeys = keys.filter(meta => meta.key.startsWith(SYNC_PREFIX));
+    if (validKeys.length === 0) return 0;
+
+    const fetchPromises = validKeys.map(meta =>
+      authFetch('/api/data/' + encodeURIComponent(meta.key))
+        .then(r => r.ok ? r.json().then(data => ({ key: meta.key, data })) : null)
+        .catch(() => null)
+    );
+
+    const results = await Promise.all(fetchPromises);
+    let loaded = 0;
+    for (const result of results) {
+      if (!result) continue;
+      const remoteStr = JSON.stringify(result.data);
+      const localStr = localStorage.getItem(result.key);
+      if (localStr !== remoteStr) {
+        _origSetItem(result.key, remoteStr);
+        loaded++;
+      }
+    }
+    return loaded;
+  } catch (e) {
     return 0;
   }
 }
@@ -256,10 +310,35 @@ function showAuthScreen() {
     const email = document.getElementById('authEmail').value.trim();
     const pw = document.getElementById('authPw').value;
     if (!email || !pw) return showError('이메일/비밀번호 입력');
+    const btn = document.getElementById('authBtnLogin');
+    btn.textContent = '로그인 중...';
+    btn.disabled = true;
     const { data, error } = await supabase.auth.signInWithPassword({ email, password: pw });
-    if (error) return showError(error.message);
+    if (error) {
+      btn.textContent = '로그인';
+      btn.disabled = false;
+      return showError(error.message);
+    }
+    // 세션 즉시 반영
+    session = data.session;
+    window.__authToken = session?.access_token || null;
+    window.__supabaseUserEmail = session?.user?.email || email;
     overlay.remove();
-    location.reload();
+    // 로딩 화면 메시지만 짧게 표시 (이미 init 시 폴링이 자동으로 hide함)
+    const msgEl = document.getElementById('loadingMsg');
+    if (msgEl) msgEl.textContent = '화면 준비 중...';
+    document.body.classList.add('loading');
+    const loadingEl = document.getElementById('loading');
+    if (loadingEl) {
+      loadingEl.classList.remove('hidden');
+      loadingEl.style.opacity = '1';
+    }
+    // React 마운트
+    await mountReactApp();
+    // React 마운트 후 즉시 로딩 숨기기 (폴링 대신 직접)
+    setTimeout(() => {
+      if (typeof window.__hideLoading === 'function') window.__hideLoading();
+    }, 50);
   };
 
   document.getElementById('authBtnSignup').onclick = async () => {

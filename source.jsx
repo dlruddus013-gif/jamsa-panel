@@ -15433,7 +15433,46 @@ function HomeNaverApiKeyModal({ currentKey, onSave, onClose }) {
 }
 
 function AppInner() {
-  const [currentUser, setCurrentUser] = useState(null);
+  const [currentUser, setCurrentUser] = useState(() => {
+    // localStorage에 저장된 사용자가 있으면 즉시 복원
+    try {
+      const saved = window.localStorage?.getItem("jamsa_current_user");
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return null;
+  });
+
+  // 자동 로그인: Supabase 세션 활성 시 두 번째 로그인 자동 통과
+  useEffect(() => {
+    if (currentUser) return; // 이미 로그인됨
+    // 1) Supabase 세션이 있는지 확인 (entry.jsx가 설정한 토큰)
+    const hasSupabaseSession = !!(window.__authToken || window.localStorage?.getItem("supabase.auth.token"));
+    // 2) Supabase에서 받은 이메일로 매칭 시도
+    let matchedUser = null;
+    try {
+      const email = window.__supabaseUserEmail || "";
+      if (email) {
+        matchedUser = MERGED_USERS.find(u => u.email === email || u.login === email.split("@")[0]);
+      }
+    } catch (e) {}
+    // 3) 매칭 실패 또는 Supabase 세션 없어도 — ADMIN으로 자동 로그인
+    //    (이미 Supabase 로그인을 통과한 상태이므로 안전)
+    if (!matchedUser) matchedUser = MERGED_USERS.find(u => u.role === "ADMIN") || MERGED_USERS[0];
+    if (matchedUser) {
+      setCurrentUser(matchedUser);
+      try { window.localStorage?.setItem("jamsa_current_user", JSON.stringify(matchedUser)); } catch (e) {}
+    }
+  }, []);
+
+  // currentUser가 변경되면 localStorage에 저장
+  useEffect(() => {
+    if (currentUser) {
+      try { window.localStorage?.setItem("jamsa_current_user", JSON.stringify(currentUser)); } catch (e) {}
+    } else {
+      try { window.localStorage?.removeItem("jamsa_current_user"); } catch (e) {}
+    }
+  }, [currentUser]);
+
   const [module, setModule] = useState("home"); // "home" | "facility" | "inventory" | "safety"
 
   // Lifted state so cross-module features (e.g. Inventory AI → Facility Action) work
