@@ -14265,6 +14265,17 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
       return;
     }
 
+    // 구역 → CCTV 채널 역매핑 (cctvSnapshotData에서 추출)
+    const _snaps = cctvSnapshotData?.snapshots || {};
+    const _ana = cctvSnapshotData?.analyses || {};
+    const _chToZone = cctvSnapshotData?.chToZone || {};
+    const _cctvEnabled = cctvSnapshotData?.enabled !== false;
+    const _zoneToCh = {};
+    Object.entries(_chToZone).forEach(([ch, zid]) => {
+      if (!_zoneToCh[zid]) _zoneToCh[zid] = [];
+      _zoneToCh[zid].push(parseInt(ch, 10));
+    });
+
     // 각 스팟마다 마커 생성 (상태별 색상 뱃지)
     zoneStatus.forEach(s => {
       const z = s.zone;
@@ -14279,15 +14290,48 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           ? `<div style="position:absolute;bottom:-6px;left:50%;transform:translateX(-50%);background:${s.statusColor};color:#fff;padding:2px 8px;border-radius:10px;font-size:9px;font-weight:800;white-space:nowrap;z-index:2;box-shadow:0 2px 4px rgba(0,0,0,0.3);">${s.statusLabel}</div>`
           : "";
 
+        // ━━ CCTV 미니창 HTML ━━
+        const _channels = (_zoneToCh[z.id] || []).sort((a, b) => a - b);
+        const _firstCh = _channels[0];
+        const _snap = _firstCh ? _snaps[_firstCh] : null;
+        const _chAna = _firstCh ? _ana[_firstCh] : null;
+        const _showMini = _cctvEnabled && _firstCh && _snap?.url && !_snap?.error;
+        let _cctvBorder = "rgba(255,255,255,0.9)";
+        let _cctvAnim = "";
+        if (_chAna?.level === "DANGER") {
+          _cctvBorder = "#dc2626";
+          _cctvAnim = "animation:cctvDangerPulse 1.2s infinite;";
+        } else if (_chAna?.level === "WARNING") {
+          _cctvBorder = "#f59e0b";
+          _cctvAnim = "animation:cctvWarnPulse 1.6s infinite;";
+        }
+        const _cctvHtml = _showMini ? `
+          <div class="jamsa-cctv-mini" style="position:absolute;left:50px;top:-2px;width:96px;height:64px;border-radius:6px;overflow:hidden;border:2px solid ${_cctvBorder};${_cctvAnim}box-shadow:0 4px 12px rgba(0,0,0,0.4);background:#0f172a;cursor:pointer;z-index:3;">
+            <img src="${_snap.url}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none'"/>
+            <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.7),transparent);padding:2px 4px;font-size:9px;color:#fff;font-weight:700;">CH${_firstCh}${_channels.length > 1 ? ` +${_channels.length-1}` : ''}</div>
+            ${_chAna?.level === "DANGER" || _chAna?.level === "WARNING" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:${_chAna.level === "DANGER" ? "rgba(220,38,38,0.95)" : "rgba(245,158,11,0.95)"};padding:1px 4px;font-size:9px;color:#fff;font-weight:800;text-align:center;">${_chAna.level === "DANGER" ? "🚨 위험" : "⚠️ 주의"} ${_chAna.score || ""}%</div>` : ''}
+            <div style="position:absolute;top:3px;right:3px;width:7px;height:7px;background:#22c55e;border-radius:50%;box-shadow:0 0 5px #22c55e;animation:cctvLiveBlink 1.5s infinite;z-index:2;"></div>
+          </div>
+        ` : (_cctvEnabled && _firstCh ? `
+          <div style="position:absolute;left:50px;top:-2px;width:96px;height:64px;border-radius:6px;overflow:hidden;border:2px dashed rgba(255,255,255,0.6);background:rgba(15,23,42,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.7);box-shadow:0 4px 12px rgba(0,0,0,0.3);z-index:3;">
+            <div style="font-size:20px;">📷</div>
+            <div style="font-size:9px;font-weight:700;margin-top:2px;">CH${_firstCh}</div>
+            <div style="font-size:8px;color:rgba(255,255,255,0.5);margin-top:1px;">서버 미가동</div>
+          </div>
+        ` : '');
+
+        // 마커 컨테이너 너비 — CCTV 미니창 있으면 더 넓게
+        const _markerWidth = (_cctvEnabled && _firstCh) ? 150 : 46;
+
         const marker = new naver.maps.Marker({
           position: new naver.maps.LatLng(z.lat, z.lng),
           map: naverMapRef.current,
           draggable: editMode,  // Enable drag in edit mode
           icon: {
-            content: `<div style="position:relative;width:46px;height:46px;${pulseAnim}cursor:${editMode ? "move" : "pointer"};${editMode ? "outline:3px dashed #2563eb;outline-offset:2px;border-radius:50%;" : ""}"><div style="background:${z.color};border:3px solid #fff;border-radius:50% 50% 50% 0;width:38px;height:38px;transform:rotate(-45deg);box-shadow:0 4px 12px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;margin:4px;"><div style="transform:rotate(45deg);font-size:18px;">${z.icon}</div></div>${badgeHtml}${statusLabelHtml}</div>`,
+            content: `<div style="position:relative;width:${_markerWidth}px;height:64px;${pulseAnim}cursor:${editMode ? "move" : "pointer"};${editMode ? "outline:3px dashed #2563eb;outline-offset:2px;border-radius:8px;" : ""}"><div style="position:absolute;left:0;top:0;width:46px;height:46px;"><div style="background:${z.color};border:3px solid #fff;border-radius:50% 50% 50% 0;width:38px;height:38px;transform:rotate(-45deg);box-shadow:0 4px 12px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;margin:4px;"><div style="transform:rotate(45deg);font-size:18px;">${z.icon}</div></div>${badgeHtml}${statusLabelHtml}</div>${_cctvHtml}</div>`,
             anchor: new naver.maps.Point(23, 46),
           },
-          title: editMode ? `[편집] ${z.name} (드래그로 이동)` : `${z.name} · ${s.statusLabel}${badgeNum > 0 ? ` (과제/재고부족 ${badgeNum}건)` : ""}`,
+          title: editMode ? `[편집] ${z.name} (드래그로 이동)` : `${z.name} · ${s.statusLabel}${badgeNum > 0 ? ` (과제/재고부족 ${badgeNum}건)` : ""}${_firstCh ? ` · CH${_firstCh}` : ""}`,
         });
         if (naver.maps.Event && naver.maps.Event.addListener) {
           // Click handler: edit mode opens edit panel, normal mode opens detail
@@ -14323,7 +14367,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         addNewZone(e.coord.lat(), e.coord.lng());
       });
     }
-  }, [zoneStatus, naverLoaded, mapProvider, bgMode, viewMode, editMode]);
+  }, [zoneStatus, naverLoaded, mapProvider, bgMode, viewMode, editMode, cctvSnapshotData]);
 
 
   const createQuickAction = (zone, template) => {
@@ -14351,7 +14395,15 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#f5f5f5" }}>
-      {/* ─── KPI Bar ─── */}
+      {/* CCTV 미니창 + 핀 펄스 애니메이션 (글로벌) */}
+      <style>{`
+        @keyframes homePinPulse { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.15);opacity:0.85} }
+        @keyframes cctvDangerPulse { 0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,0.7),0 4px 12px rgba(0,0,0,0.4)} 50%{box-shadow:0 0 0 10px rgba(220,38,38,0),0 4px 12px rgba(0,0,0,0.4)} }
+        @keyframes cctvWarnPulse { 0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,0.7),0 4px 12px rgba(0,0,0,0.4)} 50%{box-shadow:0 0 0 8px rgba(245,158,11,0),0 4px 12px rgba(0,0,0,0.4)} }
+        @keyframes cctvLiveBlink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+        .jamsa-cctv-mini { transition:transform 0.15s; transform-origin:left center; }
+        .jamsa-cctv-mini:hover { transform:scale(1.5); z-index:1000; }
+      `}</style>
       <div style={{ background: "#0f172a", color: "#fff", padding: "14px 20px", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
         <div style={{ fontSize: 13, fontWeight: 800 }}>🗺️ 통합 상황판</div>
         <div style={{ flex: 1, display: "flex", gap: 10, flexWrap: "wrap" }}>
