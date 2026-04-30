@@ -5357,7 +5357,15 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
   const [snapshots,setSnapshots]=useState([]); // for undo: [{id,prods}]
   // Custom user-defined zones (drawn on satellite map) — persisted
   const [customZones, setCustomZones] = useLocalStorage("jamsa_custom_zones", []);
-  const mergedZones = [...BASE_ZONES, ...customZones];
+  // Zone position overrides (사용자가 드래그로 이동한 위치)
+  const zoneOverrides = useMemo(() => {
+    try { return JSON.parse(window.localStorage?.getItem("jamsa_inv_zone_overrides") || "{}"); }
+    catch (e) { return {}; }
+  }, [customZones]); // customZones 갱신 시 함께 재계산
+  const mergedZones = useMemo(() => {
+    const baseWithOverrides = BASE_ZONES.map(z => ({ ...z, ...(zoneOverrides[z.id] || {}) }));
+    return [...baseWithOverrides, ...customZones];
+  }, [customZones, zoneOverrides]);
   const [page,setPage]=useState("map");
   const [hZone,setHZone]=useState(null);
   const [selZone,setSelZone]=useState(null);
@@ -5740,6 +5748,23 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
                 }}
                 onCreateFacAction={onAddFacAction}
                 switchToFacility={switchToFacility}
+                onUpdateZone={(zid, patch) => {
+                  // Custom zone이면 customZones 업데이트, base zone이면 zoneOverrides 사용
+                  const isCustom = customZones.some(cz => cz.id === zid);
+                  if (isCustom) {
+                    setCustomZones(prev => prev.map(z => z.id === zid ? { ...z, ...patch } : z));
+                  } else {
+                    // base zone: localStorage 오버라이드로 저장
+                    try {
+                      const overrides = JSON.parse(window.localStorage.getItem("jamsa_inv_zone_overrides") || "{}");
+                      overrides[zid] = { ...(overrides[zid] || {}), ...patch };
+                      window.localStorage.setItem("jamsa_inv_zone_overrides", JSON.stringify(overrides));
+                      // 강제 리렌더
+                      setCustomZones(prev => [...prev]);
+                    } catch (e) {}
+                  }
+                  addH("구역이동", zid, `→ ${patch.lat?.toFixed(5)}, ${patch.lng?.toFixed(5)}`, 0);
+                }}
               />
               {selZone&&<ZoneBottom zone={mergedZones.find(z=>z.id===selZone)} prods={zProds(selZone)} hist={zHist(selZone)} allLocs={LOCS}
                 onClose={()=>{setSelZone(null);setHighlightPid(null);}} doIn={doIn} doOut={doOut} doAdj={doAdj} doAdd={doAdd} doDel={doDel}
@@ -6297,7 +6322,7 @@ function CctvMappingModal({ zones, cctvMap, onSave, onClose }) {
   );
 }
 
-function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone,zonePhotos,zones,customZones=[],facActions=[],onCreateZone,onDeleteCustomZone,onAddInventoryToZone,onCreateFacAction,switchToFacility,userCtx}){
+function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone,zonePhotos,zones,customZones=[],facActions=[],onCreateZone,onDeleteCustomZone,onAddInventoryToZone,onCreateFacAction,switchToFacility,userCtx,onUpdateZone}){
   // Use passed zones if provided, else fall back to static ZONES
   const baseZones = zones || ZONES;
   const [gpsZone, setGpsZone] = useState(null);
@@ -6317,6 +6342,10 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
   const [showGpsInfo, setShowGpsInfo] = useState(false);
   // Zone creation mode
   const [drawMode, setDrawMode] = useState(false);
+  // 구역 이동(드래그) 모드
+  const [editPosMode, setEditPosMode] = useState(false);
+  const [draggingZoneId, setDraggingZoneId] = useState(null);
+  const [dragOffset, setDragOffset] = useState({ dx: 0, dy: 0 });
   const [drawPreview, setDrawPreview] = useState(null); // {lat, lng, x%, y%}
   const [newZoneForm, setNewZoneForm] = useState(null); // { x%, y%, lat, lng }
 
@@ -6773,6 +6802,13 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
             {drawMode ? "✕ 그리기 취소" : "🆕 구역 그리기"}
           </button>
         )}
+        {/* 구역 옮기기 (드래그로 위치 이동) */}
+        {bgMode !== "plan" && currentUserCanEdit && (
+          <button onClick={()=>{setEditPosMode(!editPosMode); if(drawMode) setDrawMode(false); if(editMode) setEditMode(false);}} title="박스를 드래그로 이동"
+            style={{padding:"5px 10px",borderRadius:6,border:"1px solid "+(editPosMode?"#f59e0b":"#cbd5e1"),background:editPosMode?"linear-gradient(135deg,#f59e0b,#dc2626)":"#fff",color:editPosMode?"#fff":"#475569",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+            {editPosMode ? "✓ 이동 종료" : "↔ 구역 옮기기"}
+          </button>
+        )}
         {/* Zone icon editing — only shown to users with permission */}
         {bgMode !== "plan" && currentUserCanEdit && (
           <button onClick={()=>{setEditMode(!editMode); if(drawMode) setDrawMode(false);}} title="아이콘 위치·크기 편집"
@@ -6914,22 +6950,107 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
             })}
           </svg>
 
-          {/* Zone labels — positioned via plan or GPS */}
+          {/* Zone labels — positioned via plan or GPS, drag-enabled in edit mode */}
           {allZones.map(z=>{
             if (z.custom && !usingGps) return null; // custom zones only in GPS modes
             const pos = usingGps ? zoneToSatPct(z) : {x: z.x + z.w/2, y: z.y + z.h/2};
             const q = zQty(z.id);
+            const prods = zProds(z.id);
             const isClosest = closestZone?.id === z.id;
-            return(<div key={z.id+"-lbl"} style={{position:"absolute",left:`${pos.x}%`,top:`${pos.y}%`,transform:"translate(-50%,-50%)",
-              background:isClosest?"#059669":"rgba(255,255,255,0.96)",
-              border:`2px solid ${isClosest?"#fff":z.color}`,
-              borderRadius:8,padding:"4px 10px",pointerEvents:"none",textAlign:"center",
-              boxShadow:isClosest?"0 0 0 3px #059669, 0 4px 12px rgba(5,150,105,0.5)":"0 2px 8px rgba(0,0,0,0.15)",whiteSpace:"nowrap",zIndex:2}}>
+            const isHovered = hZone === z.id;
+            const isDragging = draggingZoneId === z.id;
+            const sortedProds = [...prods].sort((a,b)=>b.qty-a.qty);
+            const dragX = isDragging ? `${pos.x + dragOffset.dx}%` : `${pos.x}%`;
+            const dragY = isDragging ? `${pos.y + dragOffset.dy}%` : `${pos.y}%`;
+
+            return(
+            <div key={z.id+"-lbl"}
+              onMouseEnter={()=> { if (!editPosMode) setHZone(z.id); }}
+              onMouseLeave={()=> { if (!editPosMode) setHZone(null); }}
+              onClick={(e)=>{ if (!editPosMode && !isDragging) { e.stopPropagation(); setSelZone(z.id); }}}
+              onMouseDown={(e)=>{
+                if (!editPosMode || !usingGps) return;
+                e.stopPropagation();
+                e.preventDefault();
+                setDraggingZoneId(z.id);
+                const rect = mapWrap?.current?.getBoundingClientRect();
+                if (!rect) return;
+                const startX = e.clientX;
+                const startY = e.clientY;
+                const handleMove = (ev) => {
+                  const dx = ((ev.clientX - startX) / rect.width) * 100;
+                  const dy = ((ev.clientY - startY) / rect.height) * 100;
+                  setDragOffset({ dx, dy });
+                };
+                const handleUp = (ev) => {
+                  window.removeEventListener("mousemove", handleMove);
+                  window.removeEventListener("mouseup", handleUp);
+                  // 이동된 위치 → lat/lng 역계산 후 저장
+                  const dx = ((ev.clientX - startX) / rect.width) * 100;
+                  const dy = ((ev.clientY - startY) / rect.height) * 100;
+                  const newPctX = pos.x + dx;
+                  const newPctY = pos.y + dy;
+                  // 위경도 계산 (zoneToSatPct의 역연산)
+                  const SAT_BBOX = { lat_min: 36.6378, lat_max: 36.6395, lng_min: 127.4880, lng_max: 127.4905 };
+                  const newLng = SAT_BBOX.lng_min + (newPctX / 100) * (SAT_BBOX.lng_max - SAT_BBOX.lng_min);
+                  const newLat = SAT_BBOX.lat_max - (newPctY / 100) * (SAT_BBOX.lat_max - SAT_BBOX.lat_min);
+                  if (onUpdateZone && Math.abs(dx) + Math.abs(dy) > 0.5) {
+                    onUpdateZone(z.id, { lat: newLat, lng: newLng });
+                  }
+                  setDraggingZoneId(null);
+                  setDragOffset({ dx: 0, dy: 0 });
+                };
+                window.addEventListener("mousemove", handleMove);
+                window.addEventListener("mouseup", handleUp);
+              }}
+              style={{
+                position:"absolute",
+                left: dragX, top: dragY,
+                transform:"translate(-50%,-50%)",
+                background: editPosMode ? "rgba(251,191,36,0.95)" : (isClosest ? "#059669" : "rgba(255,255,255,0.97)"),
+                border: `2px solid ${editPosMode ? "#f59e0b" : (isClosest ? "#fff" : z.color)}`,
+                borderRadius: 8,
+                padding: isHovered && !editPosMode ? "6px 10px" : "4px 10px",
+                pointerEvents: "auto",
+                cursor: editPosMode ? "move" : "pointer",
+                textAlign: "center",
+                boxShadow: isDragging ? "0 8px 24px rgba(0,0,0,0.4),0 0 0 4px rgba(251,191,36,0.5)" :
+                          (isClosest ? "0 0 0 3px #059669, 0 4px 12px rgba(5,150,105,0.5)" :
+                          (isHovered ? "0 6px 16px rgba(0,0,0,0.25)" : "0 2px 8px rgba(0,0,0,0.15)")),
+                whiteSpace: "nowrap",
+                zIndex: isDragging ? 100 : (isHovered ? 50 : 2),
+                transition: isDragging ? "none" : "box-shadow 0.15s, padding 0.15s",
+                minWidth: isHovered && !editPosMode && sortedProds.length > 0 ? 200 : "auto",
+                userSelect: "none",
+              }}>
               <div style={{fontSize:usingGps?9:11,fontWeight:700,color:isClosest?"#fff":"#333",lineHeight:1.3}}>
                 {usingGps?z.icon+" ":""}{z.name.length>9?z.name.slice(0,9)+"…":z.name}
                 {z.custom && <span style={{fontSize:8,marginLeft:3,padding:"0 3px",borderRadius:2,background:isClosest?"#fff":"#fbbf24",color:isClosest?"#059669":"#000"}}>사용자</span>}
+                {editPosMode && <span style={{fontSize:8,marginLeft:4,color:"#7c2d12",fontWeight:900}}>↔ 드래그</span>}
               </div>
               <div style={{fontSize:usingGps?13:16,fontWeight:900,color:isClosest?"#fff":(q===0?"#ef4444":z.color),lineHeight:1.2}}>{q.toLocaleString()}</div>
+
+              {/* 호버 시 재고 리스트 (편집 모드 X일 때만) */}
+              {isHovered && !editPosMode && sortedProds.length > 0 && (
+                <div style={{
+                  marginTop: 6, paddingTop: 6, borderTop: `1px solid ${z.color}30`,
+                  maxHeight: 180, overflowY: "auto", textAlign: "left",
+                  whiteSpace: "normal",
+                }}>
+                  <div style={{fontSize:8,fontWeight:700,color:"#64748b",marginBottom:3}}>📦 재고 ({sortedProds.length})</div>
+                  {sortedProds.map(p => (
+                    <div key={p.id} style={{display:"flex",justifyContent:"space-between",fontSize:9,padding:"1px 0",borderBottom:"1px dotted #f1f5f9"}}>
+                      <span style={{color:"#334155",overflow:"hidden",textOverflow:"ellipsis",maxWidth:130}}>
+                        {p.qty===0 && <span style={{color:"#ef4444"}}>⚠</span>}
+                        {p.name}
+                      </span>
+                      <span style={{fontWeight:800,color:p.qty===0?"#ef4444":p.qty<5?"#f59e0b":"#0f172a",marginLeft:6}}>
+                        {p.qty}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>);
           })}
 
