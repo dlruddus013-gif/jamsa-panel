@@ -6,6 +6,13 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' https: data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https: blob:; connect-src 'self' https: wss:; font-src 'self' data: https:; frame-src 'self' https:;">
   <title>한국잠사박물관 통합관리 시스템</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext x='50' y='75' font-size='80' text-anchor='middle'%3E🏛️%3C/text%3E%3C/svg%3E">
+  <!-- 외부 CDN preconnect — 첫 로딩 속도 향상 -->
+  <link rel="preconnect" href="https://cdn.tailwindcss.com" crossorigin>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="dns-prefetch" href="https://cdn.tailwindcss.com">
+  <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+  <!-- bundle preload -->
+  <link rel="modulepreload" href="/app.bundle.js" crossorigin>
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
   <style>
@@ -28,6 +35,10 @@
     .status-pill[data-state="pending"] .dot, .status-pill[data-state="syncing"] .dot { background: #fbbf24; animation: pulse 1s infinite; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
+    /* 로딩 중에는 검색창/상태 모두 숨김 — React 앱 마운트 후에만 표시 */
+    body.loading #globalSearch,
+    body.loading .status-stack { display: none !important; }
+
     #globalSearch { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 8500; width: 360px; background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); border-radius: 24px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); display: flex; align-items: center; padding: 4px 4px 4px 14px; transition: all 0.2s; }
     #globalSearch:focus-within { width: 480px; box-shadow: 0 6px 20px rgba(59,91,219,0.18); }
     #globalSearch input { flex: 1; border: none; outline: none; background: transparent; font-size: 13px; padding: 7px 0; color: #0f172a; font-family: inherit; }
@@ -45,7 +56,7 @@
     .sr-header { padding: 8px 12px; font-size: 11px; color: #64748b; font-weight: 600; border-bottom: 0.5px solid #e2e8f0; margin-bottom: 4px; }
   </style>
 </head>
-<body>
+<body class="loading">
   <div id="loading">
     <div class="logo">🏛️</div>
     <div class="title">한국잠사박물관 통합관리 시스템</div>
@@ -93,6 +104,7 @@
       }, 700);
       window.__hideLoading = () => {
         clearInterval(interval);
+        document.body.classList.remove('loading'); // 검색창/상태 표시 활성화
         const el = document.getElementById('loading');
         if (el) {
           el.style.transition = 'opacity 0.3s';
@@ -181,6 +193,51 @@
     })();
   </script>
   <script type="module" src="/app.bundle.js"></script>
-  <script>setTimeout(() => window.__hideLoading?.(), 1500);</script>
+  <script>
+    // React 앱 마운트 감지 — root 안에 콘텐츠가 생기면 로딩 숨김
+    (function waitForApp() {
+      const startTime = Date.now();
+      const root = document.getElementById('root');
+      const msgEl = document.getElementById('loadingMsg');
+      const messages = [
+        { at: 0,    text: '시스템 초기화 중...' },
+        { at: 2000, text: '데이터 불러오는 중... (조금만 기다려주세요)' },
+        { at: 5000, text: '거의 다 됐어요... 인터넷 속도에 따라 5-15초 소요됩니다' },
+        { at: 10000, text: '⏳ 처음 접속이시면 시간이 좀 걸릴 수 있습니다' },
+        { at: 20000, text: '⚠️ 네트워크 속도가 느린 것 같아요. 와이파이 확인해 주세요' },
+      ];
+      let msgIdx = 0;
+      const msgTimer = setInterval(() => {
+        const elapsed = Date.now() - startTime;
+        const next = messages.find(m => m.at > 0 && elapsed >= m.at && messages.indexOf(m) > msgIdx);
+        if (next && msgEl) {
+          msgIdx = messages.indexOf(next);
+          msgEl.textContent = next.text;
+        }
+      }, 500);
+
+      const tryHide = () => {
+        // root에 자식 요소가 있고, 텍스트가 있으면 React 마운트 완료
+        if (root && root.children.length > 0 && root.innerText.length > 50) {
+          clearInterval(msgTimer);
+          window.__hideLoading?.();
+          return true;
+        }
+        return false;
+      };
+
+      // 100ms마다 체크
+      const checkTimer = setInterval(() => {
+        if (tryHide()) clearInterval(checkTimer);
+      }, 100);
+
+      // 30초 timeout — 그 후엔 그냥 숨김 (사용자가 답답해할 수 있음)
+      setTimeout(() => {
+        clearInterval(checkTimer);
+        clearInterval(msgTimer);
+        window.__hideLoading?.();
+      }, 30000);
+    })();
+  </script>
 </body>
 </html>
