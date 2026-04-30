@@ -14353,15 +14353,58 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
     catch (e) { return {}; }
   });
 
-  // CCTV 매핑 (구역 → 채널 배열) - InventoryModule과 동일한 키 사용
+  // CCTV 매핑 (구역 → 채널 배열) - 자동 복구 강화
   const [cctvMap, setCctvMap] = useState(() => {
+    const fallback = (typeof CCTV_AUTO_MAP !== "undefined") ? { ...CCTV_AUTO_MAP } : {};
     try {
-      const saved = JSON.parse(window.localStorage?.getItem("jamsa_cctv_zone_map") || "null");
-      return saved || (typeof CCTV_AUTO_MAP !== "undefined" ? { ...CCTV_AUTO_MAP } : {});
+      const raw = window.localStorage?.getItem("jamsa_cctv_zone_map");
+      if (!raw || raw === "null" || raw === "{}") return fallback;
+      const saved = JSON.parse(raw);
+      // 매핑된 채널이 하나도 없으면 (모두 빈 배열) 자동 매핑으로 복구
+      const totalChs = Object.values(saved).reduce((sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0), 0);
+      if (totalChs === 0) {
+        console.warn("[CCTV] 매핑이 비어있음 → 자동 매핑으로 복구");
+        return fallback;
+      }
+      // 자동 매핑과 병합 (저장된 값이 우선, 없는 키는 자동에서 가져옴)
+      return { ...fallback, ...saved };
     } catch (e) {
-      return typeof CCTV_AUTO_MAP !== "undefined" ? { ...CCTV_AUTO_MAP } : {};
+      console.warn("[CCTV] 매핑 로드 실패 → 자동 매핑 사용:", e);
+      return fallback;
     }
   });
+
+  // CCTV 오버레이 자동으로 켜기 (사용자가 끄지 않은 한)
+  useEffect(() => {
+    try {
+      // localStorage에 명시적으로 "0"이 없으면 켜진 상태로 설정
+      const v = window.localStorage?.getItem("jamsa_cctv_overlay_on");
+      if (v === null) {
+        window.localStorage?.setItem("jamsa_cctv_overlay_on", "1");
+      }
+    } catch (e) {}
+  }, []);
+
+  // CCTV 매핑 디버깅용 헬퍼 (브라우저 콘솔)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.__cctvReset = () => {
+      try {
+        window.localStorage.removeItem("jamsa_cctv_zone_map");
+        window.localStorage.setItem("jamsa_cctv_overlay_on", "1");
+      } catch (e) {}
+      if (typeof CCTV_AUTO_MAP !== "undefined") setCctvMap({ ...CCTV_AUTO_MAP });
+      console.log("[__cctvReset] CCTV 매핑 초기화 완료. 새로고침 권장");
+    };
+    window.__cctvCheck = () => {
+      const total = Object.values(cctvMap).reduce((s, a) => s + (Array.isArray(a) ? a.length : 0), 0);
+      console.log("[__cctvCheck] 현재 매핑:", cctvMap);
+      console.log("[__cctvCheck] 총 매핑된 채널 수:", total);
+      console.log("[__cctvCheck] localStorage:", window.localStorage.getItem("jamsa_cctv_zone_map"));
+      console.log("[__cctvCheck] 오버레이 상태:", window.localStorage.getItem("jamsa_cctv_overlay_on"));
+    };
+    return () => { delete window.__cctvReset; delete window.__cctvCheck; };
+  }, [cctvMap]);
 
   // CCTV 알림 히스토리
   const [cctvAlerts, setCctvAlerts] = useState([]);
@@ -14860,6 +14903,44 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           )}
 
           {/* CCTV 라이브 오버레이 — 모든 활성 채널 라이브뷰 + Claude AI 위험 감지 */}
+          {/* CCTV 진단 배지 — 매핑 비어있거나 서버 미가동 시 안내 */}
+          {(() => {
+            const totalMapped = Object.values(cctvMap || {}).reduce((s, a) => s + (Array.isArray(a) ? a.length : 0), 0);
+            const totalSnaps = Object.values(cctvSnapshotData?.snapshots || {}).filter(s => s?.url && !s?.error).length;
+            const hasError = Object.values(cctvSnapshotData?.snapshots || {}).some(s => s?.error);
+
+            if (totalMapped === 0) {
+              return (
+                <div style={{ position: "absolute", top: 60, right: 12, zIndex: 600, background: "rgba(220,38,38,0.95)", color: "#fff", padding: "10px 14px", borderRadius: 8, fontSize: 11, fontWeight: 700, boxShadow: "0 4px 12px rgba(0,0,0,0.3)", maxWidth: 280, lineHeight: 1.5 }}>
+                  ⚠️ CCTV 매핑 비어있음
+                  <div style={{ fontSize: 10, fontWeight: 400, marginTop: 4, opacity: 0.95 }}>
+                    구역에 CCTV 채널이 매핑되지 않아 미니창이 표시되지 않습니다.
+                  </div>
+                  <button onClick={() => {
+                    if (typeof CCTV_AUTO_MAP !== "undefined") {
+                      setCctvMap({ ...CCTV_AUTO_MAP });
+                      try { window.localStorage.setItem("jamsa_cctv_zone_map", JSON.stringify(CCTV_AUTO_MAP)); } catch (e) {}
+                    }
+                  }} style={{ marginTop: 8, padding: "5px 10px", background: "#fff", color: "#dc2626", border: "none", borderRadius: 5, fontSize: 10, fontWeight: 800, cursor: "pointer" }}>
+                    🔄 자동 매핑으로 복구
+                  </button>
+                </div>
+              );
+            }
+            if (totalMapped > 0 && totalSnaps === 0 && cctvSnapshotData?.enabled !== false) {
+              return (
+                <div style={{ position: "absolute", top: 60, right: 12, zIndex: 600, background: "rgba(245,158,11,0.95)", color: "#78350f", padding: "10px 14px", borderRadius: 8, fontSize: 11, fontWeight: 700, boxShadow: "0 4px 12px rgba(0,0,0,0.3)", maxWidth: 280, lineHeight: 1.5 }}>
+                  ⚠️ CCTV 영상 수신 안 됨
+                  <div style={{ fontSize: 10, fontWeight: 400, marginTop: 4 }}>
+                    {totalMapped}개 채널 매핑됨. 박물관 PC에서 CCTV 5555 서버를 켜야 영상이 표시됩니다.
+                    <br />좌하단 "🔴 미로그인" 표시 = 서버 미가동
+                  </div>
+                </div>
+              );
+            }
+            return null;
+          })()}
+
           <CctvLiveOverlay
             zones={allZones.filter(z => !zoneCustomizations[z.id]?._deleted)}
             cctvMap={cctvMap}
