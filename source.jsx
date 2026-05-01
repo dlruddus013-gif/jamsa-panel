@@ -14412,6 +14412,49 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   // CCTV 스냅샷 데이터 (스팟 옆 미니창 표시용)
   const [cctvSnapshotData, setCctvSnapshotData] = useState({ snapshots: {}, analyses: {}, chToZone: {}, enabled: true });
 
+  // CCTV 서버 자동 헬스체크 + 안내 모달
+  const [cctvServerStatus, setCctvServerStatus] = useState({ status: "checking", checkedAt: null }); // checking | online | offline
+  const [cctvGuideOpen, setCctvGuideOpen] = useState(false);
+  const [cctvGuideDismissed, setCctvGuideDismissed] = useState(() => {
+    try { return window.sessionStorage?.getItem("jamsa_cctv_guide_dismissed") === "1"; }
+    catch (e) { return false; }
+  });
+
+  // CCTV 서버 헬스체크 (5초마다 한 번)
+  useEffect(() => {
+    let cancelled = false;
+    const checkServer = async () => {
+      const url = (typeof window !== "undefined" ? (window.BACKEND_URL || window.localStorage?.getItem("jamsa_cctv_snap_server") || "http://localhost:5555") : "http://localhost:5555");
+      try {
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 3000);
+        const res = await fetch(url.replace(/\/+$/, "") + "/api/health", { signal: ctrl.signal });
+        clearTimeout(tid);
+        if (cancelled) return;
+        if (res.ok) {
+          setCctvServerStatus({ status: "online", checkedAt: Date.now() });
+        } else {
+          setCctvServerStatus({ status: "offline", checkedAt: Date.now() });
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setCctvServerStatus({ status: "offline", checkedAt: Date.now() });
+      }
+    };
+    checkServer();
+    const tid = setInterval(checkServer, 15000);
+    return () => { cancelled = true; clearInterval(tid); };
+  }, []);
+
+  // 서버 미가동 감지 시 자동으로 가이드 모달 띄우기 (한 번만, 세션 동안)
+  useEffect(() => {
+    if (cctvServerStatus.status === "offline" && !cctvGuideDismissed && cctvServerStatus.checkedAt) {
+      // 첫 체크 후 3초 뒤에만 모달 띄움 (사용자 화면 적응 후)
+      const tid = setTimeout(() => setCctvGuideOpen(true), 3000);
+      return () => clearTimeout(tid);
+    }
+  }, [cctvServerStatus.status, cctvServerStatus.checkedAt]);
+
   // CCTV 편집 모드 (드래그로 매핑 변경)
   const [cctvEditMode, setCctvEditMode] = useState(false);
   // CCTV 미니창 위치 오프셋 (구역별 어느 위치에 그릴지)
@@ -15091,6 +15134,113 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         <HomeNaverApiKeyModal currentKey={naverClientId}
           onSave={(id) => { saveNaverClientId(id); setShowApiKeyModal(false); setNaverLoadError(null); }}
           onClose={() => setShowApiKeyModal(false)} />
+      )}
+
+      {/* ─── CCTV 서버 상태 배지 (우하단) ─── */}
+      <div onClick={() => setCctvGuideOpen(true)}
+        title="클릭하면 자세한 가이드"
+        style={{ position: "fixed", bottom: 12, right: 12, zIndex: 10070,
+          padding: "6px 12px", borderRadius: 999, fontSize: 11, fontWeight: 700, cursor: "pointer",
+          display: "flex", alignItems: "center", gap: 6,
+          background: cctvServerStatus.status === "online" ? "rgba(16,185,129,0.95)" :
+                     cctvServerStatus.status === "offline" ? "rgba(220,38,38,0.95)" : "rgba(100,116,139,0.95)",
+          color: "#fff", boxShadow: "0 4px 12px rgba(0,0,0,0.2)" }}>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#fff",
+          animation: cctvServerStatus.status === "online" ? "naverPulse 2s infinite" : "none" }} />
+        CCTV 서버 {cctvServerStatus.status === "online" ? "✓ 가동 중" : cctvServerStatus.status === "offline" ? "✗ 미가동" : "확인 중..."}
+      </div>
+
+      {/* ─── CCTV 서버 미가동 가이드 모달 ─── */}
+      {cctvGuideOpen && (
+        <div onClick={() => setCctvGuideOpen(false)}
+          style={{ position: "fixed", inset: 0, zIndex: 10090, background: "rgba(0,0,0,0.6)",
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: "#fff", borderRadius: 14, width: 560, maxWidth: "95vw", maxHeight: "85vh",
+              overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+            {/* 헤더 */}
+            <div style={{ padding: "16px 20px", background: cctvServerStatus.status === "online" ? "linear-gradient(135deg,#10b981,#059669)" : "linear-gradient(135deg,#f59e0b,#dc2626)", color: "#fff" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ fontSize: 18, fontWeight: 900 }}>
+                  {cctvServerStatus.status === "online" ? "✅ CCTV 서버 정상 가동 중" : "⚠️ CCTV 서버 미가동"}
+                </div>
+                <button onClick={() => setCctvGuideOpen(false)}
+                  style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", fontSize: 20, cursor: "pointer", lineHeight: 1, padding: "0 8px", borderRadius: 4 }}>×</button>
+              </div>
+              <div style={{ fontSize: 12, marginTop: 4, opacity: 0.95 }}>
+                박물관 PC에서 CCTV 서버(cctv.py / 5555 포트)가 가동되어야 영상이 표시됩니다
+              </div>
+            </div>
+
+            {/* 본문 */}
+            <div style={{ padding: 20 }}>
+              {cctvServerStatus.status === "online" ? (
+                <div style={{ padding: 14, background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 8, fontSize: 13, lineHeight: 1.6 }}>
+                  CCTV 서버가 정상 가동 중입니다. 핀 옆에 라이브 영상이 표시되고 있습니다.
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 13, lineHeight: 1.7, color: "#0f172a", marginBottom: 16 }}>
+                    <strong>왜 자동으로 안 켜지나요?</strong><br />
+                    Vercel에 배포된 웹사이트는 박물관 PC의 프로그램을 원격으로 켤 수 없습니다.
+                    박물관 PC에서 직접 실행해야 합니다.<br /><br />
+                    <strong>한 번만 자동 시작 등록하면 PC 켜질 때마다 자동 실행됩니다 ↓</strong>
+                  </div>
+
+                  {/* 방법 1: 자동 시작 등록 */}
+                  <div style={{ padding: 14, background: "#fef3c7", border: "2px solid #fbbf24", borderRadius: 8, marginBottom: 12 }}>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: "#78350f", marginBottom: 8 }}>
+                      🔧 방법 1: 자동 시작 등록 (권장 · 한 번만)
+                    </div>
+                    <div style={{ fontSize: 12, lineHeight: 1.7, color: "#78350f" }}>
+                      박물관 PC에서:<br />
+                      1. <strong>Win+R</strong> 키 → <code style={{ background: "#fff", padding: "1px 6px", borderRadius: 3 }}>shell:startup</code> 입력 → Enter<br />
+                      2. 시작 프로그램 폴더가 열림<br />
+                      3. 다운로드 받은 <strong><code style={{ background: "#fff", padding: "1px 6px", borderRadius: 3 }}>jamsa-cctv-autostart.bat</code></strong>를 그 폴더에 복사<br />
+                      4. 다음에 PC 켜질 때마다 <strong>자동으로 CCTV 서버 + Cloudflare Tunnel 가동</strong>
+                    </div>
+                  </div>
+
+                  {/* 방법 2: 지금 바로 켜기 */}
+                  <div style={{ padding: 14, background: "#dbeafe", border: "2px solid #60a5fa", borderRadius: 8, marginBottom: 12 }}>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: "#1e3a8a", marginBottom: 8 }}>
+                      ⚡ 방법 2: 지금 바로 켜기
+                    </div>
+                    <div style={{ fontSize: 12, lineHeight: 1.7, color: "#1e3a8a" }}>
+                      박물관 PC에서 <strong><code style={{ background: "#fff", padding: "1px 6px", borderRadius: 3 }}>jamsa-cctv-start.bat</code></strong> 더블클릭<br />
+                      → 검은 창이 뜨면서 서버 가동<br />
+                      → 5-10초 후 이 화면 새로고침 (Ctrl+Shift+R)
+                    </div>
+                  </div>
+
+                  {/* 진단 정보 */}
+                  <div style={{ padding: 12, background: "#f1f5f9", borderRadius: 8, fontSize: 11, color: "#475569" }}>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>🔍 진단 정보</div>
+                    <div>• 마지막 확인: {cctvServerStatus.checkedAt ? new Date(cctvServerStatus.checkedAt).toLocaleTimeString() : "-"}</div>
+                    <div>• 백엔드 URL: <code style={{ background: "#e2e8f0", padding: "1px 4px", borderRadius: 3 }}>{(typeof window !== "undefined" ? (window.BACKEND_URL || "http://localhost:5555") : "http://localhost:5555")}</code></div>
+                    <div>• 매핑된 채널: {Object.values(cctvMap || {}).reduce((s, a) => s + (Array.isArray(a) ? a.length : 0), 0)}개</div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* 푸터 */}
+            <div style={{ padding: "12px 20px", background: "#fafafa", borderTop: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <button onClick={() => {
+                setCctvGuideDismissed(true);
+                try { window.sessionStorage?.setItem("jamsa_cctv_guide_dismissed", "1"); } catch (e) {}
+                setCctvGuideOpen(false);
+              }}
+                style={{ padding: "6px 12px", background: "transparent", border: "none", color: "#64748b", fontSize: 11, cursor: "pointer" }}>
+                이번 세션 동안 다시 보지 않기
+              </button>
+              <button onClick={() => setCctvGuideOpen(false)}
+                style={{ padding: "8px 18px", background: "#0f172a", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                확인
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ─── Edit Mode Side Panel ─── */}
