@@ -14412,6 +14412,39 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   // CCTV 스냅샷 데이터 (스팟 옆 미니창 표시용)
   const [cctvSnapshotData, setCctvSnapshotData] = useState({ snapshots: {}, analyses: {}, chToZone: {}, enabled: true });
 
+  // CCTV 편집 모드 (드래그로 매핑 변경)
+  const [cctvEditMode, setCctvEditMode] = useState(false);
+  // CCTV 미니창 위치 오프셋 (구역별 어느 위치에 그릴지)
+  const [cctvOffsets, setCctvOffsets] = useState(() => {
+    try {
+      return JSON.parse(window.localStorage?.getItem("jamsa_cctv_offsets") || "{}");
+    } catch (e) { return {}; }
+  });
+  const saveCctvOffset = (ch, dx, dy) => {
+    setCctvOffsets(prev => {
+      const next = { ...prev, [ch]: { dx, dy } };
+      try { window.localStorage?.setItem("jamsa_cctv_offsets", JSON.stringify(next)); } catch (e) {}
+      return next;
+    });
+  };
+  // 매핑 변경 (구역 변경 또는 해제)
+  const moveChannelToZone = (ch, targetZoneId) => {
+    setCctvMap(prev => {
+      const next = {};
+      // 모든 구역에서 해당 채널 제거
+      Object.entries(prev).forEach(([zid, chs]) => {
+        next[zid] = (chs || []).filter(c => c !== ch);
+      });
+      // 타깃 구역에 추가 (null이면 해제만)
+      if (targetZoneId) {
+        if (!next[targetZoneId]) next[targetZoneId] = [];
+        next[targetZoneId].push(ch);
+      }
+      try { window.localStorage?.setItem("jamsa_cctv_zone_map", JSON.stringify(next)); } catch (e) {}
+      return next;
+    });
+  };
+
   // Persistence helpers
   const saveCustomZones = (newZones) => {
     setCustomZones(newZones);
@@ -14860,6 +14893,13 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                 boxShadow: editMode ? "0 0 0 3px rgba(220,38,38,0.2)" : "none" }}>
               {editMode ? "✕ 편집 종료" : "✏️ 스팟 편집"}
             </button>
+            <button onClick={() => { setCctvEditMode(!cctvEditMode); }} title="CCTV 매핑/위치 편집 — 박스 드래그로 구역 변경"
+              style={{ padding: "6px 12px", borderRadius: 6, border: "none",
+                background: cctvEditMode ? "linear-gradient(135deg,#f59e0b,#dc2626)" : "linear-gradient(135deg,#0891b2,#7c3aed)",
+                color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 800,
+                boxShadow: cctvEditMode ? "0 0 0 3px rgba(245,158,11,0.3)" : "none" }}>
+              {cctvEditMode ? "✓ CCTV 편집 종료" : "📹 CCTV 편집"}
+            </button>
           </>
         )}
 
@@ -14899,7 +14939,9 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
             <OsmFallbackMap zoneStatus={filteredStatus} onSelectZone={setSelectedZone}
               onOpenApiKey={() => setShowApiKeyModal(true)} hasError={!!naverLoadError} errorMsg={naverLoadError}
               bgMode={bgMode} onChangeBgMode={changeBgMode}
-              cctvSnapshotData={cctvSnapshotData} />
+              cctvSnapshotData={cctvSnapshotData}
+              cctvEditMode={cctvEditMode}
+              onMoveCctv={moveChannelToZone} />
           )}
 
           {/* CCTV 라이브 오버레이 — 모든 활성 채널 라이브뷰 + Claude AI 위험 감지 */}
@@ -14957,6 +14999,63 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
               }
             }}
           />
+
+          {/* CCTV 편집 모드 — 가이드 + 미할당 채널 */}
+          {cctvEditMode && (() => {
+            const _allChs = Object.values(cctvMap || {}).flatMap(arr => arr || []);
+            const _zoneOrder = allZones.filter(z => !zoneCustomizations[z.id]?._deleted);
+            // 사용 가능한 모든 채널 (1-44)
+            const _usedChs = new Set(_allChs);
+            const _allPossible = [];
+            for (let i = 1; i <= 44; i++) _allPossible.push(i);
+            const _unassigned = _allPossible.filter(ch => !_usedChs.has(ch));
+            return (
+              <>
+                <div style={{ position: "absolute", top: 60, left: "50%", transform: "translateX(-50%)", zIndex: 700, padding: "10px 16px", background: "linear-gradient(135deg,rgba(245,158,11,0.97),rgba(220,38,38,0.97))", color: "#fff", borderRadius: 8, fontSize: 11, fontWeight: 700, boxShadow: "0 4px 16px rgba(0,0,0,0.3)", display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 14 }}>📹</span>
+                  <span>CCTV 편집 모드</span>
+                  <span style={{ fontWeight: 400, fontSize: 10, opacity: 0.95 }}>
+                    · CCTV 박스를 다른 구역 핀에 드래그
+                    · 우클릭으로 매핑 해제
+                    · 자동 저장
+                  </span>
+                </div>
+
+                {/* 미할당 채널 패널 (우측 하단) */}
+                <div style={{ position: "absolute", bottom: 12, right: 12, background: "rgba(15,23,42,0.95)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 8, padding: "10px 12px", maxWidth: 320, maxHeight: 200, overflow: "auto", zIndex: 700, color: "#fff", fontSize: 11 }}>
+                  <div style={{ fontWeight: 800, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span>📦 미할당 채널 ({_unassigned.length})</span>
+                    <button onClick={() => {
+                      if (typeof CCTV_AUTO_MAP !== "undefined") {
+                        setCctvMap({ ...CCTV_AUTO_MAP });
+                        try { window.localStorage.setItem("jamsa_cctv_zone_map", JSON.stringify(CCTV_AUTO_MAP)); } catch (e) {}
+                      }
+                    }} style={{ padding: "3px 8px", background: "rgba(255,255,255,0.15)", color: "#fff", border: "none", borderRadius: 4, fontSize: 9, fontWeight: 700, cursor: "pointer" }}>
+                      ↻ 자동 매핑 복구
+                    </button>
+                  </div>
+                  {_unassigned.length === 0 ? (
+                    <div style={{ fontSize: 10, opacity: 0.7, textAlign: "center", padding: 8 }}>모든 채널이 매핑됨</div>
+                  ) : (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                      {_unassigned.map(ch => (
+                        <div key={ch}
+                          draggable
+                          onDragStart={(e) => {
+                            e.dataTransfer.effectAllowed = "move";
+                            e.dataTransfer.setData("text/cctv-channel", String(ch));
+                          }}
+                          style={{ padding: "4px 8px", background: "rgba(255,255,255,0.1)", border: "1px dashed rgba(255,255,255,0.3)", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "grab", userSelect: "none" }}
+                          title="드래그해서 구역 핀에 놓으세요">
+                          📷 CH{ch}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            );
+          })()}
 
           {/* 지도 우하단 범례 */}
           <div style={{ position: "absolute", bottom: 12, left: 12, background: "rgba(255,255,255,0.95)", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", fontSize: 10, boxShadow: "0 4px 12px rgba(0,0,0,0.1)", zIndex: 10 }}>
@@ -15245,7 +15344,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
 }
 
 /* ─── OSM FALLBACK MAP (네이버 API 키 없거나 오류 시) ─── */
-function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, errorMsg, bgMode = "satellite", onChangeBgMode, cctvSnapshotData = null }) {
+function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, errorMsg, bgMode = "satellite", onChangeBgMode, cctvSnapshotData = null, cctvEditMode = false, onMoveCctv = null }) {
   // 박물관 영역 경계 (한국잠사박물관 청주 - 정확한 좌표)
   const LAT_MIN = 36.6378, LAT_MAX = 36.6395, LNG_MIN = 127.4880, LNG_MAX = 127.4905;
   const LAT_CENTER = (LAT_MIN + LAT_MAX) / 2;
@@ -15418,22 +15517,30 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
       }
 
       // CCTV 미니창 HTML (있으면 핀 오른쪽에)
+      // 편집 모드면 노란 점선 + 드래그 가능 표시
+      const editBorder = cctvEditMode ? "2px dashed #fbbf24" : `2px solid ${cctvBorderColor}`;
+      const editStyle = cctvEditMode ? "outline:1px solid #fbbf24;outline-offset:2px;" : "";
+      const cctvDraggableAttr = (cctvEditMode && firstCh) ? `data-cctv-ch="${firstCh}" draggable="true"` : '';
+
       const cctvHtml = showCctvMini ? `
-        <div class="jamsa-cctv-mini" style="position:absolute;left:42px;top:-6px;width:88px;height:60px;border-radius:6px;overflow:hidden;border:2px solid ${cctvBorderColor};${cctvAnimation}box-shadow:0 4px 12px rgba(0,0,0,0.35);background:#0f172a;cursor:pointer;pointer-events:auto;">
-          <img src="${snap.url}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none'"/>
-          <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.6),transparent);padding:2px 4px;font-size:8px;color:#fff;font-weight:700;">CH${firstCh}${channels.length > 1 ? ` +${channels.length-1}` : ''}</div>
+        <div class="jamsa-cctv-mini" ${cctvDraggableAttr} style="position:absolute;left:42px;top:-6px;width:88px;height:60px;border-radius:6px;overflow:hidden;border:${editBorder};${cctvAnimation}${editStyle}box-shadow:0 4px 12px rgba(0,0,0,0.35);background:#0f172a;cursor:${cctvEditMode ? 'move' : 'pointer'};pointer-events:auto;">
+          <img src="${snap.url}" style="width:100%;height:100%;object-fit:cover;${cctvEditMode ? 'opacity:0.7;' : ''}" onerror="this.style.display='none'"/>
+          <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.6),transparent);padding:2px 4px;font-size:8px;color:#fff;font-weight:700;">CH${firstCh}${channels.length > 1 ? ` +${channels.length-1}` : ''}${cctvEditMode ? ' ↔' : ''}</div>
           ${chAna?.level === "DANGER" || chAna?.level === "WARNING" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:${chAna.level === "DANGER" ? "rgba(220,38,38,0.95)" : "rgba(245,158,11,0.95)"};padding:1px 4px;font-size:8px;color:#fff;font-weight:800;">${chAna.level === "DANGER" ? "🚨 위험" : "⚠️ 주의"} ${chAna.score || ""}%</div>` : ''}
           <div style="position:absolute;top:0;right:0;width:6px;height:6px;background:#22c55e;border-radius:50%;margin:3px;box-shadow:0 0 4px #22c55e;animation:cctvLiveBlink 1.5s infinite;"></div>
         </div>
       ` : (cctvEnabled && firstCh ? `
-        <div style="position:absolute;left:42px;top:-6px;width:88px;height:60px;border-radius:6px;overflow:hidden;border:2px dashed rgba(255,255,255,0.5);background:rgba(15,23,42,0.7);display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);">
+        <div class="jamsa-cctv-mini" ${cctvDraggableAttr} style="position:absolute;left:42px;top:-6px;width:88px;height:60px;border-radius:6px;overflow:hidden;border:${editBorder};background:rgba(15,23,42,0.7);display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);${editStyle}cursor:${cctvEditMode ? 'move' : 'default'};pointer-events:auto;">
           <div style="font-size:18px;">📷</div>
-          <div style="font-size:8px;font-weight:700;margin-top:2px;">CH${firstCh}</div>
+          <div style="font-size:8px;font-weight:700;margin-top:2px;">CH${firstCh}${cctvEditMode ? ' ↔' : ''}</div>
         </div>
       ` : '');
 
+      // 핀 자체에 데이터 속성 (드롭 타깃)
+      const zoneDataAttr = cctvEditMode ? `data-zone-id="${z.id}"` : '';
+
       const html = `
-        <div style="position:relative;cursor:pointer;${isPulse ? 'animation:homePinPulse 1.5s infinite;' : ''}">
+        <div ${zoneDataAttr} class="jamsa-zone-pin" style="position:relative;cursor:pointer;${isPulse ? 'animation:homePinPulse 1.5s infinite;' : ''}${cctvEditMode ? 'outline:2px dashed rgba(251,191,36,0.5);outline-offset:4px;border-radius:50%;' : ''}">
           <div style="background:${z.color};border:3px solid #fff;border-radius:50% 50% 50% 0;width:36px;height:36px;transform:rotate(-45deg);box-shadow:0 4px 10px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;">
             <div style="transform:rotate(45deg);font-size:16px;">${z.icon}</div>
           </div>
@@ -15458,7 +15565,91 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
         .on("click", () => onSelectZone(s));
       markersRef.current.push(marker);
     });
-  }, [zoneStatus, leafletLoaded, cctvSnapshotData]);
+  }, [zoneStatus, leafletLoaded, cctvSnapshotData, cctvEditMode]);
+
+  // CCTV 편집 모드 - 드래그앤드롭 핸들러
+  React.useEffect(() => {
+    if (!cctvEditMode || !leafletLoaded || !leafletMapRef.current) return;
+    const mapEl = mapContainerRef.current;
+    if (!mapEl) return;
+
+    let dragChannel = null;
+
+    const onDragStart = (e) => {
+      const target = e.target.closest("[data-cctv-ch]");
+      if (!target) return;
+      dragChannel = parseInt(target.dataset.cctvCh, 10);
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/cctv-channel", String(dragChannel));
+      }
+      target.style.opacity = "0.4";
+    };
+
+    const onDragEnd = (e) => {
+      const target = e.target.closest("[data-cctv-ch]");
+      if (target) target.style.opacity = "1";
+      dragChannel = null;
+    };
+
+    const onDragOver = (e) => {
+      const target = e.target.closest("[data-zone-id]");
+      if (target) {
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+        target.style.outlineColor = "rgba(34,197,94,0.9)";
+        target.style.outlineWidth = "3px";
+      }
+    };
+
+    const onDragLeave = (e) => {
+      const target = e.target.closest("[data-zone-id]");
+      if (target) {
+        target.style.outlineColor = "rgba(251,191,36,0.5)";
+        target.style.outlineWidth = "2px";
+      }
+    };
+
+    const onDrop = (e) => {
+      e.preventDefault();
+      const target = e.target.closest("[data-zone-id]");
+      if (!target) return;
+      target.style.outlineColor = "rgba(251,191,36,0.5)";
+      target.style.outlineWidth = "2px";
+      const zoneId = target.dataset.zoneId;
+      const chStr = e.dataTransfer?.getData("text/cctv-channel");
+      const ch = parseInt(chStr, 10);
+      if (zoneId && ch && onMoveCctv) {
+        onMoveCctv(ch, zoneId);
+      }
+    };
+
+    const onContextMenu = (e) => {
+      const target = e.target.closest("[data-cctv-ch]");
+      if (!target) return;
+      e.preventDefault();
+      const ch = parseInt(target.dataset.cctvCh, 10);
+      if (onMoveCctv && confirm(`CH${ch} 매핑을 해제하시겠어요?`)) {
+        onMoveCctv(ch, null);
+      }
+    };
+
+    mapEl.addEventListener("dragstart", onDragStart);
+    mapEl.addEventListener("dragend", onDragEnd);
+    mapEl.addEventListener("dragover", onDragOver);
+    mapEl.addEventListener("dragleave", onDragLeave);
+    mapEl.addEventListener("drop", onDrop);
+    mapEl.addEventListener("contextmenu", onContextMenu);
+
+    return () => {
+      mapEl.removeEventListener("dragstart", onDragStart);
+      mapEl.removeEventListener("dragend", onDragEnd);
+      mapEl.removeEventListener("dragover", onDragOver);
+      mapEl.removeEventListener("dragleave", onDragLeave);
+      mapEl.removeEventListener("drop", onDrop);
+      mapEl.removeEventListener("contextmenu", onContextMenu);
+    };
+  }, [cctvEditMode, leafletLoaded, onMoveCctv]);
 
   return (
     <div style={{ position: "absolute", inset: 0, background: "#1e293b" }}>
