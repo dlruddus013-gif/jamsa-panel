@@ -14211,6 +14211,16 @@ function UnifiedLogin({ users, onLogin }){
    All modules (facility/inventory/safety/worklog) converge here.
    Each zone spot shows aggregate status at a glance.
    ══════════════════════════════════════════════════════════════ */
+function StatCard({ label, value, unit = "", trend = "", color = "#0f172a" }) {
+  return (
+    <div style={{ background: "#fff", borderRadius: 8, padding: "12px 14px", border: "1px solid #e5e7eb" }}>
+      <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 900, color, margin: "4px 0", lineHeight: 1.1 }}>{value}{unit && <span style={{ fontSize: 14, marginLeft: 2 }}>{unit}</span>}</div>
+      {trend && <div style={{ fontSize: 10, color: "#10b981", fontWeight: 600 }}>{trend}</div>}
+    </div>
+  );
+}
+
 function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], auditLog = [], onNavigate, onAddFacAction }) {
   const [selectedZone, setSelectedZone] = useState(null);
   const [filterMode, setFilterMode] = useState("all"); // all | urgent | stock | facility
@@ -14663,6 +14673,151 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
     try { return window.localStorage?.getItem("jamsa_crowd_analysis") === "1"; }
     catch (e) { return false; }
   });
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 운영 통계 (탭별 차트용)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [opStats, setOpStats] = useState(null); // operation-stats API 결과
+  const [statsTab, setStatsTab] = useState("realtime"); // realtime | flow | stats
+  const [statsRange, setStatsRange] = useState("today"); // today | week | month
+  const [showStatsModal, setShowStatsModal] = useState(false);
+
+  // 운영 통계 폴링 (30초마다)
+  useEffect(() => {
+    if (!showStatsModal) return; // 모달 열려있을 때만 폴링
+    let cancelled = false;
+    const fetchStats = async () => {
+      try {
+        const res = await fetch(`/api/operation-stats?range=${statsRange}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        setOpStats(data);
+      } catch (e) { /* 무시 */ }
+    };
+    fetchStats();
+    const tid = setInterval(fetchStats, 30000);
+    return () => { cancelled = true; clearInterval(tid); };
+  }, [showStatsModal, statsRange]);
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 자동 알림 시스템 (과밀/위험 자동 감지)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [autoAlertOn, setAutoAlertOn] = useState(() => {
+    try { return window.localStorage?.getItem("jamsa_auto_alert") === "1"; } catch (e) { return false; }
+  });
+  const [recentAlerts, setRecentAlerts] = useState([]); // [{id, type, message, severity, ageSec}]
+  const [alertToast, setAlertToast] = useState(null); // 화면 토스트 알림
+  const lastTriggerRef = useRef({}); // { zoneId: timestamp } 중복 방지
+
+  // 알림 이력 폴링 (60초마다)
+  useEffect(() => {
+    let cancelled = false;
+    const fetchAlerts = async () => {
+      try {
+        const res = await fetch("/api/auto-alerts?range=today&limit=10", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled || !data?.ok) return;
+        setRecentAlerts(data.alerts || []);
+      } catch (e) { /* 무시 */ }
+    };
+    fetchAlerts();
+    const tid = setInterval(fetchAlerts, 60000);
+    return () => { cancelled = true; clearInterval(tid); };
+  }, []);
+
+  // 과밀 자동 감지 (zoneCrowdStats 변할 때 25명+ 발견 시)
+  useEffect(() => {
+    if (!autoAlertOn) return;
+    const now = Date.now();
+    Object.entries(zoneCrowdStats || {}).forEach(([zoneId, stat]) => {
+      if (!stat) return;
+      const peopleCount = stat.people_count || 0;
+      const crowdLevel = stat.crowd_level;
+      // 25명+ 또는 VERY_HIGH 시 알림
+      if (peopleCount >= 25 || crowdLevel === "VERY_HIGH") {
+        // 같은 구역 5분 내 중복 방지
+        const lastTriggered = lastTriggerRef.current[zoneId] || 0;
+        if (now - lastTriggered < 5 * 60 * 1000) return;
+        lastTriggerRef.current[zoneId] = now;
+        // 자동 알림 발송
+        const zone = baseZones.find(z => z.id === zoneId);
+        const zoneName = zone?.name || zoneId;
+        fetch("/api/auto-alerts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "crowd",
+            zoneId, zoneName,
+            severity: peopleCount >= 30 ? "DANGER" : "WARNING",
+            message: `${zoneName} 인파 ${peopleCount}명 - 분산 안내 권장`,
+            peopleCount,
+            autoCall: false, // SMS는 명시적 트리거만
+          }),
+        }).then(() => {
+          setAlertToast({
+            type: "crowd", zoneName,
+            message: `🚨 ${zoneName} 과밀 감지 (${peopleCount}명)`,
+            severity: peopleCount >= 30 ? "DANGER" : "WARNING",
+          });
+          setTimeout(() => setAlertToast(null), 8000);
+        }).catch(() => {});
+      }
+    });
+  }, [zoneCrowdStats, autoAlertOn]);
+
+  // CCTV AI DANGER 자동 감지
+  useEffect(() => {
+    if (!autoAlertOn) return;
+    const analyses = cctvSnapshotData?.analyses || {};
+    const chToZone = cctvSnapshotData?.chToZone || {};
+    const now = Date.now();
+    Object.entries(analyses).forEach(([ch, ana]) => {
+      if (ana?.level === "DANGER" || (ana?.score && ana.score >= 80)) {
+        const zoneId = chToZone[ch];
+        if (!zoneId) return;
+        const lastTriggered = lastTriggerRef.current[`danger-${zoneId}`] || 0;
+        if (now - lastTriggered < 3 * 60 * 1000) return; // 3분 중복 방지
+        lastTriggerRef.current[`danger-${zoneId}`] = now;
+        const zone = baseZones.find(z => z.id === zoneId);
+        const zoneName = zone?.name || zoneId;
+        fetch("/api/auto-alerts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: ana.category || "danger",
+            zoneId, zoneName,
+            severity: "DANGER",
+            channelCh: parseInt(ch, 10),
+            message: `${zoneName} ${ana.summary || '위험 감지'}`,
+            autoCall: false,
+          }),
+        }).then(() => {
+          setAlertToast({
+            type: "danger", zoneName,
+            message: `🚨 ${zoneName} ${ana.summary || '위험 감지'}`,
+            severity: "DANGER",
+          });
+          setTimeout(() => setAlertToast(null), 10000);
+        }).catch(() => {});
+      }
+    });
+  }, [cctvSnapshotData, autoAlertOn]);
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 매출 예측 + 직원 KPI
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [forecastKpi, setForecastKpi] = useState(null);
+  useEffect(() => {
+    if (!showStatsModal || (statsTab !== "forecast" && statsTab !== "kpi")) return;
+    let cancelled = false;
+    fetch("/api/forecast-kpi", { cache: "no-store" })
+      .then(res => res.json())
+      .then(data => { if (!cancelled) setForecastKpi(data); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [showStatsModal, statsTab]);
 
   // 인파 통계 폴링 (15초마다)
   useEffect(() => {
@@ -15631,12 +15786,421 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                 🖨️ 구역 QR
               </button>
             </div>
+            {/* 운영 통계 버튼 */}
+            <div style={{ marginTop: 4 }}>
+              <button onClick={() => setShowStatsModal(true)}
+                title="동선 분석 + 운영 통계 + AI 권고"
+                style={{
+                  width: "100%", padding: "5px 8px", fontSize: 10, fontWeight: 800,
+                  border: "none",
+                  background: "linear-gradient(135deg,#7c3aed,#2563eb)",
+                  color: "#fff", borderRadius: 5, cursor: "pointer",
+                  boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
+                }}>
+                📊 운영 통계 + 동선 분석
+              </button>
+            </div>
+            {/* 자동 알림 토글 */}
+            <div style={{ marginTop: 4 }}>
+              <button onClick={() => {
+                const next = !autoAlertOn;
+                setAutoAlertOn(next);
+                try { window.localStorage.setItem("jamsa_auto_alert", next ? "1" : "0"); } catch(e) {}
+              }}
+                title="과밀(25명+) / 위험(CCTV AI DANGER) 자동 감지 + 알림 발송"
+                style={{
+                  width: "100%", padding: "5px 8px", fontSize: 10, fontWeight: 800,
+                  border: `1px solid ${autoAlertOn ? "#dc2626" : "#cbd5e1"}`,
+                  background: autoAlertOn ? "linear-gradient(135deg,#dc2626,#b91c1c)" : "#fff",
+                  color: autoAlertOn ? "#fff" : "#64748b",
+                  borderRadius: 5, cursor: "pointer",
+                }}>
+                {autoAlertOn ? "🚨 자동 알림 활성" : "🔔 자동 알림 OFF"}
+                {autoAlertOn && recentAlerts.length > 0 ? ` (${recentAlerts.length})` : ""}
+              </button>
+            </div>
             {isVisitorMode && (
               <div style={{ marginTop: 6, padding: "4px 6px", background: "#fef3c7", border: "1px solid #fbbf24", borderRadius: 4, fontSize: 9, color: "#78350f", fontWeight: 700, textAlign: "center" }}>
                 👨‍👩‍👧 관람객 모드
               </div>
             )}
           </div>
+
+          {/* ━━━ 자동 알림 토스트 (우상단) ━━━ */}
+          {alertToast && (
+            <div onClick={() => setAlertToast(null)}
+              style={{
+                position: "fixed", top: 80, right: 20, zIndex: 10090,
+                padding: "12px 18px", borderRadius: 10, maxWidth: 360,
+                background: alertToast.severity === "DANGER"
+                  ? "linear-gradient(135deg,#dc2626,#991b1b)"
+                  : "linear-gradient(135deg,#f59e0b,#dc2626)",
+                color: "#fff", fontWeight: 700, fontSize: 12,
+                boxShadow: "0 10px 30px rgba(0,0,0,0.4)",
+                cursor: "pointer", animation: "slideInRight 0.3s ease-out",
+              }}>
+              <div style={{ fontSize: 14, marginBottom: 4 }}>
+                {alertToast.severity === "DANGER" ? "🚨 위험 감지" : "⚠️ 과밀 감지"}
+              </div>
+              <div style={{ fontSize: 11, opacity: 0.95, fontWeight: 500 }}>
+                {alertToast.message}
+              </div>
+              <div style={{ fontSize: 9, opacity: 0.8, marginTop: 4 }}>
+                클릭하여 닫기 · 자동 알림 시스템 작동 중
+              </div>
+            </div>
+          )}
+          <style>{`
+            @keyframes slideInRight {
+              from { transform: translateX(20px); opacity: 0; }
+              to { transform: translateX(0); opacity: 1; }
+            }
+          `}</style>
+
+          {/* ━━━ 운영 통계 + 동선 분석 모달 ━━━ */}
+          {showStatsModal && (
+            <div onClick={() => setShowStatsModal(false)}
+              style={{ position: "fixed", inset: 0, zIndex: 10100, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, backdropFilter: "blur(4px)" }}>
+              <div onClick={e => e.stopPropagation()}
+                style={{ background: "#fff", borderRadius: 14, width: 1100, maxWidth: "97vw", maxHeight: "95vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+                {/* 헤더 */}
+                <div style={{ padding: "16px 20px", background: "linear-gradient(135deg,#7c3aed,#2563eb)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
+                  <div>
+                    <div style={{ fontSize: 18, fontWeight: 900 }}>📊 박물관 운영 통계 + 동선 분석</div>
+                    <div style={{ fontSize: 11, opacity: 0.95, marginTop: 2 }}>
+                      {opStats?.generatedAt ? `최종 갱신: ${new Date(opStats.generatedAt).toLocaleTimeString("ko-KR")}` : "데이터 로딩 중..."}
+                      {opStats?.totalVisitors !== undefined ? ` · 누적 ${opStats.totalVisitors}명` : ""}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => {
+                      // 인쇄 → PDF 저장 안내
+                      window.print();
+                    }}
+                      title="현재 화면을 PDF로 인쇄/저장 (Ctrl+P → PDF 저장)"
+                      style={{ padding: "5px 10px", background: "rgba(255,255,255,0.2)", color: "#fff", border: "1px solid rgba(255,255,255,0.3)", borderRadius: 4, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                      📄 PDF
+                    </button>
+                    <select value={statsRange} onChange={e => setStatsRange(e.target.value)}
+                      style={{ padding: "5px 10px", background: "rgba(255,255,255,0.2)", color: "#fff", border: "1px solid rgba(255,255,255,0.3)", borderRadius: 4, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                      <option value="today" style={{color:"#000"}}>오늘</option>
+                      <option value="week" style={{color:"#000"}}>최근 7일</option>
+                      <option value="month" style={{color:"#000"}}>최근 30일</option>
+                    </select>
+                    <button onClick={() => setShowStatsModal(false)}
+                      style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", fontSize: 20, cursor: "pointer", padding: "0 10px", borderRadius: 4 }}>×</button>
+                  </div>
+                </div>
+
+                {/* 탭 */}
+                <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb", background: "#fafafa", flexShrink: 0, overflowX: "auto" }}>
+                  {[
+                    { k: "stats", l: "📈 핵심 지표" },
+                    { k: "flow", l: "🌊 동선 분석" },
+                    { k: "hourly", l: "⏰ 시간대별" },
+                    { k: "zones", l: "📍 구역 통계" },
+                    { k: "forecast", l: "📊 매출 예측" },
+                    { k: "kpi", l: "👥 직원 KPI" },
+                    { k: "history", l: "🚨 알림 이력" },
+                    { k: "ai", l: "🤖 AI 권고" },
+                  ].map(t => (
+                    <button key={t.k} onClick={() => setStatsTab(t.k)}
+                      style={{
+                        padding: "12px 16px", fontSize: 11, fontWeight: 700,
+                        background: statsTab === t.k ? "#fff" : "transparent",
+                        color: statsTab === t.k ? "#7c3aed" : "#64748b",
+                        border: "none", borderBottom: statsTab === t.k ? "2px solid #7c3aed" : "2px solid transparent",
+                        cursor: "pointer", whiteSpace: "nowrap",
+                      }}>{t.l}</button>
+                  ))}
+                </div>
+
+                {/* 본문 */}
+                <div style={{ flex: 1, overflow: "auto", padding: 20, background: "#f8fafc" }}>
+                  {!opStats && (
+                    <div style={{ textAlign: "center", padding: 60, color: "#94a3b8", fontSize: 13 }}>
+                      📊 데이터 로딩 중...
+                      <div style={{ fontSize: 10, marginTop: 6 }}>QR 체크인이 누적되면 데이터가 표시됩니다</div>
+                    </div>
+                  )}
+                  {opStats?.fallback && (
+                    <div style={{ padding: 14, background: "#fef3c7", border: "1px solid #fbbf24", borderRadius: 8, fontSize: 11, color: "#78350f", marginBottom: 12 }}>
+                      ⚠️ Supabase 연결 실패 - 일부 데이터가 표시되지 않을 수 있습니다
+                    </div>
+                  )}
+
+                  {/* 핵심 지표 탭 */}
+                  {statsTab === "stats" && opStats && (
+                    <div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12, marginBottom: 16 }}>
+                        <StatCard label="누적 입장객" value={opStats.totalVisitors || 0} unit="명" trend={`체크인 ${opStats.totalCheckins}건`} />
+                        <StatCard label="예상 매출" value={`₩${(opStats.estimatedRevenue || 0).toLocaleString()}`} trend="@5,000원/명" />
+                        <StatCard label="피크 시간" value={opStats.peakTimeStr || "-"} trend={opStats.peakHour > 0 ? `${opStats.peakHour}시 집중` : "-"} />
+                        <StatCard label="평균 동선" value={`${opStats.avgPathLength || 0}구역`} trend={`평균 체류 ${opStats.avgStayMinutes || 0}분`} />
+                        <StatCard label="과밀 알림" value={opStats.crowdedAlerts || 0} unit="회" trend="CCTV AI 기반" color="#dc2626" />
+                        {opStats.satisfactionScore !== null && (
+                          <StatCard label="만족도 추정" value={`${opStats.satisfactionScore}점`}
+                            trend={opStats.satisfactionScore >= 90 ? "✓ 우수" : opStats.satisfactionScore >= 70 ? "양호" : "개선 필요"}
+                            color={opStats.satisfactionScore >= 90 ? "#10b981" : opStats.satisfactionScore >= 70 ? "#f59e0b" : "#dc2626"} />
+                        )}
+                      </div>
+                      <div style={{ background: "#fff", borderRadius: 8, padding: 16, fontSize: 11, color: "#64748b", lineHeight: 1.7 }}>
+                        💡 이 데이터는 QR 체크인 + CCTV AI 인파 카운팅 기반으로 자동 계산됩니다.
+                        구역별 QR 부착이 많을수록 정확도가 높아집니다.
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 동선 분석 탭 */}
+                  {statsTab === "flow" && opStats && (
+                    <div>
+                      <div style={{ marginBottom: 16, fontWeight: 700, fontSize: 13, color: "#0f172a" }}>🌊 인기 동선 (Top 10)</div>
+                      {(opStats.topFlows || []).length === 0 ? (
+                        <div style={{ background: "#fff", borderRadius: 8, padding: 30, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+                          동선 데이터가 부족합니다.<br />
+                          관람객이 2개 이상 구역에 QR 체크인하면 표시됩니다.
+                        </div>
+                      ) : (
+                        <div style={{ background: "#fff", borderRadius: 8, padding: 14 }}>
+                          {opStats.topFlows.map((f, i) => (
+                            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: i < opStats.topFlows.length - 1 ? "1px dashed #e5e7eb" : "none" }}>
+                              <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, minWidth: 24 }}>#{i+1}</span>
+                              <span style={{ background: "#f1f5f9", padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700 }}>{f.fromName}</span>
+                              <span style={{ color: "#94a3b8" }}>→</span>
+                              <span style={{ background: "#f1f5f9", padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700 }}>{f.toName}</span>
+                              <span style={{ marginLeft: "auto", background: "#7c3aed", color: "#fff", padding: "2px 10px", borderRadius: 999, fontSize: 10, fontWeight: 800 }}>{f.count}회</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 시간대별 탭 */}
+                  {statsTab === "hourly" && opStats && (
+                    <div>
+                      <div style={{ marginBottom: 16, fontWeight: 700, fontSize: 13, color: "#0f172a" }}>⏰ 시간대별 입장객 추이 (9-18시)</div>
+                      <div style={{ background: "#fff", borderRadius: 8, padding: 20 }}>
+                        {(opStats.hourlyEntries || []).length === 0 || opStats.hourlyEntries.every(v => v === 0) ? (
+                          <div style={{ textAlign: "center", color: "#94a3b8", fontSize: 12, padding: 30 }}>
+                            데이터가 부족합니다. QR 체크인이 누적되면 표시됩니다.
+                          </div>
+                        ) : (
+                          <>
+                            <div style={{ display: "flex", gap: 4, alignItems: "end", height: 180, marginBottom: 8 }}>
+                              {opStats.hourlyEntries.map((v, i) => {
+                                const max = Math.max(...opStats.hourlyEntries, 1);
+                                const isPeak = v === max && v > 0;
+                                return (
+                                  <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                                    <div style={{ fontSize: 10, fontWeight: 700, color: isPeak ? "#dc2626" : "#64748b" }}>{v}</div>
+                                    <div style={{
+                                      width: "100%",
+                                      height: `${v / max * 150}px`,
+                                      minHeight: v > 0 ? 4 : 0,
+                                      background: isPeak ? "linear-gradient(180deg,#f59e0b,#dc2626)" : "linear-gradient(180deg,#7c3aed,#2563eb)",
+                                      borderRadius: "4px 4px 0 0",
+                                    }}></div>
+                                    <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600 }}>{9+i}시</div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 구역 통계 탭 */}
+                  {statsTab === "zones" && opStats && (
+                    <div>
+                      <div style={{ marginBottom: 16, fontWeight: 700, fontSize: 13, color: "#0f172a" }}>📍 구역별 방문 통계</div>
+                      {(opStats.zoneStats || []).length === 0 ? (
+                        <div style={{ background: "#fff", borderRadius: 8, padding: 30, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+                          QR 체크인 데이터가 누적되면 표시됩니다.
+                        </div>
+                      ) : (
+                        <div style={{ background: "#fff", borderRadius: 8, padding: 14 }}>
+                          {opStats.zoneStats.map((z, i) => (
+                            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: i < opStats.zoneStats.length - 1 ? "1px dashed #e5e7eb" : "none" }}>
+                              <div style={{ minWidth: 130, fontSize: 12, fontWeight: 700, color: "#0f172a" }}>{z.zoneName}</div>
+                              <div style={{ flex: 1, background: "#f1f5f9", height: 12, borderRadius: 6, overflow: "hidden" }}>
+                                <div style={{ width: `${z.visitRate}%`, height: "100%", background: "linear-gradient(90deg,#7c3aed,#2563eb)", transition: "width 0.5s" }}></div>
+                              </div>
+                              <div style={{ minWidth: 80, fontSize: 11, fontWeight: 700, color: "#7c3aed", textAlign: "right" }}>{z.visitRate}% ({z.uniqueVisitors}명)</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 매출 예측 탭 */}
+                  {statsTab === "forecast" && (
+                    <div>
+                      <div style={{ marginBottom: 16, fontWeight: 700, fontSize: 13, color: "#0f172a" }}>📊 매출 예측 (다음 7일)</div>
+                      {!forecastKpi && (
+                        <div style={{ background: "#fff", borderRadius: 8, padding: 30, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+                          데이터 로딩 중...
+                        </div>
+                      )}
+                      {forecastKpi?.forecast && forecastKpi.forecast.length > 0 && (
+                        <>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12, marginBottom: 16 }}>
+                            <StatCard label="다음 7일 예상 매출" value={`₩${(forecastKpi.forecastTotal || 0).toLocaleString()}`}
+                              trend={forecastKpi.forecastTrend === "up" ? "📈 증가 추세" : forecastKpi.forecastTrend === "down" ? "📉 감소 추세" : "→ 유지"}
+                              color={forecastKpi.forecastTrend === "up" ? "#10b981" : "#dc2626"} />
+                            <StatCard label="예측 신뢰도" value={forecastKpi.forecastConfidence === "high" ? "높음" : "낮음"}
+                              trend={forecastKpi.forecastConfidence === "high" ? "데이터 충분" : "데이터 부족 (7일+)"} />
+                            <StatCard label="최근 30일 누적" value={(forecastKpi.daily || []).reduce((s, d) => s + d.visitors, 0)} unit="명"
+                              trend={`총 매출 ₩${((forecastKpi.daily || []).reduce((s, d) => s + d.revenue, 0)).toLocaleString()}`} />
+                          </div>
+                          <div style={{ background: "#fff", borderRadius: 8, padding: 16 }}>
+                            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 12, color: "#0f172a" }}>다음 7일 예측 차트</div>
+                            <div style={{ display: "flex", gap: 8, alignItems: "end", height: 160 }}>
+                              {forecastKpi.forecast.map((f, i) => {
+                                const max = Math.max(...forecastKpi.forecast.map(x => x.predictedVisitors), 1);
+                                const isWeekend = f.dayOfWeek === "토" || f.dayOfWeek === "일";
+                                return (
+                                  <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                                    <div style={{ fontSize: 9, fontWeight: 800, color: isWeekend ? "#dc2626" : "#7c3aed" }}>{f.predictedVisitors}</div>
+                                    <div style={{
+                                      width: "100%", height: `${f.predictedVisitors / max * 130}px`, minHeight: 4,
+                                      background: isWeekend ? "linear-gradient(180deg,#f59e0b,#dc2626)" : "linear-gradient(180deg,#7c3aed,#2563eb)",
+                                      borderRadius: "4px 4px 0 0",
+                                    }}></div>
+                                    <div style={{ fontSize: 9, fontWeight: 700, color: isWeekend ? "#dc2626" : "#94a3b8" }}>{f.dayOfWeek}</div>
+                                    <div style={{ fontSize: 8, color: "#cbd5e1" }}>{f.day.slice(5)}</div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            <div style={{ marginTop: 12, fontSize: 10, color: "#64748b" }}>
+                              💡 최근 7일 평균 + 트렌드 분석. 주말은 1.4배 가중치 적용.
+                            </div>
+                          </div>
+                        </>
+                      )}
+                      {forecastKpi && (!forecastKpi.forecast || forecastKpi.forecast.length === 0) && (
+                        <div style={{ background: "#fff", borderRadius: 8, padding: 30, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+                          예측 데이터 부족. 최근 3일+ 데이터가 누적되면 표시됩니다.
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 직원 KPI 탭 */}
+                  {statsTab === "kpi" && (
+                    <div>
+                      <div style={{ marginBottom: 16, fontWeight: 700, fontSize: 13, color: "#0f172a" }}>👥 직원 효율 KPI (최근 30일)</div>
+                      {!forecastKpi && (
+                        <div style={{ background: "#fff", borderRadius: 8, padding: 30, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+                          데이터 로딩 중...
+                        </div>
+                      )}
+                      {forecastKpi?.overallKpi && (
+                        <>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12, marginBottom: 16 }}>
+                            <StatCard label="총 호출 응답" value={forecastKpi.overallKpi.totalCalls || 0} unit="건" trend="최근 30일" />
+                            <StatCard label="활성 직원" value={forecastKpi.overallKpi.activeStaff || 0} unit="명" trend="응답 1건+ 직원" />
+                            <StatCard label="SMS 발송 성공률" value={`${forecastKpi.overallKpi.smsSuccessRate || 0}%`} trend="Ppurio 전송 기준" />
+                            <StatCard label="평균 호출/직원" value={forecastKpi.overallKpi.avgCallsPerStaff || 0} unit="건" trend="개인별 부담" />
+                          </div>
+                          {(forecastKpi.staffKpi || []).length === 0 ? (
+                            <div style={{ background: "#fff", borderRadius: 8, padding: 30, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+                              직원 호출 데이터가 누적되면 표시됩니다
+                            </div>
+                          ) : (
+                            <div style={{ background: "#fff", borderRadius: 8, padding: 14 }}>
+                              <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr 1fr", gap: 8, padding: "8px 12px", borderBottom: "1px solid #e5e7eb", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>
+                                <div>직원</div><div>총 호출</div><div>긴급</div><div>평균 거리</div><div>SMS 성공률</div>
+                              </div>
+                              {forecastKpi.staffKpi.map((s, i) => (
+                                <div key={i} style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr 1fr", gap: 8, padding: "10px 12px", borderBottom: i < forecastKpi.staffKpi.length - 1 ? "1px dashed #e5e7eb" : "none", fontSize: 11, alignItems: "center" }}>
+                                  <div style={{ fontWeight: 700 }}>{i === 0 ? "🏆 " : ""}{s.name}</div>
+                                  <div style={{ fontWeight: 700, color: "#7c3aed" }}>{s.totalCalls}건</div>
+                                  <div style={{ color: s.urgentCalls > 0 ? "#dc2626" : "#94a3b8" }}>{s.urgentCalls}건</div>
+                                  <div style={{ color: "#64748b" }}>{s.avgDistance ? `${s.avgDistance}m` : "-"}</div>
+                                  <div style={{ fontWeight: 600, color: s.smsRate >= 90 ? "#10b981" : s.smsRate >= 70 ? "#f59e0b" : "#dc2626" }}>{s.smsRate}%</div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 알림 이력 탭 */}
+                  {statsTab === "history" && (
+                    <div>
+                      <div style={{ marginBottom: 16, fontWeight: 700, fontSize: 13, color: "#0f172a" }}>🚨 자동 알림 이력 (오늘)</div>
+                      {recentAlerts.length === 0 ? (
+                        <div style={{ background: "#fff", borderRadius: 8, padding: 30, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+                          오늘 발생한 알림이 없습니다.<br />
+                          <span style={{ fontSize: 10, marginTop: 6, display: "inline-block" }}>💡 좌상단 "🔔 자동 알림"을 활성화하세요</span>
+                        </div>
+                      ) : (
+                        <div style={{ background: "#fff", borderRadius: 8, padding: 14 }}>
+                          {recentAlerts.map((a, i) => {
+                            const severityColor = a.severity === "DANGER" ? "#dc2626" : a.severity === "WARNING" ? "#f59e0b" : "#3b82f6";
+                            const icon = a.alert_type === "fire" ? "🔥" : a.alert_type === "crowd" ? "👥" : a.alert_type === "medical" ? "🏥" : "🚨";
+                            return (
+                              <div key={i} style={{ display: "flex", gap: 10, padding: "10px 0", borderBottom: i < recentAlerts.length - 1 ? "1px dashed #e5e7eb" : "none", alignItems: "flex-start" }}>
+                                <div style={{ fontSize: 18, lineHeight: 1 }}>{icon}</div>
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontWeight: 700, fontSize: 12, color: "#0f172a" }}>
+                                    {a.zone_name || a.zone_id || '구역 미지정'}
+                                    <span style={{ marginLeft: 8, padding: "1px 6px", background: severityColor, color: "#fff", borderRadius: 4, fontSize: 9, fontWeight: 800 }}>
+                                      {a.severity}
+                                    </span>
+                                    {a.auto_called && <span style={{ marginLeft: 4, padding: "1px 6px", background: "#10b981", color: "#fff", borderRadius: 4, fontSize: 9, fontWeight: 800 }}>📞 호출됨</span>}
+                                  </div>
+                                  <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{a.message}</div>
+                                  <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 4 }}>
+                                    {new Date(a.created_at).toLocaleString("ko-KR")}
+                                    {a.people_count && ` · 인원 ${a.people_count}명`}
+                                    {a.channel_ch && ` · CCTV CH${a.channel_ch}`}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      <div style={{ marginTop: 12, padding: 12, background: "#dbeafe", border: "1px solid #93c5fd", borderRadius: 8, fontSize: 11, color: "#1e3a8a", lineHeight: 1.6 }}>
+                        💡 <strong>자동 알림 트리거:</strong>
+                        <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+                          <li>🚨 과밀 감지: 구역에 25명+ 또는 VERY_HIGH 인파</li>
+                          <li>🔥 위험 감지: CCTV AI DANGER 분석 (score 80+)</li>
+                          <li>📞 직원 호출 시 자동 SMS (Ppurio)</li>
+                        </ul>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* AI 권고 탭 */}
+                  {statsTab === "ai" && opStats && (
+                    <div>
+                      <div style={{ marginBottom: 16, fontWeight: 700, fontSize: 13, color: "#0f172a" }}>🤖 AI 운영 권고사항</div>
+                      <div style={{ display: "grid", gap: 10 }}>
+                        {(opStats.recommendations || []).map((r, i) => (
+                          <div key={i} style={{ background: "linear-gradient(135deg,rgba(124,58,237,0.08),rgba(37,99,235,0.04))", border: "1px solid rgba(124,58,237,0.2)", borderRadius: 8, padding: 14 }}>
+                            <div style={{ fontSize: 11, fontWeight: 800, color: "#7c3aed", marginBottom: 4 }}>💡 권고 #{i+1}</div>
+                            <div style={{ fontSize: 12, color: "#0f172a", lineHeight: 1.6 }}>{r}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ marginTop: 16, padding: 12, background: "#fef3c7", borderRadius: 8, fontSize: 10, color: "#78350f", lineHeight: 1.6 }}>
+                        ⚠️ 권고사항은 누적 데이터를 기반으로 자동 생성됩니다. 데이터가 적으면 정확도가 떨어질 수 있습니다.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ━━━ QR 코드 모달 (관람객 안내용) ━━━ */}
           {qrModalOpen && (() => {
