@@ -2,22 +2,47 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="format-detection" content="telephone=no">
+  <meta name="theme-color" content="#0f172a">
+  <!-- 캐시 무효화: 항상 최신 버전 받기 (모바일에서 옛 버전 캐싱 문제 방지) -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' https: data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https: blob:; connect-src 'self' https: wss:; font-src 'self' data: https:; frame-src 'self' https:;">
   <title>한국잠사박물관 통합관리 시스템</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext x='50' y='75' font-size='80' text-anchor='middle'%3E🏛️%3C/text%3E%3C/svg%3E">
   <!-- 외부 CDN preconnect — 첫 로딩 속도 향상 -->
   <link rel="preconnect" href="https://cdn.tailwindcss.com" crossorigin>
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="preconnect" href="https://unpkg.com" crossorigin>
+  <link rel="preconnect" href="https://server.arcgisonline.com" crossorigin>
   <link rel="dns-prefetch" href="https://cdn.tailwindcss.com">
   <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+  <link rel="dns-prefetch" href="https://unpkg.com">
+  <link rel="dns-prefetch" href="https://server.arcgisonline.com">
+  <link rel="dns-prefetch" href="https://tile.openstreetmap.org">
+  <!-- Leaflet 미리 로드 — 위성 지도 빨리 뜨게 -->
+  <link rel="preload" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" as="style" crossorigin>
+  <link rel="preload" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" as="script" crossorigin>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin defer></script>
   <!-- bundle preload -->
   <link rel="modulepreload" href="/app.bundle.js" crossorigin>
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { height: 100%; font-family: 'Pretendard', 'Noto Sans KR', -apple-system, sans-serif; background: #f5f5f5; overflow: hidden; }
+    html, body { height: 100%; font-family: 'Pretendard', 'Noto Sans KR', -apple-system, sans-serif; background: #f5f5f5; overflow: hidden; -webkit-tap-highlight-color: transparent; -webkit-text-size-adjust: 100%; }
+    /* 모바일 터치 최적화 */
+    button, [role="button"], input, select { touch-action: manipulation; }
+    /* iOS 입력 시 자동 줌 방지 */
+    @media (max-width: 768px) {
+      input, select, textarea { font-size: 16px !important; }
+    }
 
     #loading { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: white; z-index: 9999; }
     #loading.hidden { display: none; }
@@ -192,19 +217,46 @@
       document.addEventListener('click', e => { if (!e.target.closest('#globalSearch') && !e.target.closest('#searchResults')) results.classList.remove('active'); });
     })();
   </script>
+  <script>
+    // Service Worker가 옛 버전을 캐싱하고 있으면 자동 정리 (모바일 캐시 문제 해결)
+    (function clearOldCache() {
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(regs => {
+          regs.forEach(reg => {
+            if (!reg.active || !reg.active.scriptURL.includes('jamsa-sw')) {
+              // 우리 SW가 아니면 등록 해제 (옛 버전 잔재 제거)
+              reg.unregister().catch(() => {});
+            }
+          });
+        }).catch(() => {});
+      }
+      // CacheStorage도 정리 (구버전 vercel 캐시 잔재)
+      if ('caches' in window) {
+        caches.keys().then(names => {
+          names.forEach(name => {
+            // 모르는 캐시는 그대로 두고, 명시적으로 옛것만 삭제
+            if (name.startsWith('jamsa-old') || name.includes('workbox-precache-v1')) {
+              caches.delete(name).catch(() => {});
+            }
+          });
+        }).catch(() => {});
+      }
+    })();
+  </script>
   <script type="module" src="/app.bundle.js"></script>
   <script>
-    // React 앱 마운트 감지 — root 안에 콘텐츠가 생기면 로딩 숨김
+    // React 앱 마운트 감지 — 모바일 친화적, 다중 폴백
     (function waitForApp() {
       const startTime = Date.now();
       const root = document.getElementById('root');
       const msgEl = document.getElementById('loadingMsg');
+      const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
       const messages = [
         { at: 0,    text: '시스템 초기화 중...' },
-        { at: 2000, text: '데이터 불러오는 중... (조금만 기다려주세요)' },
-        { at: 5000, text: '거의 다 됐어요... 인터넷 속도에 따라 5-15초 소요됩니다' },
-        { at: 10000, text: '⏳ 처음 접속이시면 시간이 좀 걸릴 수 있습니다' },
-        { at: 20000, text: '⚠️ 네트워크 속도가 느린 것 같아요. 와이파이 확인해 주세요' },
+        { at: 1500, text: '데이터 불러오는 중...' },
+        { at: 4000, text: '거의 다 됐어요...' },
+        { at: 7000, text: '⏳ 잠시만 기다려주세요' },
+        { at: 10000, text: '⚠️ 강제로 화면 표시합니다' },
       ];
       let msgIdx = 0;
       const msgTimer = setInterval(() => {
@@ -216,27 +268,52 @@
         }
       }, 500);
 
-      const tryHide = () => {
-        // root에 자식 요소가 있고, 텍스트가 있으면 React 마운트 완료
-        if (root && root.children.length > 0 && root.innerText.length > 50) {
-          clearInterval(msgTimer);
-          window.__hideLoading?.();
-          return true;
+      let hidden = false;
+      const doHide = (reason) => {
+        if (hidden) return;
+        hidden = true;
+        clearInterval(msgTimer);
+        try { console.log('[loading] hide:', reason); } catch(e) {}
+        if (typeof window.__hideLoading === 'function') {
+          window.__hideLoading();
+        } else {
+          // 폴백: __hideLoading이 정의 안 됐어도 강제로 숨김
+          const el = document.getElementById('loading');
+          if (el) { el.style.opacity = '0'; setTimeout(() => el.classList.add('hidden'), 300); }
+          document.body.classList.remove('loading');
         }
-        return false;
       };
 
-      // 100ms마다 체크
-      const checkTimer = setInterval(() => {
-        if (tryHide()) clearInterval(checkTimer);
-      }, 100);
+      // 1. MutationObserver — root에 자식이 추가되면 즉시 감지 (가장 빠름)
+      if (window.MutationObserver) {
+        const mo = new MutationObserver(() => {
+          if (root && root.children.length > 0) {
+            mo.disconnect();
+            doHide('MutationObserver: root 자식 감지');
+          }
+        });
+        mo.observe(root, { childList: true });
+      }
 
-      // 30초 timeout — 그 후엔 그냥 숨김 (사용자가 답답해할 수 있음)
+      // 2. 폴링 백업 (200ms — 모바일은 가끔 MutationObserver 누락)
+      const checkTimer = setInterval(() => {
+        if (root && root.children.length > 0) {
+          clearInterval(checkTimer);
+          doHide('폴링: root 자식 감지');
+        }
+      }, 200);
+
+      // 3. 모바일은 timeout 짧게 (8초), 데스크톱은 12초 — 그 후 강제 숨김
+      const TIMEOUT_MS = isMobile ? 8000 : 12000;
       setTimeout(() => {
         clearInterval(checkTimer);
-        clearInterval(msgTimer);
-        window.__hideLoading?.();
-      }, 30000);
+        doHide(`timeout ${TIMEOUT_MS}ms`);
+      }, TIMEOUT_MS);
+
+      // 4. 추가 폴백: window.load 이벤트 후 2초
+      window.addEventListener('load', () => {
+        setTimeout(() => doHide('window.load + 2초'), 2000);
+      });
     })();
   </script>
 </body>
