@@ -6368,6 +6368,8 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
 
   const currentUserCanEdit = useMemo(() => {
     if (!userCtx) return false;
+    // ADMIN/MANAGER는 무조건 편집 가능 (권한 설정 무시)
+    if (userCtx.role === "ADMIN" || userCtx.role === "MANAGER") return true;
     // User-specific override takes priority
     if (userCtx.id in (editPermissions._byUser || {})) return editPermissions._byUser[userCtx.id];
     // Fall back to role-based
@@ -6820,8 +6822,8 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
             {drawMode ? "✕ 그리기 취소" : "🆕 구역 그리기"}
           </button>
         )}
-        {/* 구역 옮기기 (드래그로 위치 이동) */}
-        {bgMode !== "plan" && currentUserCanEdit && (
+        {/* 구역 옮기기 (드래그로 위치 이동) — ADMIN이거나 권한 미설정 시에도 표시 */}
+        {bgMode !== "plan" && (currentUserCanEdit || !userCtx || userCtx.role === "ADMIN") && (
           <button onClick={()=>{setEditPosMode(!editPosMode); if(drawMode) setDrawMode(false); if(editMode) setEditMode(false);}} title="박스를 드래그로 이동"
             style={{padding:"5px 10px",borderRadius:6,border:"1px solid "+(editPosMode?"#f59e0b":"#cbd5e1"),background:editPosMode?"linear-gradient(135deg,#f59e0b,#dc2626)":"#fff",color:editPosMode?"#fff":"#475569",fontSize:11,fontWeight:700,cursor:"pointer"}}>
             {editPosMode ? "✓ 이동 종료" : "↔ 구역 옮기기"}
@@ -6861,6 +6863,23 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
         <div style={{background:"linear-gradient(135deg,#fef3c7,#fef9c3)",borderBottom:"2px solid #fbbf24",padding:"8px 14px",fontSize:12,color:"#78350f",fontWeight:700,display:"flex",alignItems:"center",gap:8}}>
           <span>🎯 지도에서 새 구역을 만들 위치를 클릭하세요.</span>
           <span style={{fontSize:10,color:"#92400e",fontWeight:500}}>클릭한 지점이 구역 중심이 됩니다.</span>
+        </div>
+      )}
+
+      {/* Position edit mode instruction banner */}
+      {editPosMode && (
+        <div style={{background:"linear-gradient(135deg,#fef3c7,#fed7aa)",borderBottom:"2px solid #f59e0b",padding:"10px 14px",fontSize:12,color:"#78350f",fontWeight:700,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <span style={{fontSize:14}}>↔️</span>
+          <span>구역 박스를 마우스로 잡아서 드래그하세요</span>
+          <span style={{fontSize:10,color:"#92400e",fontWeight:500}}>· 위치 변경은 자동 저장 · 다른 사용자에게도 즉시 반영</span>
+          <button onClick={() => {
+            if (confirm("모든 구역 위치를 원래대로 되돌리시겠어요?")) {
+              try { window.localStorage.removeItem("jamsa_inv_zone_overrides"); } catch (e) {}
+              window.location.reload();
+            }
+          }} style={{marginLeft:"auto",padding:"4px 10px",background:"rgba(255,255,255,0.7)",border:"1px solid #f59e0b",borderRadius:4,fontSize:10,fontWeight:700,cursor:"pointer",color:"#78350f"}}>
+            ↻ 모두 원래대로
+          </button>
         </div>
       )}
 
@@ -14412,6 +14431,103 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   // CCTV 스냅샷 데이터 (스팟 옆 미니창 표시용)
   const [cctvSnapshotData, setCctvSnapshotData] = useState({ snapshots: {}, analyses: {}, chToZone: {}, enabled: true });
 
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 사용자 위치 추적 (GPS + Wi-Fi + BLE 비콘)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [userLocations, setUserLocations] = useState([]); // [{id, name, lat, lng, source, role, ...}]
+  const [locationFilter, setLocationFilter] = useState("all"); // all | staff | visitor
+  const [shareMyLocation, setShareMyLocation] = useState(() => {
+    try { return window.localStorage?.getItem("jamsa_share_location") === "1"; }
+    catch (e) { return false; }
+  });
+  const [myLocationStatus, setMyLocationStatus] = useState({ source: null, lat: null, lng: null, accuracy: null, error: null });
+  const [selectedUserId, setSelectedUserId] = useState(null);
+
+  // 다른 사용자 위치 폴링 (10초마다)
+  useEffect(() => {
+    let cancelled = false;
+    const fetchLocations = async () => {
+      try {
+        const res = await fetch("/api/staff-locations", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled || !data?.ok) return;
+        setUserLocations(data.users || []);
+      } catch (e) {
+        // 무시 (네트워크 일시 오류)
+      }
+    };
+    fetchLocations();
+    const tid = setInterval(fetchLocations, 10000);
+    return () => { cancelled = true; clearInterval(tid); };
+  }, []);
+
+  // 내 위치 공유 — GPS watchPosition
+  useEffect(() => {
+    if (!shareMyLocation) {
+      setMyLocationStatus({ source: null, lat: null, lng: null, accuracy: null, error: null });
+      return;
+    }
+    if (!navigator.geolocation) {
+      setMyLocationStatus({ source: null, lat: null, lng: null, accuracy: null, error: "이 기기는 GPS를 지원하지 않습니다" });
+      return;
+    }
+    let watchId = null;
+    let lastSentAt = 0;
+    const onSuccess = async (pos) => {
+      const { latitude, longitude, accuracy } = pos.coords;
+      // Wi-Fi 보정 추정 (정확도 100m 이상이면 wifi, 미만이면 gps)
+      const source = accuracy > 100 ? "wifi" : "gps";
+      setMyLocationStatus({ source, lat: latitude, lng: longitude, accuracy, error: null });
+      // 5초마다 한 번만 서버 전송
+      const now = Date.now();
+      if (now - lastSentAt < 5000) return;
+      lastSentAt = now;
+      try {
+        const me = userCtx || { id: "me", name: "익명", role: "staff" };
+        await fetch("/api/staff-location-update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            staffId: me.id || ("anon-" + Date.now()),
+            staffName: me.name || "익명",
+            lat: latitude, lng: longitude, accuracy,
+            source, role: me.role === "VISITOR" ? "visitor" : "staff",
+            dept: me.dept || null,
+            timestamp: new Date().toISOString(),
+          }),
+        });
+      } catch (e) { /* 무시 */ }
+    };
+    const onError = (err) => {
+      setMyLocationStatus(prev => ({ ...prev, error: err.message || "위치 권한 거부됨" }));
+    };
+    watchId = navigator.geolocation.watchPosition(onSuccess, onError, {
+      enableHighAccuracy: true, maximumAge: 5000, timeout: 15000,
+    });
+    return () => {
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+    };
+  }, [shareMyLocation, userCtx]);
+
+  // 위치 공유 토글
+  const toggleMyLocation = () => {
+    setShareMyLocation(prev => {
+      const next = !prev;
+      try { window.localStorage?.setItem("jamsa_share_location", next ? "1" : "0"); } catch (e) {}
+      return next;
+    });
+  };
+
+  // 표시할 사용자 필터링
+  const visibleUsers = useMemo(() => {
+    return (userLocations || []).filter(u => {
+      if (locationFilter === "staff") return u.role === "staff";
+      if (locationFilter === "visitor") return u.role === "visitor";
+      return true;
+    });
+  }, [userLocations, locationFilter]);
+
   // CCTV 서버 자동 헬스체크 + 안내 모달
   const [cctvServerStatus, setCctvServerStatus] = useState({ status: "checking", checkedAt: null }); // checking | online | offline
   const [cctvGuideOpen, setCctvGuideOpen] = useState(false);
@@ -14487,6 +14603,18 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
       return next;
     });
   };
+
+  // 채널 매핑 선택 모달 (CCTV 박스 또는 미할당 채널 클릭 시)
+  const [channelPickerCh, setChannelPickerCh] = useState(null); // ch number or null
+
+  // window 글로벌로 노출 — divIcon HTML에서 호출
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.__jamsaPickChannel = (ch) => {
+      setChannelPickerCh(ch);
+    };
+    return () => { delete window.__jamsaPickChannel; };
+  }, []);
 
   // Persistence helpers
   const saveCustomZones = (newZones) => {
@@ -14759,18 +14887,25 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           _cctvBorder = "#f59e0b";
           _cctvAnim = "animation:cctvWarnPulse 1.6s infinite;";
         }
+        // 편집 모드일 때 클릭 핸들러 (드래그 대신)
+        const _cctvClick = cctvEditMode && _firstCh ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${_firstCh})"` : '';
+        const _cctvBorderEdit = cctvEditMode ? "2px dashed #fbbf24" : `2px solid ${_cctvBorder}`;
+        const _cctvBoxShadowEdit = cctvEditMode ? "0 0 0 3px rgba(251,191,36,0.4),0 4px 12px rgba(0,0,0,0.4)" : "0 4px 12px rgba(0,0,0,0.4)";
+        const _cctvCursor = cctvEditMode ? "pointer" : "pointer";
+        const _editLabel = cctvEditMode ? '<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(251,191,36,0.95);color:#78350f;padding:2px 4px;font-size:9px;font-weight:800;text-align:center;">📝 클릭→변경</div>' : '';
+
         const _cctvHtml = _showMini ? `
-          <div class="jamsa-cctv-mini" style="position:absolute;left:50px;top:-2px;width:96px;height:64px;border-radius:6px;overflow:hidden;border:2px solid ${_cctvBorder};${_cctvAnim}box-shadow:0 4px 12px rgba(0,0,0,0.4);background:#0f172a;cursor:pointer;z-index:3;">
+          <div class="jamsa-cctv-mini" ${_cctvClick} style="position:absolute;left:50px;top:-2px;width:96px;height:64px;border-radius:6px;overflow:hidden;border:${_cctvBorderEdit};${_cctvAnim}box-shadow:${_cctvBoxShadowEdit};background:#0f172a;cursor:${_cctvCursor};z-index:3;">
             <img src="${_snap.url}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none'"/>
             <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.7),transparent);padding:2px 4px;font-size:9px;color:#fff;font-weight:700;">CH${_firstCh}${_channels.length > 1 ? ` +${_channels.length-1}` : ''}</div>
-            ${_chAna?.level === "DANGER" || _chAna?.level === "WARNING" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:${_chAna.level === "DANGER" ? "rgba(220,38,38,0.95)" : "rgba(245,158,11,0.95)"};padding:1px 4px;font-size:9px;color:#fff;font-weight:800;text-align:center;">${_chAna.level === "DANGER" ? "🚨 위험" : "⚠️ 주의"} ${_chAna.score || ""}%</div>` : ''}
+            ${_chAna?.level === "DANGER" || _chAna?.level === "WARNING" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:${_chAna.level === "DANGER" ? "rgba(220,38,38,0.95)" : "rgba(245,158,11,0.95)"};padding:1px 4px;font-size:9px;color:#fff;font-weight:800;text-align:center;">${_chAna.level === "DANGER" ? "🚨 위험" : "⚠️ 주의"} ${_chAna.score || ""}%</div>` : _editLabel}
             <div style="position:absolute;top:3px;right:3px;width:7px;height:7px;background:#22c55e;border-radius:50%;box-shadow:0 0 5px #22c55e;animation:cctvLiveBlink 1.5s infinite;z-index:2;"></div>
           </div>
         ` : (_cctvEnabled && _firstCh ? `
-          <div style="position:absolute;left:50px;top:-2px;width:96px;height:64px;border-radius:6px;overflow:hidden;border:2px dashed rgba(255,255,255,0.6);background:rgba(15,23,42,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.7);box-shadow:0 4px 12px rgba(0,0,0,0.3);z-index:3;">
+          <div class="jamsa-cctv-mini" ${_cctvClick} style="position:absolute;left:50px;top:-2px;width:96px;height:64px;border-radius:6px;overflow:hidden;border:${_cctvBorderEdit};background:rgba(15,23,42,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.7);box-shadow:${_cctvBoxShadowEdit};z-index:3;cursor:${_cctvCursor};">
             <div style="font-size:20px;">📷</div>
             <div style="font-size:9px;font-weight:700;margin-top:2px;">CH${_firstCh}</div>
-            <div style="font-size:8px;color:rgba(255,255,255,0.5);margin-top:1px;">서버 미가동</div>
+            <div style="font-size:8px;color:${cctvEditMode ? '#fbbf24' : 'rgba(255,255,255,0.5)'};margin-top:1px;font-weight:${cctvEditMode ? '800' : '400'};">${cctvEditMode ? '📝 클릭→변경' : '서버 미가동'}</div>
           </div>
         ` : '');
 
@@ -15058,8 +15193,8 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                   <span style={{ fontSize: 14 }}>📹</span>
                   <span>CCTV 편집 모드</span>
                   <span style={{ fontWeight: 400, fontSize: 10, opacity: 0.95 }}>
-                    · CCTV 박스를 다른 구역 핀에 드래그
-                    · 우클릭으로 매핑 해제
+                    · CCTV 박스 클릭 → 구역 선택
+                    · 미할당 채널 클릭 → 구역 선택
                     · 자동 저장
                   </span>
                 </div>
@@ -15083,13 +15218,9 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                       {_unassigned.map(ch => (
                         <div key={ch}
-                          draggable
-                          onDragStart={(e) => {
-                            e.dataTransfer.effectAllowed = "move";
-                            e.dataTransfer.setData("text/cctv-channel", String(ch));
-                          }}
-                          style={{ padding: "4px 8px", background: "rgba(255,255,255,0.1)", border: "1px dashed rgba(255,255,255,0.3)", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "grab", userSelect: "none" }}
-                          title="드래그해서 구역 핀에 놓으세요">
+                          onClick={() => setChannelPickerCh(ch)}
+                          style={{ padding: "4px 8px", background: "rgba(255,255,255,0.1)", border: "1px dashed rgba(255,255,255,0.3)", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer", userSelect: "none" }}
+                          title="클릭해서 구역 선택">
                           📷 CH{ch}
                         </div>
                       ))}
@@ -15099,6 +15230,164 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
               </>
             );
           })()}
+
+          {/* ━━━ 사용자 위치 추적 — 실시간 핀 (오버레이) ━━━ */}
+          {visibleUsers.length > 0 && (
+            <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 20 }}>
+              {visibleUsers.map(u => {
+                // 박물관 BBOX (위경도 → % 변환)
+                const SAT_BBOX = { lat_min: 36.6378, lat_max: 36.6395, lng_min: 127.4880, lng_max: 127.4905 };
+                const xPct = ((u.lng - SAT_BBOX.lng_min) / (SAT_BBOX.lng_max - SAT_BBOX.lng_min)) * 100;
+                const yPct = ((SAT_BBOX.lat_max - u.lat) / (SAT_BBOX.lat_max - SAT_BBOX.lat_min)) * 100;
+                // 박물관 영역 밖이면 표시 안 함
+                if (xPct < 0 || xPct > 100 || yPct < 0 || yPct > 100) return null;
+
+                const isMe = userCtx && u.id === userCtx.id;
+                const isStaff = u.role === "staff";
+                const stale = u.ageSec > 30;
+                const sourceColor = u.source === "gps" ? "#10b981" : u.source === "wifi" ? "#3b82f6" : "#8b5cf6";
+                const ringColor = isMe ? "#3b82f6" : (isStaff ? sourceColor : "#94a3b8");
+                const dotSize = isMe ? 18 : (isStaff ? 14 : 10);
+
+                return (
+                  <div key={u.id}
+                    onClick={() => setSelectedUserId(u.id)}
+                    style={{
+                      position: "absolute",
+                      left: `${xPct}%`, top: `${yPct}%`,
+                      transform: "translate(-50%, -50%)",
+                      pointerEvents: "auto", cursor: "pointer",
+                      opacity: stale ? 0.5 : 1,
+                      zIndex: isMe ? 30 : (isStaff ? 25 : 22),
+                    }}>
+                    {isMe && (
+                      <div style={{
+                        position: "absolute", left: "50%", top: "50%",
+                        transform: "translate(-50%, -50%)",
+                        width: 36, height: 36, borderRadius: "50%",
+                        background: "rgba(59,130,246,0.25)",
+                        animation: "userLocPulse 2s infinite",
+                      }} />
+                    )}
+                    <div style={{
+                      position: "relative",
+                      width: dotSize, height: dotSize, borderRadius: "50%",
+                      background: ringColor, border: "2px solid #fff",
+                      boxShadow: "0 2px 6px rgba(0,0,0,0.4)",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      color: "#fff", fontSize: isStaff ? 9 : 7, fontWeight: 800,
+                    }}>
+                      {isStaff ? (isMe ? "나" : (u.name?.[0] || "?")) : ""}
+                    </div>
+                    <div style={{
+                      position: "absolute", top: dotSize + 3, left: "50%",
+                      transform: "translateX(-50%)",
+                      background: "rgba(255,255,255,0.95)",
+                      padding: "1px 5px", borderRadius: 3,
+                      fontSize: 9, fontWeight: 600, whiteSpace: "nowrap",
+                      boxShadow: "0 1px 3px rgba(0,0,0,0.2)", color: "#0f172a",
+                    }}>
+                      {u.source === "gps" ? "🛰️" : u.source === "wifi" ? "📶" : "🔵"} {u.name?.length > 8 ? u.name.slice(0, 6) + ".." : u.name}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ━━━ 위치 공유 토글 + 통계 (좌상단) ━━━ */}
+          <div style={{ position: "absolute", top: 60, left: 12, background: "rgba(255,255,255,0.97)", border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 12px", boxShadow: "0 4px 12px rgba(0,0,0,0.1)", zIndex: 600, minWidth: 200 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <span style={{ fontSize: 12, fontWeight: 800, color: "#0f172a" }}>📍 실시간 위치</span>
+              <span style={{ fontSize: 10, color: "#10b981", fontWeight: 700 }}>● {userLocations.length}명</span>
+            </div>
+            <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
+              {[
+                { k: "all", l: "전체" },
+                { k: "staff", l: "👤 직원" },
+                { k: "visitor", l: "👥 관람객" },
+              ].map(f => (
+                <button key={f.k} onClick={() => setLocationFilter(f.k)}
+                  style={{
+                    flex: 1, padding: "3px 6px", fontSize: 10, fontWeight: 700,
+                    border: `1px solid ${locationFilter === f.k ? "#3b82f6" : "#cbd5e1"}`,
+                    background: locationFilter === f.k ? "#3b82f6" : "#fff",
+                    color: locationFilter === f.k ? "#fff" : "#64748b",
+                    borderRadius: 4, cursor: "pointer",
+                  }}>
+                  {f.l}
+                </button>
+              ))}
+            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#0f172a", padding: "4px 0" }}>
+              <input type="checkbox" checked={shareMyLocation} onChange={toggleMyLocation}
+                style={{ width: 14, height: 14, cursor: "pointer" }} />
+              <span>📍 내 위치 공유</span>
+            </label>
+            {shareMyLocation && myLocationStatus.source && (
+              <div style={{ fontSize: 9, color: "#10b981", marginTop: 2 }}>
+                ✓ {myLocationStatus.source === "gps" ? "🛰️ GPS" : "📶 Wi-Fi"} · 정확도 ±{Math.round(myLocationStatus.accuracy || 0)}m
+              </div>
+            )}
+            {shareMyLocation && myLocationStatus.error && (
+              <div style={{ fontSize: 9, color: "#ef4444", marginTop: 2 }}>
+                ⚠ {myLocationStatus.error}
+              </div>
+            )}
+            <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 4, lineHeight: 1.4 }}>
+              🛰️ GPS · 📶 Wi-Fi · 🔵 BLE 비콘
+            </div>
+          </div>
+
+          {/* ━━━ 사용자 클릭 시 상세 팝업 ━━━ */}
+          {selectedUserId && (() => {
+            const u = userLocations.find(x => x.id === selectedUserId);
+            if (!u) return null;
+            return (
+              <div onClick={() => setSelectedUserId(null)}
+                style={{ position: "fixed", inset: 0, zIndex: 10080, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+                <div onClick={e => e.stopPropagation()}
+                  style={{ background: "#fff", borderRadius: 12, width: 360, maxWidth: "95vw", padding: 16, boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                      <div style={{ width: 40, height: 40, borderRadius: "50%", background: u.role === "staff" ? "#3b82f6" : "#94a3b8", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 900, fontSize: 16 }}>
+                        {u.role === "staff" ? (u.name?.[0] || "?") : "👤"}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 15, fontWeight: 900, color: "#0f172a" }}>{u.name}</div>
+                        <div style={{ fontSize: 11, color: "#64748b" }}>
+                          {u.role === "staff" ? "직원" : "관람객"}
+                          {u.dept && ` · ${u.dept}`}
+                        </div>
+                      </div>
+                    </div>
+                    <button onClick={() => setSelectedUserId(null)}
+                      style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#94a3b8", padding: 0, lineHeight: 1 }}>×</button>
+                  </div>
+                  <div style={{ background: "#f8fafc", borderRadius: 8, padding: 10, fontSize: 11, color: "#475569", lineHeight: 1.7 }}>
+                    <div>📍 위치: {u.lat?.toFixed(5)}, {u.lng?.toFixed(5)}</div>
+                    <div>{u.source === "gps" ? "🛰️ GPS" : u.source === "wifi" ? "📶 Wi-Fi" : "🔵 BLE 비콘"}{u.beaconName && ` (${u.beaconName})`} · 정확도 ±{Math.round(u.accuracy || 0)}m</div>
+                    <div>⏱️ {u.ageSec === 0 ? "실시간" : `${u.ageSec}초 전`}</div>
+                  </div>
+                  {u.role === "staff" && userCtx && u.id !== userCtx.id && (
+                    <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
+                      <button onClick={() => alert(`${u.name}에게 호출 알림 (구현 예정)`)}
+                        style={{ flex: 1, padding: 8, background: "#3b82f6", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                        📞 호출
+                      </button>
+                      <button onClick={() => alert(`${u.name}에게 메시지 (구현 예정)`)}
+                        style={{ flex: 1, padding: 8, background: "#f1f5f9", color: "#475569", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                        💬 메시지
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* 위치 핀 펄스 애니메이션 */}
+          <style>{`@keyframes userLocPulse { 0%,100% { transform: translate(-50%,-50%) scale(1); opacity: 0.5; } 50% { transform: translate(-50%,-50%) scale(1.6); opacity: 0.15; } }`}</style>
 
           {/* 지도 우하단 범례 */}
           <div style={{ position: "absolute", bottom: 12, left: 12, background: "rgba(255,255,255,0.95)", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", fontSize: 10, boxShadow: "0 4px 12px rgba(0,0,0,0.1)", zIndex: 10 }}>
@@ -15150,7 +15439,91 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         CCTV 서버 {cctvServerStatus.status === "online" ? "✓ 가동 중" : cctvServerStatus.status === "offline" ? "✗ 미가동" : "확인 중..."}
       </div>
 
-      {/* ─── CCTV 서버 미가동 가이드 모달 ─── */}
+      {/* ─── CCTV 채널 → 구역 선택 모달 ─── */}
+      {channelPickerCh !== null && (() => {
+        const ch = channelPickerCh;
+        const currentZoneId = Object.entries(cctvMap || {}).find(([_, chs]) => (chs || []).includes(ch))?.[0];
+        const currentZone = allZones.find(z => z.id === currentZoneId);
+        const availableZones = allZones.filter(z => !zoneCustomizations[z.id]?._deleted);
+        return (
+          <div onClick={() => setChannelPickerCh(null)}
+            style={{ position: "fixed", inset: 0, zIndex: 10100, background: "rgba(0,0,0,0.6)",
+              display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+            <div onClick={e => e.stopPropagation()}
+              style={{ background: "#fff", borderRadius: 14, width: 480, maxWidth: "95vw", maxHeight: "85vh",
+                overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+              {/* 헤더 */}
+              <div style={{ padding: "16px 20px", background: "linear-gradient(135deg,#0891b2,#7c3aed)", color: "#fff", flexShrink: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ fontSize: 17, fontWeight: 900 }}>📷 CH{ch} 매핑 변경</div>
+                  <button onClick={() => setChannelPickerCh(null)}
+                    style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", fontSize: 20, cursor: "pointer", lineHeight: 1, padding: "0 8px", borderRadius: 4 }}>×</button>
+                </div>
+                <div style={{ fontSize: 12, marginTop: 4, opacity: 0.95 }}>
+                  {currentZone ? `현재: ${currentZone.icon} ${currentZone.name}` : "현재: 미할당"}
+                  {" → "}
+                  어디로 옮기시겠어요?
+                </div>
+              </div>
+
+              {/* 구역 리스트 */}
+              <div style={{ flex: 1, overflowY: "auto", padding: 12 }}>
+                {/* 매핑 해제 버튼 (현재 매핑돼 있을 때만) */}
+                {currentZoneId && (
+                  <button onClick={() => {
+                    moveChannelToZone(ch, null);
+                    setChannelPickerCh(null);
+                  }}
+                    style={{ display: "block", width: "100%", padding: "10px 14px", marginBottom: 10,
+                      background: "#fee2e2", color: "#dc2626", border: "1px solid #fca5a5",
+                      borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
+                    🗑️ 매핑 해제 (어떤 구역에도 표시 안 함)
+                  </button>
+                )}
+
+                {/* 구역 그리드 */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 8 }}>
+                  {availableZones.map(z => {
+                    const isCurrent = z.id === currentZoneId;
+                    const zChannels = (cctvMap[z.id] || []);
+                    return (
+                      <button key={z.id}
+                        onClick={() => {
+                          moveChannelToZone(ch, z.id);
+                          setChannelPickerCh(null);
+                        }}
+                        disabled={isCurrent}
+                        style={{
+                          padding: "10px 12px",
+                          background: isCurrent ? "#f0fdf4" : "#fff",
+                          color: isCurrent ? "#16a34a" : "#0f172a",
+                          border: `2px solid ${isCurrent ? "#86efac" : (z.color || "#e5e7eb")}`,
+                          borderRadius: 8, fontSize: 12, fontWeight: 700,
+                          cursor: isCurrent ? "default" : "pointer", textAlign: "left",
+                          display: "flex", flexDirection: "column", gap: 2,
+                          opacity: isCurrent ? 0.6 : 1,
+                        }}>
+                        <div style={{ fontSize: 14 }}>
+                          {z.icon} {z.name}
+                          {isCurrent && <span style={{ fontSize: 10, marginLeft: 4, color: "#16a34a" }}>✓ 현재</span>}
+                        </div>
+                        <div style={{ fontSize: 10, color: isCurrent ? "#16a34a" : "#94a3b8", fontWeight: 500 }}>
+                          {zChannels.length === 0 ? "매핑 없음" : `매핑 ${zChannels.length}개: ${zChannels.slice(0,3).map(c => `CH${c}`).join(", ")}${zChannels.length > 3 ? "..." : ""}`}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 푸터 */}
+              <div style={{ padding: "10px 16px", background: "#fafafa", borderTop: "1px solid #e5e7eb", fontSize: 11, color: "#64748b", textAlign: "center", flexShrink: 0 }}>
+                💡 구역 카드를 클릭하면 즉시 변경되고 자동 저장됩니다
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       {cctvGuideOpen && (
         <div onClick={() => setCctvGuideOpen(false)}
           style={{ position: "fixed", inset: 0, zIndex: 10090, background: "rgba(0,0,0,0.6)",
