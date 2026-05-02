@@ -12,6 +12,9 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="data:image/svg+xml;utf8,&lt;svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'&gt;&lt;rect width='192' height='192' rx='28' fill='%230f172a'/&gt;&lt;text x='96' y='130' font-size='110' text-anchor='middle' fill='white'&gt;🏛️&lt;/text&gt;&lt;/svg&gt;">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' https: data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: https: blob:; connect-src 'self' https: wss:; font-src 'self' data: https:; frame-src 'self' https:;">
   <title>한국잠사박물관 통합관리 시스템</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext x='50' y='75' font-size='80' text-anchor='middle'%3E🏛️%3C/text%3E%3C/svg%3E">
@@ -220,27 +223,55 @@
   <script>
     // Service Worker가 옛 버전을 캐싱하고 있으면 자동 정리 (모바일 캐시 문제 해결)
     (function clearOldCache() {
+      // 우리 jamsa-sw 등록
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker.getRegistrations().then(regs => {
           regs.forEach(reg => {
             if (!reg.active || !reg.active.scriptURL.includes('jamsa-sw')) {
-              // 우리 SW가 아니면 등록 해제 (옛 버전 잔재 제거)
               reg.unregister().catch(() => {});
             }
           });
         }).catch(() => {});
+        // 새 SW 등록
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/jamsa-sw.js', { scope: '/' }).catch(() => {});
+        });
       }
-      // CacheStorage도 정리 (구버전 vercel 캐시 잔재)
+      // CacheStorage 정리
       if ('caches' in window) {
         caches.keys().then(names => {
           names.forEach(name => {
-            // 모르는 캐시는 그대로 두고, 명시적으로 옛것만 삭제
-            if (name.startsWith('jamsa-old') || name.includes('workbox-precache-v1')) {
+            if (name.startsWith('jamsa-old') || name.includes('workbox-precache-v1') || (name.startsWith('jamsa-v') && name !== 'jamsa-v2-2026-05-01')) {
               caches.delete(name).catch(() => {});
             }
           });
         }).catch(() => {});
       }
+    })();
+
+    // URL 파라미터 감지 — 관람객 모드 / 모듈 자동 진입
+    (function detectMode() {
+      const params = new URLSearchParams(window.location.search);
+      const role = params.get('role');
+      const mod = params.get('module');
+      if (role === 'visitor') {
+        try { window.localStorage.setItem('jamsa_user_role_override', 'visitor'); } catch(e) {}
+      }
+      if (mod) {
+        try { window.localStorage.setItem('jamsa_initial_module', mod); } catch(e) {}
+      }
+      // PWA 설치 프롬프트 캡처
+      window.__deferredInstallPrompt = null;
+      window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        window.__deferredInstallPrompt = e;
+        // React 앱에 알림
+        window.dispatchEvent(new CustomEvent('jamsa-install-available'));
+      });
+      window.addEventListener('appinstalled', () => {
+        window.__deferredInstallPrompt = null;
+        try { window.localStorage.setItem('jamsa_pwa_installed', '1'); } catch(e) {}
+      });
     })();
   </script>
   <script type="module" src="/app.bundle.js"></script>
