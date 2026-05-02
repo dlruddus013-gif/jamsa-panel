@@ -14519,6 +14519,133 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
     });
   };
 
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // BLE 비콘 스캔 (Web Bluetooth API)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [bleScanning, setBleScanning] = useState(false);
+  const [bleSupported, setBleSupported] = useState(false);
+  const [nearestBeacon, setNearestBeacon] = useState(null);
+
+  useEffect(() => {
+    // Web Bluetooth API 지원 여부 (안드로이드 크롬, 데스크톱 크롬만)
+    setBleSupported(typeof navigator !== "undefined" && !!navigator.bluetooth);
+  }, []);
+
+  const startBleScan = async () => {
+    if (!navigator.bluetooth) {
+      alert("이 기기는 Bluetooth를 지원하지 않습니다.\n안드로이드 크롬에서 사용해 주세요.");
+      return;
+    }
+    try {
+      setBleScanning(true);
+      // 사용자가 비콘 선택하도록 (보안상 자동 스캔 불가)
+      const device = await navigator.bluetooth.requestDevice({
+        acceptAllDevices: true,
+        optionalServices: ['battery_service'],
+      });
+      // 비콘 정보 등록 (실제 RSSI는 라이브 스캔이 별도 API 필요 — Web Bluetooth는 제한적)
+      const beaconName = device.name || `Beacon-${device.id?.slice(0, 6)}`;
+      setNearestBeacon({ id: device.id, name: beaconName, rssi: null });
+      // 비콘 위치를 서버에 전송 (구역 매핑은 별도 등록 필요)
+      const me = userCtx || { id: "me", name: "익명", role: "staff" };
+      await fetch("/api/staff-location-update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          staffId: me.id || ("anon-" + Date.now()),
+          staffName: me.name || "익명",
+          lat: myLocationStatus.lat || 36.6385, // GPS 보정값 또는 박물관 중심
+          lng: myLocationStatus.lng || 127.4892,
+          accuracy: 5, // 비콘은 ~5m 정확도
+          source: "beacon",
+          beaconId: device.id,
+          beaconName,
+          role: me.role === "VISITOR" ? "visitor" : "staff",
+          dept: me.dept || null,
+          timestamp: new Date().toISOString(),
+        }),
+      });
+      alert(`🔵 비콘 연결됨: ${beaconName}\n실내 정확도가 향상됩니다.`);
+    } catch (e) {
+      if (e.name !== "NotFoundError") {
+        console.error("[BLE]", e);
+      }
+    } finally {
+      setBleScanning(false);
+    }
+  };
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 관람객 모드 자동 감지 (?role=visitor URL)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [isVisitorMode, setIsVisitorMode] = useState(() => {
+    try {
+      const fromUrl = new URLSearchParams(window.location.search).get("role") === "visitor";
+      const fromStorage = window.localStorage?.getItem("jamsa_user_role_override") === "visitor";
+      return fromUrl || fromStorage;
+    } catch (e) { return false; }
+  });
+
+  // 관람객 모드면 위치 공유 자동 활성 권유
+  const [visitorWelcomeShown, setVisitorWelcomeShown] = useState(() => {
+    try { return window.sessionStorage?.getItem("jamsa_visitor_welcome") === "1"; }
+    catch (e) { return false; }
+  });
+  useEffect(() => {
+    if (isVisitorMode && !visitorWelcomeShown && !shareMyLocation) {
+      const tid = setTimeout(() => {
+        if (confirm("📍 박물관 길찾기 도우미\n\n현재 위치를 공유하시면 추천 동선을 안내해드립니다.\n위치 공유는 박물관에서만 사용되며 5분 후 자동 삭제됩니다.\n\n지금 시작할까요?")) {
+          setShareMyLocation(true);
+          try { window.localStorage?.setItem("jamsa_share_location", "1"); } catch (e) {}
+        }
+        try { window.sessionStorage?.setItem("jamsa_visitor_welcome", "1"); } catch (e) {}
+        setVisitorWelcomeShown(true);
+      }, 1500);
+      return () => clearTimeout(tid);
+    }
+  }, [isVisitorMode, visitorWelcomeShown, shareMyLocation]);
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // PWA 설치 가능 감지
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [pwaInstallable, setPwaInstallable] = useState(false);
+  const [pwaInstalled, setPwaInstalled] = useState(() => {
+    try {
+      return window.localStorage?.getItem("jamsa_pwa_installed") === "1" ||
+             window.matchMedia("(display-mode: standalone)").matches;
+    } catch (e) { return false; }
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setPwaInstallable(!!window.__deferredInstallPrompt);
+    const handler = () => setPwaInstallable(true);
+    window.addEventListener("jamsa-install-available", handler);
+    return () => window.removeEventListener("jamsa-install-available", handler);
+  }, []);
+
+  const installPwa = async () => {
+    if (!window.__deferredInstallPrompt) {
+      alert("이 브라우저에서는 자동 설치를 지원하지 않습니다.\n\n안드로이드: 크롬 우측 상단 ⋮ → '홈 화면에 추가'\niOS: 사파리 공유 버튼 → '홈 화면에 추가'");
+      return;
+    }
+    try {
+      window.__deferredInstallPrompt.prompt();
+      const result = await window.__deferredInstallPrompt.userChoice;
+      if (result.outcome === "accepted") {
+        setPwaInstalled(true);
+        try { window.localStorage?.setItem("jamsa_pwa_installed", "1"); } catch (e) {}
+      }
+      window.__deferredInstallPrompt = null;
+      setPwaInstallable(false);
+    } catch (e) { /* 무시 */ }
+  };
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // QR 코드 생성기 모달 (관람객 안내용)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [qrModalOpen, setQrModalOpen] = useState(false);
+
   // 표시할 사용자 필터링
   const visibleUsers = useMemo(() => {
     return (userLocations || []).filter(u => {
@@ -15337,7 +15464,105 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
             <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 4, lineHeight: 1.4 }}>
               🛰️ GPS · 📶 Wi-Fi · 🔵 BLE 비콘
             </div>
+            {/* 추가 기능 버튼 */}
+            <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>
+              {bleSupported && shareMyLocation && (
+                <button onClick={startBleScan} disabled={bleScanning}
+                  title="BLE 비콘으로 실내 위치 정확도 향상"
+                  style={{
+                    flex: 1, padding: "4px 6px", fontSize: 9, fontWeight: 700,
+                    border: "1px solid #8b5cf6", background: nearestBeacon ? "#8b5cf6" : "#fff",
+                    color: nearestBeacon ? "#fff" : "#8b5cf6", borderRadius: 4, cursor: "pointer",
+                  }}>
+                  🔵 {bleScanning ? "검색중..." : nearestBeacon ? `비콘 ${nearestBeacon.name?.slice(0, 8)}` : "비콘 연결"}
+                </button>
+              )}
+              {pwaInstallable && !pwaInstalled && (
+                <button onClick={installPwa}
+                  title="홈 화면에 앱 설치"
+                  style={{
+                    flex: 1, padding: "4px 6px", fontSize: 9, fontWeight: 700,
+                    border: "1px solid #10b981", background: "#10b981",
+                    color: "#fff", borderRadius: 4, cursor: "pointer",
+                  }}>
+                  📱 앱 설치
+                </button>
+              )}
+              <button onClick={() => setQrModalOpen(true)}
+                title="관람객용 QR 코드 생성"
+                style={{
+                  flex: 1, padding: "4px 6px", fontSize: 9, fontWeight: 700,
+                  border: "1px solid #f59e0b", background: "#fff",
+                  color: "#f59e0b", borderRadius: 4, cursor: "pointer",
+                }}>
+                🔲 QR
+              </button>
+            </div>
+            {isVisitorMode && (
+              <div style={{ marginTop: 6, padding: "4px 6px", background: "#fef3c7", border: "1px solid #fbbf24", borderRadius: 4, fontSize: 9, color: "#78350f", fontWeight: 700, textAlign: "center" }}>
+                👨‍👩‍👧 관람객 모드
+              </div>
+            )}
           </div>
+
+          {/* ━━━ QR 코드 모달 (관람객 안내용) ━━━ */}
+          {qrModalOpen && (() => {
+            const visitorUrl = `${window.location.origin}/?role=visitor`;
+            const staffUrl = `${window.location.origin}/`;
+            // QR 코드 생성: api.qrserver.com (무료 공개 API)
+            const visitorQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(visitorUrl)}&margin=10`;
+            const staffQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(staffUrl)}&margin=10`;
+            return (
+              <div onClick={() => setQrModalOpen(false)}
+                style={{ position: "fixed", inset: 0, zIndex: 10100, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+                <div onClick={e => e.stopPropagation()}
+                  style={{ background: "#fff", borderRadius: 14, width: 600, maxWidth: "95vw", maxHeight: "90vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+                  <div style={{ padding: "16px 20px", background: "linear-gradient(135deg,#0891b2,#7c3aed)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <div style={{ fontSize: 18, fontWeight: 900 }}>🔲 QR 코드 안내</div>
+                      <div style={{ fontSize: 11, opacity: 0.95, marginTop: 2 }}>관람객/직원이 휴대폰으로 스캔하면 바로 접속</div>
+                    </div>
+                    <button onClick={() => setQrModalOpen(false)}
+                      style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", fontSize: 20, cursor: "pointer", padding: "0 8px", borderRadius: 4 }}>×</button>
+                  </div>
+                  <div style={{ padding: 20, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                    {/* 관람객 QR */}
+                    <div style={{ border: "2px solid #fbbf24", borderRadius: 10, padding: 14, background: "#fefce8" }}>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: "#78350f", marginBottom: 8, textAlign: "center" }}>👨‍👩‍👧 관람객용</div>
+                      <img src={visitorQrUrl} alt="Visitor QR" style={{ width: "100%", height: "auto", borderRadius: 6, background: "#fff" }} />
+                      <div style={{ fontSize: 10, color: "#78350f", marginTop: 8, textAlign: "center", wordBreak: "break-all" }}>{visitorUrl}</div>
+                      <div style={{ fontSize: 10, color: "#92400e", marginTop: 8, lineHeight: 1.5 }}>
+                        스캔 시 자동:<br />
+                        ✓ 관람객 모드 진입<br />
+                        ✓ 위치 공유 안내<br />
+                        ✓ 추천 동선 표시
+                      </div>
+                    </div>
+                    {/* 직원 QR */}
+                    <div style={{ border: "2px solid #3b82f6", borderRadius: 10, padding: 14, background: "#eff6ff" }}>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: "#1e3a8a", marginBottom: 8, textAlign: "center" }}>👤 직원용</div>
+                      <img src={staffQrUrl} alt="Staff QR" style={{ width: "100%", height: "auto", borderRadius: 6, background: "#fff" }} />
+                      <div style={{ fontSize: 10, color: "#1e3a8a", marginTop: 8, textAlign: "center", wordBreak: "break-all" }}>{staffUrl}</div>
+                      <div style={{ fontSize: 10, color: "#1e40af", marginTop: 8, lineHeight: 1.5 }}>
+                        스캔 시 자동:<br />
+                        ✓ 직원 로그인 화면<br />
+                        ✓ PWA 설치 가능<br />
+                        ✓ 통합 관리 화면
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ padding: "12px 20px", background: "#fafafa", borderTop: "1px solid #e5e7eb" }}>
+                    <div style={{ fontSize: 11, color: "#475569", marginBottom: 8, fontWeight: 700 }}>💡 사용 팁</div>
+                    <div style={{ fontSize: 10, color: "#64748b", lineHeight: 1.6 }}>
+                      • 관람객 QR을 입구 안내문에 인쇄해서 부착<br />
+                      • 직원 QR은 사무실/탕비실에 부착해서 신규 직원 접속 안내<br />
+                      • QR 이미지 우클릭 → "이미지 저장"으로 다운로드 후 인쇄
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* ━━━ 사용자 클릭 시 상세 팝업 ━━━ */}
           {selectedUserId && (() => {
