@@ -14655,6 +14655,98 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
     });
   }, [userLocations, locationFilter]);
 
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 구역별 인파 통계 (CCTV AI + QR 체크인)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [zoneCrowdStats, setZoneCrowdStats] = useState({}); // { zoneId: { peopleCount, crowdLevel, source, ageSec } }
+  const [crowdAnalysisOn, setCrowdAnalysisOn] = useState(() => {
+    try { return window.localStorage?.getItem("jamsa_crowd_analysis") === "1"; }
+    catch (e) { return false; }
+  });
+
+  // 인파 통계 폴링 (15초마다)
+  useEffect(() => {
+    let cancelled = false;
+    const fetchStats = async () => {
+      try {
+        const res = await fetch("/api/zone-crowd-stats?range=now", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled || !data?.ok) return;
+        setZoneCrowdStats(data.currentByZone || {});
+      } catch (e) { /* 무시 */ }
+    };
+    fetchStats();
+    const tid = setInterval(fetchStats, 15000);
+    return () => { cancelled = true; clearInterval(tid); };
+  }, []);
+
+  // CCTV AI 분석 후 인파 통계 자동 저장 (cctvSnapshotData 변경 시)
+  useEffect(() => {
+    if (!crowdAnalysisOn) return;
+    const analyses = cctvSnapshotData?.analyses || {};
+    const chToZone = cctvSnapshotData?.chToZone || {};
+    Object.entries(analyses).forEach(([ch, ana]) => {
+      const peopleCount = ana?.peopleCount;
+      if (peopleCount === undefined || peopleCount === null) return;
+      const zoneId = chToZone[ch];
+      if (!zoneId) return;
+      // 백엔드에 저장
+      fetch("/api/zone-crowd-stats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          zoneId, channelCh: parseInt(ch, 10),
+          peopleCount, confidence: ana.peopleConfidence || 0.7,
+          crowdLevel: ana.crowdLevel || "UNKNOWN",
+          source: "cctv_ai",
+        }),
+      }).catch(() => {});
+    });
+  }, [cctvSnapshotData, crowdAnalysisOn]);
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // QR 체크인 자동 처리 (?checkin=zoneId URL)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [checkinResult, setCheckinResult] = useState(null);
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const checkinZone = params.get("checkin");
+      if (!checkinZone) return;
+      const zone = baseZones.find(z => z.id === checkinZone);
+      if (!zone) return;
+      // 익명 visitor ID (sessionStorage에 저장)
+      let visitorId = window.sessionStorage?.getItem("jamsa_visitor_anon_id");
+      if (!visitorId) {
+        visitorId = "v-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+        try { window.sessionStorage?.setItem("jamsa_visitor_anon_id", visitorId); } catch(e) {}
+      }
+      // 체크인 API 호출
+      fetch("/api/qr-checkin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          visitorId, zoneId: checkinZone, zoneName: zone.name,
+          checkpointType: "entry",
+        }),
+      }).then(res => res.json()).then(data => {
+        if (data.ok) {
+          setCheckinResult({ zone, message: `✅ ${zone.name} 체크인 완료!` });
+          // URL 정리 (한 번만 체크인되도록)
+          const url = new URL(window.location);
+          url.searchParams.delete("checkin");
+          window.history.replaceState({}, "", url);
+        }
+      }).catch(() => {
+        setCheckinResult({ zone, message: "❌ 체크인 실패. 잠시 후 다시 시도해주세요." });
+      });
+    } catch (e) { /* 무시 */ }
+  }, []);
+
+  // 구역 QR 코드 인쇄 모달
+  const [zoneQrModalOpen, setZoneQrModalOpen] = useState(false);
+
   // CCTV 서버 자동 헬스체크 + 안내 모달
   const [cctvServerStatus, setCctvServerStatus] = useState({ status: "checking", checkedAt: null }); // checking | online | offline
   const [cctvGuideOpen, setCctvGuideOpen] = useState(false);
@@ -14999,6 +15091,21 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           ? `<div style="position:absolute;bottom:-6px;left:50%;transform:translateX(-50%);background:${s.statusColor};color:#fff;padding:2px 8px;border-radius:10px;font-size:9px;font-weight:800;white-space:nowrap;z-index:2;box-shadow:0 2px 4px rgba(0,0,0,0.3);">${s.statusLabel}</div>`
           : "";
 
+        // ━━ 구역별 인파 배지 (CCTV AI + QR 체크인 합산) ━━
+        const _crowdData = zoneCrowdStats[z.id];
+        const _peopleCount = _crowdData?.people_count || 0;
+        const _crowdLevel = _crowdData?.crowd_level || "EMPTY";
+        let _crowdColor = "#94a3b8", _crowdLabel = "";
+        if (_peopleCount > 0) {
+          if (_crowdLevel === "VERY_HIGH" || _peopleCount >= 26) { _crowdColor = "#dc2626"; _crowdLabel = "🚨 과밀"; }
+          else if (_crowdLevel === "HIGH" || _peopleCount >= 11) { _crowdColor = "#ea580c"; _crowdLabel = "⚠️ 혼잡"; }
+          else if (_crowdLevel === "MEDIUM" || _peopleCount >= 4) { _crowdColor = "#f59e0b"; _crowdLabel = "보통"; }
+          else { _crowdColor = "#10b981"; _crowdLabel = "여유"; }
+        }
+        const crowdBadgeHtml = _peopleCount > 0
+          ? `<div style="position:absolute;top:-22px;left:50%;transform:translateX(-50%);background:${_crowdColor};color:#fff;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:900;white-space:nowrap;z-index:3;box-shadow:0 2px 6px rgba(0,0,0,0.3);">👥 ${_peopleCount}명${_crowdLabel ? ' ' + _crowdLabel : ''}</div>`
+          : "";
+
         // ━━ CCTV 미니창 HTML ━━
         const _channels = (_zoneToCh[z.id] || []).sort((a, b) => a - b);
         const _firstCh = _channels[0];
@@ -15044,7 +15151,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           map: naverMapRef.current,
           draggable: editMode,  // Enable drag in edit mode
           icon: {
-            content: `<div style="position:relative;width:${_markerWidth}px;height:64px;${pulseAnim}cursor:${editMode ? "move" : "pointer"};${editMode ? "outline:3px dashed #2563eb;outline-offset:2px;border-radius:8px;" : ""}"><div style="position:absolute;left:0;top:0;width:46px;height:46px;"><div style="background:${z.color};border:3px solid #fff;border-radius:50% 50% 50% 0;width:38px;height:38px;transform:rotate(-45deg);box-shadow:0 4px 12px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;margin:4px;"><div style="transform:rotate(45deg);font-size:18px;">${z.icon}</div></div>${badgeHtml}${statusLabelHtml}</div>${_cctvHtml}</div>`,
+            content: `<div style="position:relative;width:${_markerWidth}px;height:64px;${pulseAnim}cursor:${editMode ? "move" : "pointer"};${editMode ? "outline:3px dashed #2563eb;outline-offset:2px;border-radius:8px;" : ""}"><div style="position:absolute;left:0;top:0;width:46px;height:46px;"><div style="background:${z.color};border:3px solid #fff;border-radius:50% 50% 50% 0;width:38px;height:38px;transform:rotate(-45deg);box-shadow:0 4px 12px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;margin:4px;"><div style="transform:rotate(45deg);font-size:18px;">${z.icon}</div></div>${badgeHtml}${statusLabelHtml}${crowdBadgeHtml}</div>${_cctvHtml}</div>`,
             anchor: new naver.maps.Point(23, 46),
           },
           title: editMode ? `[편집] ${z.name} (드래그로 이동)` : `${z.name} · ${s.statusLabel}${badgeNum > 0 ? ` (과제/재고부족 ${badgeNum}건)` : ""}${_firstCh ? ` · CH${_firstCh}` : ""}`,
@@ -15083,7 +15190,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         addNewZone(e.coord.lat(), e.coord.lng());
       });
     }
-  }, [zoneStatus, naverLoaded, mapProvider, bgMode, viewMode, editMode, cctvSnapshotData]);
+  }, [zoneStatus, naverLoaded, mapProvider, bgMode, viewMode, editMode, cctvSnapshotData, zoneCrowdStats]);
 
 
   const createQuickAction = (zone, template) => {
@@ -15498,6 +15605,32 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                 🔲 QR
               </button>
             </div>
+            {/* 인파 분석 토글 + 구역 QR 인쇄 */}
+            <div style={{ display: "flex", gap: 4, marginTop: 4, flexWrap: "wrap" }}>
+              <button onClick={() => {
+                const next = !crowdAnalysisOn;
+                setCrowdAnalysisOn(next);
+                try { window.localStorage.setItem("jamsa_crowd_analysis", next ? "1" : "0"); } catch(e) {}
+              }}
+                title="CCTV AI로 구역별 인파 자동 카운팅"
+                style={{
+                  flex: 1, padding: "4px 6px", fontSize: 9, fontWeight: 700,
+                  border: `1px solid ${crowdAnalysisOn ? "#dc2626" : "#cbd5e1"}`,
+                  background: crowdAnalysisOn ? "#dc2626" : "#fff",
+                  color: crowdAnalysisOn ? "#fff" : "#64748b", borderRadius: 4, cursor: "pointer",
+                }}>
+                {crowdAnalysisOn ? "🔴 인파분석 중" : "👥 인파 분석"}
+              </button>
+              <button onClick={() => setZoneQrModalOpen(true)}
+                title="구역별 체크인 QR 인쇄 (13개)"
+                style={{
+                  flex: 1, padding: "4px 6px", fontSize: 9, fontWeight: 700,
+                  border: "1px solid #14b8a6", background: "#fff",
+                  color: "#14b8a6", borderRadius: 4, cursor: "pointer",
+                }}>
+                🖨️ 구역 QR
+              </button>
+            </div>
             {isVisitorMode && (
               <div style={{ marginTop: 6, padding: "4px 6px", background: "#fef3c7", border: "1px solid #fbbf24", borderRadius: 4, fontSize: 9, color: "#78350f", fontWeight: 700, textAlign: "center" }}>
                 👨‍👩‍👧 관람객 모드
@@ -15563,6 +15696,78 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
               </div>
             );
           })()}
+
+          {/* ━━━ 구역별 체크인 QR 인쇄 모달 ━━━ */}
+          {zoneQrModalOpen && (
+            <div onClick={() => setZoneQrModalOpen(false)}
+              style={{ position: "fixed", inset: 0, zIndex: 10100, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+              <div onClick={e => e.stopPropagation()}
+                style={{ background: "#fff", borderRadius: 14, width: 900, maxWidth: "95vw", maxHeight: "92vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+                <div style={{ padding: "16px 20px", background: "linear-gradient(135deg,#14b8a6,#0891b2)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 1 }}>
+                  <div>
+                    <div style={{ fontSize: 18, fontWeight: 900 }}>🖨️ 구역별 체크인 QR 인쇄</div>
+                    <div style={{ fontSize: 11, opacity: 0.95, marginTop: 2 }}>13개 구역 입구에 부착 → 관람객 자발적 체크인</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => window.print()}
+                      style={{ padding: "6px 12px", background: "#fff", color: "#0891b2", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                      🖨️ 전체 인쇄
+                    </button>
+                    <button onClick={() => setZoneQrModalOpen(false)}
+                      style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", fontSize: 20, cursor: "pointer", padding: "0 8px", borderRadius: 4 }}>×</button>
+                  </div>
+                </div>
+                <div style={{ padding: 20 }} className="zone-qr-print-area">
+                  <div style={{ marginBottom: 16, padding: 12, background: "#f0fdfa", border: "1px solid #5eead4", borderRadius: 8, fontSize: 11, color: "#134e4a", lineHeight: 1.6 }}>
+                    💡 <strong>사용 방법:</strong><br />
+                    • 각 구역 입구에 해당 QR 인쇄해서 부착<br />
+                    • 관람객이 휴대폰으로 스캔 → 자동으로 그 구역 체크인<br />
+                    • 동선 분석 데이터 자동 수집 (익명)
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 14 }}>
+                    {(allZones || baseZones).map(z => {
+                      if (zoneCustomizations[z.id]?._deleted) return null;
+                      const checkinUrl = `${window.location.origin}/?checkin=${z.id}`;
+                      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(checkinUrl)}&margin=10`;
+                      return (
+                        <div key={z.id}
+                          style={{ border: `2px solid ${z.color || "#cbd5e1"}`, borderRadius: 10, padding: 12, textAlign: "center", background: "#fff", pageBreakInside: "avoid" }}>
+                          <div style={{ fontSize: 28, marginBottom: 4 }}>{z.icon}</div>
+                          <div style={{ fontSize: 14, fontWeight: 800, color: z.color || "#0f172a", marginBottom: 8 }}>{z.name}</div>
+                          <img src={qrUrl} alt={z.name} style={{ width: "100%", height: "auto", borderRadius: 4, background: "#fff" }} />
+                          <div style={{ fontSize: 9, color: "#64748b", marginTop: 6, wordBreak: "break-all" }}>📱 스캔하여 체크인</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ━━━ QR 체크인 결과 토스트 ━━━ */}
+          {checkinResult && (
+            <div onClick={() => setCheckinResult(null)}
+              style={{
+                position: "fixed", top: 80, left: "50%", transform: "translateX(-50%)",
+                zIndex: 10090, padding: "14px 24px",
+                background: checkinResult.message.startsWith("✅") ? "linear-gradient(135deg,#10b981,#059669)" : "linear-gradient(135deg,#dc2626,#b91c1c)",
+                color: "#fff", borderRadius: 12, fontSize: 14, fontWeight: 800,
+                boxShadow: "0 10px 30px rgba(0,0,0,0.3)", cursor: "pointer",
+                display: "flex", alignItems: "center", gap: 8, animation: "slideDown 0.3s",
+              }}>
+              <span style={{ fontSize: 22 }}>{checkinResult.zone.icon}</span>
+              <span>{checkinResult.message}</span>
+            </div>
+          )}
+          <style>{`
+            @keyframes slideDown { from { transform: translate(-50%, -100px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+            @media print {
+              body * { visibility: hidden; }
+              .zone-qr-print-area, .zone-qr-print-area * { visibility: visible; }
+              .zone-qr-print-area { position: absolute; left: 0; top: 0; width: 100%; }
+            }
+          `}</style>
 
           {/* ━━━ 사용자 클릭 시 상세 팝업 ━━━ */}
           {selectedUserId && (() => {
