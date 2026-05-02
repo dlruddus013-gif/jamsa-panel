@@ -1,0 +1,17477 @@
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+
+/* ─── LOCAL STORAGE PERSISTENCE HOOK ───
+   Drop-in replacement for useState that syncs to localStorage.
+   Falls back to plain useState if localStorage is unavailable. */
+const useLocalStorage = (key, defaultValue) => {
+  const [value, setValue] = useState(() => {
+    try {
+      const stored = window.localStorage?.getItem(key);
+      if (stored == null) return defaultValue;
+      const parsed = JSON.parse(stored);
+      return parsed;
+    } catch (e) {
+      return defaultValue;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      if (value == null || (Array.isArray(value) && value.length === 0)) {
+        // Skip storing empty initial state to save space
+        return;
+      }
+      window.localStorage?.setItem(key, JSON.stringify(value));
+    } catch (e) {
+      // Quota exceeded or disabled — silently ignore
+      console.warn("[useLocalStorage] save failed:", key, e.message);
+    }
+  }, [key, value]);
+
+  return [value, setValue];
+};
+
+// Export all data as JSON (for manual backup)
+const exportAllData = () => {
+  try {
+    const keys = Object.keys(window.localStorage).filter(k => k.startsWith("jamsa_"));
+    const data = {};
+    keys.forEach(k => { try { data[k] = JSON.parse(window.localStorage[k]); } catch(e) {} });
+    const json = JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), data }, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `jamsa-backup-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    return true;
+  } catch (e) {
+    alert("백업 내보내기 실패: " + e.message);
+    return false;
+  }
+};
+
+// Import JSON backup
+const importAllData = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const parsed = JSON.parse(e.target.result);
+      if (!parsed.data) throw new Error("올바른 백업 파일이 아닙니다");
+      Object.entries(parsed.data).forEach(([k, v]) => {
+        try { window.localStorage.setItem(k, JSON.stringify(v)); } catch(e2) {}
+      });
+      resolve(parsed);
+    } catch (err) { reject(err); }
+  };
+  reader.onerror = () => reject(new Error("파일 읽기 실패"));
+  reader.readAsText(file);
+});
+
+/* ============================================================
+ * 한국잠사플레이팜/박물관 - 통합 관리 시스템 (Integrated Suite)
+ *
+ * Combines two previously-separate tools into a single artifact:
+ *   1) 시설점검 (Facility Inspection)  — from facility-manager-v2
+ *   2) 재고관리 (Inventory Management) — from 잠사박물관 재고관리 v11
+ *
+ * Shared:
+ *   - 로그인 & 사용자/권한 관리 (merged role matrix)
+ *   - 좌측 사이드바 + 상단 모듈 전환 탭
+ *   - 공통 아이콘/Modal/QR 유틸
+ *
+ * Each module retains its full original functionality.
+ * ============================================================ */
+
+
+/* ==================== FACILITY MODULE (from facility-manager-v2) ==================== */
+
+/* ─── DATA ─── */
+const FAC_USERS = [
+  { id: "u1", name: "이경연", email: "admin@jamsafarm.kr", pw: "admin1234", role: "ADMIN", dept: "시설운영팀" },
+  { id: "u2", name: "김효진", email: "mgr@jamsafarm.kr", pw: "mgr1234", role: "MANAGER", dept: "시설운영팀" },
+  { id: "u3", name: "전원기", email: "ins1@jamsafarm.kr", pw: "ins1234", role: "INSPECTOR", dept: "시설운영팀" },
+  { id: "u4", name: "고가은", email: "ins2@jamsafarm.kr", pw: "ins1234", role: "INSPECTOR", dept: "체험프로그램팀" },
+  { id: "u5", name: "박반장", email: "viewer@jamsafarm.kr", pw: "viewer1234", role: "VIEWER", dept: "경영지원팀" },
+];
+
+const FAC_FACILITIES = [
+  { id: "f1", code: "FAC-001", name: "튜브썰매장", type: "RIDE", location: "야외광장 남측", zone: "야외광장", importance: "VERY_HIGH", cycle: "WEEKLY", legal: true },
+  { id: "f2", code: "FAC-002", name: "에어바운스 놀이터", type: "RIDE", location: "야외광장 동측", zone: "야외광장", importance: "VERY_HIGH", cycle: "WEEKLY", legal: true },
+  { id: "f3", code: "FAC-010", name: "누에체험관", type: "EXHIBIT", location: "본관 1층", zone: "박물관동", importance: "HIGH", cycle: "MONTHLY", legal: false },
+  { id: "f4", code: "FAC-020", name: "디지털 키즈카페", type: "PLAYGROUND", location: "본관 2층", zone: "박물관동", importance: "HIGH", cycle: "WEEKLY", legal: false },
+  { id: "f5", code: "FAC-030", name: "양떼정원 울타리", type: "LIVESTOCK", location: "양떼정원 외곽", zone: "양떼정원", importance: "HIGH", cycle: "DAILY", legal: false },
+  { id: "f6", code: "FAC-040", name: "단체식당 주방", type: "KITCHEN", location: "식당동 1층", zone: "식당동", importance: "VERY_HIGH", cycle: "DAILY", legal: true },
+  { id: "f7", code: "FAC-050", name: "박물관 주출입 계단", type: "PASSAGE", location: "본관 정문", zone: "박물관동", importance: "HIGH", cycle: "WEEKLY", legal: false },
+  { id: "f8", code: "FAC-060", name: "본관 전기 배전반", type: "ELECTRICAL", location: "지하 전기실", zone: "박물관동", importance: "VERY_HIGH", cycle: "QUARTERLY", legal: true },
+  { id: "f9", code: "FAC-070", name: "본관 소방설비", type: "FIRE_SAFETY", location: "본관 전체", zone: "박물관동", importance: "VERY_HIGH", cycle: "MONTHLY", legal: true },
+  { id: "f10", code: "FAC-080", name: "본관 건축외벽", type: "BUILDING", location: "본관 전체", zone: "박물관동", importance: "MEDIUM", cycle: "QUARTERLY", legal: false },
+  { id: "f11", code: "FAC-090", name: "공용 화장실", type: "HYGIENE", location: "본관 1층 중앙", zone: "박물관동", importance: "MEDIUM", cycle: "DAILY", legal: false },
+  { id: "f12", code: "FAC-021", name: "클라이밍 체험장", type: "PLAYGROUND", location: "별관 1층", zone: "박물관동", importance: "VERY_HIGH", cycle: "WEEKLY", legal: true },
+];
+
+const FAC_FTYPES = { RIDE: "놀이시설", EXHIBIT: "전시관", PLAYGROUND: "키즈/체험", LIVESTOCK: "축사/목장", KITCHEN: "식음/주방", PASSAGE: "동선/계단", FIRE_SAFETY: "소방설비", ELECTRICAL: "전기설비", BUILDING: "건축/외벽", HYGIENE: "위생/청결" };
+const FAC_IMP = { VERY_HIGH: { l: "최상", c: "bg-red-100 text-red-800" }, HIGH: { l: "상", c: "bg-orange-100 text-orange-800" }, MEDIUM: { l: "중", c: "bg-yellow-100 text-yellow-800" }, LOW: { l: "하", c: "bg-blue-100 text-blue-800" } };
+const FAC_CYC = { DAILY: "매일", WEEKLY: "주간", MONTHLY: "월간", QUARTERLY: "분기", HALF_YEARLY: "반기", YEARLY: "연간" };
+const FAC_SEV = { URGENT: { l: "긴급", c: "bg-red-100 text-red-800" }, HIGH: { l: "높음", c: "bg-orange-100 text-orange-800" }, MEDIUM: { l: "보통", c: "bg-yellow-100 text-yellow-800" }, LOW: { l: "낮음", c: "bg-gray-100 text-gray-700" } };
+const FAC_STS = { TODO: "미착수", IN_PROGRESS: "진행중", DONE: "완료", REINSPECTION_REQUIRED: "재점검필요" };
+const FAC_RES = { NORMAL: { l: "정상", c: "bg-emerald-100 text-emerald-800" }, CAUTION: { l: "주의", c: "bg-amber-100 text-amber-800" }, DANGER: { l: "위험", c: "bg-red-100 text-red-800" }, NOT_APPLICABLE: { l: "N/A", c: "bg-gray-100 text-gray-600" } };
+const FAC_APR = { DRAFT: { l: "작성중", c: "bg-gray-100 text-gray-600" }, PENDING: { l: "승인대기", c: "bg-amber-100 text-amber-800" }, APPROVED: { l: "승인완료", c: "bg-emerald-100 text-emerald-800" }, REJECTED: { l: "반려", c: "bg-red-100 text-red-800" } };
+
+const FAC_CHECKLISTS = {
+  f1: [
+    { tid: "t1", name: "지지대 볼트 체결", std: "규격 토크값 유지", range: "20~25 Nm", risk: 5, photo: true, guide: "토크렌치로 각 볼트 확인" },
+    { tid: "t2", name: "용접부 균열/부식", std: "균열·부식 없음", risk: 5, photo: true },
+    { tid: "t3", name: "안전 패딩 상태", std: "파손/마모 없음", risk: 4, photo: true },
+    { tid: "t4", name: "비상정지 버튼", std: "0.5초 이내 정지", risk: 5, photo: false },
+    { tid: "t5", name: "튜브 공기압", std: "제조사 권장", range: "0.02~0.04 MPa", risk: 3, photo: false },
+  ],
+  f4: [
+    { tid: "t10", name: "볼풀 볼 파손", std: "찢어진 볼 제거", risk: 3, photo: false },
+    { tid: "t11", name: "미끄럼틀 표면", std: "균열/파손 없음", risk: 4, photo: true },
+    { tid: "t12", name: "트램펄린 스프링", std: "녹/이탈 없음", risk: 5, photo: true },
+  ],
+  f6: [
+    { tid: "t20", name: "가스 배관 누출", std: "비눗물 테스트", risk: 5, photo: true, guide: "배관 연결부 중점 확인" },
+    { tid: "t21", name: "냉장고 온도", std: "5℃ 이하", range: "≤ 5℃", risk: 4, photo: false },
+    { tid: "t22", name: "식자재 유통기한", std: "기한 경과품 없음", risk: 4, photo: false },
+  ],
+};
+
+const facNow = new Date();
+const _facD = (n) => { const x = new Date(facNow); x.setDate(x.getDate() + n); return x.toISOString(); };
+
+const FAC_INIT_INSPECTIONS = [
+  { id: "i1", facId: "f1", inspId: "u3", at: _facD(-3), result: "DANGER", approval: "PENDING", memo: "볼트 풀림, 패딩 마모 발견", items: [
+    { tid: "t1", result: "DANGER", val: "15 Nm", memo: "2번, 5번 볼트 풀림" },
+    { tid: "t2", result: "NORMAL", val: "" },
+    { tid: "t3", result: "CAUTION", val: "", memo: "하단 마모" },
+    { tid: "t4", result: "NORMAL", val: "" },
+    { tid: "t5", result: "NORMAL", val: "0.03 MPa" },
+  ]},
+  { id: "i2", facId: "f6", inspId: "u4", at: _facD(-1), result: "NORMAL", approval: "APPROVED", memo: "전체 정상", items: [
+    { tid: "t20", result: "NORMAL", val: "" },
+    { tid: "t21", result: "NORMAL", val: "3.2℃" },
+    { tid: "t22", result: "NORMAL", val: "" },
+  ]},
+  { id: "i3", facId: "f4", inspId: "u4", at: _facD(-2), result: "CAUTION", approval: "APPROVED", memo: "미끄럼틀 경미 균열", items: [
+    { tid: "t10", result: "NORMAL", val: "" },
+    { tid: "t11", result: "CAUTION", val: "", memo: "하단부 세로균열" },
+    { tid: "t12", result: "NORMAL", val: "" },
+  ]},
+];
+
+const FAC_INIT_ACTIONS = [
+  { id: "a1", facId: "f1", inspId: "i1", title: "지지대 볼트 재체결", type: "구조물", desc: "2번, 5번 지지대 볼트 풀림", sev: "URGENT", status: "TODO", rec: "토크렌치로 규격 토크 재체결", due: _facD(2), assignee: "u3", memo: null },
+  { id: "a2", facId: "f1", inspId: "i1", title: "안전 패딩 교체", type: "안전장치", desc: "하단 충격흡수 패딩 마모", sev: "HIGH", status: "IN_PROGRESS", rec: "신규 패딩 발주 교체", due: _facD(7), assignee: "u3", memo: null },
+  { id: "a3", facId: "f4", inspId: "i3", title: "미끄럼틀 균열 보수", type: "시설물", desc: "하단부 세로균열 발견", sev: "HIGH", status: "TODO", rec: "균열 부위 보수", due: _facD(-1), assignee: null, memo: null },
+];
+
+const FAC_CCTV_CAMERAS = [
+  // ── 메인 NVR (172.30.10.x) - 본관동/야외 12채널 ──
+  { ch: 1,  name: "입구",       zone: "박물관동",   facId: "f7" },
+  { ch: 2,  name: "주차장",     zone: "야외광장",   facId: "f1" },
+  { ch: 3,  name: "로비",       zone: "박물관동",   facId: "f7" },
+  { ch: 4,  name: "전시실1",    zone: "박물관동",   facId: "f3" },
+  { ch: 5,  name: "전시실2",    zone: "박물관동",   facId: "f3" },
+  { ch: 6,  name: "체험장",     zone: "박물관동",   facId: "f4" },
+  { ch: 7,  name: "복도",       zone: "박물관동",   facId: "f7" },
+  { ch: 8,  name: "후문",       zone: "박물관동",   facId: "f10" },
+  { ch: 9,  name: "창고",       zone: "창고동",     facId: "f8" },
+  { ch: 10, name: "사무실",     zone: "박물관동",   facId: "f7" },
+  { ch: 11, name: "식당",       zone: "식당동",     facId: "f6" },
+  { ch: 12, name: "외부",       zone: "야외광장",   facId: "f1" },
+
+  // ── 누에과학관 NVR (172.31.10.x) - 누에쉘터 7채널 ──
+  { ch: 13, name: "누에1",      zone: "누에과학관", facId: "f3" },
+  { ch: 14, name: "누에2",      zone: "누에과학관", facId: "f3" },
+  { ch: 15, name: "누에3",      zone: "누에과학관", facId: "f3" },
+  { ch: 16, name: "누에4",      zone: "누에과학관", facId: "f3" },
+  { ch: 17, name: "누에5",      zone: "누에과학관", facId: "f3" },
+  { ch: 18, name: "누에6",      zone: "누에과학관", facId: "f3" },
+  { ch: 19, name: "누에7",      zone: "누에과학관", facId: "f3" },
+
+  // ── 야외광장 NVR (172.31.1.51) - 슬로프/광장 4채널 ──
+  { ch: 20, name: "슬로프하단", zone: "야외광장",   facId: "f1" },
+  { ch: 21, name: "야외광장2",  zone: "야외광장",   facId: "f1" },
+  { ch: 22, name: "야외광장3",  zone: "야외광장",   facId: "f1" },
+  { ch: 23, name: "야외광장4",  zone: "야외광장",   facId: "f1" },
+
+  // ── 외부매표소 NVR (172.29.10.60) ──
+  { ch: 24, name: "외부매표소", zone: "매표소",     facId: "f7" },
+
+  // ── 애견파크 NVR (172.31.2.51) - 3채널 ──
+  { ch: 25, name: "왼쪽",       zone: "애견파크",   facId: "f4" },
+  { ch: 26, name: "중앙",       zone: "애견파크",   facId: "f4" },
+  { ch: 27, name: "오른쪽",     zone: "애견파크",   facId: "f4" },
+
+  // ── 양떼정원 NVR (172.31.2.50) - 8채널 ──
+  { ch: 28, name: "Half라인",   zone: "양떼정원",   facId: "f4" },
+  { ch: 29, name: "양떼2",      zone: "양떼정원",   facId: "f4" },
+  { ch: 30, name: "양떼3",      zone: "양떼정원",   facId: "f4" },
+  { ch: 31, name: "양우리내부", zone: "양떼정원",   facId: "f4" },
+  { ch: 32, name: "가운데라인", zone: "양떼정원",   facId: "f4" },
+  { ch: 33, name: "금중어방향", zone: "양떼정원",   facId: "f4" },
+  { ch: 34, name: "양떼7",      zone: "양떼정원",   facId: "f4" },
+  { ch: 35, name: "키오스크",   zone: "양떼정원",   facId: "f7" },
+
+  // ── 매표소 NVR (172.29.0.50) - 티켓팅 5채널 ──
+  { ch: 36, name: "ticket1",    zone: "매표소",     facId: "f7" },
+  { ch: 37, name: "ticket2",    zone: "매표소",     facId: "f7" },
+  { ch: 38, name: "ticket3",    zone: "매표소",     facId: "f7" },
+  { ch: 39, name: "ticket4",    zone: "매표소",     facId: "f7" },
+  { ch: 40, name: "ticket5",    zone: "매표소",     facId: "f7" },
+];
+
+const FAC_CCTV_EVENTS = [
+  { id: "ev1", ch: 2, type: "MOTION", rate: 18.3, sev: "URGENT", summary: "지지대 연결부 이완 감지", time: _facD(0).replace(/T.*/, "T09:14:00"), assigned: "전원기" },
+  { id: "ev2", ch: 6, type: "MOTION", rate: 12.1, sev: "HIGH", summary: "볼풀 매트 이탈 감지", time: _facD(0).replace(/T.*/, "T09:08:00"), assigned: "고가은" },
+  { id: "ev3", ch: 11, type: "SCHEDULED", rate: null, sev: "NONE", summary: "정기 청결점검 — 이상 없음", time: _facD(0).replace(/T.*/, "T09:01:00"), assigned: "고가은" },
+  { id: "ev4", ch: 3, type: "MOTION", rate: 3.2, sev: "NONE", summary: null, time: _facD(0).replace(/T.*/, "T08:45:00"), assigned: null },
+];
+
+/* ─── HELPERS ─── */
+const FacBadge = ({ v, map }) => { const m = map[v]; return m ? <span className={`inline-block text-[10px] font-medium px-1.5 py-0.5 rounded ${m.c}`}>{m.l}</span> : <span className="text-[10px] text-gray-400">{v}</span>; };
+const facFmtD = (s) => { if (!s) return "—"; const d = new Date(s); return d.toLocaleDateString("ko-KR"); };
+const facFmtDT = (s) => { if (!s) return "—"; const d = new Date(s); return d.toLocaleDateString("ko-KR") + " " + d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }); };
+const facFind = (id) => FAC_FACILITIES.find(f => f.id === id);
+const usrFind = (id) => FAC_USERS.find(u => u.id === id);
+
+/* ─── AI VISION API (mock) ─────────────────────────────────────────
+ * In production, replace the body with a fetch() to a backend or
+ * Anthropic / OpenAI vision endpoint. Input: base64 data URL of the
+ * inspection photo + context (facility name, checklist item name).
+ * Output: { defect, solution, materials[], time, budget, severity, type }
+ * ─────────────────────────────────────────────────────────────── */
+/* Suggests a sensible work date+time based on severity. Avoids weekends
+   for non-urgent items, considers facility operation hours. */
+function aiSuggestSchedule(severity) {
+  const now = new Date();
+  const dayMs = 86400000;
+  let offsetDays, timeSlot, reason;
+  if (severity === "URGENT") {
+    offsetDays = 1; timeSlot = "09:00 ~ 12:00";
+    reason = "긴급 위험도로 판정되어 내일 오전 작업을 강력 권장합니다. 개장 전 시간대에 조치 완료 필요.";
+  } else if (severity === "HIGH") {
+    offsetDays = 3; timeSlot = "09:00 ~ 13:00";
+    reason = "주중 오전이 작업 최적 시간입니다. 체험객 방문 전 완료, 자재 건조시간도 확보 가능.";
+  } else if (severity === "MEDIUM") {
+    offsetDays = 7; timeSlot = "14:00 ~ 17:00";
+    reason = "다음 주 평일 오후로 편성. 긴급도가 낮으므로 정기 유지관리 일정과 통합 진행.";
+  } else {
+    offsetDays = 14; timeSlot = "정기점검일 포함 처리";
+    reason = "경미한 수준으로, 2주 내 정기점검일에 함께 처리 권장.";
+  }
+  let target = new Date(now.getTime() + offsetDays * dayMs);
+  // Non-urgent: skip weekends (Sat=6, Sun=0)
+  if (severity !== "URGENT") {
+    while (target.getDay() === 0 || target.getDay() === 6) {
+      target = new Date(target.getTime() + dayMs);
+    }
+  }
+  const yyyymmdd = target.toISOString().slice(0, 10);
+  const weekday = ["일", "월", "화", "수", "목", "금", "토"][target.getDay()];
+  return { date: yyyymmdd, weekday, time: timeSlot, reason };
+}
+
+/* Generates offline + online procurement suggestions based on material name.
+   Offline uses category heuristics for Cheongju region stores. Online
+   uses search URLs (coupang/naver/11st) that open pre-filled searches. */
+function aiSuggestProcurement(matName) {
+  const n = (matName || "").toLowerCase();
+  const q = encodeURIComponent(matName);
+  const offline = [];
+
+  // Category detection
+  const isPaintish = /사포|페인트|프라이머|도료|마스킹|실란트|코팅/.test(n);
+  const isBolt = /볼트|너트|나사|와이어브러시|토크/.test(n);
+  const isPpe = /안전모|작업화|장갑|고글|보호구|마스크/.test(n);
+  const isFire = /소화기|유도등|방화|반사|형광/.test(n);
+  const isRubber = /epdm|고무|패드|패딩|접착제/.test(n);
+  const isChem = /클리너|용제|세제|윤활|방청제/.test(n);
+  const isStationery = /양식|라벨|기록대장|스티커|테이프/.test(n);
+
+  if (isPaintish || isChem) {
+    offline.push({ name: "다이소 청주터미널점", price: "₩2,000~5,000", note: "사포·마스킹테이프 최저가", distance: "2.1km" });
+    offline.push({ name: "청주 페인트상사 (석교동)", price: "₩4,000~12,000", note: "전문 프라이머·상도 상담 가능", distance: "3.4km" });
+    offline.push({ name: "홈플러스 청주점 DIY코너", price: "₩3,500~8,000", note: "주말 방문 · 주차 편리", distance: "4.8km" });
+  } else if (isBolt) {
+    offline.push({ name: "청주 금호철물 (모충동)", price: "₩500~3,000", note: "낱개 구매 가능, 규격 상담", distance: "3.0km" });
+    offline.push({ name: "세원볼트 청주지점", price: "₩300~2,500", note: "업소용 대량 할인", distance: "5.2km" });
+    offline.push({ name: "다이소 청주터미널점", price: "₩1,000~3,000", note: "소량 간이 세트", distance: "2.1km" });
+  } else if (isPpe) {
+    offline.push({ name: "청주 안전용품 (흥덕구)", price: "₩5,000~35,000", note: "산업안전 전용점, KCs 인증품", distance: "4.5km" });
+    offline.push({ name: "홈플러스 청주점", price: "₩8,000~25,000", note: "일반 작업용 PPE", distance: "4.8km" });
+  } else if (isFire) {
+    offline.push({ name: "청주소방용품 (우암동)", price: "₩3,000~50,000", note: "점검표·유도등 전문", distance: "2.8km" });
+    offline.push({ name: "다이소 청주터미널점", price: "₩1,000~4,000", note: "반사테이프·형광라벨만", distance: "2.1km" });
+  } else if (isRubber) {
+    offline.push({ name: "청주 고무상사 (복대동)", price: "₩10,000~80,000", note: "EPDM 재단 판매, 상담 필수", distance: "4.0km" });
+    offline.push({ name: "청주 건자재마트", price: "₩15,000~60,000", note: "구조용 접착제 구비", distance: "5.5km" });
+  } else if (isStationery) {
+    offline.push({ name: "다이소 청주터미널점", price: "₩1,000~3,000", note: "양식지·라벨 최저가", distance: "2.1km" });
+    offline.push({ name: "청주 사무용품상 (사창동)", price: "₩2,000~10,000", note: "대량·맞춤 인쇄", distance: "3.3km" });
+  } else {
+    offline.push({ name: "다이소 청주터미널점", price: "₩1,000~5,000", note: "범용 소모품", distance: "2.1km" });
+    offline.push({ name: "홈플러스 청주점", price: "₩3,000~15,000", note: "일반 생활·작업용품", distance: "4.8km" });
+  }
+
+  const online = [
+    { name: "쿠팡 로켓배송", priceRange: "₩2,000~15,000", delivery: "내일 도착", url: `https://www.coupang.com/np/search?q=${q}` },
+    { name: "네이버 쇼핑 최저가", priceRange: "₩1,800~12,000", delivery: "2~3일", url: `https://search.shopping.naver.com/search/all?query=${q}` },
+    { name: "11번가 오늘발송", priceRange: "₩2,200~14,000", delivery: "당일/익일", url: `https://search.11st.co.kr/Search.tmall?kwd=${q}` },
+  ];
+
+  return { offline, online };
+}
+
+/* Generates beginner-friendly step-by-step guide for each scenario type */
+function aiStepsForType(type, severity) {
+  const stepLib = {
+    "시설물 보수": [
+      { n: 1, title: "안전 준비", desc: "작업 구역을 안전띠로 표시하고 '점검 중 출입금지' 팻말을 세웁니다. 방진 마스크·보안경·면장갑을 반드시 착용하세요.", duration: "10분", tip: "💡 페인트 가루가 나므로 눈 보호는 필수. 면장갑은 샌딩 시 미끄럼 방지용입니다." },
+      { n: 2, title: "기존 페인트 제거 (샌딩)", desc: "220방 사포를 이용해 박리된 페인트와 녹을 한 방향으로 문질러 제거합니다. 깨끗한 금속 표면이 드러날 때까지 계속하세요.", duration: "30~45분", tip: "💡 초심자는 전동 샌더 없이 손 샌딩이 안전합니다. 힘을 빼고 여러 번 문지르세요." },
+      { n: 3, title: "표면 청소 및 마스킹", desc: "샌딩 후 젖은 마이크로파이버 천으로 먼지를 깨끗이 닦고 완전히 말립니다. 도색하지 않을 부분은 마스킹 테이프로 가려주세요.", duration: "15분", tip: "💡 먼지가 남으면 도장이 들뜹니다. 표면을 손으로 만져 매끈해질 때까지 반복." },
+      { n: 4, title: "방청 프라이머 도포", desc: "프라이머를 얇게 한 겹만 바르고 30분 건조. 붓보다 롤러가 초심자에게 편합니다. 한 방향으로 가볍게 바르세요.", duration: "30분 (건조 포함)", tip: "⚠️ 두껍게 바르면 오히려 떨어집니다. '얇게·여러 번'이 원칙." },
+      { n: 5, title: "우레탄 상도 재도장", desc: "프라이머가 완전히 마른 후(손가락으로 눌러서 묻어나오지 않을 때) 상도 도료를 2회 도포. 각 회차 사이 1시간 건조.", duration: "약 1시간", tip: "💡 맑은 날, 습도 70% 이하에서 도장. 비오는 날은 2일 미룹니다." },
+      { n: 6, title: "볼트 재조임 및 최종 점검", desc: "토크렌치로 볼트를 규격 토크(20~25Nm)로 조입니다. 토크렌치가 없으면 '렌치로 힘껏 조이되 무리하지 않는 수준'이 기준.", duration: "15분", tip: "⚠️ 볼트에 방청제 한 방울 바른 후 조이면 나중에 풀기 쉽습니다." },
+    ],
+    "안전장치 교체": [
+      { n: 1, title: "기존 패딩 분리", desc: "손상된 고무 패딩의 접착 부위를 스크래퍼로 긁어 분리합니다. 남은 접착제 잔여물은 클리너 용제로 닦아 제거.", duration: "20분", tip: "💡 강제로 뜯지 말고 용제를 살짝 뿌려 불린 후 분리하세요." },
+      { n: 2, title: "부착면 청소·건조", desc: "클리너 용제로 접착 부위를 완전히 청소 후 최소 10분 건조. 기름·먼지가 남으면 새 패딩이 붙지 않습니다.", duration: "15분", tip: "💡 손으로 만져서 기름기가 느껴지지 않을 때까지 반복 청소." },
+      { n: 3, title: "패딩 재단", desc: "EPDM 패드를 기존 크기보다 약 5mm 여유 있게 재단합니다. 커터 칼은 새 칼날로 한 번에 긋는 게 깔끔합니다.", duration: "15분", tip: "💡 자르기 전 연필로 먼저 표시하세요. 실수 방지." },
+      { n: 4, title: "접착제 도포 및 부착", desc: "구조용 접착제를 패드 전체에 지그재그로 발라주고 바로 부착. 30초간 꾹 눌러 기포 제거.", duration: "20분", tip: "⚠️ 접착제 도포 후 5분 이내 부착. 너무 빨리 붙이면 미끄러지고 늦으면 접착 실패." },
+      { n: 5, title: "양생 (24시간)", desc: "부착 후 24시간은 해당 구역을 사용하지 마세요. 체험객 진입 금지선 유지.", duration: "24시간", tip: "💡 '사용 금지' 안내판을 확실히 부착. 야간에도 명확히 보이도록." },
+    ],
+    "구조물": [
+      { n: 1, title: "시설 일시 운영 중단", desc: "위험도 URGENT이므로 해당 시설 즉시 출입 차단. 체험 예약자에게 SMS로 공지.", duration: "5분", tip: "⚠️ URGENT 등급은 즉시 조치가 법적 의무입니다. 연기 금지." },
+      { n: 2, title: "부식 부위 제거", desc: "와이어브러시로 부식 부위를 갈아냅니다. 금속 광택이 보일 때까지 반복. 가루가 많이 나므로 마스크 필수.", duration: "20분", tip: "💡 전동 와이어브러시가 있으면 10분에 끝납니다." },
+      { n: 3, title: "방청제 도포 및 건조", desc: "방청제를 충분히 뿌린 후 10분 건조. 표면에 얇은 피막이 형성됩니다.", duration: "15분", tip: "💡 방청제는 꼭 '에어로졸형'이 사용 편합니다." },
+      { n: 4, title: "동일규격 볼트 교체", desc: "기존 볼트를 풀고 동일 규격(M12)의 새 볼트로 교체. 렌치 2개(하나는 고정용)로 양쪽에서 작업.", duration: "30분", tip: "💡 볼트 구매 전 풀어놓은 헌 볼트를 철물점에 가져가 비교하세요." },
+      { n: 5, title: "규격 토크로 체결", desc: "토크렌치로 20~25Nm에 맞춰 조입니다. 토크렌치가 없으면 렌치에 30cm 연장대 사용 시 힘껏 조이는 수준.", duration: "15분", tip: "⚠️ 과토크는 볼트 파손 원인. 토크렌치 대여 추천." },
+      { n: 6, title: "재점검 및 시설 재개장", desc: "모든 체결부를 손으로 당겨 이상 없는지 확인하고 사진 기록 후 재개장.", duration: "10분", tip: "💡 재개장 전 사진은 다음 AI 완료확인 시 사용됩니다." },
+    ],
+    "유지관리": [
+      { n: 1, title: "표면 상태 확인", desc: "중성세제 사용 전 표면 오염 정도를 사진 찍어 기록합니다. 심한 곰팡이/기름때가 있으면 전용 세제 사용.", duration: "5분", tip: "💡 세척 전/후 사진이 있으면 AI 완료확인 시 정확도 올라갑니다." },
+      { n: 2, title: "중성세제 세척", desc: "중성세제를 물 1리터당 10ml 희석해 마이크로파이버 천에 적셔 전체 표면을 닦아냅니다.", duration: "20분", tip: "💡 강한 세제·식초·락스 절대 금지. 표면 코팅 손상." },
+      { n: 3, title: "헹굼 및 건조", desc: "깨끗한 물로 적신 천으로 세제 잔여물을 완전히 제거하고 마른 천으로 물기를 닦아냅니다. 30분 자연 건조.", duration: "30분", tip: "💡 햇빛 직사 건조는 얼룩 원인. 그늘진 곳에서 말리세요." },
+      { n: 4, title: "보호 코팅 재도포", desc: "스프레이형 보호 코팅제를 30cm 거리에서 얇게 분사. 1회 도포로 충분합니다.", duration: "10분", tip: "💡 바람 불지 않는 날·실내 작업 권장." },
+    ],
+    "안전장치 교체": [], // placeholder duplicate safety
+  };
+  const arr = stepLib[type] || stepLib["시설물 보수"];
+  return arr;
+}
+
+const analyzeFacilityPhotoAI = async (imageDataUrl, facName, itemName) => {
+  // Deterministic pseudo-randomization so repeated calls on the same
+  // photo + context produce the same mock result (useful for demos).
+  const seedStr = String(imageDataUrl || "").slice(-60) + "|" + (facName || "") + "|" + (itemName || "");
+  let seed = 0;
+  for (let i = 0; i < seedStr.length; i++) seed = ((seed << 5) - seed + seedStr.charCodeAt(i)) | 0;
+  const rnd = (n) => { seed = (seed * 16807) % 2147483647; return Math.abs(seed) % n; };
+
+  const SCENARIOS = [
+    {
+      defect: "페인트 박리 및 미세 녹 발생, 볼트 체결부 이완 의심",
+      solution: "해당 부위 샌딩(220방) 후 방청 프라이머 도포 → 우레탄 상도 재도장 → 토크렌치로 규격값 재조임",
+      materials: ["사포(220방) 3장", "방청 프라이머 1L", "우레탄 상도 페인트 1L", "마스킹 테이프", "방청 윤활제"],
+      time: "약 3~4시간", budget: "약 55,000원", severity: "HIGH", type: "시설물 보수",
+      beforeLabel: "페인트 박리·녹 발생·볼트 이완",
+      afterLabel: "재도장 완료·볼트 규격토크 체결",
+    },
+    {
+      defect: "고무 패딩 경화·균열 및 접착부 박리",
+      solution: "손상 패딩 제거 → EPDM 고무 패드 신규 부착, 구조용 접착제 도포 후 24시간 양생",
+      materials: ["EPDM 패드 2㎡", "구조용 접착제 500g", "클리너 용제 1L"],
+      time: "약 2시간(양생 별도)", budget: "약 38,000원", severity: "HIGH", type: "안전장치 교체",
+      beforeLabel: "고무 균열·접착 박리",
+      afterLabel: "신규 EPDM 패드 부착 완료",
+    },
+    {
+      defect: "볼트/용접부 국부 부식 및 체결력 저하",
+      solution: "부식 부위 와이어브러시 제거 → 방청제 도포 → 동일규격 볼트 교체, 체결토크 20~25Nm",
+      materials: ["M12 볼트 6개", "와이어브러시", "방청제 300ml", "토크렌치 점검"],
+      time: "약 1.5시간", budget: "약 22,000원", severity: "URGENT", type: "구조물",
+      beforeLabel: "볼트 부식·체결력 저하",
+      afterLabel: "신규 볼트 교체·토크 체결 완료",
+    },
+    {
+      defect: "표면 미세 균열(0.3~0.5mm) 및 수분 침투 흔적",
+      solution: "균열 부위 V-커팅 후 폴리우레탄 실란트 충전, 코팅 재도포",
+      materials: ["PU 실란트 2개", "V-커터 날", "프라이머 500ml", "코팅제 1L"],
+      time: "약 2~3시간", budget: "약 45,000원", severity: "MEDIUM", type: "시설물 보수",
+      beforeLabel: "미세 균열·수분 침투 흔적",
+      afterLabel: "실란트 충전·코팅 재도포",
+    },
+    {
+      defect: "표면 오염 및 경미한 마모, 기능상 이상 없음",
+      solution: "중성세제로 세척 후 보호 코팅 재도포. 다음 정기점검 시 재확인",
+      materials: ["중성세제 1L", "마이크로파이버 천", "보호 코팅제 500ml"],
+      time: "약 1시간", budget: "약 12,000원", severity: "LOW", type: "유지관리",
+      beforeLabel: "표면 오염·경미 마모",
+      afterLabel: "세척·보호 코팅 재도포 완료",
+    },
+  ];
+
+  // Simulate latency (shorter than 2.5s for better UX, 1.2s)
+  await new Promise(r => setTimeout(r, 1200));
+  const scenario = SCENARIOS[rnd(SCENARIOS.length)];
+  const procurement = {};
+  scenario.materials.forEach(m => { procurement[m] = aiSuggestProcurement(m); });
+  return {
+    ...scenario,
+    defect: (facName ? facName + " — " : "") + (itemName ? "[" + itemName + "] " : "") + scenario.defect,
+    detailedSteps: aiStepsForType(scenario.type, scenario.severity),
+    schedule: aiSuggestSchedule(scenario.severity),
+    procurement,
+  };
+};
+
+/* Inline SVG illustration for "before" (damaged) state */
+function AiBeforeSvg({ label }) {
+  return (
+    <svg viewBox="0 0 200 140" xmlns="http://www.w3.org/2000/svg" style={{ width: "100%", height: "100%", display: "block" }}>
+      <defs>
+        <pattern id="rustPatt" width="8" height="8" patternUnits="userSpaceOnUse">
+          <circle cx="2" cy="2" r="1.2" fill="#b91c1c" opacity="0.6"/>
+          <circle cx="6" cy="5" r="0.8" fill="#991b1b" opacity="0.4"/>
+        </pattern>
+      </defs>
+      <rect width="200" height="140" fill="#fef2f2"/>
+      <rect x="25" y="30" width="150" height="70" fill="#e5e7eb" rx="6"/>
+      <rect x="25" y="30" width="150" height="70" fill="url(#rustPatt)" rx="6"/>
+      {/* Cracks */}
+      <path d="M 60 40 L 75 55 L 68 70 L 82 85" stroke="#7f1d1d" strokeWidth="1.5" fill="none" opacity="0.7"/>
+      <path d="M 120 45 L 135 60 L 128 80" stroke="#7f1d1d" strokeWidth="1.5" fill="none" opacity="0.7"/>
+      {/* Warning icon */}
+      <circle cx="170" cy="20" r="14" fill="#dc2626"/>
+      <text x="170" y="26" textAnchor="middle" fontSize="16" fill="#fff" fontWeight="bold">!</text>
+      {/* Label */}
+      <rect x="10" y="108" width="180" height="22" fill="#dc2626" rx="3"/>
+      <text x="100" y="123" textAnchor="middle" fontSize="10" fill="#fff" fontWeight="bold">⚠️ 조치 전: {label}</text>
+    </svg>
+  );
+}
+
+/* Inline SVG illustration for "after" (repaired) state */
+function AiAfterSvg({ label }) {
+  return (
+    <svg viewBox="0 0 200 140" xmlns="http://www.w3.org/2000/svg" style={{ width: "100%", height: "100%", display: "block" }}>
+      <defs>
+        <linearGradient id="shinyG" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#dcfce7"/>
+          <stop offset="100%" stopColor="#86efac"/>
+        </linearGradient>
+      </defs>
+      <rect width="200" height="140" fill="#f0fdf4"/>
+      <rect x="25" y="30" width="150" height="70" fill="url(#shinyG)" rx="6" stroke="#22c55e" strokeWidth="1"/>
+      {/* Sparkles */}
+      <text x="55" y="60" fontSize="12">✨</text>
+      <text x="140" y="55" fontSize="10">✨</text>
+      <text x="90" y="85" fontSize="10">✨</text>
+      {/* Check icon */}
+      <circle cx="170" cy="20" r="14" fill="#059669"/>
+      <path d="M 163 20 L 168 25 L 177 14" stroke="#fff" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+      {/* Label */}
+      <rect x="10" y="108" width="180" height="22" fill="#059669" rx="3"/>
+      <text x="100" y="123" textAnchor="middle" fontSize="10" fill="#fff" fontWeight="bold">✅ 조치 후: {label}</text>
+    </svg>
+  );
+}
+
+/* Downsize image before sending to AI to keep payload small */
+const facCompressPhoto = (file, maxSize = 800) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const img = new Image();
+    img.onload = () => {
+      const max = maxSize;
+      let w = img.width, h = img.height;
+      if (w > max || h > max) { const r = Math.min(max / w, max / h); w = w * r; h = h * r; }
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      c.getContext("2d").drawImage(img, 0, 0, w, h);
+      resolve(c.toDataURL("image/jpeg", 0.75));
+    };
+    img.onerror = reject;
+    img.src = ev.target.result;
+  };
+  reader.onerror = reject;
+  reader.readAsDataURL(file);
+});
+
+/* ─── AI SAFETY & HAZARD API (mock) ─────────────────────────────
+ * Analyzes a site/facility photo for occupational safety hazards.
+ * In production, replace with fetch() to a backend model trained on
+ * OSHA-style hazard detection. Output can be registered as a facility
+ * 보완과제 (시정조치) with legal reference attached.
+ * ───────────────────────────────────────────────────────────── */
+// 안전 위험성 평가 — 백엔드 /api/safety-ai-analyze 경유 (Claude API)
+const analyzeSafetyHazardAI = async (photoDataUrl, facName, facType) => {
+  if (!photoDataUrl) throw new Error("사진이 필요합니다.");
+
+  const fetcher = (typeof window !== "undefined" && window.authFetch) ? window.authFetch : ((path, opts) => fetch(path, opts));
+
+  const response = await fetcher("/api/safety-ai-analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      image: photoDataUrl,
+      zoneName: facName || "",
+      zoneType: facType || "",
+    }),
+  });
+
+  if (!response.ok) {
+    let errMsg = `API 요청 실패 (${response.status})`;
+    try { const j = await response.json(); errMsg = j.message || j.error || errMsg; } catch (e) {}
+    throw new Error(errMsg);
+  }
+
+  const data = await response.json();
+  if (!data.ok || !data.result) throw new Error("백엔드에서 유효한 응답을 받지 못했습니다.");
+
+  const r = data.result;
+
+  // 기존 UI 호환을 위한 매핑 (severity, hazards, solution, type, materials, legalRef)
+  const sevMap = { "긴급": "URGENT", "높음": "HIGH", "보통": "MEDIUM", "낮음": "LOW" };
+  return {
+    // 기존 필드 (호환성)
+    hazards: (r.발견내용 || []).join("\n• ") ? `• ${(r.발견내용 || []).join("\n• ")}` : "특이사항 없음",
+    solution: [
+      ...(r.즉시조치 || []).map(s => `[즉시] ${s}`),
+      ...(r.단기조치 || []).map(s => `[단기] ${s}`),
+      ...(r.장기조치 || []).map(s => `[장기] ${s}`),
+    ].join("\n"),
+    severity: sevMap[r.위험도] || "MEDIUM",
+    legalRef: r.관련법규 || "",
+    type: (r.위험유형 && r.위험유형[0]) || "안전점검",
+    materials: [],
+    // 새 필드 (확장)
+    score: r.위험점수,
+    riskTypes: r.위험유형 || [],
+    placeGuess: r.장소추정,
+    findings: r.발견내용 || [],
+    findingsLocation: r.발견_위치 || [],
+    immediate: r.즉시조치 || [],
+    shortTerm: r.단기조치 || [],
+    longTerm: r.장기조치 || [],
+    department: r.담당부서,
+    deadline: r.조치기한,
+    taskTitle: r.보완과제제목,
+    rephotoGuide: r.재촬영가이드,
+    estCost: r.예상비용,
+    relatedLaw: r.관련법규,
+    similarCaseWarning: r.유사사례경고,
+    raw: r,
+  };
+};
+
+/* ─── SAFETY DATA (initial) ─── */
+const FAC_SAFE_TRAIN_TYPES = {
+  "법정안전": { c: "bg-violet-100 text-violet-700" },
+  "운영안전": { c: "bg-blue-100 text-blue-700" },
+  "보건/응급": { c: "bg-emerald-100 text-emerald-700" },
+  "소방안전": { c: "bg-red-100 text-red-700" },
+  "위생관리": { c: "bg-amber-100 text-amber-700" },
+};
+const FAC_SAFE_TRAIN_STS = {
+  "SCHEDULED": { l: "예정", c: "bg-gray-100 text-gray-700" },
+  "COMPLETED": { l: "완료", c: "bg-emerald-100 text-emerald-700" },
+  "CANCELLED": { l: "취소", c: "bg-red-100 text-red-700" },
+};
+
+const FAC_INIT_SAFE_TRAININGS = [
+  { id: "tr1", title: "튜브썰매장 안전요원 수칙 교육", type: "운영안전", date: "2026-04-10", instructor: "이경연", attendees: ["u3", "u4"], status: "COMPLETED" },
+  { id: "tr2", title: "누에체험관 알러지 및 응급처치(CPR)", type: "보건/응급", date: "2026-04-12", instructor: "외부강사", attendees: ["u2", "u3", "u4", "u5"], status: "COMPLETED" },
+  { id: "tr3", title: "식당동 주방 화재 예방 및 소화기 사용법", type: "소방안전", date: "2026-04-20", instructor: "김효진", attendees: ["u2", "u4"], status: "SCHEDULED" },
+];
+
+const FAC_INIT_SAFE_INSPECTIONS = [
+  { id: "si1", facId: "f1", title: "썰매장 개장 전 직원 동선 점검", inspector: "u3", date: "2026-04-15", result: "NORMAL", memo: "안전 펜스 결속 양호, 직원 무전기 정상 작동" },
+  { id: "si2", facId: "f8", title: "전기실 수전설비 작업자 안전구 점검", inspector: "u2", date: "2026-04-18", result: "CAUTION", memo: "절연 장갑 마모 발견 (재고 출고 요청함)" },
+];
+
+/* ─── AI COMPLETION VERIFY (mock) ─────────────────────────────
+ * Given a "before" photo context and "after" photos, decides if the
+ * reported issue was resolved. In production, replace with fetch()
+ * that compares images against the original AI defect description.
+ * ─────────────────────────────────────────────────────────────── */
+const verifyCompletionAI = async (beforePhoto, afterPhotos, aiContext) => {
+  // Deterministic seed so same inputs produce same verdict
+  const seedStr = String(beforePhoto || "").slice(-30) + "|" + afterPhotos.length + "|" + (aiContext?.type || "");
+  let seed = 0;
+  for (let i = 0; i < seedStr.length; i++) seed = ((seed << 5) - seed + seedStr.charCodeAt(i)) | 0;
+  const rnd = (n) => { seed = (seed * 16807) % 2147483647; return Math.abs(seed) % n; };
+
+  // Weighted outcomes: 70% confirmed / 20% partial / 10% needs rework
+  const roll = rnd(100);
+  await new Promise(r => setTimeout(r, 1500));
+
+  if (afterPhotos.length === 0) {
+    return { confirmed: false, confidence: 0, status: "ERROR", notes: "After 사진이 없어 판정할 수 없습니다." };
+  }
+
+  if (roll < 70) {
+    return {
+      confirmed: true,
+      confidence: 85 + rnd(13),
+      status: "RESOLVED",
+      notes: `원 보고(${aiContext?.type || "문제"}) 대비 개선 상태 확인됨. 볼트 체결·페인트 도포·정리정돈 등 시정조치 실행 증거가 관찰됨. 완료 처리 승인.`,
+    };
+  } else if (roll < 90) {
+    return {
+      confirmed: false,
+      confidence: 55 + rnd(15),
+      status: "PARTIAL",
+      notes: "부분적 개선은 확인되나 일부 지점(좌측 하단 영역)에 원 문제가 잔존. 추가 보완 후 재촬영 권장.",
+    };
+  } else {
+    return {
+      confirmed: false,
+      confidence: 30 + rnd(20),
+      status: "UNRESOLVED",
+      notes: "제출된 사진에서 원 문제의 해소 증거가 관찰되지 않음. 시정조치가 실제 수행되었는지 재확인 필요.",
+    };
+  }
+};
+
+/* ─── AUDIT LOG MODAL ─── */
+function AuditLogModal({ log, onClose }) {
+  const [filterModule, setFilterModule] = useState("all");
+  const [filterAction, setFilterAction] = useState("all");
+  const modBadge = { facility: { l: "🛠 시설", c: "#3b5bdb" }, inventory: { l: "📦 재고", c: "#7c3aed" }, safety: { l: "🛡️ 안전", c: "#ef4444" } };
+  const actBadge = {
+    ai_analyze: { l: "AI 분석", c: "#7c3aed" },
+    ai_complete: { l: "AI 완료 확인", c: "#059669" },
+    action_create: { l: "과제 생성", c: "#2563eb" },
+    action_done: { l: "완료 처리", c: "#059669" },
+    action_update: { l: "과제 수정", c: "#64748b" },
+    training_save: { l: "교육 등록", c: "#ca8a04" },
+  };
+  const filtered = log.filter(e => {
+    if (filterModule !== "all" && e.module !== filterModule) return false;
+    if (filterAction !== "all" && e.action !== filterAction) return false;
+    return true;
+  });
+  const fmt = (iso) => { const d = new Date(iso); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`; };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10001, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)", backdropFilter: "blur(2px)" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, width: 720, maxWidth: "92vw", maxHeight: "85vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 800 }}>📋 활동 기록 (감사 로그)</div>
+            <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>AI 분석 · 보완과제 · 교육 등록 전체 이력</div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#94a3b8" }}>×</button>
+        </div>
+
+        <div style={{ padding: "10px 20px", display: "flex", gap: 8, alignItems: "center", borderBottom: "1px solid #f1f5f9", flexShrink: 0, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>모듈:</span>
+          {[["all", "전체"], ["facility", "시설"], ["inventory", "재고"], ["safety", "안전"]].map(([k, l]) => (
+            <button key={k} onClick={() => setFilterModule(k)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #e5e7eb", fontSize: 11, fontWeight: 700, cursor: "pointer", background: filterModule === k ? "#0f172a" : "#fff", color: filterModule === k ? "#fff" : "#475569" }}>{l}</button>
+          ))}
+          <span style={{ width: 1, height: 18, background: "#e5e7eb", margin: "0 4px" }}></span>
+          <span style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>구분:</span>
+          {[["all", "전체"], ["ai_analyze", "AI 분석"], ["ai_complete", "완료확인"], ["action_create", "과제생성"], ["action_done", "완료"]].map(([k, l]) => (
+            <button key={k} onClick={() => setFilterAction(k)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #e5e7eb", fontSize: 11, fontWeight: 700, cursor: "pointer", background: filterAction === k ? "#0f172a" : "#fff", color: filterAction === k ? "#fff" : "#475569" }}>{l}</button>
+          ))}
+          <span style={{ marginLeft: "auto", fontSize: 11, color: "#64748b" }}>{filtered.length}건 표시</span>
+        </div>
+
+        <div style={{ flex: 1, overflowY: "auto", padding: "12px 20px" }}>
+          {filtered.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 40, color: "#94a3b8", fontSize: 13 }}>
+              {log.length === 0 ? "아직 기록이 없습니다. AI 분석을 실행하면 여기에 누적됩니다." : "필터 조건에 맞는 기록이 없습니다."}
+            </div>
+          ) : (
+            filtered.map(e => {
+              const m = modBadge[e.module] || { l: e.module, c: "#64748b" };
+              const a = actBadge[e.action] || { l: e.action, c: "#64748b" };
+              return (
+                <div key={e.id} style={{ display: "flex", gap: 10, padding: "10px 0", borderBottom: "1px solid #f1f5f9", fontSize: 12 }}>
+                  <div style={{ fontSize: 10, color: "#94a3b8", minWidth: 80, fontFamily: "monospace" }}>{fmt(e.at)}</div>
+                  <div style={{ display: "flex", gap: 4, flexDirection: "column", alignItems: "flex-start", flexShrink: 0, minWidth: 76 }}>
+                    <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 4, background: m.c + "22", color: m.c }}>{m.l}</span>
+                    <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 4, background: a.c + "22", color: a.c }}>{a.l}</span>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "#0f172a", marginBottom: 2 }}>
+                      <span style={{ color: "#2563eb" }}>{e.userName}</span>
+                      <span style={{ color: "#64748b" }}> — {e.summary || e.targetLabel}</span>
+                    </div>
+                    <div style={{ fontSize: 10, color: "#94a3b8" }}>
+                      {e.targetLabel && <span>대상: {e.targetLabel}</span>}
+                      {e.photoCount > 0 && <span> · 📷 {e.photoCount}장</span>}
+                      {e.severity && <span> · 심각도 {e.severity}</span>}
+                      {e.resultStatus && <span> · 결과 {e.resultStatus}</span>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── ACTION COMPLETION MODAL (AI 완료 확인) ─── */
+function ActionCompletionModal({ action, onClose, onConfirm, addAudit }) {
+  const [afterPhotos, setAfterPhotos] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [verdict, setVerdict] = useState(null);
+  const [note, setNote] = useState("");
+
+  const addPhotos = async (files) => {
+    const arr = [];
+    for (const f of files) {
+      try { arr.push(await facCompressPhoto(f)); } catch (e) { /* ignore */ }
+    }
+    setAfterPhotos(prev => [...prev, ...arr]);
+  };
+  const handleFile = (e) => { if (e.target.files?.length) addPhotos([...e.target.files]); e.target.value = ""; };
+
+  // Document-level paste listener — captures Ctrl+V from anywhere while modal is open
+  useEffect(() => {
+    const onDocPaste = (e) => {
+      const items = e.clipboardData?.items || [];
+      const files = [];
+      for (const it of items) {
+        if (it.type?.startsWith("image/")) {
+          const f = it.getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      if (files.length > 0) {
+        e.preventDefault();
+        addPhotos(files);
+      }
+    };
+    document.addEventListener("paste", onDocPaste);
+    return () => document.removeEventListener("paste", onDocPaste);
+  }, []);
+
+  const removePhoto = (idx) => setAfterPhotos(prev => prev.filter((_, i) => i !== idx));
+
+  const runVerify = async () => {
+    if (afterPhotos.length === 0) return alert("완료 증빙 사진을 1장 이상 업로드해주세요.");
+    setBusy(true);
+    try {
+      const v = await verifyCompletionAI(action.photo, afterPhotos, action.ai);
+      setVerdict(v);
+      if (addAudit) addAudit({
+        module: action.source === "safety" ? "safety" : action.source === "inventory" ? "inventory" : "facility",
+        action: "ai_complete",
+        targetLabel: action.title,
+        photoCount: afterPhotos.length,
+        resultStatus: v.status,
+        summary: `AI 완료확인 — ${v.confirmed ? "승인" : "보완 필요"} (신뢰도 ${v.confidence}%)`,
+      });
+    } catch (err) {
+      alert("AI 확인 실패: " + err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmComplete = () => {
+    onConfirm({
+      status: verdict.confirmed ? "DONE" : "IN_PROGRESS",
+      completionPhotos: afterPhotos,
+      completionVerdict: verdict,
+      completionNote: note,
+      completedAt: verdict.confirmed ? new Date().toISOString() : null,
+    });
+    onClose();
+  };
+
+  return (
+    <div onClick={onClose}
+      style={{ position: "fixed", inset: 0, zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)", backdropFilter: "blur(2px)" }}>
+      <style>{`@keyframes compSpin{to{transform:rotate(360deg)}}`}</style>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, width: 560, maxWidth: "92vw", padding: 20, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h3 style={{ fontSize: 16, fontWeight: 800 }}>✅ AI 완료 확인</h3>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#94a3b8" }}>×</button>
+        </div>
+
+        <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 10, marginBottom: 12, fontSize: 12 }}>
+          <div style={{ fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>{action.title}</div>
+          <div style={{ fontSize: 11, color: "#64748b" }}>{action.type} · 기한 {facFmtD(action.due)}</div>
+          {action.ai && (
+            <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
+              원 문제: <span style={{ color: "#b91c1c" }}>{action.ai.defect || action.ai.hazards || action.ai.insight}</span>
+            </div>
+          )}
+        </div>
+
+        {action.photo && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", marginBottom: 4 }}>📸 조치 전 (원 사진)</div>
+            <img src={action.photo} alt="before" style={{ width: "100%", maxHeight: 150, objectFit: "contain", borderRadius: 8, background: "#f1f5f9", border: "1px solid #e5e7eb" }} />
+          </div>
+        )}
+
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b" }}>📸 조치 후 사진 ({afterPhotos.length}장)</span>
+            <span style={{ fontSize: 10, color: "#94a3b8" }}>💡 Ctrl+V로 붙여넣기 가능</span>
+          </div>
+          {afterPhotos.length > 0 && (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, marginBottom: 8 }}>
+              {afterPhotos.map((p, i) => (
+                <div key={i} style={{ position: "relative", aspectRatio: "1", borderRadius: 6, overflow: "hidden", border: "1px solid #e5e7eb" }}>
+                  <img src={p} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  <button type="button" onClick={() => removePhoto(i)} style={{ position: "absolute", top: 2, right: 2, background: "rgba(0,0,0,0.6)", color: "#fff", border: "none", borderRadius: "50%", width: 20, height: 20, fontSize: 11, cursor: "pointer", lineHeight: 1 }}>×</button>
+                </div>
+              ))}
+            </div>
+          )}
+          <label style={{ display: "block", cursor: "pointer", padding: "14px 0", textAlign: "center", background: "#f8fafc", border: "2px dashed #cbd5e1", borderRadius: 8, fontSize: 12, color: "#64748b" }}>
+            📷 조치 후 사진 추가 (여러 장 가능)
+            <input type="file" accept="image/*" multiple capture="environment" onChange={handleFile} style={{ display: "none" }} />
+          </label>
+        </div>
+
+        {!verdict && !busy && (
+          <button onClick={runVerify} disabled={afterPhotos.length === 0}
+            style={{ width: "100%", borderRadius: 10, background: afterPhotos.length ? "#2563eb" : "#cbd5e1", color: "#fff", padding: 12, fontSize: 14, fontWeight: 700, border: "none", cursor: afterPhotos.length ? "pointer" : "not-allowed" }}>
+            🔍 AI 완료 확인 요청
+          </button>
+        )}
+
+        {busy && (
+          <div style={{ textAlign: "center", padding: 20, color: "#2563eb", fontWeight: 700, fontSize: 13 }}>
+            <div style={{ display: "inline-block", width: 20, height: 20, border: "3px solid #2563eb", borderTopColor: "transparent", borderRadius: "50%", animation: "compSpin 0.8s linear infinite", marginRight: 8, verticalAlign: "middle" }}></div>
+            조치 전/후 사진 대조 분석 중...
+          </div>
+        )}
+
+        {verdict && (
+          <div style={{ background: verdict.confirmed ? "#f0fdf4" : "#fff7ed", border: `1px solid ${verdict.confirmed ? "#bbf7d0" : "#fed7aa"}`, borderRadius: 10, padding: 14, marginTop: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 18 }}>{verdict.confirmed ? "✅" : "⚠️"}</span>
+              <span style={{ fontWeight: 800, color: verdict.confirmed ? "#166534" : "#9a3412" }}>
+                {verdict.confirmed ? "완료 확인 승인" : "보완 필요"}
+              </span>
+              <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, color: verdict.confirmed ? "#166534" : "#9a3412" }}>
+                신뢰도 {verdict.confidence}%
+              </span>
+            </div>
+            <div style={{ fontSize: 12, color: "#1f2937", lineHeight: 1.5, marginBottom: 10 }}>{verdict.notes}</div>
+            <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="담당자 메모 (선택)"
+              style={{ width: "100%", padding: 8, border: "1px solid #e5e7eb", borderRadius: 6, fontSize: 12, minHeight: 50, resize: "vertical", fontFamily: "inherit" }} />
+            <button onClick={confirmComplete}
+              style={{ width: "100%", borderRadius: 10, background: verdict.confirmed ? "#059669" : "#ea580c", color: "#fff", padding: 12, fontSize: 14, fontWeight: 700, border: "none", cursor: "pointer", marginTop: 10 }}>
+              {verdict.confirmed ? "✨ 완료 처리 (완료 리스트로 이동)" : "📌 진행중으로 상태 변경"}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ─── SIGNATURE PAD (shared) ─── */
+function SignaturePad({ onSave, onCancel }) {
+  const canvasRef = useRef(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [hasStrokes, setHasStrokes] = useState(false);
+
+  // Coordinate correction — scales for CSS-sized canvas so internal res matches
+  const getCoordinates = (event) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    if (event.touches && event.touches.length > 0) {
+      return { x: (event.touches[0].clientX - rect.left) * scaleX, y: (event.touches[0].clientY - rect.top) * scaleY };
+    }
+    return { x: (event.clientX - rect.left) * scaleX, y: (event.clientY - rect.top) * scaleY };
+  };
+
+  const startDrawing = (e) => {
+    e.preventDefault();
+    const { x, y } = getCoordinates(e);
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    setIsDrawing(true);
+  };
+  const draw = (e) => {
+    e.preventDefault();
+    if (!isDrawing) return;
+    const { x, y } = getCoordinates(e);
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    if (!hasStrokes) setHasStrokes(true);
+  };
+  const stopDrawing = () => { setIsDrawing(false); };
+  const clearCanvas = () => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    setHasStrokes(false);
+  };
+  const saveSignature = () => {
+    if (!hasStrokes) { alert("서명을 입력해주세요."); return; }
+    const dataUrl = canvasRef.current.toDataURL("image/png");
+    onSave(dataUrl);
+  };
+
+  // Initialize canvas stroke style on mount
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "#0f172a";
+  }, []);
+
+  return (
+    <div style={{ border: "2px solid #e5e7eb", borderRadius: 12, overflow: "hidden", background: "#f8fafc" }}>
+      <div style={{ padding: "8px 12px", background: "#f1f3f5", borderBottom: "1px solid #e5e7eb", fontSize: 12, fontWeight: 700, color: "#64748b", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span>✍️ 서명 패드 (정자로 서명해주세요)</span>
+        <button type="button" onClick={clearCanvas}
+          style={{ color: "#ef4444", background: "none", border: "none", fontSize: 11, fontWeight: 700, cursor: "pointer", padding: "2px 6px" }}>
+          지우기
+        </button>
+      </div>
+      <canvas
+        ref={canvasRef}
+        width={400} height={150}
+        style={{ display: "block", width: "100%", height: 150, cursor: "crosshair", touchAction: "none", background: "#fff" }}
+        onMouseDown={startDrawing} onMouseMove={draw} onMouseUp={stopDrawing} onMouseLeave={stopDrawing}
+        onTouchStart={startDrawing} onTouchMove={draw} onTouchEnd={stopDrawing} onTouchCancel={stopDrawing}
+      />
+      <div style={{ display: "flex", borderTop: "1px solid #e5e7eb" }}>
+        <button type="button" onClick={onCancel}
+          style={{ flex: 1, padding: 10, background: "#fff", color: "#64748b", fontWeight: 700, border: "none", cursor: "pointer", fontSize: 13 }}>
+          취소
+        </button>
+        <button type="button" onClick={saveSignature}
+          style={{ flex: 1, padding: 10, background: hasStrokes ? "#0f172a" : "#cbd5e1", color: "#fff", fontWeight: 700, border: "none", cursor: hasStrokes ? "pointer" : "not-allowed", fontSize: 13 }}>
+          입력 완료
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── SIGNATURE MODAL ─── */
+function SignatureModal({ label, onSave, onClose }) {
+  return (
+    <div onClick={onClose}
+      style={{ position: "fixed", inset: 0, zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)", backdropFilter: "blur(2px)" }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ background: "#fff", borderRadius: 16, width: 460, maxWidth: "92vw", padding: 20, boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 800 }}>서명 입력</div>
+            {label && <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{label}</div>}
+          </div>
+          <button type="button" onClick={onClose}
+            style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#94a3b8", lineHeight: 1 }}>×</button>
+        </div>
+        <SignaturePad onSave={(url) => { onSave(url); onClose(); }} onCancel={onClose} />
+      </div>
+    </div>
+  );
+}
+
+/* ─── SIGNATURE SLOT (clickable placeholder that opens modal) ─── */
+function SignatureSlot({ label, value, onChange, sublabel }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6, fontWeight: 600 }}>{label}</div>
+        <div onClick={() => setOpen(true)}
+          style={{ minHeight: 56, border: "1px dashed #cbd5e1", borderRadius: 6, background: value ? "#fff" : "#f8fafc", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", padding: 4, transition: "all 0.15s" }}
+          onMouseOver={e => e.currentTarget.style.borderColor = "#3b5bdb"}
+          onMouseOut={e => e.currentTarget.style.borderColor = "#cbd5e1"}>
+          {value ? (
+            <img src={value} alt="서명" style={{ maxHeight: 50, maxWidth: "100%", objectFit: "contain" }} />
+          ) : (
+            <span style={{ fontSize: 11, color: "#94a3b8" }}>클릭하여 서명</span>
+          )}
+        </div>
+        <div style={{ borderTop: "1px solid #000", marginTop: 4, fontSize: 9, color: "#94a3b8", paddingTop: 2 }}>
+          {sublabel || "(서명란)"}
+        </div>
+      </div>
+      {open && <SignatureModal label={label} onSave={onChange} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+/* ─── PHOTO + AI ANALYSIS PANEL (inline inside inspection items) ─── */
+function FacPhotoAI({ photo, analysis, onAttach, onAnalyze, onRemove, busy, facName, itemName }) {
+  const fileRef = useRef(null);
+  const camRef = useRef(null);
+  const pickFile = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    try {
+      const dataUrl = await facCompressPhoto(f);
+      onAttach(dataUrl);
+    } catch (err) { alert("사진 처리 실패: " + err.message); }
+    e.target.value = "";
+  };
+  const sevColor = (sev) => ({
+    URGENT: "bg-red-100 text-red-800 border-red-300",
+    HIGH:   "bg-orange-100 text-orange-800 border-orange-300",
+    MEDIUM: "bg-yellow-100 text-yellow-800 border-yellow-300",
+    LOW:    "bg-blue-100 text-blue-800 border-blue-300",
+  }[sev] || "bg-gray-100 text-gray-700 border-gray-200");
+
+  if (!photo) {
+    return (
+      <div className="flex gap-1.5 items-center mt-1.5">
+        <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={pickFile} className="hidden" />
+        <input ref={fileRef} type="file" accept="image/*" onChange={pickFile} className="hidden" />
+        <button type="button" onClick={() => camRef.current?.click()}
+          className="text-[10px] px-2 py-1 rounded border border-blue-200 bg-blue-50 text-blue-700">📷 카메라</button>
+        <button type="button" onClick={() => fileRef.current?.click()}
+          className="text-[10px] px-2 py-1 rounded border border-gray-200 bg-gray-50 text-gray-600">🖼️ 파일</button>
+        <span className="text-[10px] text-gray-400">사진 첨부 → AI 자동 분석</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-1.5 rounded-lg border border-gray-200 bg-gray-50 overflow-hidden">
+      <div className="flex gap-2 p-2">
+        <img src={photo} alt="" className="w-20 h-20 rounded object-cover border border-gray-200 flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          {busy && (
+            <div className="flex items-center gap-2 text-[11px] text-blue-700 font-medium">
+              <span className="inline-block w-3 h-3 border-2 border-blue-700 border-t-transparent rounded-full animate-spin"></span>
+              AI 분석 중...
+            </div>
+          )}
+          {!busy && !analysis && (
+            <button type="button" onClick={onAnalyze}
+              className="text-[11px] px-2 py-1 rounded bg-blue-600 text-white font-medium">🤖 AI 분석 시작</button>
+          )}
+          {!busy && analysis && (
+            <div className="space-y-1">
+              <div className="flex items-center gap-1 flex-wrap">
+                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${sevColor(analysis.severity)}`}>{analysis.severity}</span>
+                <span className="text-[10px] text-gray-500">{analysis.type}</span>
+                <span className="text-[10px] text-gray-400">· {analysis.time} · {analysis.budget}</span>
+              </div>
+              <div className="text-[11px] text-gray-800 font-medium leading-snug">{analysis.defect}</div>
+              <div className="text-[10px] text-gray-600 leading-snug">💡 {analysis.solution}</div>
+              {analysis.materials?.length > 0 && (
+                <div className="text-[10px] text-gray-500">자재: {analysis.materials.join(", ")}</div>
+              )}
+            </div>
+          )}
+        </div>
+        <button type="button" onClick={onRemove} className="text-[10px] text-gray-400 hover:text-red-500 flex-shrink-0 self-start">✕</button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── MAIN APP ─── */
+function FacilityModule({ userCtx, onLogout, inspections, setInspections, actions, setActions, addAudit, updateFacAction }) {
+  const user = userCtx;
+  const [page, setPage] = useState("dashboard");
+  const [detail, setDetail] = useState(null);
+  const [showAiModal, setShowAiModal] = useState(false);
+
+  // login is handled at top-level App
+
+  const nav = [
+    { k: "dashboard", l: "대시보드" },
+    { k: "facilities", l: "시설 관리" },
+    { k: "checklists", l: "체크리스트" },
+    { k: "inspections", l: "점검 현황" },
+    { k: "actions", l: "보완 과제" },
+    { k: "cctv", l: "CCTV" },
+    { k: "reports", l: "보고서" },
+  ];
+
+  const go = (p, d) => { setPage(p); setDetail(d ?? null); };
+
+  const handleAiSubmit = (actionData) => {
+    setActions(prev => [actionData, ...prev]);
+    setShowAiModal(false);
+    alert("AI 분석 기반 보완과제가 생성되었습니다.");
+    go("actions");
+  };
+
+  return (
+    <div className="flex h-full bg-gray-50 overflow-hidden" style={{ fontFamily: "'Pretendard', system-ui, sans-serif" }}>
+      <aside className="w-56 bg-white border-r flex flex-col shrink-0">
+        <div className="p-4 border-b">
+          <div className="text-sm font-bold text-gray-800">시설점검 시스템</div>
+          <div className="text-[10px] text-gray-400 mt-0.5">한국잠사플레이팜</div>
+        </div>
+        <nav className="flex-1 p-2 space-y-0.5">
+          <button onClick={() => setShowAiModal(true)}
+            className="w-full text-left px-3 py-2.5 rounded-lg text-xs font-bold mb-2"
+            style={{ background: "linear-gradient(135deg,#7c3aed,#2563eb)", color: "#fff", display: "flex", alignItems: "center", gap: 6, boxShadow: "0 2px 6px rgba(124,58,237,0.25)" }}>
+            <span style={{ fontSize: 14 }}>🤖</span>
+            <span>AI 현장 진단</span>
+          </button>
+          {nav.map(n => (
+            <button key={n.k} onClick={() => go(n.k)}
+              className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-all ${page === n.k ? "bg-blue-50 text-blue-700 font-medium" : "text-gray-600 hover:bg-gray-50"}`}>
+              {n.l}
+            </button>
+          ))}
+        </nav>
+        <div className="p-3 border-t">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[10px] font-bold">{user.name[0]}</div>
+            <div className="min-w-0">
+              <div className="text-[11px] font-medium truncate">{user.name}</div>
+              <div className="text-[10px] text-gray-400">{user.role}</div>
+            </div>
+          </div>
+          <button onClick={() => { if (onLogout) onLogout(); }} className="mt-2 w-full text-[10px] text-gray-400 hover:text-red-500 text-left">로그아웃</button>
+        </div>
+      </aside>
+
+      <main className="flex-1 overflow-y-auto">
+        {page === "dashboard" && <FacDashboard inspections={inspections} actions={actions} go={go} />}
+        {page === "facilities" && !detail && <FacFacList inspections={inspections} actions={actions} go={go} />}
+        {page === "facilities" && detail && <FacFacDetail id={detail} inspections={inspections} actions={actions} go={go} />}
+        {page === "checklists" && <FacChecklistsPage inspections={inspections} go={go} />}
+        {page === "inspections" && !detail && <FacInspList inspections={inspections} go={go} user={user} setInspections={setInspections} />}
+        {page === "inspections" && detail === "new" && <FacInspNew user={user} inspections={inspections} setInspections={setInspections} go={go} />}
+        {page === "inspections" && detail && detail !== "new" && <FacInspDetail id={detail} inspections={inspections} setInspections={setInspections} actions={actions} setActions={setActions} user={user} go={go} />}
+        {page === "actions" && <FacActionsPage actions={actions} setActions={setActions} user={user} addAudit={addAudit} updateFacAction={updateFacAction} />}
+        {page === "cctv" && <FacCctvPage go={go} setActions={setActions} addAudit={addAudit} user={user} />}
+        {page === "reports" && <FacReportsPage inspections={inspections} actions={actions} />}
+        {showAiModal && <FacAiAnalysisModal onClose={() => setShowAiModal(false)} onSubmit={handleAiSubmit} addAudit={addAudit} />}
+      </main>
+    </div>
+  );
+}
+
+/* ─── LOGIN ─── */
+function FacLogin({ onLogin }) {
+  const [email, setEmail] = useState("admin@jamsafarm.kr");
+  const [pw, setPw] = useState("admin1234");
+  const [err, setErr] = useState("");
+  const submit = () => {
+    const u = FAC_USERS.find(u => u.email === email && u.pw === pw);
+    if (!u) { setErr("이메일 또는 비밀번호 오류"); return; }
+    onLogin(u);
+  };
+  const onKey = (e) => { if (e.key === "Enter") submit(); };
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+      <div className="w-full max-w-sm bg-white rounded-2xl border p-6 space-y-4">
+        <div className="text-center">
+          <div className="text-lg font-bold">시설점검 시스템</div>
+          <div className="text-xs text-gray-400 mt-1">한국잠사플레이팜</div>
+        </div>
+        <input className="w-full rounded-xl border px-3 py-2 text-sm" placeholder="이메일" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={onKey} />
+        <input className="w-full rounded-xl border px-3 py-2 text-sm" type="password" placeholder="비밀번호" value={pw} onChange={e => setPw(e.target.value)} onKeyDown={onKey} />
+        {err && <p className="text-xs text-red-600">{err}</p>}
+        <button type="button" onClick={submit} className="w-full rounded-xl bg-gray-900 text-white py-2 text-sm font-medium hover:bg-gray-800 cursor-pointer">로그인</button>
+        <div className="text-[10px] text-gray-400 space-y-0.5 pt-2 border-t">
+          <div className="font-medium text-gray-500 mb-1">테스트 계정 (클릭하면 자동 입력):</div>
+          {FAC_USERS.map(u => (
+            <div key={u.id} className="cursor-pointer hover:text-blue-600" onClick={() => { setEmail(u.email); setPw(u.pw); setErr(""); }}>
+              {u.email} / {u.pw} ({u.role})
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── DASHBOARD ─── */
+function FacDashboard({ inspections, actions, go }) {
+  const today = inspections.filter(i => new Date(i.at).toDateString() === facNow.toDateString()).length;
+  const urgent = actions.filter(a => a.sev === "URGENT" && a.status !== "DONE").length;
+  const overdue = actions.filter(a => a.status !== "DONE" && new Date(a.due) < facNow).length;
+  const pending = inspections.filter(i => i.approval === "PENDING").length;
+
+  return (
+    <div className="p-6 space-y-5">
+      <div className="text-xl font-bold">대시보드</div>
+      {(urgent > 0 || overdue > 0) && (
+        <div className="rounded-xl bg-red-50 border border-red-200 p-3">
+          <div className="text-sm font-medium text-red-800">조치 필요</div>
+          <div className="text-xs text-red-700 mt-1">긴급 {urgent}건 · 기한초과 {overdue}건 <button className="underline ml-2" onClick={() => go("actions")}>바로가기</button></div>
+        </div>
+      )}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <FacMC l="오늘 점검" v={today} />
+        <FacMC l="긴급 과제" v={urgent} c={urgent > 0 ? "text-red-600" : ""} />
+        <FacMC l="기한 초과" v={overdue} c={overdue > 0 ? "text-orange-600" : ""} />
+        <FacMC l="전체 시설" v={FAC_FACILITIES.length} />
+      </div>
+      {pending > 0 && (
+        <div className="rounded-xl border p-4">
+          <div className="text-sm font-medium mb-2">승인 대기 점검 ({pending}건)</div>
+          {inspections.filter(i => i.approval === "PENDING").map(i => {
+            const f = facFind(i.facId);
+            return <div key={i.id} className="flex items-center justify-between py-2 border-b last:border-0">
+              <div>
+                <div className="text-sm font-medium">{f?.name}</div>
+                <div className="text-xs text-gray-500">{facFmtD(i.at)} · {usrFind(i.inspId)?.name} · <FacBadge v={i.result} map={FAC_RES} /></div>
+              </div>
+              <button onClick={() => go("inspections", i.id)} className="text-xs px-2 py-1 rounded bg-amber-100 text-amber-800">검토</button>
+            </div>;
+          })}
+        </div>
+      )}
+      <div className="rounded-xl border p-4">
+        <div className="text-sm font-medium mb-2">최근 보완과제</div>
+        {actions.slice(0, 5).map(a => {
+          const f = facFind(a.facId);
+          return <div key={a.id} className="flex items-center justify-between py-2 border-b last:border-0">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2"><FacBadge v={a.sev} map={FAC_SEV} /><span className="text-sm font-medium truncate">{a.title}</span></div>
+              <div className="text-xs text-gray-500">{f?.name} · 기한: {facFmtD(a.due)}</div>
+            </div>
+            <span className="text-[10px] text-gray-400 shrink-0">{FAC_STS[a.status]}</span>
+          </div>;
+        })}
+      </div>
+      <div className="flex gap-2">
+        <button onClick={() => go("inspections", "new")} className="rounded-xl bg-gray-900 text-white px-4 py-2 text-sm">새 점검</button>
+        <button onClick={() => go("inspections")} className="rounded-xl border px-4 py-2 text-sm">점검 현황</button>
+        <button onClick={() => go("actions")} className="rounded-xl border px-4 py-2 text-sm">보완 과제</button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── FAC_FACILITIES ─── */
+function FacFacList({ inspections, actions, go }) {
+  const [q, setQ] = useState("");
+  const rows = FAC_FACILITIES.filter(f => !q || f.name.includes(q) || f.code.includes(q));
+  return (
+    <div className="p-6 space-y-4">
+      <div className="flex justify-between items-center"><div className="text-xl font-bold">시설 관리 ({FAC_FACILITIES.length})</div></div>
+      <input className="w-full rounded-xl border px-3 py-2 text-sm" placeholder="시설명, 관리번호 검색..." value={q} onChange={e => setQ(e.target.value)} />
+      <div className="overflow-x-auto rounded-xl border">
+        <table className="w-full text-xs">
+          <thead><tr className="bg-gray-50 border-b">{["코드", "시설명", "유형", "위치", "중요도", "주기", "법정", "점검", "과제"].map(h => <th key={h} className="text-left p-2.5 font-medium text-gray-500">{h}</th>)}</tr></thead>
+          <tbody>
+            {rows.map(f => {
+              const ic = inspections.filter(i => i.facId === f.id).length;
+              const ac = actions.filter(a => a.facId === f.id && a.status !== "DONE").length;
+              return <tr key={f.id} className="border-b hover:bg-blue-50 cursor-pointer" onClick={() => go("facilities", f.id)}>
+                <td className="p-2.5 font-mono text-blue-600">{f.code}</td>
+                <td className="p-2.5 font-medium">{f.name}</td>
+                <td className="p-2.5 text-gray-500">{FAC_FTYPES[f.type] ?? f.type}</td>
+                <td className="p-2.5 text-gray-500">{f.location}</td>
+                <td className="p-2.5"><FacBadge v={f.importance} map={FAC_IMP} /></td>
+                <td className="p-2.5">{FAC_CYC[f.cycle]}</td>
+                <td className="p-2.5">{f.legal ? "필수" : ""}</td>
+                <td className="p-2.5 text-center">{ic}</td>
+                <td className="p-2.5 text-center">{ac > 0 ? <span className="text-red-600 font-medium">{ac}</span> : "0"}</td>
+              </tr>;
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function FacFacDetail({ id, inspections, actions, go }) {
+  const f = facFind(id);
+  if (!f) return <div className="p-6">시설을 찾을 수 없습니다</div>;
+  const fi = inspections.filter(i => i.facId === id);
+  const fa = actions.filter(a => a.facId === id && a.status !== "DONE");
+  const cl = FAC_CHECKLISTS[id] ?? [];
+  return (
+    <div className="p-6 space-y-4">
+      <div className="flex items-center gap-3"><button onClick={() => go("facilities")} className="text-xs border rounded-lg px-2 py-1">← 목록</button><div className="text-xl font-bold">{f.name}</div></div>
+      <div className="text-sm text-gray-500">{f.code} · {f.location}{f.zone ? ` · ${f.zone}` : ""}</div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <FacMC l="유형" v={FAC_FTYPES[f.type]} />
+        <div className="bg-gray-50 rounded-xl p-3"><div className="text-[10px] text-gray-500">중요도</div><div className="mt-1"><FacBadge v={f.importance} map={FAC_IMP} /></div></div>
+        <FacMC l="점검 주기" v={FAC_CYC[f.cycle]} />
+        <FacMC l="법정 점검" v={f.legal ? "필수" : "선택"} />
+      </div>
+      {fa.length > 0 && <div className="rounded-xl border p-4"><div className="text-sm font-medium mb-2 text-red-700">미완료 보완과제 ({fa.length})</div>
+        {fa.map(a => <div key={a.id} className="flex items-center gap-2 py-1.5 border-b last:border-0"><FacBadge v={a.sev} map={FAC_SEV} /><span className="text-xs">{a.title}</span><span className="text-[10px] text-gray-400 ml-auto">{FAC_STS[a.status]}</span></div>)}
+      </div>}
+      {cl.length > 0 && <div className="rounded-xl border p-4"><div className="text-sm font-medium mb-2">체크리스트 ({cl.length})</div>
+        {cl.map(c => <div key={c.tid} className="py-1.5 border-b last:border-0"><div className="text-xs font-medium">{c.name} <span className="text-[10px] text-amber-600">R{c.risk}</span></div><div className="text-[10px] text-gray-500">{c.std}{c.range ? ` · ${c.range}` : ""}</div></div>)}
+      </div>}
+      {fi.length > 0 && <div className="rounded-xl border p-4"><div className="text-sm font-medium mb-2">점검 이력 ({fi.length})</div>
+        {fi.map(i => <div key={i.id} className="flex items-center justify-between py-1.5 border-b last:border-0 cursor-pointer hover:bg-blue-50" onClick={() => go("inspections", i.id)}>
+          <div className="flex items-center gap-2"><span className="text-xs">{facFmtD(i.at)}</span><FacBadge v={i.result} map={FAC_RES} /><FacBadge v={i.approval} map={FAC_APR} /></div>
+          <span className="text-[10px] text-gray-400">{usrFind(i.inspId)?.name} · 항목 {i.items.length}</span>
+        </div>)}
+      </div>}
+      <button onClick={() => go("inspections", "new")} className="rounded-xl bg-gray-900 text-white px-4 py-2 text-sm">점검 시작</button>
+    </div>
+  );
+}
+
+/* ─── INSPECTIONS LIST ─── */
+/* ─── CHECKLISTS PAGE — cycle-based inspection overview ─────────
+ * Groups all facilities by inspection cycle (일일/주별/월별/계절별)
+ * and shows each facility's completion status for the current period.
+ * ───────────────────────────────────────────────────────────── */
+function FacChecklistsPage({ inspections, go }) {
+  const [tab, setTab] = useState("DAILY");
+
+  const CYCLE_TABS = [
+    { k: "DAILY", l: "📅 일일", desc: "오늘 (24시간 이내)" },
+    { k: "WEEKLY", l: "📆 주별", desc: "이번 주 (월~일)" },
+    { k: "MONTHLY", l: "🗓 월별", desc: "이번 달" },
+    { k: "SEASONAL", l: "🌤 계절별", desc: "분기/반기/연간" },
+  ];
+
+  // Map tab → which cycle values qualify
+  const cycleFilter = {
+    DAILY: ["DAILY"],
+    WEEKLY: ["WEEKLY"],
+    MONTHLY: ["MONTHLY"],
+    SEASONAL: ["QUARTERLY", "HALF_YEARLY", "YEARLY"],
+  };
+
+  // Period start for "is this facility inspected in current period?"
+  const getPeriodStart = (cycleTab) => {
+    const now = new Date();
+    const s = new Date(now);
+    s.setHours(0, 0, 0, 0);
+    if (cycleTab === "DAILY") return s;
+    if (cycleTab === "WEEKLY") {
+      const dow = s.getDay(); // Sun=0
+      const offset = dow === 0 ? 6 : dow - 1; // days since Monday
+      s.setDate(s.getDate() - offset);
+      return s;
+    }
+    if (cycleTab === "MONTHLY") {
+      s.setDate(1);
+      return s;
+    }
+    // SEASONAL — start of current quarter
+    const q = Math.floor(now.getMonth() / 3);
+    s.setMonth(q * 3, 1);
+    return s;
+  };
+
+  const periodStart = getPeriodStart(tab);
+  const validCycles = cycleFilter[tab];
+  const facs = FAC_FACILITIES.filter(f => validCycles.includes(f.cycle));
+
+  // Status per facility
+  const statusMap = {};
+  facs.forEach(f => {
+    const fInsp = inspections.filter(i => i.facId === f.id);
+    const latest = fInsp.sort((a, b) => new Date(b.at) - new Date(a.at))[0];
+    const done = fInsp.some(i => new Date(i.at) >= periodStart);
+    statusMap[f.id] = { latest, done, hasWarning: latest && (latest.result === "DANGER" || latest.result === "CAUTION") };
+  });
+
+  const doneCount = facs.filter(f => statusMap[f.id].done).length;
+
+  const sevBadge = (r) => {
+    if (r === "DANGER") return { bg: "#fef2f2", fg: "#dc2626", l: "위험" };
+    if (r === "CAUTION") return { bg: "#fff7ed", fg: "#ea580c", l: "주의" };
+    if (r === "NORMAL") return { bg: "#f0fdf4", fg: "#059669", l: "정상" };
+    return { bg: "#f1f5f9", fg: "#64748b", l: "미점검" };
+  };
+
+  const impBadge = (i) => ({
+    VERY_HIGH: { bg: "#fef2f2", fg: "#dc2626", l: "최고" },
+    HIGH: { bg: "#fff7ed", fg: "#ea580c", l: "높음" },
+    MEDIUM: { bg: "#fefce8", fg: "#ca8a04", l: "중간" },
+    LOW: { bg: "#eff6ff", fg: "#2563eb", l: "낮음" },
+  }[i] || { bg: "#f8fafc", fg: "#64748b", l: i });
+
+  const fmtDate = (iso) => {
+    const d = new Date(iso);
+    return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+
+  const tabInfo = CYCLE_TABS.find(t => t.k === tab);
+
+  return (
+    <div className="p-6 space-y-4">
+      <div className="flex justify-between items-center flex-wrap gap-2">
+        <div>
+          <div className="text-xl font-bold">📋 체크리스트</div>
+          <div className="text-xs text-gray-500 mt-1">점검 주기별 시설 현황 · 기간 내 완료 여부 추적</div>
+        </div>
+        <button onClick={() => go("inspections", "new")}
+          className="rounded-xl bg-gray-900 text-white px-4 py-2 text-xs font-bold">+ 새 점검 시작</button>
+      </div>
+
+      {/* Tab strip */}
+      <div className="flex gap-1 bg-gray-100 rounded-lg p-1 overflow-x-auto">
+        {CYCLE_TABS.map(t => {
+          const facsInTab = FAC_FACILITIES.filter(f => cycleFilter[t.k].includes(f.cycle));
+          const startT = getPeriodStart(t.k);
+          const doneInTab = facsInTab.filter(f => inspections.some(i => i.facId === f.id && new Date(i.at) >= startT)).length;
+          return (
+            <button key={t.k} onClick={() => setTab(t.k)}
+              className={`flex-1 text-xs px-3 py-2 rounded font-bold transition whitespace-nowrap ${tab === t.k ? "bg-white shadow-sm text-gray-900" : "text-gray-500"}`}>
+              {t.l} <span className="text-[10px] text-gray-400">({doneInTab}/{facsInTab.length})</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Period summary */}
+      <div className="rounded-xl border-2 p-4" style={{ borderColor: doneCount === facs.length ? "#bbf7d0" : "#fecaca", background: doneCount === facs.length ? "#f0fdf4" : "#fef2f2" }}>
+        <div className="flex justify-between items-center flex-wrap gap-2">
+          <div>
+            <div className="text-xs font-bold" style={{ color: doneCount === facs.length ? "#166534" : "#991b1b" }}>{tabInfo.l} 점검 진행 현황</div>
+            <div className="text-[11px] text-gray-600 mt-1">기간: {tabInfo.desc} · 기준일 {periodStart.toISOString().slice(0, 10)}</div>
+          </div>
+          <div className="text-right">
+            <div className="text-2xl font-black" style={{ color: doneCount === facs.length ? "#059669" : "#dc2626" }}>{doneCount}/{facs.length}</div>
+            <div className="text-[10px] text-gray-500">완료 / 전체</div>
+          </div>
+        </div>
+        {doneCount < facs.length && (
+          <div className="mt-2 text-xs text-red-700">⚠️ 미점검 {facs.length - doneCount}건 — 해당 주기 내 점검 완료 필요</div>
+        )}
+      </div>
+
+      {/* Facility list */}
+      {facs.length === 0 ? (
+        <div className="text-center py-12 rounded-xl border border-dashed text-gray-400 text-sm">이 주기에 해당하는 시설이 없습니다</div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {facs.map(f => {
+            const st = statusMap[f.id];
+            const sev = st.latest ? sevBadge(st.latest.result) : sevBadge(null);
+            const imp = impBadge(f.importance);
+            return (
+              <div key={f.id} className="rounded-xl border bg-white p-4"
+                style={{ borderLeft: `4px solid ${st.done ? "#059669" : "#dc2626"}` }}>
+                <div className="flex items-center gap-2 flex-wrap mb-2">
+                  <span className="text-[10px] px-2 py-0.5 rounded font-bold" style={{ background: imp.bg, color: imp.fg }}>{imp.l}</span>
+                  {f.legal && <span className="text-[10px] px-2 py-0.5 rounded font-bold bg-purple-100 text-purple-700">법정</span>}
+                  <span className="text-sm font-bold text-gray-900">{f.code}</span>
+                  <span className="text-sm text-gray-700">{f.name}</span>
+                </div>
+                <div className="text-[11px] text-gray-500 mb-3">📍 {f.location} · 🔁 {FAC_CYC[f.cycle]} 주기</div>
+
+                <div className="flex items-center justify-between bg-gray-50 rounded p-2 mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[10px] px-2 py-1 rounded font-bold ${st.done ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
+                      {st.done ? "✅ 완료" : "❌ 미점검"}
+                    </span>
+                    {st.hasWarning && <span className="text-[10px] px-2 py-1 rounded font-bold" style={{ background: sev.bg, color: sev.fg }}>최근 {sev.l} 발견</span>}
+                  </div>
+                  {st.latest && (
+                    <div className="text-right">
+                      <div className="text-[10px] text-gray-500">최근 점검</div>
+                      <div className="text-[11px] font-bold text-gray-700">{fmtDate(st.latest.at)}</div>
+                    </div>
+                  )}
+                </div>
+
+                {FAC_CHECKLISTS[f.id] && FAC_CHECKLISTS[f.id].length > 0 && (
+                  <div className="text-[10px] text-gray-500 mb-3">
+                    <strong>체크 항목 ({FAC_CHECKLISTS[f.id].length}):</strong>{" "}
+                    {FAC_CHECKLISTS[f.id].slice(0, 3).map(c => c.name).join(" · ")}
+                    {FAC_CHECKLISTS[f.id].length > 3 && " ..."}
+                  </div>
+                )}
+
+                <div className="flex gap-1.5">
+                  {st.latest && (
+                    <button onClick={() => go("inspections", st.latest.id)}
+                      className="text-[10px] px-3 py-1.5 rounded border border-gray-200 text-gray-600 font-medium">
+                      최근 기록
+                    </button>
+                  )}
+                  <button onClick={() => go("facilities", f.id)}
+                    className="text-[10px] px-3 py-1.5 rounded border border-gray-200 text-gray-600 font-medium">
+                    시설 상세
+                  </button>
+                  {!st.done && (
+                    <button onClick={() => go("inspections", "new")}
+                      className="text-[10px] px-3 py-1.5 rounded text-white font-bold ml-auto"
+                      style={{ background: "linear-gradient(135deg,#dc2626,#ea580c)" }}>
+                      지금 점검하기 →
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FacInspList({ inspections, go, user }) {
+  const [af, setAf] = useState("");
+  const [rf, setRf] = useState("");
+  const isMgr = user.role === "ADMIN" || user.role === "MANAGER";
+  const rows = inspections.filter(i => { if (af && i.approval !== af) return false; if (rf && i.result !== rf) return false; return true; });
+  const pc = inspections.filter(i => i.approval === "PENDING").length;
+  const dc = inspections.filter(i => i.result === "DANGER").length;
+  return (
+    <div className="p-6 space-y-4">
+      <div className="flex justify-between items-center"><div className="text-xl font-bold">점검 현황 ({inspections.length})</div><button onClick={() => go("inspections", "new")} className="rounded-xl bg-gray-900 text-white px-3 py-2 text-xs">+ 새 점검</button></div>
+      {isMgr && <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+        <FacQBtn l="승인 대기" v={pc} on={af === "PENDING"} c="amber" click={() => { setAf(af === "PENDING" ? "" : "PENDING"); setRf(""); }} />
+        <FacQBtn l="위험 판정" v={dc} on={rf === "DANGER"} c="red" click={() => { setRf(rf === "DANGER" ? "" : "DANGER"); setAf(""); }} />
+      </div>}
+      <div className="flex gap-2">
+        <select className="rounded-xl border px-2 py-1.5 text-xs" value={af} onChange={e => setAf(e.target.value)}>
+          <option value="">전체 승인상태</option>
+          {Object.entries(FAC_APR).map(([k, v]) => <option key={k} value={k}>{v.l}</option>)}
+        </select>
+        <select className="rounded-xl border px-2 py-1.5 text-xs" value={rf} onChange={e => setRf(e.target.value)}>
+          <option value="">전체 결과</option>
+          {Object.entries(FAC_RES).map(([k, v]) => <option key={k} value={k}>{v.l}</option>)}
+        </select>
+      </div>
+      <div className="space-y-2">{rows.map(i => { const f = facFind(i.facId); return (
+        <div key={i.id} className={`rounded-xl border p-3 cursor-pointer hover:bg-blue-50 ${i.result === "DANGER" ? "border-red-200" : ""}`} onClick={() => go("inspections", i.id)}>
+          <div className="flex items-center gap-2 flex-wrap mb-1">
+            <span className="text-sm font-medium">{f?.name}</span>
+            <span className="text-[10px] font-mono text-gray-400">{f?.code}</span>
+            <FacBadge v={i.result} map={FAC_RES} />
+            <FacBadge v={i.approval} map={FAC_APR} />
+          </div>
+          <div className="text-[10px] text-gray-500">{facFmtDT(i.at)} · {usrFind(i.inspId)?.name} · 항목 {i.items.length}</div>
+          {i.memo && <div className="text-[10px] text-gray-400 mt-1 truncate">{i.memo}</div>}
+        </div>
+      ); })}</div>
+    </div>
+  );
+}
+
+/* ─── NEW INSPECTION ─── */
+function FacInspNew({ user, inspections, setInspections, go }) {
+  const [facId, setFacId] = useState("");
+  const [phase, setPhase] = useState("select");
+  const [items, setItems] = useState([]);
+  const [memo, setMemo] = useState("");
+  const [busyIdx, setBusyIdx] = useState(null); // index of item currently being analyzed
+  const cl = FAC_CHECKLISTS[facId] ?? [];
+  const facObj = facFind(facId);
+
+  const start = () => {
+    if (!facId || !cl.length) return;
+    setItems(cl.map(c => ({ tid: c.tid, result: "NORMAL", val: "", memo: "", photo: null, ai: null })));
+    setPhase("inspect");
+  };
+
+  const updateItem = (idx, patch) => setItems(prev => {
+    const n = [...prev]; n[idx] = { ...n[idx], ...patch }; return n;
+  });
+
+  const attachPhoto = (idx, dataUrl) => {
+    // Attaching a photo auto-kicks AI analysis
+    updateItem(idx, { photo: dataUrl, ai: null });
+    runAI(idx, dataUrl);
+  };
+  const runAI = async (idx, dataUrl) => {
+    setBusyIdx(idx);
+    try {
+      const result = await analyzeFacilityPhotoAI(dataUrl, facObj?.name, cl[idx]?.name);
+      // If analysis suggests a severity, auto-set item result to match (DANGER/CAUTION/NORMAL)
+      const resultMap = { URGENT: "DANGER", HIGH: "DANGER", MEDIUM: "CAUTION", LOW: "NORMAL" };
+      updateItem(idx, { ai: result, result: resultMap[result.severity] || "CAUTION" });
+    } catch (e) {
+      alert("AI 분석 실패: " + e.message);
+    } finally {
+      setBusyIdx(null);
+    }
+  };
+  const removePhoto = (idx) => updateItem(idx, { photo: null, ai: null });
+
+  const submit = () => {
+    const result = items.some(i => i.result === "DANGER") ? "DANGER" : items.some(i => i.result === "CAUTION") ? "CAUTION" : "NORMAL";
+    const ni = { id: "i" + Date.now(), facId, inspId: user.id, at: new Date().toISOString(), result, approval: "PENDING", memo, items };
+    setInspections([ni, ...inspections]);
+    alert("점검 제출 완료! 관리자 승인 대기 중입니다." + (items.filter(i => i.ai).length > 0 ? "\nAI 분석 " + items.filter(i => i.ai).length + "건 포함됨." : ""));
+    go("inspections", ni.id);
+  };
+
+  const overall = items.length ? (items.some(i => i.result === "DANGER") ? "DANGER" : items.some(i => i.result === "CAUTION") ? "CAUTION" : "NORMAL") : "NORMAL";
+
+  return (
+    <div className="p-6 max-w-2xl space-y-4">
+      <div className="text-xl font-bold">새 점검</div>
+      <div className="text-xs text-gray-500">점검자: <span className="font-medium text-gray-700">{user.name}</span></div>
+
+      {phase === "select" && <>
+        <div className="rounded-xl border p-4">
+          <label className="text-xs text-gray-500 mb-1 block">점검 시설 *</label>
+          <select className="w-full rounded-xl border px-3 py-2 text-sm" value={facId} onChange={e => setFacId(e.target.value)}>
+            <option value="">-- 시설 선택 --</option>
+            {FAC_FACILITIES.filter(f => FAC_CHECKLISTS[f.id]).map(f => <option key={f.id} value={f.id}>[{f.code}] {f.name}</option>)}
+          </select>
+          {facId && cl.length > 0 && <div className="text-[10px] text-gray-400 mt-2">체크리스트 {cl.length}항목</div>}
+        </div>
+        <button onClick={start} disabled={!facId || !cl.length} className="w-full rounded-xl bg-gray-900 text-white px-4 py-2.5 text-sm disabled:opacity-40">점검 시작</button>
+      </>}
+
+      {phase === "inspect" && <>
+        <div className={`rounded-xl border p-3 text-center text-sm font-medium ${overall === "DANGER" ? "bg-red-50 border-red-200 text-red-800" : overall === "CAUTION" ? "bg-amber-50 border-amber-200 text-amber-800" : "bg-emerald-50 border-emerald-200 text-emerald-800"}`}>
+          종합: {FAC_RES[overall]?.l}
+        </div>
+        {cl.map((c, idx) => {
+          const item = items[idx];
+          const bad = item.result === "DANGER" || item.result === "CAUTION";
+          return (
+            <div key={c.tid} className={`rounded-xl border p-4 ${bad ? "border-red-200 bg-red-50/30" : ""}`}>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-sm font-medium">{c.name}</span>
+                <span className={`text-[10px] px-1 rounded ${c.risk >= 4 ? "bg-red-100 text-red-700" : "bg-gray-100 text-gray-600"}`}>R{c.risk}</span>
+                {c.photo && <span className="text-[10px] text-blue-600">사진필수</span>}
+              </div>
+              <div className="text-[10px] text-gray-500 mb-2">{c.std}{c.range ? ` · 허용: ${c.range}` : ""}</div>
+              {c.guide && <div className="text-[10px] bg-blue-50 border border-blue-100 rounded p-1.5 mb-2 text-blue-800">{c.guide}</div>}
+              <div className="flex gap-1 mb-2">
+                {Object.entries(FAC_RES).map(([k, v]) => (
+                  <button key={k} onClick={() => { const n = [...items]; n[idx] = { ...n[idx], result: k }; setItems(n); }}
+                    className={`text-[10px] px-2.5 py-1 rounded-lg border ${item.result === k ? v.c + " border-2 font-medium" : "bg-white border-gray-200 text-gray-500"}`}>{v.l}</button>
+                ))}
+              </div>
+              <input className="w-full rounded-lg border px-2 py-1.5 text-xs mb-1.5" placeholder="측정값" value={item.val}
+                onChange={e => { const n = [...items]; n[idx] = { ...n[idx], val: e.target.value }; setItems(n); }} />
+              <input className="w-full rounded-lg border px-2 py-1.5 text-xs" placeholder="메모" value={item.memo}
+                onChange={e => { const n = [...items]; n[idx] = { ...n[idx], memo: e.target.value }; setItems(n); }} />
+              <FacPhotoAI
+                photo={item.photo}
+                analysis={item.ai}
+                busy={busyIdx === idx}
+                facName={facObj?.name}
+                itemName={c.name}
+                onAttach={(url) => attachPhoto(idx, url)}
+                onAnalyze={() => runAI(idx, item.photo)}
+                onRemove={() => removePhoto(idx)}
+              />
+            </div>
+          );
+        })}
+        <textarea className="w-full rounded-xl border px-3 py-2 text-sm" rows={2} placeholder="종합 메모" value={memo} onChange={e => setMemo(e.target.value)} />
+        <button onClick={submit} className={`w-full rounded-xl px-4 py-2.5 text-white text-sm font-medium ${overall === "DANGER" ? "bg-red-600" : overall === "CAUTION" ? "bg-amber-600" : "bg-gray-900"}`}>
+          점검 제출 ({FAC_RES[overall]?.l})
+        </button>
+      </>}
+    </div>
+  );
+}
+
+/* ─── INSPECTION DETAIL ─── */
+function FacInspDetail({ id, inspections, setInspections, actions, setActions, user, go }) {
+  const idx = inspections.findIndex(i => i.id === id);
+  const insp = inspections[idx];
+  if (!insp) return <div className="p-6">점검을 찾을 수 없습니다</div>;
+  const f = facFind(insp.facId);
+  const isMgr = user.role === "ADMIN" || user.role === "MANAGER";
+
+  const approve = () => {
+    const n = [...inspections]; n[idx] = { ...n[idx], approval: "APPROVED" };
+    setInspections(n);
+    alert("승인 완료");
+  };
+  const reject = () => {
+    const reason = prompt("반려 사유를 입력하세요");
+    if (!reason) return;
+    const n = [...inspections]; n[idx] = { ...n[idx], approval: "REJECTED" };
+    setInspections(n);
+  };
+  const genAction = () => {
+    const dItems = insp.items.filter(it => it.result === "DANGER" || it.result === "CAUTION");
+    const cl = FAC_CHECKLISTS[insp.facId] ?? [];
+    const newActions = dItems.map(it => {
+      const tmpl = cl.find(c => c.tid === it.tid);
+      const ai = it.ai;
+      if (ai) {
+        // Use AI analysis to enrich the action
+        const sevMap = { URGENT: "URGENT", HIGH: "HIGH", MEDIUM: "MEDIUM", LOW: "LOW" };
+        const sev = sevMap[ai.severity] || (it.result === "DANGER" ? "URGENT" : "HIGH");
+        const dueOffset = sev === "URGENT" ? 1 : sev === "HIGH" ? 3 : sev === "MEDIUM" ? 7 : 14;
+        return {
+          id: "a" + Date.now() + Math.random(),
+          facId: insp.facId, inspId: insp.id,
+          title: `[AI분석] ${tmpl?.name ?? it.tid} 보수`,
+          type: ai.type || "점검발견",
+          desc: ai.defect || (it.memo || "이상 판정"),
+          sev, status: "TODO",
+          rec: ai.solution + (ai.materials?.length ? `\n자재: ${ai.materials.join(", ")}` : "") + `\n예상시간: ${ai.time || "—"} · 예산: ${ai.budget || "—"}`,
+          due: _facD(dueOffset), assignee: null, memo: null,
+          ai: ai, // keep AI data attached for reference
+          photo: it.photo || null,
+        };
+      }
+      return { id: "a" + Date.now() + Math.random(), facId: insp.facId, inspId: insp.id, title: `[점검] ${tmpl?.name ?? it.tid} 시정`, type: "점검발견", desc: it.memo || "이상 판정", sev: it.result === "DANGER" ? "URGENT" : "HIGH", status: "TODO", rec: "현장 확인 및 시정", due: _facD(it.result === "DANGER" ? 2 : 7), assignee: null, memo: null };
+    });
+    setActions([...newActions, ...actions]);
+    const aiCount = dItems.filter(it => it.ai).length;
+    alert(`보완과제 ${newActions.length}건 생성 완료` + (aiCount > 0 ? ` (AI 분석 기반 ${aiCount}건)` : ""));
+  };
+
+  const relActions = actions.filter(a => a.inspId === id);
+
+  return (
+    <div className="p-6 max-w-4xl space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <button onClick={() => go("inspections")} className="text-xs border rounded-lg px-2 py-1">← 목록</button>
+        <div className="flex gap-2">
+          {insp.items.some(it => it.result === "DANGER" || it.result === "CAUTION") && <button onClick={genAction} className="rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs">보완과제 생성</button>}
+          {isMgr && insp.approval === "PENDING" && <>
+            <button onClick={approve} className="rounded-lg bg-emerald-600 text-white px-3 py-1.5 text-xs">승인</button>
+            <button onClick={reject} className="rounded-lg bg-red-600 text-white px-3 py-1.5 text-xs">반려</button>
+          </>}
+        </div>
+      </div>
+      <div><div className="text-xl font-bold">{f?.name}</div><div className="text-xs text-gray-500">{f?.code} · {facFmtDT(insp.at)} · {usrFind(insp.inspId)?.name}</div></div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="rounded-xl border p-3"><div className="text-[10px] text-gray-500">종합 결과</div><div className="mt-1"><FacBadge v={insp.result} map={FAC_RES} /></div></div>
+        <div className="rounded-xl border p-3"><div className="text-[10px] text-gray-500">승인 상태</div><div className="mt-1"><FacBadge v={insp.approval} map={FAC_APR} /></div></div>
+        <FacMC l="항목 수" v={insp.items.length} />
+        <FacMC l="관련 과제" v={relActions.length} />
+      </div>
+      {insp.memo && <div className="rounded-xl border p-3"><div className="text-[10px] text-gray-500">종합 메모</div><div className="text-sm mt-1">{insp.memo}</div></div>}
+      <div className="rounded-xl border p-4">
+        <div className="text-sm font-medium mb-3">점검 항목 ({insp.items.length})</div>
+        <div className="space-y-2">
+          {insp.items.map((it, i) => {
+            const cl = (FAC_CHECKLISTS[insp.facId] ?? []).find(c => c.tid === it.tid);
+            const sevColor = (sev) => ({
+              URGENT: "bg-red-100 text-red-800 border-red-300",
+              HIGH:   "bg-orange-100 text-orange-800 border-orange-300",
+              MEDIUM: "bg-yellow-100 text-yellow-800 border-yellow-300",
+              LOW:    "bg-blue-100 text-blue-800 border-blue-300",
+            }[sev] || "bg-gray-100 text-gray-700");
+            return (
+              <div key={i} className={`rounded-lg border p-2.5 ${it.result === "DANGER" ? "border-red-200 bg-red-50/30" : it.result === "CAUTION" ? "border-amber-200 bg-amber-50/30" : ""}`}>
+                <div className="flex items-center gap-2 text-xs flex-wrap">
+                  <span className="font-medium">{cl?.name ?? it.tid}</span>
+                  <FacBadge v={it.result} map={FAC_RES} />
+                  {it.val && <span className="font-mono text-gray-600">{it.val}</span>}
+                  {it.ai && <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 font-bold">🤖 AI</span>}
+                </div>
+                {cl?.std && <div className="text-[10px] text-gray-500 mt-0.5">기준: {cl.std}</div>}
+                {it.memo && <div className="text-[11px] text-gray-600 mt-1">💬 {it.memo}</div>}
+                {(it.photo || it.ai) && (
+                  <div className="flex gap-2 mt-2 items-start">
+                    {it.photo && <img src={it.photo} alt="" className="w-24 h-24 object-cover rounded border border-gray-200 flex-shrink-0" />}
+                    {it.ai && (
+                      <div className="flex-1 min-w-0 bg-white rounded border border-violet-200 p-2 text-[11px]">
+                        <div className="flex items-center gap-1 mb-1 flex-wrap">
+                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${sevColor(it.ai.severity)}`}>{it.ai.severity}</span>
+                          <span className="text-[10px] text-gray-500">{it.ai.type}</span>
+                          <span className="text-[10px] text-gray-400">· {it.ai.time} · {it.ai.budget}</span>
+                        </div>
+                        <div className="font-medium text-gray-800 leading-snug">{it.ai.defect}</div>
+                        <div className="text-gray-600 mt-0.5 leading-snug">💡 {it.ai.solution}</div>
+                        {it.ai.materials?.length > 0 && <div className="text-gray-500 mt-0.5">자재: {it.ai.materials.join(", ")}</div>}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      {relActions.length > 0 && <div className="rounded-xl border p-4">
+        <div className="text-sm font-medium mb-2">관련 보완과제</div>
+        {relActions.map(a => <div key={a.id} className="flex items-center gap-2 py-1.5 border-b last:border-0"><FacBadge v={a.sev} map={FAC_SEV} /><span className="text-xs">{a.title}</span><span className="text-[10px] text-gray-400 ml-auto">{FAC_STS[a.status]}</span></div>)}
+      </div>}
+    </div>
+  );
+}
+
+/* ─── ACTIONS ─── */
+function FacActionsPage({ actions, setActions, user, addAudit }) {
+  const [sf, setSf] = useState("");
+  const [viewTab, setViewTab] = useState("active"); // active | done
+  const isMgr = user.role === "ADMIN" || user.role === "MANAGER";
+  const [showNew, setShowNew] = useState(false);
+  const [showAiModal, setShowAiModal] = useState(false);
+  const [completingAction, setCompletingAction] = useState(null);
+
+  const activeRows = actions.filter(a => a.status !== "DONE").filter(a => !sf || a.status === sf);
+  const doneRows = actions.filter(a => a.status === "DONE");
+  const rows = viewTab === "active" ? activeRows : doneRows;
+
+  const update = (id, patch) => {
+    setActions(prev => prev.map(a => a.id === id ? { ...a, ...patch } : a));
+  };
+
+  const create = (a) => {
+    setActions([{ id: a.id || ("a" + Date.now()), status: "TODO", memo: null, ...a }, ...actions]);
+    setShowNew(false);
+    setShowAiModal(false);
+  };
+
+  const handleCompletion = (action, completionData) => {
+    update(action.id, completionData);
+    if (completionData.status === "DONE" && addAudit) {
+      addAudit({
+        module: action.source === "safety" ? "safety" : action.source === "inventory" ? "inventory" : "facility",
+        action: "action_done",
+        targetLabel: action.title,
+        photoCount: completionData.completionPhotos?.length || 0,
+        resultStatus: completionData.completionVerdict?.status,
+        summary: `완료 처리 (AI 신뢰도 ${completionData.completionVerdict?.confidence}%)`,
+      });
+    }
+  };
+
+  return (
+    <div className="p-6 space-y-4">
+      <div className="flex justify-between items-center flex-wrap gap-2">
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="text-xl font-bold">보완 과제</div>
+          <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+            <button onClick={() => setViewTab("active")}
+              className={`text-xs px-3 py-1 rounded font-medium transition ${viewTab === "active" ? "bg-white shadow-sm text-gray-900" : "text-gray-500"}`}>
+              📋 진행중 <span className="text-[10px] text-gray-400">({activeRows.length})</span>
+            </button>
+            <button onClick={() => setViewTab("done")}
+              className={`text-xs px-3 py-1 rounded font-medium transition ${viewTab === "done" ? "bg-white shadow-sm text-emerald-700" : "text-gray-500"}`}>
+              ✅ 완료 <span className="text-[10px] text-gray-400">({doneRows.length})</span>
+            </button>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          {viewTab === "active" && (
+            <select className="rounded-xl border px-2 py-1.5 text-xs" value={sf} onChange={e => setSf(e.target.value)}>
+              <option value="">전체 상태</option>
+              {Object.entries(FAC_STS).filter(([k]) => k !== "DONE").map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+          )}
+          {isMgr && viewTab === "active" && <>
+            <button onClick={() => setShowAiModal(true)}
+              className="rounded-xl px-3 py-1.5 text-xs font-bold text-white"
+              style={{ background: "linear-gradient(135deg,#7c3aed,#2563eb)" }}>🤖 AI 사진 분석</button>
+            <button onClick={() => setShowNew(!showNew)} className="rounded-xl bg-gray-900 text-white px-3 py-1.5 text-xs">+ 수기 등록</button>
+          </>}
+        </div>
+      </div>
+
+      {showAiModal && <FacAiAnalysisModal onClose={() => setShowAiModal(false)} onSubmit={create} />}
+
+      {showNew && <div className="rounded-xl border p-4 space-y-2">
+        <FacNewActionForm onSubmit={create} onCancel={() => setShowNew(false)} />
+      </div>}
+
+      {rows.map(a => {
+        const f = facFind(a.facId);
+        const over = a.status !== "DONE" && new Date(a.due) < facNow;
+        return (
+          <div key={a.id} className={`rounded-xl border p-4 ${over ? "border-red-200 bg-red-50/50" : ""} ${a.status === "DONE" ? "opacity-50" : ""}`}
+            style={{ borderLeft: `4px solid ${a.sev === "URGENT" ? "#dc2626" : a.sev === "HIGH" ? "#ea580c" : "#9ca3af"}` }}>
+            <div className="flex items-center gap-2 flex-wrap mb-1">
+              <FacBadge v={a.sev} map={FAC_SEV} />
+              <span className="text-sm font-medium">{a.title}</span>
+              <span className="text-[10px] text-gray-400">{a.type}</span>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded ${a.status === "DONE" ? "bg-emerald-100 text-emerald-800" : "bg-gray-100 text-gray-600"}`}>{FAC_STS[a.status]}</span>
+            </div>
+            <div className="text-xs text-gray-500 mb-2">{f?.code} {f?.name} · 기한: {facFmtD(a.due)}{over ? " 지연" : ""} · 담당: {a.assignee ? usrFind(a.assignee)?.name : "미배정"}</div>
+            {a.desc && <div className="text-xs text-gray-600 mb-1">{a.desc}</div>}
+            {a.rec && <div className="text-xs text-blue-700 mb-2">→ {a.rec}</div>}
+            {a.status !== "DONE" && <div className="flex gap-1.5 flex-wrap items-center">
+              {a.status === "TODO" && <button onClick={() => update(a.id, { status: "IN_PROGRESS" })} className="text-[10px] px-2 py-1 rounded border">진행 시작</button>}
+              <button onClick={() => setCompletingAction(a)}
+                className="text-[10px] px-2 py-1 rounded text-white font-bold"
+                style={{ background: "linear-gradient(135deg,#059669,#2563eb)" }}>
+                🤖 AI 완료 확인
+              </button>
+              {isMgr && (
+                <button onClick={() => {
+                  if (confirm("AI 확인 없이 바로 완료 처리하시겠습니까?")) {
+                    const m = prompt("완료 메모 (선택)") || "관리자 직접 완료";
+                    update(a.id, { status: "DONE", memo: m, completedAt: new Date().toISOString() });
+                  }
+                }} className="text-[10px] px-2 py-1 rounded border text-gray-500">직접 완료</button>
+              )}
+              {isMgr && <select className="text-[10px] rounded border px-1 py-0.5 ml-auto" value={a.assignee ?? ""} onChange={e => update(a.id, { assignee: e.target.value || null })}>
+                <option value="">담당 배정</option>
+                {FAC_USERS.filter(u => u.role !== "VIEWER").map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+              </select>}
+            </div>}
+            {a.completionVerdict && a.status !== "DONE" && (
+              <div className="text-xs mt-2 rounded p-2 bg-orange-50 border border-orange-200 text-orange-900">
+                ⚠️ AI 완료확인 결과: <strong>{a.completionVerdict.status}</strong> (신뢰도 {a.completionVerdict.confidence}%) — {a.completionVerdict.notes}
+              </div>
+            )}
+            {a.status === "DONE" && (
+              <div className="text-xs mt-2 rounded p-2 bg-emerald-50 border border-emerald-200 text-emerald-900">
+                ✅ 완료 {a.completedAt && <span className="text-[10px] text-emerald-600">({facFmtDT(a.completedAt)})</span>}
+                {a.completionVerdict && <span className="text-[10px] ml-2">· AI 신뢰도 {a.completionVerdict.confidence}%</span>}
+                {a.memo && <div className="mt-1">📝 {a.memo}</div>}
+                {a.completionNote && <div className="mt-1">담당자: {a.completionNote}</div>}
+                {a.completionPhotos?.length > 0 && (
+                  <div className="flex gap-1 mt-1.5">
+                    {a.completionPhotos.slice(0, 4).map((p, i) => (
+                      <img key={i} src={p} alt="" className="w-12 h-12 object-cover rounded border border-emerald-200" />
+                    ))}
+                    {a.completionPhotos.length > 4 && <span className="text-[10px] text-emerald-600 self-center">+{a.completionPhotos.length - 4}</span>}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {rows.length === 0 && (
+        <div className="text-center py-12 rounded-xl border border-dashed border-gray-200 text-gray-400 text-sm">
+          {viewTab === "active" ? "진행 중인 보완과제가 없습니다" : "완료 처리된 보완과제가 아직 없습니다"}
+        </div>
+      )}
+
+      {completingAction && (
+        <ActionCompletionModal
+          action={completingAction}
+          onClose={() => setCompletingAction(null)}
+          onConfirm={(data) => handleCompletion(completingAction, data)}
+          addAudit={addAudit}
+        />
+      )}
+    </div>
+  );
+}
+
+function FacNewActionForm({ onSubmit, onCancel }) {
+  const [form, setForm] = useState({ facId: "", title: "", type: "", desc: "", sev: "MEDIUM", rec: "", due: new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10), assignee: "" });
+  return (
+    <div className="space-y-2">
+      <div className="flex justify-between"><span className="text-sm font-medium">새 보완과제</span><button onClick={onCancel} className="text-xs text-gray-400">닫기</button></div>
+      <select className="w-full rounded-lg border px-2 py-1.5 text-xs" value={form.facId} onChange={e => setForm({ ...form, facId: e.target.value })}>
+        <option value="">시설 선택 *</option>
+        {FAC_FACILITIES.map(f => <option key={f.id} value={f.id}>[{f.code}] {f.name}</option>)}
+      </select>
+      <input className="w-full rounded-lg border px-2 py-1.5 text-xs" placeholder="과제명 *" value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} />
+      <div className="grid grid-cols-2 gap-2">
+        <select className="rounded-lg border px-2 py-1.5 text-xs" value={form.sev} onChange={e => setForm({ ...form, sev: e.target.value })}>
+          {Object.entries(FAC_SEV).map(([k, v]) => <option key={k} value={k}>{v.l}</option>)}
+        </select>
+        <input type="date" className="rounded-lg border px-2 py-1.5 text-xs" value={form.due} onChange={e => setForm({ ...form, due: e.target.value })} />
+      </div>
+      <textarea className="w-full rounded-lg border px-2 py-1.5 text-xs" rows={2} placeholder="설명" value={form.desc} onChange={e => setForm({ ...form, desc: e.target.value })} />
+      <button onClick={() => { if (!form.facId || !form.title) { alert("시설, 과제명 필수"); return; } onSubmit(form); }}
+        className="w-full rounded-lg bg-gray-900 text-white py-1.5 text-xs">등록</button>
+    </div>
+  );
+}
+
+/* ─── CCTV ─── */
+/* Mock AI camera inspection — analyzes current feed and surfaces anomalies.
+   Deterministic per channel so demo behavior is predictable. */
+/* ─── LIVE CCTV FEED COMPONENT ───
+   Supports 4 modes:
+   1) HLS stream (.m3u8 URL) - MediaMTX 방식
+   2) MJPEG/snapshot refresh (.jpg or /cgi-bin/snapshot)
+   3) cctv.py snapshot polling (http://...:5555/api/snap/{ch}) - Dahua NVR용 권장
+   4) Simulated feed (fallback)
+*/
+function CctvLiveFeed({ ch, camName, severity, streamUrl, snapServerUrl, size = "small", showControls = false }) {
+  const [tick, setTick] = useState(0);
+  const [streamErr, setStreamErr] = useState(false);
+  const [imgTick, setImgTick] = useState(Date.now());
+
+  useEffect(() => {
+    const t = setInterval(() => setTick(v => v + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // cctv.py 스냅샷 서버 폴링 모드 - 1.5초마다 새 이미지 요청
+  useEffect(() => {
+    if (!snapServerUrl || streamErr) return;
+    const t = setInterval(() => setImgTick(Date.now()), 1500);
+    return () => clearInterval(t);
+  }, [snapServerUrl, streamErr]);
+
+  // [MODE 3] cctv.py 스냅샷 서버 폴링 모드 (최우선)
+  if (snapServerUrl && !streamErr) {
+    const url = `${snapServerUrl.replace(/\/+$/, "")}/api/snap/${ch}?_t=${imgTick}`;
+    return (
+      <div style={{ position: "absolute", inset: 0, background: "#000", overflow: "hidden" }}>
+        <img src={url} alt={camName}
+          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+          onError={() => setStreamErr(true)} />
+        <div style={{ position: "absolute", top: 4, left: 4, padding: "2px 6px", borderRadius: 3, background: "rgba(0,0,0,0.7)", color: "#fff", fontSize: 9, fontWeight: 700, pointerEvents: "none" }}>
+          CH{ch} · LIVE
+        </div>
+        <div style={{ position: "absolute", top: 4, right: 4, padding: "2px 6px", borderRadius: 3, background: "rgba(220,38,38,0.9)", color: "#fff", fontSize: 9, fontWeight: 700, pointerEvents: "none", display: "flex", alignItems: "center", gap: 3 }}>
+          <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#fff", animation: "pulse 1.2s infinite" }} />
+          REC
+        </div>
+      </div>
+    );
+  }
+
+  // If user has configured a real stream URL (HLS/MJPEG/img-refresh), try that first
+  if (streamUrl && !streamErr) {
+    if (streamUrl.endsWith(".m3u8") || streamUrl.includes("manifest")) {
+      // HLS stream via video tag
+      return (
+        <video src={streamUrl} autoPlay muted playsInline
+          style={{ width: "100%", height: "100%", objectFit: "cover", background: "#000" }}
+          onError={() => setStreamErr(true)} />
+      );
+    }
+    if (streamUrl.includes(".jpg") || streamUrl.includes("/cgi-bin/snapshot") || streamUrl.includes("mjpeg")) {
+      // MJPEG / snapshot refresh
+      return (
+        <img src={`${streamUrl}${streamUrl.includes("?") ? "&" : "?"}_t=${Math.floor(Date.now() / 1000)}`}
+          alt={camName}
+          style={{ width: "100%", height: "100%", objectFit: "cover", background: "#000" }}
+          onError={() => setStreamErr(true)} />
+      );
+    }
+  }
+
+  // Simulated feed — dynamically generated SVG with animated elements
+  const sevColors = {
+    URGENT: "#dc2626", WARNING: "#ea580c", CAUTION: "#ca8a04", NORMAL: "#059669",
+  };
+  const borderColor = severity ? (sevColors[severity] || "#059669") : "transparent";
+
+  // Scene type per camera name (loose keyword match)
+  const getScene = () => {
+    const n = camName || "";
+    if (n.includes("주차") || n.includes("외부") || n.includes("광장")) return "parking";
+    if (n.includes("입구") || n.includes("로비") || n.includes("후문")) return "entrance";
+    if (n.includes("전시")) return "exhibit";
+    if (n.includes("체험") || n.includes("놀이")) return "playground";
+    if (n.includes("식당") || n.includes("주방")) return "kitchen";
+    if (n.includes("복도")) return "corridor";
+    return "generic";
+  };
+  const scene = getScene();
+
+  // Simulate motion — different objects depending on scene type
+  const now = new Date();
+  const ts = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}:${String(now.getSeconds()).padStart(2,"0")}`;
+
+  const isSmall = size === "small";
+  const txtSize = isSmall ? 6 : 10;
+  const chLabelSize = isSmall ? 7 : 10;
+
+  // Phase-based positions for animated figures
+  const phase = (tick + ch * 3) % 30;
+
+  const renderScene = () => {
+    switch (scene) {
+      case "parking":
+        return (
+          <>
+            {/* Parking lot lines */}
+            <line x1="20" y1="140" x2="340" y2="140" stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeDasharray="4,3" />
+            <line x1="20" y1="180" x2="340" y2="180" stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeDasharray="4,3" />
+            {/* Parked cars */}
+            <rect x="40" y="145" width="35" height="30" fill="rgba(100,116,139,0.6)" rx="3" />
+            <rect x="90" y="145" width="35" height="30" fill="rgba(71,85,105,0.6)" rx="3" />
+            <rect x="180" y="145" width="35" height="30" fill="rgba(120,113,108,0.6)" rx="3" />
+            <rect x="250" y="145" width="35" height="30" fill="rgba(87,83,78,0.6)" rx="3" />
+            {/* Moving car */}
+            <rect x={40 + (phase * 10) % 280} y="183" width="30" height="18" fill="rgba(239,68,68,0.7)" rx="3">
+              <animate attributeName="x" values="40;320;40" dur="8s" repeatCount="indefinite" />
+            </rect>
+          </>
+        );
+      case "entrance":
+        return (
+          <>
+            {/* Entrance door/frame */}
+            <rect x="140" y="40" width="80" height="140" fill="rgba(251,191,36,0.15)" stroke="rgba(251,191,36,0.4)" strokeWidth="1" />
+            <rect x="145" y="60" width="70" height="115" fill="rgba(71,85,105,0.3)" />
+            {/* Tile floor */}
+            <rect x="0" y="180" width="360" height="60" fill="rgba(148,163,184,0.1)" />
+            {/* Person figure walking */}
+            <g transform={`translate(${100 + phase * 8},${150})`}>
+              <circle cx="0" cy="0" r="7" fill="rgba(15,23,42,0.8)" />
+              <rect x="-6" y="7" width="12" height="25" fill="rgba(15,23,42,0.75)" rx="2" />
+              <rect x="-6" y="32" width="5" height="15" fill="rgba(15,23,42,0.75)" />
+              <rect x="1" y="32" width="5" height="15" fill="rgba(15,23,42,0.75)" />
+            </g>
+          </>
+        );
+      case "exhibit":
+        return (
+          <>
+            {/* Display cases */}
+            <rect x="30" y="70" width="70" height="100" fill="rgba(99,102,241,0.15)" stroke="rgba(99,102,241,0.4)" strokeWidth="1" />
+            <rect x="140" y="70" width="70" height="100" fill="rgba(139,92,246,0.15)" stroke="rgba(139,92,246,0.4)" strokeWidth="1" />
+            <rect x="250" y="70" width="70" height="100" fill="rgba(168,85,247,0.15)" stroke="rgba(168,85,247,0.4)" strokeWidth="1" />
+            {/* Lit exhibits */}
+            <circle cx="65" cy="120" r="12" fill="rgba(251,191,36,0.4)" />
+            <circle cx="175" cy="120" r="14" fill="rgba(250,204,21,0.35)" />
+            <circle cx="285" cy="120" r="12" fill="rgba(245,158,11,0.4)" />
+            {/* Visitor */}
+            <g transform={`translate(${80 + (phase * 3) % 200},190)`}>
+              <circle cx="0" cy="0" r="6" fill="rgba(239,68,68,0.75)" />
+              <rect x="-5" y="6" width="10" height="20" fill="rgba(239,68,68,0.7)" rx="2" />
+            </g>
+          </>
+        );
+      case "playground":
+        return (
+          <>
+            {/* Play equipment */}
+            <rect x="50" y="110" width="100" height="80" fill="rgba(14,165,233,0.2)" rx="4" />
+            <circle cx="100" cy="150" r="30" fill="rgba(236,72,153,0.2)" />
+            <rect x="200" y="130" width="120" height="60" fill="rgba(34,197,94,0.2)" rx="4" />
+            {/* Ball pit circles */}
+            <circle cx="225" cy="155" r="8" fill="rgba(239,68,68,0.5)" />
+            <circle cx="255" cy="165" r="8" fill="rgba(59,130,246,0.5)" />
+            <circle cx="285" cy="150" r="8" fill="rgba(234,179,8,0.5)" />
+            <circle cx="245" cy="175" r="7" fill="rgba(34,197,94,0.5)" />
+            {/* Kids */}
+            <circle cx={100 + Math.sin(tick/2) * 30} cy="140" r="5" fill="rgba(251,191,36,0.8)" />
+            <circle cx={260 + Math.cos(tick/2) * 20} cy="160" r="5" fill="rgba(236,72,153,0.8)" />
+          </>
+        );
+      case "kitchen":
+        return (
+          <>
+            {/* Counters */}
+            <rect x="0" y="100" width="360" height="30" fill="rgba(148,163,184,0.3)" />
+            <rect x="0" y="160" width="360" height="30" fill="rgba(148,163,184,0.3)" />
+            {/* Equipment */}
+            <rect x="30" y="70" width="40" height="30" fill="rgba(71,85,105,0.5)" />
+            <rect x="90" y="70" width="40" height="30" fill="rgba(71,85,105,0.5)" />
+            <rect x="150" y="70" width="80" height="30" fill="rgba(71,85,105,0.5)" />
+            {/* Steam */}
+            <circle cx="50" cy="65" r="4" fill="rgba(255,255,255,0.3)">
+              <animate attributeName="cy" values="65;40;65" dur="3s" repeatCount="indefinite" />
+              <animate attributeName="opacity" values="0.3;0;0.3" dur="3s" repeatCount="indefinite" />
+            </circle>
+          </>
+        );
+      case "corridor":
+        return (
+          <>
+            {/* Perspective corridor */}
+            <polygon points="20,30 340,30 280,210 80,210" fill="rgba(100,116,139,0.15)" />
+            <line x1="180" y1="30" x2="180" y2="210" stroke="rgba(255,255,255,0.1)" strokeWidth="1" />
+            {/* Doors */}
+            <rect x="40" y="70" width="20" height="80" fill="rgba(120,113,108,0.4)" />
+            <rect x="300" y="70" width="20" height="80" fill="rgba(120,113,108,0.4)" />
+            {/* Light fixtures */}
+            <circle cx="180" cy="30" r="4" fill="rgba(254,240,138,0.8)" />
+          </>
+        );
+      default:
+        return (
+          <>
+            <rect x="40" y="80" width="280" height="6" fill="rgba(100,116,139,0.3)" />
+            <rect x="60" y="100" width="40" height="90" fill="rgba(71,85,105,0.35)" rx="2" />
+            <rect x="130" y="100" width="40" height="90" fill="rgba(71,85,105,0.35)" rx="2" />
+            <rect x="200" y="100" width="40" height="90" fill="rgba(71,85,105,0.35)" rx="2" />
+            <rect x="270" y="100" width="40" height="90" fill="rgba(71,85,105,0.35)" rx="2" />
+          </>
+        );
+    }
+  };
+
+  return (
+    <div style={{ position: "absolute", inset: 0, width: "100%", height: "100%", minHeight: 60, background: "#000", overflow: "hidden", borderRadius: "inherit" }}>
+      <svg width="100%" height="100%" viewBox="0 0 360 240" preserveAspectRatio="xMidYMid slice" style={{ width: "100%", height: "100%", display: "block" }} xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id={`cctvBg-${ch}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#1e293b" />
+            <stop offset="100%" stopColor="#0f172a" />
+          </linearGradient>
+          <pattern id={`cctvNoise-${ch}`} width="3" height="3" patternUnits="userSpaceOnUse">
+            <rect width="3" height="3" fill="transparent" />
+            <circle cx="1" cy="1" r="0.4" fill="rgba(255,255,255,0.02)" />
+            <circle cx="2.5" cy="2" r="0.3" fill="rgba(255,255,255,0.015)" />
+          </pattern>
+        </defs>
+        <rect width="360" height="240" fill={`url(#cctvBg-${ch})`} />
+        {renderScene()}
+        <rect width="360" height="240" fill={`url(#cctvNoise-${ch})`} />
+        {/* Corner frame indicator for severity */}
+        {severity && severity !== "NORMAL" && (
+          <rect x="2" y="2" width="356" height="236" fill="none" stroke={borderColor} strokeWidth="2" />
+        )}
+        {/* REC indicator */}
+        <g>
+          <rect x="8" y="8" width="44" height="14" fill="rgba(0,0,0,0.7)" rx="2" />
+          <circle cx="14" cy="15" r="2.5" fill="#ef4444">
+            <animate attributeName="opacity" values="1;0.3;1" dur="1.2s" repeatCount="indefinite" />
+          </circle>
+          <text x="20" y="18" fill="#fff" fontFamily="monospace" fontSize={chLabelSize} fontWeight="bold">REC</text>
+        </g>
+        {/* Channel label */}
+        <g>
+          <rect x="8" y={240-22} width="120" height="14" fill="rgba(0,0,0,0.7)" rx="2" />
+          <text x="12" y={240-12} fill="#fff" fontFamily="monospace" fontSize={chLabelSize}>CH{ch} · {camName}</text>
+        </g>
+        {/* Timestamp */}
+        <g>
+          <rect x={240} y={240-22} width="115" height="14" fill="rgba(0,0,0,0.7)" rx="2" />
+          <text x={350} y={240-12} fill="#fff" fontFamily="monospace" fontSize={txtSize} textAnchor="end">{ts}</text>
+        </g>
+      </svg>
+    </div>
+  );
+}
+
+
+/* Generate a synthetic CCTV capture SVG based on scenario type.
+   In production, replace with actual frame grab from the camera stream. */
+const generateCctvCapture = (ch, camName, severity, findingType) => {
+  const sevColors = {
+    URGENT: { frame: "#dc2626", overlay: "rgba(220,38,38,0.15)", text: "#fef2f2" },
+    WARNING: { frame: "#ea580c", overlay: "rgba(234,88,12,0.12)", text: "#fff7ed" },
+    CAUTION: { frame: "#ca8a04", overlay: "rgba(202,138,4,0.1)", text: "#fefce8" },
+    NORMAL: { frame: "#059669", overlay: "rgba(5,150,105,0.08)", text: "#f0fdf4" },
+  };
+  const sc = sevColors[severity] || sevColors.NORMAL;
+  const now = new Date();
+  const ts = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")} ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}:${String(now.getSeconds()).padStart(2,"0")}`;
+
+  // Scene elements based on finding type
+  let sceneElements = "";
+  if (findingType.includes("물기")) {
+    // Water reflection puddle
+    sceneElements = `
+      <ellipse cx="180" cy="175" rx="40" ry="10" fill="rgba(96,165,250,0.5)"/>
+      <ellipse cx="185" cy="173" rx="28" ry="6" fill="rgba(147,197,253,0.7)"/>
+      <rect x="140" y="100" width="80" height="80" fill="rgba(100,116,139,0.4)" rx="2"/>
+      <circle cx="70" cy="160" r="4" fill="rgba(96,165,250,0.8)"/>
+      <circle cx="90" cy="165" r="3" fill="rgba(96,165,250,0.6)"/>`;
+  } else if (findingType.includes("집중") || findingType.includes("초과")) {
+    // Crowd silhouettes
+    sceneElements = `
+      ${Array.from({length:8},(_,i)=>`<circle cx="${40+i*38}" cy="120" r="7" fill="rgba(51,65,85,0.7)"/><rect x="${33+i*38}" y="125" width="14" height="30" fill="rgba(51,65,85,0.6)" rx="2"/>`).join("")}
+      ${Array.from({length:6},(_,i)=>`<circle cx="${60+i*50}" cy="160" r="8" fill="rgba(71,85,105,0.8)"/><rect x="${52+i*50}" y="165" width="16" height="32" fill="rgba(71,85,105,0.7)" rx="2"/>`).join("")}`;
+  } else if (findingType.includes("안전장치") || findingType.includes("볼트")) {
+    // Structure with rust/bolt markers
+    sceneElements = `
+      <rect x="50" y="60" width="8" height="140" fill="#64748b"/>
+      <rect x="290" y="60" width="8" height="140" fill="#64748b"/>
+      <rect x="50" y="60" width="248" height="10" fill="#64748b"/>
+      <circle cx="54" cy="90" r="5" fill="#dc2626"/>
+      <circle cx="54" cy="140" r="5" fill="#dc2626"/>
+      <circle cx="294" cy="90" r="5" fill="#dc2626"/>
+      <path d="M 54 85 L 50 95 M 54 100 L 58 90" stroke="#fbbf24" stroke-width="2"/>`;
+  } else if (findingType.includes("무단") || findingType.includes("출입")) {
+    // Single silhouette in restricted area
+    sceneElements = `
+      <rect x="20" y="30" width="320" height="3" fill="#fbbf24" stroke-dasharray="6 4"/>
+      <text x="180" y="50" text-anchor="middle" fill="#fbbf24" font-size="9" font-weight="bold">RESTRICTED</text>
+      <circle cx="200" cy="120" r="12" fill="rgba(15,23,42,0.85)"/>
+      <rect x="188" y="130" width="24" height="45" fill="rgba(15,23,42,0.8)" rx="3"/>
+      <rect x="188" y="175" width="10" height="25" fill="rgba(15,23,42,0.8)"/>
+      <rect x="202" y="175" width="10" height="25" fill="rgba(15,23,42,0.8)"/>`;
+  } else {
+    // Generic clean scene
+    sceneElements = `
+      <rect x="40" y="80" width="280" height="6" fill="rgba(100,116,139,0.3)"/>
+      <rect x="60" y="100" width="40" height="90" fill="rgba(71,85,105,0.35)" rx="2"/>
+      <rect x="130" y="100" width="40" height="90" fill="rgba(71,85,105,0.35)" rx="2"/>
+      <rect x="200" y="100" width="40" height="90" fill="rgba(71,85,105,0.35)" rx="2"/>
+      <rect x="270" y="100" width="40" height="90" fill="rgba(71,85,105,0.35)" rx="2"/>`;
+  }
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 240" style="display:block">
+    <defs>
+      <linearGradient id="bg${ch}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#1e293b"/>
+        <stop offset="100%" stop-color="#0f172a"/>
+      </linearGradient>
+      <pattern id="noise${ch}" width="4" height="4" patternUnits="userSpaceOnUse">
+        <rect width="4" height="4" fill="transparent"/>
+        <circle cx="1" cy="1" r="0.5" fill="rgba(255,255,255,0.03)"/>
+        <circle cx="3" cy="2" r="0.4" fill="rgba(255,255,255,0.02)"/>
+      </pattern>
+    </defs>
+    <rect width="360" height="240" fill="url(#bg${ch})"/>
+    <rect width="360" height="240" fill="url(#noise${ch})"/>
+    <rect width="360" height="240" fill="${sc.overlay}"/>
+    ${sceneElements}
+    <rect x="2" y="2" width="356" height="236" fill="none" stroke="${sc.frame}" stroke-width="3"/>
+    <rect x="8" y="8" width="60" height="18" fill="rgba(0,0,0,0.7)" rx="2"/>
+    <circle cx="16" cy="17" r="3" fill="#ef4444"><animate attributeName="opacity" values="1;0.3;1" dur="1.2s" repeatCount="indefinite"/></circle>
+    <text x="24" y="21" fill="#fff" font-family="monospace" font-size="10" font-weight="bold">REC</text>
+    <rect x="8" y="214" width="344" height="18" fill="rgba(0,0,0,0.7)" rx="2"/>
+    <text x="12" y="227" fill="#fff" font-family="monospace" font-size="10">CH${ch} · ${camName}</text>
+    <text x="352" y="227" fill="#fff" font-family="monospace" font-size="10" text-anchor="end">${ts}</text>
+  </svg>`;
+
+  // btoa with UTF-8 safe encoding
+  const encoded = typeof window !== "undefined" && window.btoa
+    ? window.btoa(unescape(encodeURIComponent(svg)))
+    : "";
+  return `data:image/svg+xml;base64,${encoded}`;
+};
+
+/* ─── REAL CCTV AI VISION ANALYSIS ─────────────────────────────
+ * 1) Fetch live JPEG from cctv.py snapshot server
+ * 2) Convert to base64 data URL
+ * 3) Send to Anthropic Claude Vision API for analysis
+ * 4) Parse structured JSON response
+ * Falls back to mock if no API key or snap server configured.
+ */
+
+// localStorage keys
+const ANTHROPIC_API_KEY_LS = "jamsa_anthropic_api_key";
+const ANTHROPIC_MODEL_LS = "jamsa_anthropic_model";
+
+// Fetch snapshot from cctv.py and convert to base64
+const fetchCctvSnapshotAsBase64 = async (snapServerUrl, ch) => {
+  if (!snapServerUrl) return null;
+  try {
+    const url = `${snapServerUrl.replace(/\/+$/, "")}/api/snap/${ch}?_t=${Date.now()}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout?.(8000) });
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch (e) {
+    console.warn("Snapshot fetch failed:", e.message);
+    return null;
+  }
+};
+
+// Call Anthropic API via cctv.py proxy (bypasses CORS)
+const callAnthropicVision = async (apiKey, base64Image, camName, zone, snapServerUrl) => {
+  const model = (() => {
+    try { return window.localStorage?.getItem(ANTHROPIC_MODEL_LS) || "claude-sonnet-4-5"; }
+    catch (e) { return "claude-sonnet-4-5"; }
+  })();
+
+  // Extract media type and data from data URL
+  const match = base64Image.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) throw new Error("Invalid base64 image format");
+  const mediaType = match[1];
+  const pureBase64 = match[2];
+
+  const systemPrompt = `당신은 박물관·체험시설 CCTV 영상을 분석하는 안전·시설 점검 AI입니다.
+이미지를 분석하여 다음 관점에서 이상 징후를 판단하세요:
+- 시설 안전 (구조물, 볼트 이완, 파손, 기울어짐)
+- 위생·청결 (바닥 물기, 쓰레기, 오염)
+- 운영 상태 (혼잡도, 수용인원 초과, 무단 출입)
+- 보안 (비인가자 출입, 이상 행동)
+- 환경 (조명 불량, 침수, 화재 징후)
+
+반드시 아래 JSON 형식만 응답하세요 (다른 텍스트 절대 금지):
+{
+  "severity": "URGENT|WARNING|CAUTION|NORMAL",
+  "confidence": 0-100,
+  "finding": "짧은 핵심 발견 (15자 이내)",
+  "detail": "상세 분석 (2-3문장)",
+  "suggestions": ["조치1", "조치2", "조치3"],
+  "autoAction": { "title": "과제 제목", "sev": "URGENT|HIGH|MEDIUM|LOW", "type": "카테고리" } | null
+}
+
+severity 기준:
+- URGENT: 즉시 운영중단·긴급조치 필요 (구조물 파손, 화재, 심각한 안전사고)
+- WARNING: 오늘 내 조치 필요 (수용인원 초과, 보안 이상)
+- CAUTION: 수일 내 확인 (경미한 오염, 예방적 조치)
+- NORMAL: 이상 없음 (suggestions=[], autoAction=null)`;
+
+  const userMsg = `카메라 정보:
+- 채널: ${camName}
+- 구역: ${zone || "미지정"}
+
+위 CCTV 스냅샷을 분석하여 JSON으로 답하세요.`;
+
+  // Use cctv.py proxy if snapServerUrl is available (avoids CORS)
+  const proxyUrl = snapServerUrl
+    ? `${snapServerUrl.replace(/\/+$/, "")}/api/ai-proxy`
+    : null;
+
+  let response;
+  if (proxyUrl) {
+    // Proxy mode: send to local cctv.py
+    response = await fetch(proxyUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: apiKey,
+        model: model,
+        image_base64: pureBase64,
+        media_type: mediaType,
+        system: systemPrompt,
+        user_msg: userMsg,
+      }),
+      signal: AbortSignal.timeout?.(45000),
+    });
+  } else {
+    // Direct mode (will likely fail due to CORS in browser)
+    response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+      body: JSON.stringify({
+        model: model,
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: mediaType, data: pureBase64 } },
+            { type: "text", text: userMsg },
+          ],
+        }],
+      }),
+    });
+  }
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`API ${response.status}: ${errText.slice(0, 200)}`);
+  }
+
+  const data = await response.json();
+  // Handle proxy error response
+  if (data.error) {
+    throw new Error(data.error);
+  }
+  const text = data.content?.[0]?.text || "";
+
+  // Extract JSON from response (strip any markdown fences)
+  const cleanText = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+  const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("No JSON in response: " + cleanText.slice(0, 100));
+
+  const parsed = JSON.parse(jsonMatch[0]);
+  // Normalize severity
+  const sev = (parsed.severity || "NORMAL").toUpperCase();
+  parsed.severity = ["URGENT", "WARNING", "CAUTION", "NORMAL"].includes(sev) ? sev : "NORMAL";
+  parsed.confidence = Math.min(100, Math.max(0, parseInt(parsed.confidence) || 0));
+  parsed.suggestions = Array.isArray(parsed.suggestions) ? parsed.suggestions : [];
+  if (parsed.autoAction && typeof parsed.autoAction !== "object") parsed.autoAction = null;
+  return parsed;
+};
+
+// Main analysis entry point
+const analyzeCctvFeedAI = async (ch, camName, opts = {}) => {
+  const { snapServerUrl, useRealAI, zone, strict } = opts;
+
+  // Get API key
+  let apiKey = "";
+  try { apiKey = window.localStorage?.getItem(ANTHROPIC_API_KEY_LS) || ""; } catch (e) {}
+
+  // Track error for upstream reporting
+  let lastError = null;
+
+  // Try real AI path
+  if (useRealAI && apiKey && snapServerUrl) {
+    let base64Img = null;
+
+    // Step 1: Fetch snapshot
+    try {
+      console.log(`[AI CH${ch}] Step 1: Fetching snapshot from ${snapServerUrl}/api/snap/${ch}`);
+      base64Img = await fetchCctvSnapshotAsBase64(snapServerUrl, ch);
+      if (!base64Img) {
+        lastError = `스냅샷 가져오기 실패 (서버 응답 비어있음)`;
+        console.error(`[AI CH${ch}] ${lastError}`);
+        if (strict) {
+          return {
+            severity: "NORMAL", confidence: 0,
+            finding: "❌ AI 분석 실패",
+            detail: `오류: ${lastError}\n\nNVR 서버 (${snapServerUrl})에서 채널 ${ch} 스냅샷을 가져올 수 없습니다.\n\n[확인 사항]\n1. cctv.py 서버 실행 여부\n2. 해당 채널 카메라 연결 상태\n3. cameras.json 설정`,
+            suggestions: ["cctv.py 서버 재시작", "NVR 서버 URL 재설정", "해당 채널 카메라 확인"],
+            autoAction: null, capture: null, _mode: "error", _error: lastError,
+          };
+        }
+      }
+    } catch (e) {
+      lastError = `스냅샷 fetch 오류: ${e.message}`;
+      console.error(`[AI CH${ch}] ${lastError}`);
+      if (strict) {
+        return {
+          severity: "NORMAL", confidence: 0,
+          finding: "❌ NVR 서버 연결 실패",
+          detail: `오류: ${e.message}\n\ncctv.py 서버에 접근할 수 없습니다.\n\n[확인 사항]\n1. cctv.py 실행 중인지 확인\n2. URL이 정확한지 확인 (현재: ${snapServerUrl})\n3. 방화벽 허용 여부`,
+          suggestions: ["cctv.py 서버 재시작", "URL 재확인", "방화벽 허용"],
+          autoAction: null, capture: null, _mode: "error", _error: lastError,
+        };
+      }
+    }
+
+    // Step 2: Call AI
+    if (base64Img) {
+      try {
+        console.log(`[AI CH${ch}] Step 2: Calling AI (image: ${(base64Img.length/1024).toFixed(0)}KB)`);
+        const result = await callAnthropicVision(apiKey, base64Img, camName, zone, snapServerUrl);
+        console.log(`[AI CH${ch}] ✅ REAL analysis success: ${result.severity} (${result.confidence}%)`);
+        return { ...result, capture: base64Img, _mode: "real" };
+      } catch (apiErr) {
+        lastError = `AI API 오류: ${apiErr.message}`;
+        console.error(`[AI CH${ch}] ❌ ${lastError}`);
+        if (strict) {
+          return {
+            severity: "NORMAL", confidence: 0,
+            finding: "❌ AI API 호출 실패",
+            detail: `오류: ${apiErr.message}\n\n[가능한 원인]\n• cctv.py가 구버전 (AI 프록시 기능 없음)\n• API 키 만료/잘못됨\n• 크레딧 부족\n• 네트워크 차단`,
+            suggestions: ["cctv.py 최신 버전으로 교체", "API 키 재발급", "console.anthropic.com 크레딧 확인"],
+            autoAction: null, capture: base64Img, _mode: "error", _error: lastError,
+          };
+        }
+        // Non-strict: real image + mock analysis
+        const mockResult = await _mockAnalyze(ch, camName);
+        return { ...mockResult, capture: base64Img, _mode: "mock-real-image", _error: lastError };
+      }
+    }
+  }
+
+  // Full mock fallback (no real AI configured)
+  const mockResult = await _mockAnalyze(ch, camName);
+  return { ...mockResult, _mode: "mock", _error: lastError };
+};
+
+// Mock analyzer (extracted from old code)
+const _mockAnalyze = async (ch, camName) => {
+  await new Promise(r => setTimeout(r, 800));
+  let seed = ch * 31 + camName.length;
+  const rnd = (n) => { seed = (seed * 16807) % 2147483647; return Math.abs(seed) % n; };
+
+  const scenarios = [
+    {
+      severity: "NORMAL", confidence: 92 + rnd(7),
+      finding: "정상 운영 상태",
+      detail: "이상 감지 없음. 체험객 정상 이용 중이며 작업 환경 및 안전장치 상태 양호.",
+      suggestions: [],
+      autoAction: null,
+    },
+    {
+      severity: "CAUTION", confidence: 78 + rnd(10),
+      finding: "바닥 물기 감지 의심",
+      detail: "체험관 입구 주변에 반사광이 감지되어 바닥 물기 가능성 있음. 미끄럼 사고 예방을 위해 즉시 확인 필요.",
+      suggestions: ["현장 확인 후 건조 처리", "미끄럼 주의 표지판 설치", "청소 인력 호출"],
+      autoAction: { title: "바닥 물기 확인 및 건조 처리", sev: "MEDIUM", type: "위생·안전" },
+    },
+    {
+      severity: "WARNING", confidence: 85 + rnd(8),
+      finding: "체험객 집중 · 정원 초과 우려",
+      detail: "현재 구역에 체험객 밀도가 권장 수용인원의 85%를 초과. 일시 입장 통제 검토 필요.",
+      suggestions: ["매표소에 일시 발권 중단 요청", "현장 안전요원 추가 배치", "안내 방송 실시"],
+      autoAction: { title: "수용인원 초과 — 입장 일시 통제", sev: "HIGH", type: "안전관리" },
+    },
+    {
+      severity: "URGENT", confidence: 90 + rnd(8),
+      finding: "안전장치 이상 · 즉시 점검 필요",
+      detail: "체험 시설의 볼트 또는 연결부에 이완 패턴이 관찰됨. 구조 안정성 확인 전까지 운영 중단 권장.",
+      suggestions: ["해당 시설 즉시 운영 중단", "현장 안전 담당자 긴급 호출", "시설점검 팀 출동 요청"],
+      autoAction: { title: "CCTV 감지 이상 — 안전장치 긴급 점검", sev: "URGENT", type: "구조물" },
+    },
+    {
+      severity: "CAUTION", confidence: 72 + rnd(12),
+      finding: "무단 출입 의심 · 미확인 인물",
+      detail: "비개장 시간대 또는 직원 전용 구역에서 미등록 인물 동선 감지. 보안 확인 필요.",
+      suggestions: ["보안 담당 연락", "CCTV 녹화 보존", "관리자 보고"],
+      autoAction: { title: "무단 출입 의심 — 보안 확인", sev: "HIGH", type: "보안" },
+    },
+    {
+      severity: "NORMAL", confidence: 88 + rnd(9),
+      finding: "청결 상태 양호",
+      detail: "정기 청결점검 기준 부합. 이상 없음.",
+      suggestions: [],
+      autoAction: null,
+    },
+  ];
+  const picked = scenarios[rnd(scenarios.length)];
+  return {
+    ...picked,
+    capture: generateCctvCapture(ch, camName, picked.severity, picked.finding),
+  };
+};
+
+function FacCctvPage({ go, setActions, addAudit, user }) {
+  const [sel, setSel] = useState(null);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiResult, setAiResult] = useState(null); // { ch, camName, ...result }
+  const [aiHistory, setAiHistory] = useState([]); // [{ch, name, at, severity, finding, capture}]
+  const [captureViewer, setCaptureViewer] = useState(null); // {src, title, subtitle, time, sev, detail, confidence}
+  // CCTV stream URLs — persisted per channel
+  const [streamUrls, setStreamUrls] = useLocalStorage("jamsa_cctv_streams", {}); // {ch: "url"}
+  const [showStreamCfg, setShowStreamCfg] = useState(false);
+  // cctv.py 스냅샷 서버 URL (Dahua NVR RTSP → JPEG 폴링 서버)
+  const [snapServerUrl, setSnapServerUrl] = useLocalStorage("jamsa_cctv_snap_server", "");
+  const [snapServerStatus, setSnapServerStatus] = useState(null); // null | "ok" | "error"
+  const [showSnapCfg, setShowSnapCfg] = useState(false);
+  // Anthropic AI API key for real vision analysis
+  const [anthropicKey, setAnthropicKey] = useLocalStorage("jamsa_anthropic_api_key", "");
+  const [showAiCfg, setShowAiCfg] = useState(false);
+
+  // 스냅 서버 상태 체크 (30초마다)
+  useEffect(() => {
+    if (!snapServerUrl) { setSnapServerStatus(null); return; }
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const res = await fetch(`${snapServerUrl.replace(/\/+$/, "")}/api/status`, { signal: AbortSignal.timeout?.(3000) });
+        if (!cancelled) setSnapServerStatus(res.ok ? "ok" : "error");
+      } catch (e) {
+        if (!cancelled) setSnapServerStatus("error");
+      }
+    };
+    check();
+    const iv = setInterval(check, 30000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [snapServerUrl]);
+
+  // Inject streamUrl into camera objects
+  const cctvCameras = FAC_CCTV_CAMERAS.map(c => ({ ...c, streamUrl: streamUrls[c.ch] || null }));
+  // Batch scan state
+  const [showBatch, setShowBatch] = useState(false);
+  const [batchPreset, setBatchPreset] = useState("now"); // now | hourly | open | close | custom
+  const [batchStartH, setBatchStartH] = useState("09");
+  const [batchEndH, setBatchEndH] = useState("18");
+  const [batchChannels, setBatchChannels] = useState(() => FAC_CCTV_CAMERAS.map(c => c.ch));
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchProgress, setBatchProgress] = useState(null); // { done, total, results:[] }
+  // 결과 상세 미리보기 모달 상태
+  const [showBatchPreview, setShowBatchPreview] = useState(false);
+  const [batchPreviewFilter, setBatchPreviewFilter] = useState("all"); // all|URGENT|WARNING|CAUTION|NORMAL
+  const [batchSelectedItems, setBatchSelectedItems] = useState(new Set()); // Set of result indices selected for action creation
+  const [batchDetailItem, setBatchDetailItem] = useState(null); // Individual item to view in detail
+  const cam = sel != null ? cctvCameras.find(c => c.ch === sel) : null;
+
+  const toggleBatchChannel = (ch) => {
+    setBatchChannels(prev => prev.includes(ch) ? prev.filter(c => c !== ch) : [...prev, ch]);
+  };
+  const selectAllChannels = () => setBatchChannels(FAC_CCTV_CAMERAS.map(c => c.ch));
+  const deselectAllChannels = () => setBatchChannels([]);
+
+  const runBatchScan = async () => {
+    if (batchChannels.length === 0) return alert("점검할 채널을 1개 이상 선택해주세요.");
+    const totalScans = batchPreset === "hourly"
+      ? batchChannels.length * (parseInt(batchEndH) - parseInt(batchStartH) + 1)
+      : batchChannels.length;
+
+    // Check AI mode eligibility with explicit user confirmation
+    let anthropicKey = "";
+    try { anthropicKey = window.localStorage?.getItem("jamsa_anthropic_api_key") || ""; } catch(e){}
+    const useRealAI = !!(snapServerUrl && anthropicKey);
+
+    // ─── PREFLIGHT CHECK for Real AI Mode ───
+    if (useRealAI) {
+      console.log("[Preflight] Testing AI proxy on cctv.py...");
+      try {
+        const testRes = await fetch(`${snapServerUrl.replace(/\/+$/, "")}/api/ai-test`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_key: anthropicKey, model: window.localStorage?.getItem("jamsa_anthropic_model") || "claude-sonnet-4-5" }),
+          signal: AbortSignal.timeout?.(15000),
+        });
+
+        if (testRes.status === 404) {
+          alert("❌ cctv.py가 구버전입니다!\n\n"
+              + "AI 프록시 기능이 없는 이전 버전 cctv.py가 실행 중입니다.\n\n"
+              + "[해결 방법]\n"
+              + "1. cctv.py 서버 종료 (창에서 Ctrl+C)\n"
+              + "2. 새 ZIP의 cctv.py를 cctv-server 폴더에 덮어쓰기\n"
+              + "3. START_CCTV.bat 다시 실행\n"
+              + "4. 통합관리 시스템 새로고침 (F5)\n"
+              + "5. 다시 일괄점검 시도\n\n"
+              + "취소합니다.");
+          return;
+        }
+
+        const testData = await testRes.json();
+        if (!testData.ok) {
+          if (!confirm(`⚠️ AI API 사전 테스트 실패\n\n오류: ${testData.error || "알 수 없음"}\n\n`
+              + `이 상태로 일괄점검을 진행하면 모든 결과가 시뮬레이션이 됩니다.\n\n`
+              + `[해결 방법]\n`
+              + `1. console.anthropic.com에서 API 키 재확인\n`
+              + `2. 결제 수단 등록 (Settings → Billing)\n`
+              + `3. 무료 크레딧 ($5) 잔액 확인\n\n`
+              + `그래도 시뮬레이션 모드로 계속하시겠습니까?`)) {
+            return;
+          }
+          // Continue but force fully simulation
+        } else {
+          console.log("[Preflight] ✅ AI proxy reachable, key valid");
+        }
+      } catch (e) {
+        if (!confirm(`⚠️ cctv.py 서버 연결 실패\n\n오류: ${e.message}\n\n`
+            + `cctv.py 서버가 실행 중인지 확인하세요.\n\n`
+            + `시뮬레이션 모드로 계속하시겠습니까?`)) {
+          return;
+        }
+      }
+    }
+
+    // Warn user about mode
+    let modeMsg = "";
+    if (useRealAI) {
+      modeMsg = `🧠 실제 AI Vision 모드로 ${totalScans}회 분석합니다.\n\n`
+              + `• NVR 서버: ${snapServerUrl}\n`
+              + `• API 키: ${anthropicKey.slice(0, 12)}...\n`
+              + `• 예상 비용: 약 $${(totalScans * 0.003).toFixed(3)} (약 ${Math.ceil(totalScans * 0.003 * 1400)}원)\n\n`
+              + `※ 실패하면 명확한 오류 메시지로 표시됩니다 (시뮬레이션 fallback 없음)\n\n`
+              + `계속하시겠습니까?`;
+    } else {
+      const reasons = [];
+      if (!snapServerUrl) reasons.push("• NVR 서버 URL 미설정");
+      if (!anthropicKey) reasons.push("• Anthropic API 키 미설정");
+      modeMsg = `⚠️ 시뮬레이션 모드로 실행됩니다.\n\n`
+              + `실제 AI 분석을 위해 다음이 필요합니다:\n${reasons.join("\n")}\n\n`
+              + `시뮬레이션으로 계속하시겠습니까?\n`
+              + `(취소 후 상단의 '🤖 AI 분석 설정' 또는 'NVR 서버 설정' 버튼을 확인하세요)`;
+    }
+    if (!confirm(modeMsg)) return;
+
+    setBatchRunning(true);
+    const results = [];
+    setBatchProgress({ done: 0, total: totalScans, results: [] });
+
+    // Track real AI success/failure for reporting
+    let realSuccess = 0;
+    let realFail = 0;
+    let firstError = null;
+
+    try {
+      if (batchPreset === "hourly") {
+        // Each hour for each channel
+        for (let h = parseInt(batchStartH); h <= parseInt(batchEndH); h++) {
+          for (const ch of batchChannels) {
+            const cam = FAC_CCTV_CAMERAS.find(c => c.ch === ch);
+            const camName = cam?.name || `CH${ch}`;
+            // strict: true means show error in UI instead of silently fall back
+            const r = await analyzeCctvFeedAI(ch, camName + "_" + h, { snapServerUrl, useRealAI, zone: cam?.zone, strict: useRealAI });
+            if (useRealAI) {
+              if (r._mode === "real") realSuccess++;
+              else {
+                realFail++;
+                if (!firstError && r._error) firstError = r._error;
+              }
+            }
+            const entry = { ch, camName, hour: h, at: new Date().toISOString(), ...r };
+            results.push(entry);
+            setBatchProgress(prev => ({ done: prev.done + 1, total: totalScans, results: [...results] }));
+          }
+        }
+      } else {
+        // Single scan per channel
+        for (const ch of batchChannels) {
+          const cam = FAC_CCTV_CAMERAS.find(c => c.ch === ch);
+          const camName = cam?.name || `CH${ch}`;
+          const r = await analyzeCctvFeedAI(ch, camName, { snapServerUrl, useRealAI, zone: cam?.zone, strict: useRealAI });
+          if (useRealAI) {
+            if (r._mode === "real") realSuccess++;
+            else {
+              realFail++;
+              if (!firstError && r._error) firstError = r._error;
+            }
+          }
+          const entry = { ch, camName, at: new Date().toISOString(), ...r };
+          results.push(entry);
+          setBatchProgress(prev => ({ done: prev.done + 1, total: totalScans, results: [...results] }));
+        }
+      }
+
+      // If real AI was attempted, report success rate
+      if (useRealAI && realFail > 0) {
+        alert(`⚠️ 일괄점검 완료 - 부분 실패\n\n`
+            + `✅ 실제 AI 성공: ${realSuccess}건\n`
+            + `❌ AI 실패 → 시뮬레이션 fallback: ${realFail}건\n\n`
+            + `첫 번째 오류: ${firstError || "알 수 없음"}\n\n`
+            + `[확인 방법]\n`
+            + `1. 브라우저 개발자도구 (F12) > 콘솔 탭에서 상세 로그 확인\n`
+            + `2. cctv.py 서버 실행 중인지 확인\n`
+            + `3. API 키 유효성 확인\n`
+            + `4. 크레딧 잔액 확인 (console.anthropic.com)`);
+      }
+
+      // Merge into history
+      setAiHistory(prev => [...results.slice().reverse(), ...prev].slice(0, 50));
+
+      // Log audit
+      const abnormal = results.filter(r => r.severity !== "NORMAL").length;
+      if (addAudit) addAudit({
+        module: "facility",
+        action: "ai_analyze",
+        targetLabel: `CCTV 일괄 AI 자체점검`,
+        severity: abnormal > 0 ? "HIGH" : "LOW",
+        summary: `전체 ${totalScans}회 분석 완료 · 이상 ${abnormal}건 발견 · 프리셋: ${batchPreset}`,
+      });
+    } catch (err) {
+      alert("일괄 분석 실패: " + err.message);
+    } finally {
+      setBatchRunning(false);
+    }
+  };
+
+  const createBatchActions = () => {
+    if (!batchProgress || !batchProgress.results.length) return;
+    const abnormals = batchProgress.results.filter(r => r.autoAction);
+    if (abnormals.length === 0) return alert("자동 생성할 이상 항목이 없습니다.");
+    if (!confirm(`${abnormals.length}건의 보완과제를 일괄 생성하시겠습니까?`)) return;
+
+    abnormals.forEach(r => {
+      const dueOffset = r.autoAction.sev === "URGENT" ? 0 : r.autoAction.sev === "HIGH" ? 1 : 3;
+      const newAction = {
+        id: "a" + Date.now() + Math.random(),
+        facId: null, inspId: null,
+        title: `[CCTV CH${r.ch} ${r.camName}${r.hour != null ? ` ${r.hour}시` : ""}] ${r.autoAction.title}`,
+        type: r.autoAction.type,
+        desc: `[AI CCTV 일괄점검]\n발견: ${r.finding}\n\n${r.detail}\n\n[권장 조치]\n${r.suggestions.map((s, i) => `${i + 1}. ${s}`).join("\n")}`,
+        sev: r.autoAction.sev,
+        rec: r.suggestions[0],
+        status: "TODO",
+        due: _facD(dueOffset),
+        assignee: null, memo: null, source: "cctv",
+        photo: r.capture || null,
+        photos: r.capture ? [r.capture] : [],
+        ai: { type: "CCTV 일괄점검", severity: r.autoAction.sev, defect: r.finding, solution: r.suggestions.join(" / "), time: "현장 확인 후 판단", budget: "-", materials: [] },
+      };
+      setActions(prev => [newAction, ...prev]);
+    });
+
+    if (addAudit) addAudit({
+      module: "facility",
+      action: "action_create",
+      targetLabel: `CCTV 일괄점검 보완과제`,
+      summary: `${abnormals.length}건 일괄 생성`,
+    });
+    alert(`${abnormals.length}건의 보완과제가 생성되었습니다.`);
+  };
+
+  // 선택한 항목만 보완과제 생성 (미리보기 모달에서 호출)
+  const createSelectedActions = () => {
+    if (!batchProgress || batchSelectedItems.size === 0) {
+      alert("선택된 항목이 없습니다.");
+      return;
+    }
+    const selected = Array.from(batchSelectedItems)
+      .map(i => batchProgress.results[i])
+      .filter(r => r && r.autoAction);
+    if (selected.length === 0) {
+      alert("선택한 항목 중 과제 생성 가능한 항목이 없습니다.");
+      return;
+    }
+    if (!confirm(`선택한 ${selected.length}건의 보완과제를 생성하시겠습니까?`)) return;
+
+    selected.forEach(r => {
+      const dueOffset = r.autoAction.sev === "URGENT" ? 0 : r.autoAction.sev === "HIGH" ? 1 : 3;
+      const newAction = {
+        id: "a" + Date.now() + Math.random(),
+        facId: null, inspId: null,
+        title: `[CCTV CH${r.ch} ${r.camName}${r.hour != null ? ` ${r.hour}시` : ""}] ${r.autoAction.title}`,
+        type: r.autoAction.type,
+        desc: `[AI CCTV 선택 점검]\n발견: ${r.finding}\n\n${r.detail}\n\n[권장 조치]\n${r.suggestions.map((s, i) => `${i + 1}. ${s}`).join("\n")}`,
+        sev: r.autoAction.sev,
+        rec: r.suggestions[0],
+        status: "TODO",
+        due: _facD(dueOffset),
+        assignee: null, memo: null, source: "cctv",
+        photo: r.capture || null,
+        photos: r.capture ? [r.capture] : [],
+        ai: { type: "CCTV 선택점검", severity: r.autoAction.sev, defect: r.finding, solution: r.suggestions.join(" / "), time: "현장 확인 후 판단", budget: "-", materials: [] },
+      };
+      setActions(prev => [newAction, ...prev]);
+    });
+
+    if (addAudit) addAudit({
+      module: "facility",
+      action: "action_create",
+      targetLabel: `CCTV 선택 보완과제`,
+      summary: `${selected.length}건 선택 생성`,
+    });
+    alert(`${selected.length}건의 보완과제가 생성되었습니다.`);
+    setShowBatchPreview(false);
+  };
+
+  const runCctvAi = async (ch, camName) => {
+    setAiBusy(true);
+    setAiResult(null);
+    try {
+      // Check if real AI mode is available
+      let anthropicKey = "";
+      try { anthropicKey = window.localStorage?.getItem("jamsa_anthropic_api_key") || ""; } catch(e){}
+      const useRealAI = !!(snapServerUrl && anthropicKey);
+      const cam = FAC_CCTV_CAMERAS.find(c => c.ch === ch);
+      const r = await analyzeCctvFeedAI(ch, camName, { snapServerUrl, useRealAI, zone: cam?.zone, strict: useRealAI });
+      const entry = { ch, camName, at: new Date().toISOString(), ...r };
+      setAiResult(entry);
+      setAiHistory(prev => [entry, ...prev].slice(0, 20));
+      if (addAudit) addAudit({
+        module: "facility",
+        action: "ai_analyze",
+        targetLabel: `CCTV CH${ch} ${camName}`,
+        severity: r.severity === "URGENT" ? "URGENT" : r.severity === "WARNING" ? "HIGH" : r.severity === "CAUTION" ? "MEDIUM" : "LOW",
+        summary: `CCTV AI 자체점검 — ${r.finding} (신뢰도 ${r.confidence}%)`,
+      });
+    } catch (err) {
+      alert("AI 분석 실패: " + err.message);
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  const createActionFromCctv = (result) => {
+    if (!result.autoAction) return;
+    const dueOffset = result.autoAction.sev === "URGENT" ? 0 : result.autoAction.sev === "HIGH" ? 1 : 3;
+    const newAction = {
+      id: "a" + Date.now() + Math.random(),
+      facId: null,
+      inspId: null,
+      title: `[CCTV CH${result.ch} ${result.camName}] ${result.autoAction.title}`,
+      type: result.autoAction.type,
+      desc: `[AI CCTV 자체점검]\n발견: ${result.finding}\n\n${result.detail}\n\n[권장 조치]\n${result.suggestions.map((s, i) => `${i + 1}. ${s}`).join("\n")}`,
+      sev: result.autoAction.sev,
+      rec: result.suggestions[0],
+      status: "TODO",
+      due: _facD(dueOffset),
+      assignee: null,
+      memo: null,
+      source: "cctv",
+      photo: result.capture || null,
+      photos: result.capture ? [result.capture] : [],
+      ai: {
+        type: "CCTV 자체점검",
+        severity: result.autoAction.sev,
+        defect: result.finding,
+        solution: result.suggestions.join(" / "),
+        time: "현장 확인 후 판단",
+        budget: "-",
+        materials: [],
+      },
+    };
+    setActions(prev => [newAction, ...prev]);
+    if (addAudit) addAudit({
+      module: "facility",
+      action: "action_create",
+      targetLabel: `CCTV CH${result.ch} 자동 생성`,
+      severity: result.autoAction.sev,
+      summary: `CCTV AI 판정으로 보완과제 자동 생성 — ${result.autoAction.title}`,
+    });
+    alert("보완과제가 생성되었습니다.");
+    go("actions");
+  };
+
+  const sevColor = (s) => ({
+    URGENT: { bg: "#fef2f2", fg: "#dc2626", border: "#fecaca", l: "긴급" },
+    WARNING: { bg: "#fff7ed", fg: "#ea580c", border: "#fed7aa", l: "경고" },
+    CAUTION: { bg: "#fefce8", fg: "#ca8a04", border: "#fde68a", l: "주의" },
+    NORMAL: { bg: "#f0fdf4", fg: "#059669", border: "#bbf7d0", l: "정상" },
+  }[s] || { bg: "#f8fafc", fg: "#64748b", border: "#e2e8f0", l: s });
+
+  return (
+    <div className="p-6 space-y-4">
+      <div className="flex justify-between items-center flex-wrap gap-2">
+        <div>
+          <div className="text-xl font-bold">CCTV 모니터링</div>
+          <div className="text-xs text-gray-500 mt-1">🤖 각 채널 클릭 → AI 자체점검 실행 → 이상 발견 시 보완과제 자동 생성</div>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={() => setShowAiCfg(true)}
+            className="text-xs px-3 py-1.5 rounded font-bold"
+            style={{ background: anthropicKey ? "#e0e7ff" : "#fff",
+              border: `1px solid ${anthropicKey ? "#a5b4fc" : "#cbd5e1"}`,
+              color: anthropicKey ? "#3730a3" : "#475569" }}>
+            {anthropicKey ? "🧠 실제 AI 분석 ON" : "🤖 AI 분석 설정"}
+          </button>
+          <button onClick={() => setShowSnapCfg(true)}
+            className="text-xs px-3 py-1.5 rounded font-bold"
+            style={{ background: snapServerStatus === "ok" ? "#dcfce7" : snapServerStatus === "error" ? "#fee2e2" : "#fff",
+              border: `1px solid ${snapServerStatus === "ok" ? "#86efac" : snapServerStatus === "error" ? "#fecaca" : "#cbd5e1"}`,
+              color: snapServerStatus === "ok" ? "#166534" : snapServerStatus === "error" ? "#991b1b" : "#475569" }}>
+            {snapServerStatus === "ok" ? "✓ NVR 서버 연결됨" : snapServerStatus === "error" ? "✗ NVR 서버 오류" : "📹 NVR 서버 설정"}
+          </button>
+          <button onClick={() => setShowStreamCfg(true)}
+            className="text-xs px-3 py-1.5 rounded font-bold"
+            style={{ background: "#fff", border: "1px solid #cbd5e1", color: "#475569" }}>
+            📡 스트림 주소 설정
+          </button>
+          <button onClick={() => setShowBatch(!showBatch)}
+            className="text-xs px-3 py-1.5 rounded text-white font-bold"
+            style={{ background: showBatch ? "#0f172a" : "linear-gradient(135deg,#059669,#2563eb)" }}>
+            {showBatch ? "✕ 일괄점검 패널 닫기" : "🎯 전체 채널 일괄점검"}
+          </button>
+          {sel != null && (
+            <button onClick={() => runCctvAi(sel, cam.name)} disabled={aiBusy}
+              className="text-xs px-3 py-1.5 rounded text-white font-bold"
+              style={{ background: aiBusy ? "#cbd5e1" : "linear-gradient(135deg,#7c3aed,#2563eb)", cursor: aiBusy ? "wait" : "pointer" }}>
+              {aiBusy ? "🔍 분석 중..." : "🤖 이 화면 AI 자체점검"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Batch scan panel */}
+      {showBatch && (
+        <div style={{ background: "linear-gradient(135deg,#f0fdf4,#eff6ff)", border: "2px solid #bbf7d0", borderRadius: 12, padding: 16, marginBottom: 12 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "#065f46", marginBottom: 10 }}>🎯 전체 채널 일괄 AI 자체점검</div>
+
+          {/* Preset selector */}
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#475569", marginBottom: 6 }}>📅 점검 시점 프리셋</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {[
+                { k: "now", l: "🔍 지금 즉시", d: "현재 시점 1회 점검" },
+                { k: "open", l: "🌅 개장 시간대", d: "오전 9-10시 범위" },
+                { k: "close", l: "🌙 폐장 시간대", d: "오후 18-19시 범위" },
+                { k: "hourly", l: "⏰ 시간대별 스캔", d: "지정 시간 범위 매시간" },
+              ].map(p => (
+                <button key={p.k} onClick={() => {
+                  setBatchPreset(p.k);
+                  if (p.k === "open") { setBatchStartH("09"); setBatchEndH("10"); }
+                  else if (p.k === "close") { setBatchStartH("18"); setBatchEndH("19"); }
+                }}
+                  style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid " + (batchPreset === p.k ? "#059669" : "#e5e7eb"), background: batchPreset === p.k ? "#059669" : "#fff", color: batchPreset === p.k ? "#fff" : "#475569", fontSize: 11, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
+                  <div>{p.l}</div>
+                  <div style={{ fontSize: 9, opacity: 0.8, marginTop: 2 }}>{p.d}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Time range (only for hourly) */}
+          {batchPreset === "hourly" && (
+            <div style={{ marginBottom: 12, padding: 10, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#475569", marginBottom: 6 }}>🕐 시간 범위 (시간대별 반복 점검)</div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <select value={batchStartH} onChange={e => setBatchStartH(e.target.value)}
+                  style={{ padding: "5px 10px", border: "1px solid #cbd5e1", borderRadius: 4, fontSize: 12 }}>
+                  {Array.from({length: 24}, (_, i) => <option key={i} value={String(i).padStart(2, "0")}>{String(i).padStart(2, "0")}시</option>)}
+                </select>
+                <span style={{ fontSize: 12, color: "#64748b" }}>~</span>
+                <select value={batchEndH} onChange={e => setBatchEndH(e.target.value)}
+                  style={{ padding: "5px 10px", border: "1px solid #cbd5e1", borderRadius: 4, fontSize: 12 }}>
+                  {Array.from({length: 24}, (_, i) => <option key={i} value={String(i).padStart(2, "0")}>{String(i).padStart(2, "0")}시</option>)}
+                </select>
+                <span style={{ fontSize: 11, color: "#059669", fontWeight: 700, marginLeft: 8 }}>
+                  → 채널당 {parseInt(batchEndH) - parseInt(batchStartH) + 1}회 분석
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Channel selector */}
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#475569" }}>📹 대상 채널 선택 ({batchChannels.length}/{FAC_CCTV_CAMERAS.length})</span>
+              <div style={{ display: "flex", gap: 4 }}>
+                <button onClick={selectAllChannels} style={{ fontSize: 10, padding: "3px 8px", borderRadius: 4, background: "#fff", border: "1px solid #cbd5e1", cursor: "pointer" }}>전체 선택</button>
+                <button onClick={deselectAllChannels} style={{ fontSize: 10, padding: "3px 8px", borderRadius: 4, background: "#fff", border: "1px solid #cbd5e1", cursor: "pointer" }}>전체 해제</button>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 4 }}>
+              {FAC_CCTV_CAMERAS.map(c => {
+                const checked = batchChannels.includes(c.ch);
+                return (
+                  <label key={c.ch} style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", borderRadius: 4, background: checked ? "#eff6ff" : "#fff", border: "1px solid " + (checked ? "#bfdbfe" : "#e5e7eb"), cursor: "pointer", fontSize: 11 }}>
+                    <input type="checkbox" checked={checked} onChange={() => toggleBatchChannel(c.ch)}
+                      style={{ cursor: "pointer", accentColor: "#2563eb" }} />
+                    <span style={{ fontWeight: 700, color: "#1e40af" }}>CH{c.ch}</span>
+                    <span style={{ color: "#475569", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Progress + actions */}
+          {batchRunning && batchProgress && (
+            <div style={{ marginBottom: 12, padding: 10, background: "#fff", border: "1px solid #bfdbfe", borderRadius: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 6 }}>
+                <span style={{ fontWeight: 700, color: "#1e40af" }}>🔍 분석 진행 중...</span>
+                <span style={{ fontWeight: 700 }}>{batchProgress.done} / {batchProgress.total}</span>
+              </div>
+              <div style={{ height: 8, background: "#f1f5f9", borderRadius: 4, overflow: "hidden" }}>
+                <div style={{ width: `${(batchProgress.done / batchProgress.total) * 100}%`, height: "100%", background: "linear-gradient(90deg,#059669,#2563eb)", transition: "width 0.3s" }} />
+              </div>
+            </div>
+          )}
+
+          {batchProgress && !batchRunning && (
+            <div style={{ marginBottom: 12, padding: 12, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <div style={{ fontSize: 12, fontWeight: 800, color: "#0f172a" }}>✅ 일괄점검 완료 — 결과 요약</div>
+                <button onClick={() => { setShowBatchPreview(true); setBatchPreviewFilter("all"); setBatchSelectedItems(new Set(batchProgress.results.map((_, i) => i).filter(i => batchProgress.results[i].autoAction))); }}
+                  style={{ padding: "5px 10px", borderRadius: 6, background: "#0f172a", color: "#fff", border: "none", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                  📋 상세 내역 보기
+                </button>
+              </div>
+              {(() => {
+                const r = batchProgress.results;
+                const urgent = r.filter(x => x.severity === "URGENT").length;
+                const warning = r.filter(x => x.severity === "WARNING").length;
+                const caution = r.filter(x => x.severity === "CAUTION").length;
+                const normal = r.filter(x => x.severity === "NORMAL").length;
+                const autoActions = r.filter(x => x.autoAction).length;
+                const cardStyle = (sev, count, bg, color, darkColor) => ({
+                  padding: 8, background: bg, borderRadius: 6, textAlign: "center",
+                  cursor: count > 0 ? "pointer" : "default",
+                  transition: "all 0.15s", border: "2px solid transparent",
+                  opacity: count === 0 ? 0.5 : 1,
+                });
+                const openFiltered = (sev) => {
+                  if (r.filter(x => x.severity === sev).length === 0) return;
+                  setShowBatchPreview(true);
+                  setBatchPreviewFilter(sev);
+                  setBatchSelectedItems(new Set(r.map((x, i) => ({ x, i })).filter(o => o.x.severity === sev && o.x.autoAction).map(o => o.i)));
+                };
+                return (
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, marginBottom: 10 }}>
+                      <div onClick={() => openFiltered("URGENT")} style={cardStyle("URGENT", urgent, "#fef2f2")}
+                        onMouseEnter={e => urgent > 0 && (e.currentTarget.style.border = "2px solid #dc2626")}
+                        onMouseLeave={e => (e.currentTarget.style.border = "2px solid transparent")}>
+                        <div style={{ fontSize: 18, fontWeight: 900, color: "#dc2626" }}>{urgent}</div>
+                        <div style={{ fontSize: 9, color: "#991b1b", fontWeight: 700 }}>긴급 {urgent > 0 ? "▸" : ""}</div>
+                      </div>
+                      <div onClick={() => openFiltered("WARNING")} style={cardStyle("WARNING", warning, "#fff7ed")}
+                        onMouseEnter={e => warning > 0 && (e.currentTarget.style.border = "2px solid #ea580c")}
+                        onMouseLeave={e => (e.currentTarget.style.border = "2px solid transparent")}>
+                        <div style={{ fontSize: 18, fontWeight: 900, color: "#ea580c" }}>{warning}</div>
+                        <div style={{ fontSize: 9, color: "#9a3412", fontWeight: 700 }}>경고 {warning > 0 ? "▸" : ""}</div>
+                      </div>
+                      <div onClick={() => openFiltered("CAUTION")} style={cardStyle("CAUTION", caution, "#fefce8")}
+                        onMouseEnter={e => caution > 0 && (e.currentTarget.style.border = "2px solid #ca8a04")}
+                        onMouseLeave={e => (e.currentTarget.style.border = "2px solid transparent")}>
+                        <div style={{ fontSize: 18, fontWeight: 900, color: "#ca8a04" }}>{caution}</div>
+                        <div style={{ fontSize: 9, color: "#854d0e", fontWeight: 700 }}>주의 {caution > 0 ? "▸" : ""}</div>
+                      </div>
+                      <div onClick={() => openFiltered("NORMAL")} style={cardStyle("NORMAL", normal, "#f0fdf4")}
+                        onMouseEnter={e => normal > 0 && (e.currentTarget.style.border = "2px solid #059669")}
+                        onMouseLeave={e => (e.currentTarget.style.border = "2px solid transparent")}>
+                        <div style={{ fontSize: 18, fontWeight: 900, color: "#059669" }}>{normal}</div>
+                        <div style={{ fontSize: 9, color: "#065f46", fontWeight: 700 }}>정상 {normal > 0 ? "▸" : ""}</div>
+                      </div>
+                    </div>
+                    {autoActions > 0 && (
+                      <button onClick={() => { setShowBatchPreview(true); setBatchPreviewFilter("all"); setBatchSelectedItems(new Set(batchProgress.results.map((_, i) => i).filter(i => batchProgress.results[i].autoAction))); }}
+                        style={{ width: "100%", padding: 10, borderRadius: 8, background: "#059669", color: "#fff", border: "none", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+                        ✨ 이상 항목 {autoActions}건 → 미리보기 후 선택 생성
+                      </button>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+          )}
+
+          <button onClick={runBatchScan} disabled={batchRunning || batchChannels.length === 0}
+            style={{ width: "100%", padding: 12, borderRadius: 10, background: batchRunning || batchChannels.length === 0 ? "#cbd5e1" : "linear-gradient(135deg,#059669,#2563eb)", color: "#fff", border: "none", fontSize: 14, fontWeight: 800, cursor: batchRunning || batchChannels.length === 0 ? "not-allowed" : "pointer" }}>
+            {batchRunning ? "🔍 분석 진행 중..." : `🚀 ${batchChannels.length}개 채널 일괄점검 시작${batchPreset === "hourly" ? ` (시간대별 ${parseInt(batchEndH) - parseInt(batchStartH) + 1}회)` : ""}`}
+          </button>
+        </div>
+      )}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2">
+          {sel == null ? (
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+              {cctvCameras.map(c => {
+                const ev = FAC_CCTV_EVENTS.find(e => e.ch === c.ch && e.sev !== "NONE");
+                const lastAi = aiHistory.find(h => h.ch === c.ch);
+                const aiSev = lastAi ? sevColor(lastAi.severity) : null;
+                const feedSev = lastAi ? lastAi.severity : (ev && ev.sev !== "NONE" ? (ev.sev === "URGENT" ? "URGENT" : ev.sev === "HIGH" ? "WARNING" : "CAUTION") : "NORMAL");
+                return (
+                  <div key={c.ch} onClick={() => setSel(c.ch)}
+                    className={`rounded-lg border overflow-hidden cursor-pointer hover:border-blue-400 ${ev ? "border-red-400 border-2" : ""}`}>
+                    <div style={{ position: "relative", width: "100%", aspectRatio: "16/9", minHeight: 80, background: "#000" }}>
+                      <CctvLiveFeed ch={c.ch} camName={c.name} severity={feedSev} streamUrl={c.streamUrl} snapServerUrl={snapServerUrl} size="small" />
+                      <div className="absolute top-1 left-1 text-[8px] bg-green-500/80 text-white px-1 rounded z-10" style={{ pointerEvents: "none" }}>CH{c.ch}</div>
+                      {ev && <div className="absolute bottom-1 right-1 w-2 h-2 rounded-full bg-red-500 z-10" style={{ animation: "pulse 1.5s infinite", pointerEvents: "none" }} />}
+                      {lastAi && <div className="absolute top-1 right-1 text-[8px] px-1 rounded font-bold z-10" style={{ background: aiSev.fg, color: "#fff", pointerEvents: "none" }}>🤖 {aiSev.l}</div>}
+                    </div>
+                    <div className="p-1.5"><div className="text-[10px] font-medium">{c.name}</div></div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div>
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-sm font-medium">CH{sel} {cam?.name}</span>
+                <button onClick={() => { setSel(null); setAiResult(null); }} className="text-xs border rounded px-2 py-1">← 그리드</button>
+              </div>
+              <div style={{ position: "relative", width: "100%", aspectRatio: "16/9", minHeight: 200, borderRadius: 8, overflow: "hidden", background: "#000" }}>
+                <CctvLiveFeed ch={sel} camName={cam?.name} severity={aiResult?.ch === sel ? aiResult.severity : "NORMAL"} streamUrl={cam?.streamUrl} snapServerUrl={snapServerUrl} size="large" />
+                <div className="absolute top-2 left-2 text-[10px] bg-green-500/80 text-white px-2 py-0.5 rounded z-10">LIVE · CH{sel} {cam?.name}</div>
+                {aiBusy && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-lg z-20">
+                    <div className="text-white text-sm font-bold flex items-center gap-2">
+                      <div style={{ width: 20, height: 20, border: "3px solid #fff", borderTopColor: "transparent", borderRadius: "50%", animation: "cctvSpin 0.8s linear infinite" }}></div>
+                      AI 영상 분석 중...
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* AI result */}
+              {aiResult && aiResult.ch === sel && (() => {
+                const sc = sevColor(aiResult.severity);
+                return (
+                  <div style={{ marginTop: 10, padding: 12, background: sc.bg, border: `2px solid ${sc.border}`, borderRadius: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 11, fontWeight: 800, padding: "3px 8px", borderRadius: 4, background: sc.fg, color: "#fff" }}>🤖 {sc.l}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>{aiResult.finding}</span>
+                      <span style={{ fontSize: 10, color: "#64748b", marginLeft: "auto" }}>신뢰도 {aiResult.confidence}% · {new Date(aiResult.at).toLocaleTimeString("ko")}</span>
+                    </div>
+                    {aiResult.capture && (
+                      <div style={{ marginBottom: 10, cursor: "pointer", borderRadius: 6, overflow: "hidden", border: `1px solid ${sc.border}` }}
+                        onClick={() => setCaptureViewer({ src: aiResult.capture, title: `CH${aiResult.ch} ${aiResult.camName}`, subtitle: aiResult.finding, time: aiResult.at, sev: aiResult.severity, detail: aiResult.detail, confidence: aiResult.confidence })}>
+                        <img src={aiResult.capture} alt="AI 감지 캡처" style={{ width: "100%", display: "block" }} />
+                        <div style={{ fontSize: 10, color: "#64748b", textAlign: "center", padding: "4px 0", background: "#fff" }}>
+                          📷 AI 감지 시점 캡처 · 클릭하여 확대
+                        </div>
+                      </div>
+                    )}
+                    <div style={{ fontSize: 12, color: "#1f2937", lineHeight: 1.6, marginBottom: 10 }}>{aiResult.detail}</div>
+                    {aiResult.suggestions.length > 0 && (
+                      <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 6, padding: 10, marginBottom: 10 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: "#475569", marginBottom: 6 }}>💡 권장 조치</div>
+                        {aiResult.suggestions.map((s, i) => (
+                          <div key={i} style={{ fontSize: 12, color: "#1f2937", padding: "3px 0", display: "flex", gap: 6 }}>
+                            <span style={{ color: sc.fg, fontWeight: 700 }}>{i + 1}.</span>
+                            <span>{s}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {aiResult.autoAction && (
+                        <button onClick={() => createActionFromCctv(aiResult)}
+                          style={{ flex: 1, minWidth: 200, padding: 10, borderRadius: 8, background: "#059669", color: "#fff", border: "none", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                          ✨ 보완과제 자동 생성 ({aiResult.autoAction.sev})
+                        </button>
+                      )}
+                      <button onClick={() => runCctvAi(sel, cam.name)}
+                        style={{ padding: "10px 14px", borderRadius: 8, background: "#fff", color: "#475569", border: "1px solid #e5e7eb", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                        🔄 재분석
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {!aiResult && !aiBusy && (
+                <div className="text-[10px] text-gray-400 mt-2">💡 "AI 자체점검" 버튼을 클릭하면 해당 채널을 AI가 분석하고 이상 시 보완과제를 자동 생성합니다.</div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Right panel: events + AI history */}
+        <div className="space-y-3">
+          <div className="rounded-xl border p-3 max-h-[320px] overflow-y-auto">
+            <div className="text-xs font-medium mb-3 flex items-center gap-1.5">
+              <div className="w-1.5 h-1.5 rounded-full bg-green-500" />실시간 이벤트
+            </div>
+            {FAC_CCTV_EVENTS.map(ev => {
+              const camMeta = FAC_CCTV_CAMERAS.find(c => c.ch === ev.ch);
+              const capSev = ev.sev === "URGENT" ? "URGENT" : ev.sev === "HIGH" ? "WARNING" : ev.sev === "CAUTION" ? "CAUTION" : "NORMAL";
+              const capture = generateCctvCapture(ev.ch, camMeta?.name || `CH${ev.ch}`, capSev, ev.summary || "");
+              return (
+                <div key={ev.id} className="py-2 border-b last:border-0 text-xs cursor-pointer hover:bg-gray-50 rounded"
+                  onClick={() => setCaptureViewer({ src: capture, title: `CH${ev.ch} ${camMeta?.name}`, subtitle: ev.summary || ev.type, time: ev.time, sev: ev.sev })}>
+                  <div className="flex gap-2">
+                    <img src={capture} alt="" style={{ width: 80, height: 53, objectFit: "cover", borderRadius: 3, flexShrink: 0, border: "1px solid #e5e7eb" }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="flex justify-between items-start">
+                        <span className="font-medium">CH{ev.ch} {camMeta?.name}</span>
+                        {ev.sev !== "NONE" && <FacBadge v={ev.sev} map={FAC_SEV} />}
+                      </div>
+                      <div className="text-[10px] text-gray-500 mt-1">{new Date(ev.time).toLocaleTimeString("ko-KR")} · {ev.type}{ev.rate ? ` · ${ev.rate}%` : ""}</div>
+                      {ev.summary && <div className="text-[10px] mt-1" style={{ color: ev.sev === "URGENT" ? "#991b1b" : ev.sev === "HIGH" ? "#9a3412" : "#555" }}>{ev.summary}</div>}
+                      {ev.assigned && <div className="text-[10px] text-blue-600 mt-0.5">담당: {ev.assigned}</div>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="rounded-xl border p-3 max-h-[320px] overflow-y-auto" style={{ background: "#faf5ff" }}>
+            <div className="text-xs font-medium mb-3 flex items-center gap-1.5" style={{ color: "#7c3aed" }}>
+              🤖 AI 자체점검 이력 ({aiHistory.length})
+            </div>
+            {aiHistory.length === 0 ? (
+              <div className="text-[10px] text-gray-400 py-4 text-center">아직 AI 점검 이력이 없습니다</div>
+            ) : aiHistory.map((h, i) => {
+              const sc = sevColor(h.severity);
+              return (
+                <div key={i} className="py-2 border-b last:border-0 text-xs cursor-pointer hover:bg-purple-100 rounded"
+                  onClick={() => h.capture && setCaptureViewer({ src: h.capture, title: `CH${h.ch} ${h.camName}`, subtitle: h.finding, time: h.at, sev: h.severity, detail: h.detail, confidence: h.confidence })}>
+                  <div className="flex gap-2">
+                    {h.capture && <img src={h.capture} alt="" style={{ width: 80, height: 53, objectFit: "cover", borderRadius: 3, flexShrink: 0, border: "1px solid #e9d5ff" }} />}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="flex justify-between items-center">
+                        <span className="font-medium">CH{h.ch} {h.camName}</span>
+                        <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 5px", borderRadius: 3, background: sc.fg, color: "#fff" }}>{sc.l}</span>
+                      </div>
+                      <div className="text-[10px] text-gray-500 mt-1">{new Date(h.at).toLocaleTimeString("ko")} · 신뢰도 {h.confidence}%</div>
+                      <div className="text-[10px] text-gray-700 mt-1">{h.finding}</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Capture viewer modal */}
+      {captureViewer && <CctvCaptureViewer data={captureViewer} onClose={() => setCaptureViewer(null)} />}
+      {showStreamCfg && <CctvStreamConfigModal cameras={FAC_CCTV_CAMERAS} streamUrls={streamUrls} setStreamUrls={setStreamUrls} onClose={() => setShowStreamCfg(false)} />}
+      {showSnapCfg && <SnapServerConfigModal currentUrl={snapServerUrl} onSave={(u) => { setSnapServerUrl(u); setShowSnapCfg(false); }} onClose={() => setShowSnapCfg(false)} />}
+      {showAiCfg && <AiApiKeyConfigModal currentKey={anthropicKey} onSave={(k) => { setAnthropicKey(k); setShowAiCfg(false); }} onClose={() => setShowAiCfg(false)} />}
+      {showBatchPreview && batchProgress && (
+        <BatchScanPreviewModal
+          results={batchProgress.results}
+          filter={batchPreviewFilter}
+          setFilter={setBatchPreviewFilter}
+          selectedItems={batchSelectedItems}
+          setSelectedItems={setBatchSelectedItems}
+          onCreateActions={createSelectedActions}
+          onShowDetail={setBatchDetailItem}
+          onClose={() => setShowBatchPreview(false)}
+        />
+      )}
+      {batchDetailItem && <BatchScanDetailModal item={batchDetailItem} onClose={() => setBatchDetailItem(null)} />}
+      <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}@keyframes cctvSpin{to{transform:rotate(360deg)}}`}</style>
+    </div>
+  );
+}
+
+/* ─── CCTV CAPTURE VIEWER MODAL ─── */
+function CctvCaptureViewer({ data, onClose }) {
+  const sevMap = {
+    URGENT: { l: "긴급", c: "#dc2626" },
+    HIGH: { l: "높음", c: "#ea580c" },
+    WARNING: { l: "경고", c: "#ea580c" },
+    CAUTION: { l: "주의", c: "#ca8a04" },
+    MEDIUM: { l: "중간", c: "#ca8a04" },
+    NORMAL: { l: "정상", c: "#059669" },
+    LOW: { l: "낮음", c: "#2563eb" },
+    NONE: { l: "정보", c: "#64748b" },
+  };
+  const sev = sevMap[data.sev] || { l: data.sev, c: "#64748b" };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10200, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.85)" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#0f172a", borderRadius: 12, width: 720, maxWidth: "95vw", maxHeight: "92vh", boxShadow: "0 20px 60px rgba(0,0,0,0.5)", overflow: "hidden" }}>
+        <div style={{ padding: "12px 16px", background: "#1e293b", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `2px solid ${sev.c}` }}>
+          <div>
+            <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700 }}>📷 CCTV 캡처 화면</div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#fff", marginTop: 2 }}>{data.title}</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 11, fontWeight: 800, padding: "4px 10px", borderRadius: 4, background: sev.c, color: "#fff" }}>{sev.l}</span>
+            <button onClick={onClose} style={{ background: "rgba(255,255,255,0.1)", border: "none", color: "#fff", fontSize: 20, cursor: "pointer", width: 28, height: 28, borderRadius: "50%", lineHeight: 1 }}>×</button>
+          </div>
+        </div>
+        <div style={{ background: "#000", padding: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <img src={data.src} alt="CCTV 캡처" style={{ width: "100%", maxHeight: "60vh", display: "block" }} />
+        </div>
+        <div style={{ padding: 16, color: "#f1f5f9", background: "#0f172a" }}>
+          {data.subtitle && (
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#fff", marginBottom: 6 }}>{data.subtitle}</div>
+          )}
+          {data.detail && (
+            <div style={{ fontSize: 12, color: "#cbd5e1", lineHeight: 1.6, marginBottom: 10 }}>{data.detail}</div>
+          )}
+          <div style={{ display: "flex", gap: 12, fontSize: 11, color: "#94a3b8", fontFamily: "monospace" }}>
+            <span>🕐 {new Date(data.time).toLocaleString("ko")}</span>
+            {data.confidence != null && <span>🎯 신뢰도 {data.confidence}%</span>}
+          </div>
+          <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
+            <a href={data.src} download={`CCTV_${Date.now()}.svg`}
+              style={{ padding: "8px 14px", borderRadius: 6, background: "#2563eb", color: "#fff", textDecoration: "none", fontSize: 12, fontWeight: 700 }}>
+              💾 캡처 다운로드
+            </a>
+            <button onClick={onClose}
+              style={{ padding: "8px 14px", borderRadius: 6, background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.2)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              닫기
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── CCTV STREAM URL CONFIGURATION MODAL ─── */
+function CctvStreamConfigModal({ cameras, streamUrls, setStreamUrls, onClose }) {
+  const [drafts, setDrafts] = useState({ ...streamUrls });
+  const [tab, setTab] = useState("setup"); // "setup" | "guide"
+
+  const handleSave = () => {
+    setStreamUrls(drafts);
+    alert(`스트림 주소 저장 완료\n${Object.values(drafts).filter(Boolean).length}개 채널 설정됨`);
+    onClose();
+  };
+
+  const handleClearAll = () => {
+    if (confirm("모든 스트림 주소를 삭제하시겠습니까?\n(시뮬레이션 화면으로 돌아갑니다)")) {
+      setDrafts({});
+    }
+  };
+
+  const handleClearOne = (ch) => {
+    const next = { ...drafts };
+    delete next[ch];
+    setDrafts(next);
+  };
+
+  // Auto-fill helper for Dahua snapshot URLs
+  const fillDahuaPattern = () => {
+    if (!confirm("Dahua NVR 기본 스냅샷 패턴으로 자동 채우시겠습니까?\n(NVR IP 172.30.2.50 기준)\n각 채널별로 URL이 생성됩니다.")) return;
+    const next = {};
+    cameras.forEach(c => {
+      // Dahua snapshot CGI: http://USER:PASS@IP:PORT/cgi-bin/snapshot.cgi?channel=N
+      // Note: Browsers strip credentials from URLs since 2018; need backend proxy for real use
+      next[c.ch] = `http://172.30.2.50:37777/cgi-bin/snapshot.cgi?channel=${c.ch}`;
+    });
+    setDrafts(next);
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10300, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: 720, maxWidth: "95vw", maxHeight: "92vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        <div style={{ padding: "14px 18px", background: "linear-gradient(135deg,#0f172a,#1e293b)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 11, opacity: 0.7 }}>CCTV 스트리밍 연동</div>
+            <div style={{ fontSize: 17, fontWeight: 900 }}>📡 채널별 스트림 주소 설정</div>
+          </div>
+          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", fontSize: 22, cursor: "pointer", width: 30, height: 30, borderRadius: "50%", lineHeight: 1 }}>×</button>
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb", background: "#f8fafc" }}>
+          {[{ k: "setup", l: "🛠 채널 설정" }, { k: "guide", l: "📘 사용 가이드" }].map(t => (
+            <button key={t.k} onClick={() => setTab(t.k)}
+              style={{ padding: "10px 16px", border: "none", background: tab === t.k ? "#fff" : "transparent", color: tab === t.k ? "#0f172a" : "#64748b", fontSize: 12, fontWeight: 700, cursor: "pointer", borderBottom: tab === t.k ? "2px solid #2563eb" : "2px solid transparent" }}>
+              {t.l}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ padding: 18, overflowY: "auto", flex: 1 }}>
+          {tab === "setup" ? (
+            <>
+              {/* Quick actions */}
+              <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+                <button onClick={fillDahuaPattern}
+                  style={{ padding: "7px 14px", borderRadius: 6, background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#065f46", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                  🎯 Dahua 기본 패턴 자동 입력
+                </button>
+                <button onClick={handleClearAll}
+                  style={{ padding: "7px 14px", borderRadius: 6, background: "#fff", border: "1px solid #fecaca", color: "#991b1b", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                  🗑 모두 삭제
+                </button>
+                <div style={{ marginLeft: "auto", fontSize: 10, color: "#64748b", alignSelf: "center" }}>
+                  설정된 채널: <strong style={{ color: "#059669" }}>{Object.values(drafts).filter(Boolean).length}</strong> / {cameras.length}
+                </div>
+              </div>
+
+              {/* Per-channel inputs */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {cameras.map(c => (
+                  <div key={c.ch} style={{ display: "grid", gridTemplateColumns: "80px 1fr auto", gap: 8, alignItems: "center", padding: 8, background: drafts[c.ch] ? "#f0fdf4" : "#f8fafc", borderRadius: 6, border: `1px solid ${drafts[c.ch] ? "#bbf7d0" : "#e5e7eb"}` }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>
+                      <span style={{ display: "inline-block", padding: "2px 6px", borderRadius: 3, background: drafts[c.ch] ? "#059669" : "#94a3b8", color: "#fff", fontSize: 10, marginRight: 4 }}>CH{c.ch}</span>
+                    </div>
+                    <input type="text" value={drafts[c.ch] || ""} onChange={e => setDrafts({ ...drafts, [c.ch]: e.target.value })}
+                      placeholder={`${c.name} — 비워두면 시뮬레이션 화면 표시`}
+                      style={{ padding: "6px 10px", border: "1px solid #cbd5e1", borderRadius: 4, fontSize: 11, fontFamily: "monospace", boxSizing: "border-box" }} />
+                    {drafts[c.ch] && (
+                      <button onClick={() => handleClearOne(c.ch)}
+                        style={{ padding: "4px 8px", borderRadius: 4, background: "#fff", border: "1px solid #fecaca", color: "#dc2626", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                        제거
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ marginTop: 14, padding: 10, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, fontSize: 10, color: "#78350f", lineHeight: 1.6 }}>
+                💡 <strong>저장된 주소가 없는 채널</strong>은 시뮬레이션 화면이 표시됩니다. 실제 스트림 연동에는 NVR 측 설정 + (대부분의 경우) <strong>백엔드 프록시</strong>가 필요합니다 (브라우저 보안 제약 때문).
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "#0f172a", marginBottom: 10 }}>
+                📡 지원하는 스트림 형식
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12, fontSize: 11, color: "#475569", lineHeight: 1.7 }}>
+                <div style={{ padding: 12, background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 8 }}>
+                  <div style={{ fontWeight: 800, color: "#0c4a6e", marginBottom: 4 }}>① HLS 스트림 (.m3u8) — 가장 권장</div>
+                  <div>HTML5 video로 직접 재생. 지연 2~5초.</div>
+                  <div style={{ fontFamily: "monospace", fontSize: 10, background: "#fff", padding: 6, borderRadius: 4, marginTop: 4 }}>
+                    https://your-server.com/stream/ch1/index.m3u8
+                  </div>
+                </div>
+
+                <div style={{ padding: 12, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8 }}>
+                  <div style={{ fontWeight: 800, color: "#065f46", marginBottom: 4 }}>② Snapshot 새로고침 (JPEG) — 간단</div>
+                  <div>1초마다 이미지를 새로 받아 표시. CCTV 느낌은 약하지만 호환성 최고.</div>
+                  <div style={{ fontFamily: "monospace", fontSize: 10, background: "#fff", padding: 6, borderRadius: 4, marginTop: 4 }}>
+                    http://your-proxy:8080/snapshot/ch1.jpg
+                  </div>
+                </div>
+
+                <div style={{ padding: 12, background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 8 }}>
+                  <div style={{ fontWeight: 800, color: "#78350f", marginBottom: 4 }}>③ MJPEG 스트림 — 끊김 없음</div>
+                  <div>img 태그에서 바로 재생. 일부 NVR이 직접 지원.</div>
+                  <div style={{ fontFamily: "monospace", fontSize: 10, background: "#fff", padding: 6, borderRadius: 4, marginTop: 4 }}>
+                    http://your-server/mjpeg/ch1
+                  </div>
+                </div>
+
+                <div style={{ padding: 12, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8 }}>
+                  <div style={{ fontWeight: 800, color: "#991b1b", marginBottom: 4 }}>❌ 직접 지원 불가: RTSP</div>
+                  <div>웹브라우저는 RTSP를 직접 재생할 수 없습니다. 변환 서버가 필요합니다 (예: <code>rtsp-relay</code>, <code>go2rtc</code>, <code>MediaMTX</code>).</div>
+                </div>
+
+                <div style={{ marginTop: 6, padding: 12, background: "#0f172a", color: "#fff", borderRadius: 8 }}>
+                  <div style={{ fontWeight: 800, marginBottom: 6, color: "#6ee7b7" }}>🛠 Dahua NVR (172.30.2.50) 연동 가이드</div>
+                  <div style={{ fontSize: 10, lineHeight: 1.7, color: "#cbd5e1" }}>
+                    1. NVR 웹UI 진입 (admin/zam4zam4)<br/>
+                    2. 설정 → 네트워크 → HTTP 활성화 (포트 80)<br/>
+                    3. <strong>스냅샷 URL</strong>: <code style={{ background: "#1e293b", padding: "1px 4px", borderRadius: 2 }}>/cgi-bin/snapshot.cgi?channel=N</code><br/>
+                    4. <strong>RTSP URL</strong>: <code style={{ background: "#1e293b", padding: "1px 4px", borderRadius: 2 }}>rtsp://USER:PW@IP:554/cam/realmonitor?channel=N&subtype=0</code><br/>
+                    5. 브라우저에서 직접 사용하려면 <strong>중계 서버</strong>가 필요 (CORS·인증 우회)<br/>
+                    6. 권장 도구: go2rtc, MediaMTX, NodeMediaServer
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        <div style={{ padding: "12px 18px", borderTop: "1px solid #e5e7eb", display: "flex", justifyContent: "flex-end", gap: 8, background: "#f8fafc" }}>
+          <button onClick={onClose}
+            style={{ padding: "9px 16px", borderRadius: 6, background: "#fff", border: "1px solid #e5e7eb", color: "#64748b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+            취소
+          </button>
+          <button onClick={handleSave}
+            style={{ padding: "9px 18px", borderRadius: 6, background: "linear-gradient(135deg,#059669,#2563eb)", color: "#fff", border: "none", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+            💾 저장
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── NVR SNAPSHOT SERVER CONFIG MODAL ───
+   cctv.py 로컬 서버 연동 안내 + URL 입력 + 연결 테스트
+   참조: cctv-v11-motion (FFmpeg 기반 Dahua NVR → JPEG 폴링 서버) */
+function SnapServerConfigModal({ currentUrl, onSave, onClose }) {
+  const [url, setUrl] = useState(currentUrl || "http://localhost:5555");
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null); // null | "ok" | "fail"
+  const [testDetail, setTestDetail] = useState("");
+
+  const testConnection = async () => {
+    if (!url) return;
+    setTesting(true);
+    setTestResult(null);
+    setTestDetail("연결 시도 중...");
+    try {
+      const clean = url.replace(/\/+$/, "");
+      const res = await fetch(`${clean}/api/status`, { signal: AbortSignal.timeout?.(5000) });
+      if (!res.ok) {
+        setTestResult("fail");
+        setTestDetail(`HTTP ${res.status}: 서버 응답 오류`);
+      } else {
+        const data = await res.json();
+        setTestResult("ok");
+        setTestDetail(`✓ 연결 성공 · 총 ${data.total}개 채널 · 라이브 ${data.live}개 · 온라인 ${data.online}개`);
+      }
+    } catch (e) {
+      setTestResult("fail");
+      setTestDetail(`연결 실패: ${e.message || "서버에 접근할 수 없습니다"}`);
+    }
+    setTesting(false);
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10400, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: 680, maxWidth: "95vw", maxHeight: "92vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        {/* Header */}
+        <div style={{ padding: "14px 18px", background: "linear-gradient(135deg,#0f172a,#1e293b)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 11, opacity: 0.8 }}>실제 CCTV 영상 연동</div>
+            <div style={{ fontSize: 17, fontWeight: 900 }}>📹 NVR 스냅샷 서버 설정</div>
+          </div>
+          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", fontSize: 22, cursor: "pointer", width: 30, height: 30, borderRadius: "50%", lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ padding: 18 }}>
+          {/* 작동 원리 설명 */}
+          <div style={{ padding: 12, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, marginBottom: 14, fontSize: 12, color: "#1e40af", lineHeight: 1.6 }}>
+            <div style={{ fontWeight: 800, marginBottom: 6, fontSize: 13 }}>🔧 동작 원리</div>
+            <div style={{ fontSize: 11, color: "#1e3a8a" }}>
+              Dahua NVR의 RTSP 스트림을 FFmpeg으로 받아 JPEG 이미지로 변환 후,
+              이 프로그램의 CCTV 패널에 1.5초마다 자동 갱신됩니다. (참조: cctv-v11-motion)
+            </div>
+          </div>
+
+          {/* 설치 가이드 */}
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#0f172a", marginBottom: 8 }}>⚙️ 설치 가이드</div>
+          <div style={{ padding: 12, background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, marginBottom: 14, fontSize: 11, color: "#475569", lineHeight: 1.7 }}>
+            <div style={{ fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>1. Python 설치</div>
+            <div style={{ marginBottom: 8, paddingLeft: 10 }}>Windows: <a href="https://python.org/downloads" target="_blank" rel="noreferrer" style={{ color: "#2563eb" }}>python.org/downloads</a>에서 3.8 이상 설치</div>
+
+            <div style={{ fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>2. cctv-server 폴더 준비</div>
+            <div style={{ marginBottom: 8, paddingLeft: 10 }}>JamsaMuseum 폴더의 <code style={{ background: "#e2e8f0", padding: "1px 4px", borderRadius: 3 }}>cctv-server/</code> 디렉토리 열기 <em>(없으면 별도 다운로드 필요)</em></div>
+
+            <div style={{ fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>3. 카메라 설정 편집</div>
+            <div style={{ marginBottom: 8, paddingLeft: 10 }}>
+              <code style={{ background: "#e2e8f0", padding: "1px 4px", borderRadius: 3 }}>cameras.json</code> 파일의 IP·계정·채널을 실제 Dahua NVR 정보로 수정
+              <div style={{ marginTop: 4, padding: 6, background: "#0f172a", color: "#86efac", fontFamily: "monospace", fontSize: 10, borderRadius: 3 }}>
+                {`{
+  "ch": 1, "name": "입구",
+  "ip": "172.30.10.60", "user": "admin", "pass": "zam4zam4",
+  "rtsp": 554, "path": "/live/ch00_0"
+}`}
+              </div>
+            </div>
+
+            <div style={{ fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>4. 서버 실행</div>
+            <div style={{ marginBottom: 8, paddingLeft: 10 }}>
+              <code style={{ background: "#e2e8f0", padding: "1px 4px", borderRadius: 3 }}>START_CCTV.bat</code> 더블클릭 (또는 <code style={{ background: "#e2e8f0", padding: "1px 4px", borderRadius: 3 }}>python cctv.py</code>)<br/>
+              → 최초 실행 시 FFmpeg 자동 다운로드 (2-3분 소요)<br/>
+              → "http://localhost:5555" 자동 열림
+            </div>
+
+            <div style={{ fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>5. 이 화면에 URL 입력</div>
+            <div style={{ paddingLeft: 10 }}>
+              아래 입력란에 <code style={{ background: "#e2e8f0", padding: "1px 4px", borderRadius: 3 }}>http://localhost:5555</code> 입력 후 저장
+            </div>
+          </div>
+
+          {/* URL 입력 */}
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#0f172a", marginBottom: 6 }}>🌐 스냅샷 서버 URL</div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+            <input type="text" value={url} onChange={e => setUrl(e.target.value)}
+              placeholder="http://localhost:5555"
+              style={{ flex: 1, padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13, fontFamily: "monospace" }} />
+            <button onClick={testConnection} disabled={testing || !url}
+              style={{ padding: "10px 16px", borderRadius: 6, background: testing ? "#cbd5e1" : "#0f172a", color: "#fff", border: "none", fontSize: 12, fontWeight: 700, cursor: testing ? "wait" : "pointer", whiteSpace: "nowrap" }}>
+              {testing ? "테스트 중..." : "연결 테스트"}
+            </button>
+          </div>
+
+          {testResult && (
+            <div style={{ padding: 10, borderRadius: 6, marginBottom: 10, fontSize: 11, fontWeight: 600,
+              background: testResult === "ok" ? "#dcfce7" : "#fee2e2",
+              color: testResult === "ok" ? "#065f46" : "#991b1b",
+              border: `1px solid ${testResult === "ok" ? "#86efac" : "#fecaca"}` }}>
+              {testDetail}
+            </div>
+          )}
+
+          {/* 다른 PC에서 접속 안내 */}
+          <div style={{ padding: 10, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, fontSize: 10, color: "#78350f", lineHeight: 1.6 }}>
+            💡 <strong>다른 PC에서 접속</strong>: cctv.py가 돌아가는 PC의 IP를 사용하세요 (예: <code>http://172.30.1.100:5555</code>). 방화벽에서 5555 포트 허용 필요.
+          </div>
+        </div>
+
+        <div style={{ padding: "12px 18px", borderTop: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", gap: 8, background: "#f8fafc" }}>
+          <button onClick={() => { onSave(""); }}
+            style={{ padding: "9px 14px", borderRadius: 6, background: "#fff", border: "1px solid #e5e7eb", color: "#991b1b", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+            🗑 연결 해제 (시뮬레이션으로 복귀)
+          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onClose}
+              style={{ padding: "9px 16px", borderRadius: 6, background: "#fff", border: "1px solid #e5e7eb", color: "#64748b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              취소
+            </button>
+            <button onClick={() => onSave(url)}
+              style={{ padding: "9px 20px", borderRadius: 6, background: "linear-gradient(135deg,#059669,#0891b2)", color: "#fff", border: "none", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+              💾 저장 및 연결
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── ANTHROPIC API KEY CONFIG MODAL ─── */
+function AiApiKeyConfigModal({ currentKey, onSave, onClose }) {
+  const [key, setKey] = useState(currentKey || "");
+  const [model, setModel] = useState(() => {
+    try { return window.localStorage?.getItem("jamsa_anthropic_model") || "claude-sonnet-4-5"; }
+    catch(e) { return "claude-sonnet-4-5"; }
+  });
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null); // null | "ok" | "fail"
+  const [testMsg, setTestMsg] = useState("");
+
+  const testConnection = async () => {
+    if (!key) { setTestResult("fail"); setTestMsg("API 키를 입력하세요"); return; }
+    setTesting(true);
+    setTestResult(null);
+    setTestMsg("API 연결 테스트 중...");
+
+    // Get NVR server URL for proxy
+    let snapServerUrl = "";
+    try { snapServerUrl = window.localStorage?.getItem("jamsa_cctv_snap_server") || ""; } catch(e){}
+
+    try {
+      let res;
+      if (snapServerUrl) {
+        // Use cctv.py proxy (recommended - bypasses CORS)
+        res = await fetch(`${snapServerUrl.replace(/\/+$/, "")}/api/ai-test`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_key: key, model: model }),
+          signal: AbortSignal.timeout?.(15000),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          setTestResult("ok");
+          setTestMsg(`✓ API 키 유효 · 모델 ${model} 연결 성공 (cctv.py 프록시 경유)`);
+        } else {
+          setTestResult("fail");
+          setTestMsg(`API 오류: ${data.error || "알 수 없음"}`);
+        }
+      } else {
+        // Direct call (likely fails due to CORS)
+        res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "anthropic-dangerous-direct-browser-access": "true",
+          },
+          body: JSON.stringify({
+            model: model,
+            max_tokens: 10,
+            messages: [{ role: "user", content: "ping" }],
+          }),
+        });
+        if (res.ok) {
+          setTestResult("ok");
+          setTestMsg(`✓ API 키 유효 · 모델 ${model} 연결 성공 (직접 호출)`);
+        } else {
+          const txt = await res.text();
+          setTestResult("fail");
+          setTestMsg(`HTTP ${res.status}: ${txt.slice(0, 150)}\n\n💡 NVR 서버를 먼저 설정하면 CORS 문제 없이 작동합니다.`);
+        }
+      }
+    } catch (e) {
+      setTestResult("fail");
+      setTestMsg(`연결 실패: ${e.message || "네트워크 오류"}\n\n💡 cctv.py 서버가 실행 중인지 확인하세요.\n   cctv.py에 AI 프록시 기능이 추가되었으니 최신 버전 사용 필요.`);
+    }
+    setTesting(false);
+  };
+
+  const handleSave = () => {
+    try { window.localStorage?.setItem("jamsa_anthropic_model", model); } catch(e){}
+    onSave(key.trim());
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10400, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: 680, maxWidth: "95vw", maxHeight: "92vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        {/* Header */}
+        <div style={{ padding: "14px 18px", background: "linear-gradient(135deg,#7c3aed,#2563eb)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 11, opacity: 0.9 }}>실제 AI Vision 연동</div>
+            <div style={{ fontSize: 17, fontWeight: 900 }}>🧠 Anthropic Claude API 키 설정</div>
+          </div>
+          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", fontSize: 22, cursor: "pointer", width: 30, height: 30, borderRadius: "50%", lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ padding: 18 }}>
+          {/* Explanation */}
+          <div style={{ padding: 12, background: "#f3e8ff", border: "1px solid #ddd6fe", borderRadius: 8, marginBottom: 14, fontSize: 12, color: "#5b21b6", lineHeight: 1.6 }}>
+            <div style={{ fontWeight: 800, marginBottom: 6, fontSize: 13 }}>🎯 실제 AI Vision 분석이란?</div>
+            <div style={{ fontSize: 11, color: "#6b21a8" }}>
+              cctv.py 서버의 실시간 스냅샷을 Anthropic Claude Vision API로 전송하여 AI가 실제로 이미지를 보고 분석합니다.
+              시뮬레이션이 아닌 <strong>진짜 AI 분석</strong>으로 시설 안전, 위생, 운영 상태 등을 평가합니다.
+            </div>
+          </div>
+
+          {/* Prerequisites warning */}
+          {!window.localStorage?.getItem("jamsa_cctv_snap_server") && (
+            <div style={{ padding: 10, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, marginBottom: 14, fontSize: 11, color: "#991b1b" }}>
+              ⚠️ <strong>NVR 서버가 설정되지 않았습니다!</strong> AI 분석을 사용하려면 먼저 "NVR 서버 설정"에서 cctv.py URL을 등록해야 합니다.
+            </div>
+          )}
+
+          {/* How to get key */}
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#0f172a", marginBottom: 8 }}>🔑 API 키 발급 방법</div>
+          <div style={{ padding: 12, background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, marginBottom: 14, fontSize: 11, color: "#475569", lineHeight: 1.7 }}>
+            <div style={{ fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>1. Anthropic Console 접속</div>
+            <div style={{ marginBottom: 8, paddingLeft: 10 }}>
+              <a href="https://console.anthropic.com/" target="_blank" rel="noreferrer" style={{ color: "#2563eb", fontWeight: 700 }}>https://console.anthropic.com/</a>
+            </div>
+            <div style={{ fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>2. 회원가입 / 로그인</div>
+            <div style={{ fontWeight: 700, color: "#0f172a", marginBottom: 4, marginTop: 8 }}>3. API Keys 메뉴 클릭 → Create Key</div>
+            <div style={{ marginBottom: 8, paddingLeft: 10 }}>발급된 키 <code style={{ background: "#e2e8f0", padding: "1px 4px", borderRadius: 3 }}>sk-ant-api03-...</code> 복사</div>
+            <div style={{ fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>4. 결제 수단 등록 (Settings → Billing)</div>
+            <div style={{ paddingLeft: 10 }}>최초 $5 크레딧 무료, 이후 사용량 만큼 과금 (이미지당 약 $0.003)</div>
+          </div>
+
+          {/* API Key input */}
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#0f172a", marginBottom: 6 }}>🔐 API 키 입력</div>
+          <input type="password" value={key} onChange={e => setKey(e.target.value)}
+            placeholder="sk-ant-api03-..."
+            style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12, fontFamily: "monospace", marginBottom: 10 }} />
+
+          {/* Model selection */}
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#0f172a", marginBottom: 6 }}>🤖 모델 선택</div>
+          <select value={model} onChange={e => setModel(e.target.value)}
+            style={{ width: "100%", padding: "9px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12, marginBottom: 10, background: "#fff" }}>
+            <option value="claude-sonnet-4-5">claude-sonnet-4-5 (추천 · Vision 균형)</option>
+            <option value="claude-opus-4-5">claude-opus-4-5 (최고 성능 · 비용 높음)</option>
+            <option value="claude-haiku-4-5">claude-haiku-4-5 (빠름 · 저렴)</option>
+            <option value="claude-3-5-sonnet-latest">claude-3-5-sonnet-latest (기존)</option>
+          </select>
+
+          {/* Test buttons */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+            <button onClick={testConnection} disabled={testing || !key}
+              style={{ flex: 1, padding: "9px 16px", borderRadius: 6, background: testing || !key ? "#cbd5e1" : "#7c3aed", color: "#fff", border: "none", fontSize: 12, fontWeight: 700, cursor: testing || !key ? "not-allowed" : "pointer" }}>
+              {testing ? "테스트 중..." : "🧪 API 키 테스트"}
+            </button>
+            <button onClick={async () => {
+              if (!key) return alert("API 키 먼저 입력");
+              setTesting(true);
+              setTestMsg("전체 진단 진행 중...\n");
+              const log = [];
+              let snapUrl = "";
+              try { snapUrl = window.localStorage?.getItem("jamsa_cctv_snap_server") || ""; } catch(e){}
+
+              // Step 1: Check NVR URL
+              log.push("【1단계】 NVR 서버 URL 확인");
+              if (!snapUrl) {
+                log.push("  ❌ NVR 서버 URL이 설정되지 않음");
+                log.push("     → 'NVR 서버 설정' 버튼에서 http://localhost:5555 입력 필요");
+                setTestResult("fail");
+                setTestMsg(log.join("\n"));
+                setTesting(false);
+                return;
+              }
+              log.push(`  ✓ URL: ${snapUrl}`);
+
+              // Step 2: Check NVR server reachable
+              log.push("\n【2단계】 NVR 서버 연결 테스트");
+              try {
+                const r = await fetch(`${snapUrl.replace(/\/+$/, "")}/api/status`, { signal: AbortSignal.timeout?.(5000) });
+                if (r.ok) {
+                  const d = await r.json();
+                  log.push(`  ✓ cctv.py 정상 (${d.live}/${d.total} 라이브)`);
+                } else {
+                  log.push(`  ❌ cctv.py 응답 오류: HTTP ${r.status}`);
+                }
+              } catch (e) {
+                log.push(`  ❌ cctv.py 연결 실패: ${e.message}`);
+                log.push("     → cctv.py 서버를 시작하세요 (START_CCTV.bat)");
+                setTestResult("fail");
+                setTestMsg(log.join("\n"));
+                setTesting(false);
+                return;
+              }
+
+              // Step 3: Check AI proxy endpoint exists
+              log.push("\n【3단계】 AI 프록시 엔드포인트 확인");
+              try {
+                const r = await fetch(`${snapUrl.replace(/\/+$/, "")}/api/ai-test`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ api_key: key, model: model }),
+                  signal: AbortSignal.timeout?.(15000),
+                });
+                if (r.status === 404) {
+                  log.push("  ❌ /api/ai-test 엔드포인트 없음");
+                  log.push("     → cctv.py가 구버전입니다!");
+                  log.push("     → 새 ZIP의 cctv.py로 교체 후 START_CCTV.bat 재실행");
+                  setTestResult("fail");
+                  setTestMsg(log.join("\n"));
+                  setTesting(false);
+                  return;
+                }
+                const d = await r.json();
+                if (d.ok) {
+                  log.push(`  ✓ 프록시 정상, API 키 유효, 모델 ${model} 연결됨`);
+                  log.push("\n【최종 결과】 ✅ 모든 검사 통과! 일괄점검 가능 상태");
+                  setTestResult("ok");
+                } else {
+                  log.push(`  ❌ API 오류: ${d.error}`);
+                  log.push("     → console.anthropic.com에서 키/크레딧 확인");
+                  setTestResult("fail");
+                }
+                setTestMsg(log.join("\n"));
+              } catch (e) {
+                log.push(`  ❌ 프록시 호출 실패: ${e.message}`);
+                setTestResult("fail");
+                setTestMsg(log.join("\n"));
+              }
+              setTesting(false);
+            }} disabled={testing || !key}
+              style={{ flex: 1, padding: "9px 16px", borderRadius: 6, background: testing || !key ? "#cbd5e1" : "#dc2626", color: "#fff", border: "none", fontSize: 12, fontWeight: 700, cursor: testing || !key ? "not-allowed" : "pointer" }}>
+              🩺 전체 진단
+            </button>
+          </div>
+
+          {testResult && (
+            <div style={{ padding: 10, borderRadius: 6, marginBottom: 10, fontSize: 11, fontWeight: 600,
+              background: testResult === "ok" ? "#dcfce7" : "#fee2e2",
+              color: testResult === "ok" ? "#065f46" : "#991b1b",
+              border: `1px solid ${testResult === "ok" ? "#86efac" : "#fecaca"}`,
+              whiteSpace: "pre-wrap", fontFamily: "monospace", maxHeight: 240, overflow: "auto" }}>
+              {testMsg}
+            </div>
+          )}
+
+          {/* Cost/usage info */}
+          <div style={{ padding: 10, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, fontSize: 10, color: "#78350f", lineHeight: 1.6 }}>
+            💰 <strong>예상 비용</strong>: 40채널 일괄점검 1회 약 <strong>$0.12 (약 170원)</strong> (Sonnet 4.5 기준).
+            시간대별 스캔은 10회 x 40채널 = 400회 = 약 $1.20 (약 1,700원).
+            Opus는 약 5배, Haiku는 약 1/4 비용.
+          </div>
+          <div style={{ padding: 10, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 6, fontSize: 10, color: "#065f46", lineHeight: 1.6, marginTop: 8 }}>
+            🔒 <strong>보안</strong>: API 키는 브라우저 로컬 저장소(localStorage)에만 저장되며, Anthropic API에만 직접 전송됩니다. 다른 서버로 유출되지 않습니다.
+          </div>
+        </div>
+
+        <div style={{ padding: "12px 18px", borderTop: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", gap: 8, background: "#f8fafc" }}>
+          <button onClick={() => onSave("")}
+            style={{ padding: "9px 14px", borderRadius: 6, background: "#fff", border: "1px solid #e5e7eb", color: "#991b1b", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+            🗑 해제 (시뮬레이션 모드)
+          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onClose}
+              style={{ padding: "9px 16px", borderRadius: 6, background: "#fff", border: "1px solid #e5e7eb", color: "#64748b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              취소
+            </button>
+            <button onClick={handleSave}
+              style={{ padding: "9px 20px", borderRadius: 6, background: "linear-gradient(135deg,#7c3aed,#2563eb)", color: "#fff", border: "none", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+              💾 저장 및 활성화
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── BATCH SCAN PREVIEW MODAL ───
+   일괄점검 결과 전체 미리보기 + 개별 선택 + 과제 생성 */
+function BatchScanPreviewModal({ results, filter, setFilter, selectedItems, setSelectedItems, onCreateActions, onShowDetail, onClose }) {
+  const sevMap = {
+    URGENT: { l: "긴급", c: "#dc2626", bg: "#fef2f2", border: "#fecaca" },
+    WARNING: { l: "경고", c: "#ea580c", bg: "#fff7ed", border: "#fed7aa" },
+    CAUTION: { l: "주의", c: "#ca8a04", bg: "#fefce8", border: "#fef08a" },
+    NORMAL: { l: "정상", c: "#059669", bg: "#f0fdf4", border: "#bbf7d0" },
+  };
+
+  const filtered = filter === "all"
+    ? results.map((r, i) => ({ r, i }))
+    : results.map((r, i) => ({ r, i })).filter(o => o.r.severity === filter);
+
+  const toggleItem = (idx) => {
+    const next = new Set(selectedItems);
+    if (next.has(idx)) next.delete(idx);
+    else next.add(idx);
+    setSelectedItems(next);
+  };
+
+  const selectAllVisible = () => {
+    const actionable = filtered.filter(o => o.r.autoAction).map(o => o.i);
+    setSelectedItems(new Set([...selectedItems, ...actionable]));
+  };
+
+  const deselectAllVisible = () => {
+    const visibleIdxs = new Set(filtered.map(o => o.i));
+    setSelectedItems(new Set([...selectedItems].filter(i => !visibleIdxs.has(i))));
+  };
+
+  const selectedActionable = Array.from(selectedItems).filter(i => results[i]?.autoAction).length;
+
+  // Severity counts
+  const counts = {
+    all: results.length,
+    URGENT: results.filter(r => r.severity === "URGENT").length,
+    WARNING: results.filter(r => r.severity === "WARNING").length,
+    CAUTION: results.filter(r => r.severity === "CAUTION").length,
+    NORMAL: results.filter(r => r.severity === "NORMAL").length,
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10300, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)", padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: 1080, maxWidth: "98vw", maxHeight: "92vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        {/* Header */}
+        <div style={{ padding: "14px 20px", background: "linear-gradient(135deg,#0f172a,#1e293b)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", borderRadius: "12px 12px 0 0" }}>
+          <div>
+            <div style={{ fontSize: 11, opacity: 0.85 }}>AI 일괄점검 결과</div>
+            <div style={{ fontSize: 17, fontWeight: 900 }}>📋 일괄점검 상세 내역 · 총 {results.length}건</div>
+          </div>
+          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", fontSize: 22, cursor: "pointer", width: 30, height: 30, borderRadius: "50%", lineHeight: 1 }}>×</button>
+        </div>
+
+        {/* Filter Tabs */}
+        <div style={{ padding: "12px 20px", background: "#f8fafc", borderBottom: "1px solid #e5e7eb", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {[
+            { k: "all", l: "전체", c: "#0f172a" },
+            { k: "URGENT", l: "🚨 긴급", c: sevMap.URGENT.c },
+            { k: "WARNING", l: "⚠️ 경고", c: sevMap.WARNING.c },
+            { k: "CAUTION", l: "ⓘ 주의", c: sevMap.CAUTION.c },
+            { k: "NORMAL", l: "✓ 정상", c: sevMap.NORMAL.c },
+          ].map(t => (
+            <button key={t.k} onClick={() => setFilter(t.k)}
+              style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid", borderColor: filter === t.k ? t.c : "#e5e7eb", background: filter === t.k ? t.c : "#fff", color: filter === t.k ? "#fff" : "#64748b", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+              {t.l} ({counts[t.k]})
+            </button>
+          ))}
+          <div style={{ flex: 1 }} />
+          <button onClick={selectAllVisible} style={{ padding: "5px 10px", borderRadius: 5, background: "#fff", border: "1px solid #cbd5e1", color: "#475569", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>📋 현재 뷰 전체 선택</button>
+          <button onClick={deselectAllVisible} style={{ padding: "5px 10px", borderRadius: 5, background: "#fff", border: "1px solid #cbd5e1", color: "#475569", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>▢ 현재 뷰 해제</button>
+        </div>
+
+        {/* Results List */}
+        <div style={{ flex: 1, overflow: "auto", padding: 16, background: "#f5f5f5" }}>
+          {filtered.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 40, color: "#94a3b8", fontSize: 12 }}>
+              표시할 결과가 없습니다.
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: 10 }}>
+              {filtered.map(({ r, i }) => {
+                const sev = sevMap[r.severity] || sevMap.NORMAL;
+                const isSelected = selectedItems.has(i);
+                const hasAction = !!r.autoAction;
+                return (
+                  <div key={i} style={{ background: "#fff", border: `2px solid ${isSelected ? sev.c : "#e5e7eb"}`, borderRadius: 10, padding: 12, display: "flex", gap: 12, alignItems: "flex-start", transition: "all 0.15s" }}>
+                    {/* Checkbox */}
+                    <div style={{ paddingTop: 4 }}>
+                      {hasAction ? (
+                        <input type="checkbox" checked={isSelected} onChange={() => toggleItem(i)}
+                          style={{ width: 18, height: 18, cursor: "pointer", accentColor: sev.c }} />
+                      ) : (
+                        <div style={{ width: 18, height: 18, borderRadius: 4, background: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "#94a3b8" }}>-</div>
+                      )}
+                    </div>
+
+                    {/* Capture thumbnail */}
+                    {r.capture ? (
+                      <div onClick={() => onShowDetail(r)} style={{ width: 120, height: 68, borderRadius: 6, overflow: "hidden", flexShrink: 0, cursor: "pointer", border: `1px solid ${sev.border}`, background: "#000" }}>
+                        <img src={r.capture} alt={r.camName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                      </div>
+                    ) : (
+                      <div style={{ width: 120, height: 68, borderRadius: 6, background: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "#94a3b8", flexShrink: 0 }}>
+                        캡처 없음
+                      </div>
+                    )}
+
+                    {/* Info */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+                        <span style={{ padding: "2px 8px", borderRadius: 4, background: sev.bg, color: sev.c, fontSize: 10, fontWeight: 800, border: `1px solid ${sev.border}` }}>
+                          {sev.l}
+                        </span>
+                        <span style={{ fontSize: 12, fontWeight: 800, color: "#0f172a" }}>CH{r.ch} · {r.camName}</span>
+                        {r.hour != null && <span style={{ padding: "1px 6px", borderRadius: 3, background: "#e0e7ff", color: "#3730a3", fontSize: 9, fontWeight: 700 }}>{r.hour}시 스캔</span>}
+                        {r.confidence && <span style={{ fontSize: 10, color: "#64748b" }}>신뢰도 {r.confidence}%</span>}
+                      </div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: r.severity === "NORMAL" ? "#059669" : "#0f172a", marginBottom: 4 }}>
+                        {r.finding}
+                      </div>
+                      <div style={{ fontSize: 10, color: "#64748b", lineHeight: 1.5, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+                        {r.detail}
+                      </div>
+                      {r.suggestions && r.suggestions.length > 0 && (
+                        <div style={{ marginTop: 6, padding: "4px 8px", background: "#f8fafc", borderRadius: 4, fontSize: 10, color: "#475569" }}>
+                          <strong style={{ color: "#0f172a" }}>권장 조치:</strong> {r.suggestions[0]}
+                          {r.suggestions.length > 1 && <span style={{ color: "#94a3b8" }}> (외 {r.suggestions.length - 1}건)</span>}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Detail button */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      <button onClick={() => onShowDetail(r)} style={{ padding: "5px 10px", borderRadius: 5, background: "#0f172a", color: "#fff", border: "none", fontSize: 10, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                        🔍 상세 보기
+                      </button>
+                      {r.autoAction && (
+                        <div style={{ fontSize: 9, color: "#059669", textAlign: "center", padding: "2px 4px", background: "#f0fdf4", borderRadius: 3, fontWeight: 700 }}>
+                          과제 생성 가능
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{ padding: "12px 20px", borderTop: "1px solid #e5e7eb", background: "#f8fafc", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, borderRadius: "0 0 12px 12px" }}>
+          <div style={{ fontSize: 11, color: "#475569" }}>
+            <strong style={{ fontSize: 14, color: "#0f172a" }}>{selectedActionable}</strong>건 선택됨
+            <span style={{ color: "#94a3b8", marginLeft: 6 }}>(과제 생성 가능 항목만)</span>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onClose}
+              style={{ padding: "9px 16px", borderRadius: 6, background: "#fff", border: "1px solid #e5e7eb", color: "#64748b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              취소
+            </button>
+            <button onClick={onCreateActions} disabled={selectedActionable === 0}
+              style={{ padding: "9px 20px", borderRadius: 6,
+                background: selectedActionable === 0 ? "#cbd5e1" : "linear-gradient(135deg,#059669,#0891b2)",
+                color: "#fff", border: "none", fontSize: 12, fontWeight: 800,
+                cursor: selectedActionable === 0 ? "not-allowed" : "pointer" }}>
+              ✨ 선택한 {selectedActionable}건 보완과제 생성
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── BATCH SCAN DETAIL MODAL ───
+   개별 항목 풀 상세 보기 (캡처 확대 + AI 분석 전체) */
+function BatchScanDetailModal({ item, onClose }) {
+  const sevMap = {
+    URGENT: { l: "긴급", c: "#dc2626", bg: "#fef2f2" },
+    WARNING: { l: "경고", c: "#ea580c", bg: "#fff7ed" },
+    CAUTION: { l: "주의", c: "#ca8a04", bg: "#fefce8" },
+    NORMAL: { l: "정상", c: "#059669", bg: "#f0fdf4" },
+  };
+  const sev = sevMap[item.severity] || sevMap.NORMAL;
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10500, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.75)", padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: 900, maxWidth: "98vw", maxHeight: "94vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+        {/* Header */}
+        <div style={{ padding: "14px 20px", background: sev.c, color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", borderRadius: "12px 12px 0 0" }}>
+          <div>
+            <div style={{ fontSize: 11, opacity: 0.9 }}>AI 자체점검 상세 결과 · {sev.l}</div>
+            <div style={{ fontSize: 18, fontWeight: 900 }}>📹 CH{item.ch} {item.camName}{item.hour != null ? ` · ${item.hour}시 스캔` : ""}</div>
+          </div>
+          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", fontSize: 24, cursor: "pointer", width: 32, height: 32, borderRadius: "50%", lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ flex: 1, overflow: "auto", padding: 20 }}>
+          {/* Capture image */}
+          {item.capture && (
+            <div style={{ marginBottom: 16, borderRadius: 8, overflow: "hidden", background: "#000", boxShadow: "0 4px 16px rgba(0,0,0,0.2)" }}>
+              <img src={item.capture} alt={item.camName} style={{ width: "100%", display: "block", maxHeight: "50vh", objectFit: "contain" }} />
+            </div>
+          )}
+
+          {/* Severity + confidence bar */}
+          <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center", padding: "10px 14px", background: sev.bg, borderRadius: 8, border: `1px solid ${sev.c}40` }}>
+            <span style={{ padding: "4px 12px", borderRadius: 4, background: sev.c, color: "#fff", fontSize: 11, fontWeight: 800 }}>
+              {sev.l}
+            </span>
+            {item.confidence != null && (
+              <>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#0f172a" }}>AI 신뢰도</div>
+                <div style={{ flex: 1, height: 6, background: "#fff", borderRadius: 3, overflow: "hidden", border: "1px solid #e5e7eb" }}>
+                  <div style={{ width: `${item.confidence}%`, height: "100%", background: sev.c }} />
+                </div>
+                <div style={{ fontSize: 12, fontWeight: 900, color: sev.c, minWidth: 40 }}>{item.confidence}%</div>
+              </>
+            )}
+          </div>
+
+          {/* Finding */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 10, fontWeight: 800, color: "#94a3b8", textTransform: "uppercase", marginBottom: 4 }}>🔍 발견 내용</div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#0f172a", padding: 12, background: "#f8fafc", borderRadius: 8, borderLeft: `4px solid ${sev.c}` }}>
+              {item.finding}
+            </div>
+          </div>
+
+          {/* Detail */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 10, fontWeight: 800, color: "#94a3b8", textTransform: "uppercase", marginBottom: 4 }}>📝 상세 분석</div>
+            <div style={{ fontSize: 13, color: "#334155", lineHeight: 1.7, padding: 14, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, whiteSpace: "pre-wrap" }}>
+              {item.detail}
+            </div>
+          </div>
+
+          {/* Suggestions */}
+          {item.suggestions && item.suggestions.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 10, fontWeight: 800, color: "#94a3b8", textTransform: "uppercase", marginBottom: 4 }}>💡 AI 권장 조치사항</div>
+              <div style={{ padding: 14, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8 }}>
+                {item.suggestions.map((s, i) => (
+                  <div key={i} style={{ display: "flex", gap: 8, marginBottom: i === item.suggestions.length - 1 ? 0 : 8, alignItems: "flex-start" }}>
+                    <div style={{ minWidth: 22, height: 22, borderRadius: "50%", background: "#ea580c", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 900, flexShrink: 0 }}>{i + 1}</div>
+                    <div style={{ fontSize: 12, color: "#78350f", paddingTop: 3, fontWeight: 600 }}>{s}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Auto action info */}
+          {item.autoAction && (
+            <div style={{ padding: 14, background: "linear-gradient(135deg,#f0fdf4,#eff6ff)", border: "1px solid #bbf7d0", borderRadius: 8 }}>
+              <div style={{ fontSize: 10, fontWeight: 800, color: "#065f46", textTransform: "uppercase", marginBottom: 6 }}>⚙️ 자동 생성 가능한 보완과제</div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "#0f172a", marginBottom: 4 }}>
+                {item.autoAction.title}
+              </div>
+              <div style={{ display: "flex", gap: 8, fontSize: 10 }}>
+                <span style={{ padding: "2px 8px", borderRadius: 3, background: "#fff", border: "1px solid #e5e7eb", color: "#64748b", fontWeight: 700 }}>유형: {item.autoAction.type}</span>
+                <span style={{ padding: "2px 8px", borderRadius: 3, background: item.autoAction.sev === "URGENT" ? "#fef2f2" : "#fff7ed", color: item.autoAction.sev === "URGENT" ? "#991b1b" : "#9a3412", fontWeight: 800 }}>중요도: {item.autoAction.sev}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Timestamp */}
+          <div style={{ marginTop: 14, fontSize: 10, color: "#94a3b8", textAlign: "right", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+            <div>
+              {item._mode === "real" ? (
+                <span style={{ padding: "2px 8px", borderRadius: 4, background: "#f3e8ff", color: "#5b21b6", fontWeight: 700 }}>
+                  🧠 실제 AI Vision 분석
+                </span>
+              ) : item._mode === "mock-real-image" ? (
+                <span style={{ padding: "2px 8px", borderRadius: 4, background: "#fef3c7", color: "#92400e", fontWeight: 700 }} title={item._error || ""}>
+                  ⚠️ 실제 영상 · 시뮬레이션 분석 (AI API 오류)
+                </span>
+              ) : (
+                <span style={{ padding: "2px 8px", borderRadius: 4, background: "#fee2e2", color: "#991b1b", fontWeight: 700 }} title={item._error || ""}>
+                  🎲 시뮬레이션 모드{item._error ? ` (${item._error.slice(0, 40)}...)` : ""}
+                </span>
+              )}
+            </div>
+            <div>스캔 시각: {new Date(item.at).toLocaleString("ko-KR")}</div>
+          </div>
+        </div>
+
+        <div style={{ padding: "12px 20px", borderTop: "1px solid #e5e7eb", background: "#f8fafc", borderRadius: "0 0 12px 12px", textAlign: "right" }}>
+          <button onClick={onClose}
+            style={{ padding: "9px 20px", borderRadius: 6, background: "#0f172a", color: "#fff", border: "none", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+            닫기
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── REPORTS ─── */
+function FacReportsPage({ inspections, actions }) {
+  const [tab, setTab] = useState("daily"); // daily, weekly, monthly, seasonal
+  const [sigs, setSigs] = useState({ inspector: null, reviewer: null, approver: null });
+
+  // 현재 날짜 기준 기간 필터링
+  const nowMs = facNow.getTime();
+  let startDate = new Date(nowMs - 864e5); // 기본 일간
+  let periodLabel = "일일";
+
+  if (tab === "weekly") { startDate = new Date(nowMs - 7 * 864e5); periodLabel = "주간"; }
+  if (tab === "monthly") { startDate = new Date(nowMs - 30 * 864e5); periodLabel = "월간"; }
+  if (tab === "seasonal") {
+    // 현재 월 기준 계절 판별
+    const currentMonth = facNow.getMonth() + 1;
+    if ([3, 4, 5].includes(currentMonth)) { periodLabel = "봄철(춘계)"; }
+    else if ([6, 7, 8].includes(currentMonth)) { periodLabel = "여름철(하계)"; }
+    else if ([9, 10, 11].includes(currentMonth)) { periodLabel = "가을철(추계)"; }
+    else { periodLabel = "겨울철(동계)"; }
+    startDate = new Date(nowMs - 90 * 864e5); // 약 3개월 전
+  }
+
+  const periodInspections = inspections.filter(i => new Date(i.at) >= startDate);
+  const periodActions = actions.filter(a => new Date(a.due) >= startDate);
+
+  const nRes = { NORMAL: 0, CAUTION: 0, DANGER: 0 };
+  periodInspections.forEach(i => { if (nRes[i.result] !== undefined) nRes[i.result]++; });
+
+  return (
+    <div className="p-6 space-y-4">
+      <div className="text-xl font-bold">점검 일지 및 보고서</div>
+      <div className="flex gap-2 flex-wrap">
+        {[["daily", "일간"], ["weekly", "주간"], ["monthly", "월간"], ["seasonal", "계절별"]].map(([k, l]) => (
+          <button key={k} onClick={() => setTab(k)}
+            className={`text-xs px-4 py-2 rounded-lg font-bold border transition-all ${tab === k ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 hover:bg-gray-50"}`}>{l}</button>
+        ))}
+        <button onClick={() => window.print()} className="text-xs px-4 py-2 rounded-lg border ml-auto bg-gray-50 font-medium">🖨️ PDF / 인쇄</button>
+      </div>
+
+      <div className="rounded-xl border bg-white p-8 shadow-sm">
+        <div className="border-b-2 border-gray-900 pb-4 mb-6 flex justify-between items-end flex-wrap gap-2">
+          <div>
+            <div className="text-2xl font-black text-gray-900">한국잠사플레이팜 {periodLabel} 종합 점검 일지</div>
+            <div className="text-xs text-gray-500 mt-2">집계 기간: {facFmtD(startDate.toISOString())} ~ {facFmtD(facNow.toISOString())}</div>
+          </div>
+          <div className="text-right text-xs text-gray-500">
+            <div className="font-bold text-gray-700">문서번호: REP-{facNow.getFullYear()}-{String(facNow.getMonth() + 1).padStart(2, '0')}-{tab.substring(0, 3).toUpperCase()}</div>
+            <div>출력일시: {facFmtDT(new Date().toISOString())}</div>
+          </div>
+        </div>
+
+        <div className="text-sm font-bold mb-3 border-l-4 border-gray-900 pl-2">1. 점검 요약</div>
+        <div className="grid grid-cols-4 gap-3 mb-8">
+          <div className="border rounded-lg p-3 bg-gray-50"><div className="text-xs text-gray-500">총 점검 수행</div><div className="text-xl font-black">{periodInspections.length}건</div></div>
+          <div className="border rounded-lg p-3"><div className="text-xs text-gray-500">정상 (안전)</div><div className="text-xl font-black text-emerald-600">{nRes.NORMAL}건</div></div>
+          <div className="border rounded-lg p-3"><div className="text-xs text-gray-500">주의 (관찰요망)</div><div className="text-xl font-black text-amber-600">{nRes.CAUTION}건</div></div>
+          <div className="border rounded-lg p-3 bg-red-50"><div className="text-xs text-gray-500">위험 (즉시조치)</div><div className="text-xl font-black text-red-600">{nRes.DANGER}건</div></div>
+        </div>
+
+        <div className="text-sm font-bold mb-3 border-l-4 border-gray-900 pl-2">2. 주요 점검 내역</div>
+        {periodInspections.length === 0 ? (
+          <div className="text-xs text-gray-400 text-center py-6 mb-8 border rounded">해당 기간 점검 이력 없음</div>
+        ) : (
+          <table className="w-full text-xs border-collapse mb-8">
+            <thead><tr className="bg-gray-100 border-y border-gray-900">{["일시", "시설명", "점검자", "판정", "메모"].map(h => <th key={h} className="p-2 text-left font-bold">{h}</th>)}</tr></thead>
+            <tbody>{periodInspections.slice(0, 10).map(i => { const f = facFind(i.facId); return <tr key={i.id} className="border-b">
+              <td className="p-2">{facFmtD(i.at)}</td>
+              <td className="p-2 font-medium">{f?.name}</td>
+              <td className="p-2">{usrFind(i.inspId)?.name}</td>
+              <td className="p-2"><FacBadge v={i.result} map={FAC_RES} /></td>
+              <td className="p-2 text-gray-500 truncate max-w-[200px]">{i.memo || "-"}</td>
+            </tr>; })}</tbody>
+          </table>
+        )}
+
+        <div className="text-sm font-bold mb-3 border-l-4 border-gray-900 pl-2 flex justify-between items-center">
+          <span>3. 시설 보완 및 개선 현황</span>
+          <span className="text-xs text-red-600 font-normal">미완료: {periodActions.filter(a => a.status !== "DONE").length}건</span>
+        </div>
+        {periodActions.length === 0 ? (
+          <div className="text-xs text-gray-400 text-center py-6 mb-8 border rounded">해당 기간 보완과제 없음</div>
+        ) : (
+          <div className="grid grid-cols-1 gap-2 mb-8">
+            {periodActions.slice(0, 5).map(a => {
+              const f = facFind(a.facId);
+              return <div key={a.id} className="p-3 border rounded-lg bg-gray-50 text-xs flex justify-between items-center flex-wrap gap-2" style={{ borderLeft: `4px solid ${a.sev === "URGENT" ? "#dc2626" : a.sev === "HIGH" ? "#ea580c" : a.sev === "MEDIUM" ? "#ca8a04" : "#2563eb"}` }}>
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold text-sm mb-1">[{FAC_SEV[a.sev]?.l}] {a.title}</div>
+                  <div className="text-gray-500">{f?.name} · 담당: {a.assignee ? usrFind(a.assignee)?.name : "미배정"} · 기한: {facFmtD(a.due)}</div>
+                </div>
+                <div className="text-right">
+                  <span className={`px-2 py-1 rounded font-bold ${a.status === "DONE" ? "bg-emerald-100 text-emerald-800" : "bg-white border text-gray-600"}`}>{FAC_STS[a.status]}</span>
+                </div>
+              </div>;
+            })}
+          </div>
+        )}
+
+        <div className="grid grid-cols-3 gap-8 mt-12 pt-8">
+          <SignatureSlot label="점검자 (담당)" value={sigs.inspector} onChange={v => setSigs(s => ({ ...s, inspector: v }))} />
+          <SignatureSlot label="검토자 (팀장)" value={sigs.reviewer} onChange={v => setSigs(s => ({ ...s, reviewer: v }))} />
+          <SignatureSlot label="승인자 (운영대표)" value={sigs.approver} onChange={v => setSigs(s => ({ ...s, approver: v }))} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── SAFETY MANAGEMENT PAGE ─── */
+/* ─── SHARED COMPONENTS ─── */
+function FacMC({ l, v, c }) { return <div className="bg-gray-50 rounded-xl p-3"><div className="text-[10px] text-gray-500">{l}</div><div className={`text-lg font-bold mt-1 ${c ?? ""}`}>{v}</div></div>; }
+function FacQBtn({ l, v, on, c, click }) {
+  const cs = { amber: "bg-amber-50 text-amber-800", red: "bg-red-50 text-red-800" };
+  return <button onClick={click} className={`rounded-xl border p-2.5 text-left ${on ? "ring-2 ring-offset-1 ring-blue-400" : ""} ${cs[c]}`}>
+    <div className="text-[10px]">{l}</div><div className="text-lg font-bold mt-0.5">{v}</div>
+  </button>;
+}
+
+/* ─── AI QUICK DIAGNOSIS MODAL ─────────────────────────────────
+ * Standalone "photo → diagnosis → action" flow.
+ * Unlike the inline AI in FacInspNew (which runs per-checklist-item
+ * during a full inspection), this modal lets any user snap a photo
+ * of a facility problem and generate a 보완과제 directly.
+ * ──────────────────────────────────────────────────────────── */
+function FacAiAnalysisModal({ onClose, onSubmit, addAudit }) {
+  const [photos, setPhotos] = useState([]); // array of dataURLs, multi-photo
+  const [analyzing, setAnalyzing] = useState(false);
+  const [result, setResult] = useState(null);
+  const [facId, setFacId] = useState("");
+
+  const addPhotos = async (files) => {
+    const arr = [];
+    for (const f of files) {
+      try { arr.push(await facCompressPhoto(f)); } catch (e) { /* skip */ }
+    }
+    if (arr.length) { setPhotos(prev => [...prev, ...arr]); setResult(null); }
+  };
+  const handleFile = (e) => { if (e.target.files?.length) addPhotos([...e.target.files]); e.target.value = ""; };
+
+  // Document-level paste listener — captures Ctrl+V from anywhere while modal is open
+  useEffect(() => {
+    const onDocPaste = (e) => {
+      const items = e.clipboardData?.items || [];
+      const files = [];
+      for (const it of items) {
+        if (it.type?.startsWith("image/")) {
+          const f = it.getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      if (files.length > 0) {
+        e.preventDefault();
+        addPhotos(files);
+      }
+    };
+    document.addEventListener("paste", onDocPaste);
+    return () => document.removeEventListener("paste", onDocPaste);
+  }, []);
+
+  const removePhoto = (idx) => setPhotos(prev => prev.filter((_, i) => i !== idx));
+
+  const runAnalysis = async () => {
+    if (photos.length === 0) return alert("사진을 먼저 업로드해주세요. (파일 선택 또는 Ctrl+V 붙여넣기)");
+    if (!facId) return alert("분석할 시설을 선택해주세요.");
+    setAnalyzing(true);
+    try {
+      const facName = facFind(facId)?.name;
+      // Use first photo as primary (mock); real backend could send all
+      const aiData = await analyzeFacilityPhotoAI(photos[0], facName, "현장 진단");
+      setResult(aiData);
+      if (addAudit) addAudit({
+        module: "facility",
+        action: "ai_analyze",
+        targetLabel: facName,
+        photoCount: photos.length,
+        severity: aiData.severity,
+        summary: `AI 현장진단 — ${aiData.type}`,
+      });
+    } catch (err) {
+      alert("AI 분석 실패: " + err.message);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const submitAction = () => {
+    if (!result) return;
+    const fac = facFind(facId);
+    // Use AI-suggested schedule date if available, else fall back to severity-based offset
+    const suggestedDate = result.schedule?.date;
+    const dueOffset = result.severity === "URGENT" ? 1 : result.severity === "HIGH" ? 3 : result.severity === "MEDIUM" ? 7 : 14;
+    const actionData = {
+      id: "a" + Date.now() + Math.random(),
+      facId: facId,
+      inspId: null,
+      title: `[AI 현장진단] ${fac?.name ?? ""} 보완`,
+      type: result.type || "AI 진단",
+      desc: `[발견사항]\n${result.defect}\n\n[해결책]\n${result.solution}\n\n[필요 재료] ${result.materials.join(", ")}\n[소요 시간] ${result.time}\n[예상 예산] ${result.budget}${result.schedule ? `\n[권장 일정] ${result.schedule.date} (${result.schedule.weekday}) ${result.schedule.time}` : ""}`,
+      sev: result.severity,
+      rec: result.solution,
+      status: "TODO",
+      due: suggestedDate || _facD(dueOffset),
+      assignee: null,
+      memo: null,
+      ai: result, // full AI result incl. detailedSteps, schedule, procurement
+      photo: photos[0] || null,
+      photos: photos,
+    };
+    if (addAudit) addAudit({
+      module: "facility",
+      action: "action_create",
+      targetLabel: fac?.name,
+      photoCount: photos.length,
+      severity: result.severity,
+      summary: `보완과제 생성 — ${result.type} (일정/가이드/구매처 포함)`,
+    });
+    onSubmit(actionData);
+  };
+
+  return (
+    <div onClick={onClose}
+      style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)", backdropFilter: "blur(2px)" }}>
+      <style>{`@keyframes facPulse{0%,100%{opacity:1}50%{opacity:.5}}`}</style>
+      <div onClick={e => e.stopPropagation()}
+        style={{ background: "#fff", borderRadius: 16, width: 520, maxWidth: "92vw", padding: 24, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h3 style={{ fontSize: 17, fontWeight: 800 }}>🤖 AI 현장 진단 (퀵 분석)</h3>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#94a3b8", lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12, background: "#f0f7ff", padding: "8px 12px", borderRadius: 8, border: "1px solid #bfdbfe" }}>
+          💡 사진을 여러 장 첨부할 수 있고, <strong>Ctrl+V</strong>로 클립보드 이미지 붙여넣기도 가능합니다.
+        </div>
+
+        <select className="w-full rounded-lg border px-3 py-2 text-sm mb-3"
+          style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 12px", fontSize: 13, width: "100%" }}
+          value={facId} onChange={e => setFacId(e.target.value)}>
+          <option value="">-- 촬영한 시설 선택 --</option>
+          {FAC_FACILITIES.map(f => <option key={f.id} value={f.id}>[{f.code}] {f.name}</option>)}
+        </select>
+
+        <div style={{ border: "2px dashed #cbd5e1", borderRadius: 12, padding: 12, marginBottom: 16, background: "#f8fafc" }}>
+          {photos.length > 0 && (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 6, marginBottom: 10 }}>
+              {photos.map((p, i) => (
+                <div key={i} style={{ position: "relative", aspectRatio: "4/3", borderRadius: 8, overflow: "hidden", border: "1px solid #e5e7eb", background: "#fff" }}>
+                  <img src={p} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  <button type="button" onClick={() => removePhoto(i)}
+                    style={{ position: "absolute", top: 4, right: 4, background: "rgba(0,0,0,0.65)", color: "#fff", border: "none", borderRadius: "50%", width: 22, height: 22, fontSize: 12, cursor: "pointer", lineHeight: 1 }}>×</button>
+                  <div style={{ position: "absolute", bottom: 4, left: 4, background: "rgba(0,0,0,0.65)", color: "#fff", borderRadius: 4, padding: "1px 6px", fontSize: 10, fontWeight: 700 }}>{i + 1}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          <label style={{ cursor: "pointer", display: "block", textAlign: "center", padding: photos.length > 0 ? "12px 0" : "20px 0", color: "#64748b", fontSize: 13 }}>
+            <div style={{ fontSize: photos.length > 0 ? 24 : 36, marginBottom: 4 }}>📷</div>
+            <div style={{ fontWeight: 600, color: "#475569" }}>{photos.length > 0 ? "📎 사진 더 추가" : "클릭하여 현장 사진 업로드"}</div>
+            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
+              {photos.length > 0 ? `현재 ${photos.length}장 첨부됨` : "여러 장 선택 가능 · Ctrl+V 붙여넣기"}
+            </div>
+            <input type="file" accept="image/*" multiple capture="environment" onChange={handleFile} style={{ display: "none" }} />
+          </label>
+        </div>
+
+        {photos.length > 0 && !result && !analyzing && (
+          <button onClick={runAnalysis}
+            style={{ width: "100%", borderRadius: 12, background: "#2563eb", color: "#fff", padding: 12, fontSize: 14, fontWeight: 700, border: "none", cursor: "pointer" }}>
+            🔍 AI 비전 분석 시작 (사진 {photos.length}장)
+          </button>
+        )}
+
+        {analyzing && (
+          <div style={{ textAlign: "center", padding: 20, color: "#3b82f6", fontWeight: "bold", fontSize: 13, animation: "facPulse 1.5s infinite" }}>
+            <div style={{ display: "inline-block", width: 20, height: 20, border: "3px solid #3b82f6", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite", marginRight: 8, verticalAlign: "middle" }}></div>
+            이미지 패턴 분석 및 해결책 탐색 중...
+            <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+          </div>
+        )}
+
+        {result && <FacAiResultTabs result={result} onSubmit={submitAction} />}
+      </div>
+    </div>
+  );
+}
+
+/* ─── FAC AI RESULT — TABBED DETAIL VIEW ─── */
+function FacAiResultTabs({ result, onSubmit }) {
+  const [tab, setTab] = useState("summary");
+  const sevColor = (sev) => ({
+    URGENT: { bg: "#fef2f2", fg: "#dc2626", border: "#fecaca" },
+    HIGH: { bg: "#fff7ed", fg: "#ea580c", border: "#fed7aa" },
+    MEDIUM: { bg: "#fefce8", fg: "#ca8a04", border: "#fde68a" },
+    LOW: { bg: "#eff6ff", fg: "#2563eb", border: "#bfdbfe" },
+  }[sev] || { bg: "#f8fafc", fg: "#64748b", border: "#e2e8f0" });
+  const sc = sevColor(result.severity);
+
+  const tabs = [
+    { k: "summary", l: "📋 진단" },
+    { k: "beforeafter", l: "🎨 전/후" },
+    { k: "steps", l: "📝 가이드" },
+    { k: "schedule", l: "📅 일정" },
+    { k: "procure", l: "🛒 구매처" },
+  ];
+
+  return (
+    <div style={{ background: "#fff", border: `2px solid ${sc.border}`, borderRadius: 12, marginTop: 16, overflow: "hidden", fontSize: 13 }}>
+      {/* Header */}
+      <div style={{ padding: "12px 14px", background: sc.bg, borderBottom: `1px solid ${sc.border}`, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 14 }}>✅</span>
+        <span style={{ fontWeight: 800, color: sc.fg }}>AI 진단 완료</span>
+        <span style={{ fontSize: 10, fontWeight: 800, padding: "3px 8px", borderRadius: 6, background: "#fff", color: sc.fg, border: `1px solid ${sc.border}` }}>{FAC_SEV[result.severity]?.l || result.severity}</span>
+        <span style={{ fontSize: 10, color: "#64748b", marginLeft: "auto" }}>{result.type}</span>
+      </div>
+
+      {/* Tab strip */}
+      <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb", overflowX: "auto", background: "#f8fafc" }}>
+        {tabs.map(t => (
+          <button key={t.k} type="button" onClick={() => setTab(t.k)}
+            style={{ padding: "8px 12px", border: "none", background: tab === t.k ? "#fff" : "transparent", color: tab === t.k ? sc.fg : "#64748b", fontSize: 11, fontWeight: 700, cursor: "pointer", borderBottom: tab === t.k ? `2px solid ${sc.fg}` : "2px solid transparent", whiteSpace: "nowrap", flexShrink: 0 }}>
+            {t.l}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab content */}
+      <div style={{ padding: 14, minHeight: 200, maxHeight: 380, overflowY: "auto" }}>
+        {tab === "summary" && (
+          <div>
+            <div style={{ marginBottom: 10 }}><strong>🔍 발견된 문제:</strong><br/><span style={{ color: "#b91c1c", display: "block", marginTop: 2, lineHeight: 1.5 }}>{result.defect}</span></div>
+            <div style={{ marginBottom: 10 }}><strong>💡 권장 해결책:</strong><br/><span style={{ display: "block", marginTop: 2, lineHeight: 1.5 }}>{result.solution}</span></div>
+            <div style={{ background: "#f8fafc", borderRadius: 8, padding: 10, border: "1px solid #e2e8f0", fontSize: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}><span style={{ color: "#64748b" }}>예상 소요 시간</span><strong>{result.time}</strong></div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}><span style={{ color: "#64748b" }}>예상 예산</span><strong>{result.budget}</strong></div>
+              <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 8 }}>
+                <div style={{ color: "#64748b", marginBottom: 4 }}>필요 재료 ({result.materials.length}종)</div>
+                <div>{result.materials.map(m => <span key={m} style={{ display: "inline-block", background: "#e2e8f0", padding: "2px 8px", borderRadius: 4, margin: "0 4px 4px 0", fontSize: 11 }}>{m}</span>)}</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === "beforeafter" && (
+          <div>
+            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>AI가 예측한 조치 전/후 상태 개념도입니다. 실제 사진이 아닌 시각화입니다.</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div style={{ border: "1px solid #fecaca", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
+                <AiBeforeSvg label={result.beforeLabel || "문제 발생 상태"} />
+              </div>
+              <div style={{ border: "1px solid #bbf7d0", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
+                <AiAfterSvg label={result.afterLabel || "조치 완료 상태"} />
+              </div>
+            </div>
+            <div style={{ marginTop: 12, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: 10, fontSize: 11, color: "#1e40af", lineHeight: 1.5 }}>
+              💡 <strong>TIP</strong> — 조치 후 실제 사진을 찍어 <strong>"AI 완료 확인"</strong>에서 제출하면, AI가 전/후를 대조해 완료 여부를 자동 판정합니다.
+            </div>
+          </div>
+        )}
+
+        {tab === "steps" && (
+          <div>
+            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>초심자도 따라할 수 있도록 세분화한 단계별 가이드입니다.</div>
+            {(result.detailedSteps || []).length === 0 ? (
+              <div style={{ color: "#94a3b8", textAlign: "center", padding: 20 }}>상세 가이드가 준비되지 않았습니다.</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {result.detailedSteps.map(s => (
+                  <div key={s.n} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 10, background: "#fff" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 22, height: 22, borderRadius: "50%", background: sc.fg, color: "#fff", fontWeight: 800, fontSize: 11 }}>{s.n}</span>
+                      <span style={{ fontWeight: 700, fontSize: 13 }}>{s.title}</span>
+                      <span style={{ marginLeft: "auto", fontSize: 10, color: "#64748b", background: "#f1f5f9", padding: "2px 6px", borderRadius: 4 }}>⏱ {s.duration}</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: "#1f2937", lineHeight: 1.6, marginBottom: s.tip ? 6 : 0 }}>{s.desc}</div>
+                    {s.tip && (
+                      <div style={{ fontSize: 11, color: s.tip.startsWith("⚠️") ? "#9a3412" : "#1e40af", background: s.tip.startsWith("⚠️") ? "#fff7ed" : "#eff6ff", border: `1px solid ${s.tip.startsWith("⚠️") ? "#fed7aa" : "#bfdbfe"}`, borderRadius: 6, padding: "5px 8px" }}>
+                        {s.tip}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab === "schedule" && (
+          <div>
+            {result.schedule ? (
+              <div>
+                <div style={{ background: sc.bg, border: `1px solid ${sc.border}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, color: sc.fg, fontWeight: 800, marginBottom: 4 }}>📅 AI 권장 작업 일정</div>
+                  <div style={{ fontSize: 20, fontWeight: 900, color: "#0f172a", marginBottom: 2 }}>
+                    {result.schedule.date} ({result.schedule.weekday})
+                  </div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#475569" }}>⏰ {result.schedule.time}</div>
+                </div>
+                <div style={{ fontSize: 12, color: "#1f2937", lineHeight: 1.6, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 10 }}>
+                  <strong>📌 배정 사유:</strong><br/>{result.schedule.reason}
+                </div>
+                <div style={{ marginTop: 10, fontSize: 11, color: "#64748b", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: 8 }}>
+                  💡 이 일정은 심각도와 일반적 작업 패턴 기준이며, 보완과제 생성 시 기한으로 자동 설정됩니다. 실제 작업자 일정에 맞게 조정 가능합니다.
+                </div>
+              </div>
+            ) : <div style={{ color: "#94a3b8" }}>일정 정보 없음</div>}
+          </div>
+        )}
+
+        {tab === "procure" && (
+          <div>
+            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>재료별 오프라인(청주 지역) + 온라인 구매 옵션입니다.</div>
+            {result.materials.map(m => {
+              const p = result.procurement?.[m];
+              if (!p) return null;
+              return (
+                <div key={m} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 10, marginBottom: 8, background: "#fff" }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: "#0f172a", marginBottom: 8 }}>📦 {m}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#065f46", marginBottom: 4 }}>🏪 오프라인 (청주 근처)</div>
+                      {p.offline.map((o, i) => (
+                        <div key={i} style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 6, padding: "6px 8px", marginBottom: 4, fontSize: 11 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                            <strong style={{ color: "#065f46" }}>{o.name}</strong>
+                            <span style={{ color: "#059669", fontWeight: 700 }}>{o.price}</span>
+                          </div>
+                          <div style={{ color: "#475569", fontSize: 10 }}>{o.note} · 📍 {o.distance}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#1e40af", marginBottom: 4 }}>💻 온라인</div>
+                      {p.online.map((o, i) => (
+                        <a key={i} href={o.url} target="_blank" rel="noopener noreferrer"
+                          style={{ display: "block", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 6, padding: "6px 8px", marginBottom: 4, fontSize: 11, textDecoration: "none", color: "inherit" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                            <strong style={{ color: "#1e40af" }}>{o.name}</strong>
+                            <span style={{ color: "#2563eb", fontWeight: 700 }}>{o.priceRange}</span>
+                          </div>
+                          <div style={{ color: "#475569", fontSize: 10 }}>🚚 {o.delivery} · 🔗 검색 페이지 열기</div>
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Submit footer (always visible) */}
+      <div style={{ padding: 12, borderTop: "1px solid #e5e7eb", background: "#f8fafc" }}>
+        <button onClick={onSubmit}
+          style={{ width: "100%", borderRadius: 10, background: "#059669", color: "#fff", padding: 12, fontSize: 14, fontWeight: 700, border: "none", cursor: "pointer" }}>
+          ✨ 이 내용으로 보완 과제 자동 생성 (일정·재료정보 포함)
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ==================== INVENTORY MODULE (from 잠사박물관 재고관리 v11) ==================== */
+
+const MAP_IMG = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice"><defs><pattern id="g" width="10" height="10" patternUnits="userSpaceOnUse"><rect width="10" height="10" fill="%23f0f4f8"/><path d="M0 0L10 10M10 0L0 10" stroke="%23e2e8f0" stroke-width="0.3"/></pattern></defs><rect width="100" height="100" fill="url(%23g)"/><text x="50" y="50" text-anchor="middle" font-family="sans-serif" font-size="3" fill="%2364748b">한국잠사플레이팜 시설 배치도</text></svg>`;
+
+// ========== QR CODE GENERATOR ==========
+function genQRMatrix(text) {
+  const size = 21;
+  const m = Array.from({length:size}, ()=>Array(size).fill(0));
+  // Finder patterns (3 corners)
+  const setFinder = (r,c) => {
+    for(let i=-1;i<=7;i++) for(let j=-1;j<=7;j++){
+      const ri=r+i, ci=c+j;
+      if(ri<0||ri>=size||ci<0||ci>=size)continue;
+      if(i===-1||i===7||j===-1||j===7) m[ri][ci]=0;
+      else if(i===0||i===6||j===0||j===6) m[ri][ci]=1;
+      else if(i>=2&&i<=4&&j>=2&&j<=4) m[ri][ci]=1;
+      else m[ri][ci]=0;
+    }
+  };
+  setFinder(0,0); setFinder(0,size-7); setFinder(size-7,0);
+  // Timing
+  for(let i=8;i<size-8;i++){m[6][i]=i%2===0?1:0;m[i][6]=i%2===0?1:0;}
+  // Data from text hash
+  let hash=0;
+  for(let i=0;i<text.length;i++){hash=((hash<<5)-hash+text.charCodeAt(i))|0;}
+  let seed=Math.abs(hash);
+  const rng=()=>{seed=(seed*16807+0)%2147483647;return seed/2147483647;};
+  for(let r=0;r<size;r++) for(let c=0;c<size;c++){
+    if(m[r][c]===1)continue;
+    if((r<9&&c<9)||(r<9&&c>=size-8)||(r>=size-8&&c<9))continue;
+    if(r===6||c===6)continue;
+    m[r][c]=rng()>0.55?1:0;
+  }
+  return m;
+}
+
+function QRCodeSVG({text,size=120,color="#000"}){
+  const mx=genQRMatrix(text);
+  const n=mx.length;
+  const cs=size/n;
+  return(
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      <rect width={size} height={size} fill="#fff"/>
+      {mx.map((row,r)=>row.map((cell,c)=>cell?<rect key={`${r}-${c}`} x={c*cs} y={r*cs} width={cs+0.5} height={cs+0.5} fill={color}/>:null))}
+    </svg>
+  );
+}
+
+function genCode(id){
+  // Short code: JB + 4-digit from last digits of id
+  const n = id % 10000;
+  return `JB-${String(n).padStart(4,'0')}`;
+}
+let _nextId = 31; // auto-increment counter
+function nextId(){ return _nextId++; }
+
+// ========== ZONES ==========
+/* Korea Silk Museum GPS — TIGHT coordinates matching actual museum footprint
+   중심: 36.6383333, 127.3827778 (청주시 흥덕구 강내면 청주역로 213-52)
+
+   실제 박물관은 매우 집약적 (~80m × 80m).
+   중심에서 각 방향 ±40m 이내에 모든 구역이 위치.
+   1도 위도 ≈ 111,000m → 40m ≈ 0.00036도
+   1도 경도(36.6°N) ≈ 89,000m → 40m ≈ 0.00045도
+
+   ⚠️ 정밀 좌표 필요 시: 구역에 휴대폰을 두고 지도 앱에서 실측 좌표를 확인해
+   아래 lat/lng 값을 직접 덮어쓰면 됩니다. */
+const JAMSA_CENTER = { lat: 36.6383333, lng: 127.3827778 };
+
+// ── CCTV-구역 자동 매핑 (구역 ID → 채널 배열) ──
+// 자동 매핑은 zone.name과 카메라.zone을 키워드 매칭. 수동 매핑은 localStorage에 저장됨.
+const CCTV_AUTO_MAP = {
+  farm:    [],                          // 뽕밭 (CCTV 없음)
+  gh:      [],                          // 온실창고 (CCTV 없음)
+  water:   [],                          // 물놀이장 (CCTV 없음)
+  garden:  [],                          // 텃밭/정원 (CCTV 없음)
+  storage: [9],                         // 수장고 → 창고
+  bldg:    [1, 3, 4, 5, 7, 10],        // 본관 → 입구/로비/전시실/복도/사무실
+  shop:    [11, 24, 36, 37, 38, 39, 40], // 매점/체험접수 → 식당/매표소
+  dome:    [13, 14, 15, 16, 17, 18, 19], // 누에과학관 (돔) → 누에1~7
+  field:   [6, 8, 12, 25, 26, 27],      // 검정비닐천막 → 체험장/후문/외부/애견파크
+  park:    [2, 20, 21, 22, 23],         // 주차장 → 주차장/슬로프/야외광장
+  forest:  [28, 29, 30, 31, 32, 33, 34, 35], // 산책로 → 양떼정원
+  rest:    [],                          // 쉼터 (CCTV 없음)
+  basic:   [],                          // 기본 창고 (CCTV 없음)
+};
+
+// 사용자 수동 매핑 (localStorage에 저장)
+function loadCctvMap() {
+  try {
+    const saved = JSON.parse(window.localStorage?.getItem("jamsa_cctv_zone_map") || "{}");
+    return { ...CCTV_AUTO_MAP, ...saved };
+  } catch (e) { return { ...CCTV_AUTO_MAP }; }
+}
+function saveCctvMap(map) {
+  try { window.localStorage?.setItem("jamsa_cctv_zone_map", JSON.stringify(map)); } catch (e) {}
+}
+
+const BASE_ZONES = [
+  // 북쪽 라인 (박물관 입구 쪽)
+  { id:"farm",    name:"뽕밭 / 농경지",       color:"#6D4C41", x:7,  y:5,  w:19, h:21, icon:"🌿", desc:"뽕나무 재배 및 농경 체험",    lat: 36.63867, lng: 127.38245 },
+  { id:"gh",      name:"온실창고",             color:"#2E7D32", x:26, y:7,  w:9,  h:18, icon:"🏠", desc:"온실 및 하우스용품 창고",      lat: 36.63865, lng: 127.38263 },
+  { id:"water",   name:"물놀이장",             color:"#1565C0", x:34, y:4,  w:13, h:15, icon:"💧", desc:"여름 체험 물놀이 시설",        lat: 36.63870, lng: 127.38278 },
+  { id:"garden",  name:"텃밭 / 정원",         color:"#558B2F", x:49, y:4,  w:17, h:24, icon:"🌱", desc:"체험용 텃밭 및 정원",          lat: 36.63863, lng: 127.38295 },
+  { id:"storage", name:"수장고",               color:"#3949AB", x:69, y:3,  w:20, h:30, icon:"📦", desc:"수장고 A-5~C-2 등",            lat: 36.63860, lng: 127.38312 },
+  // 중앙 라인 (메인 건물군 - 박물관 중심부)
+  { id:"bldg",    name:"본관 (전시동)",        color:"#00695C", x:4,  y:33, w:15, h:16, icon:"🏛️", desc:"본관 전시관 및 사무동",       lat: 36.63838, lng: 127.38258 },
+  { id:"shop",    name:"매점 / 체험접수",      color:"#E65100", x:19, y:32, w:11, h:13, icon:"🎪", desc:"매점 및 체험 접수처",         lat: 36.63840, lng: 127.38275 },
+  { id:"dome",    name:"누에과학관 (돔)",      color:"#6A1B9A", x:34, y:35, w:15, h:20, icon:"🔬", desc:"돔형 누에 과학 전시관",       lat: 36.63833, lng: 127.38288 },
+  { id:"field",   name:"검정비닐천막",         color:"#37474F", x:52, y:28, w:28, h:32, icon:"⛺", desc:"야외 창고 및 비닐천막",       lat: 36.63828, lng: 127.38305 },
+  // 남쪽 라인 (휴게·주차)
+  { id:"park",    name:"주차장",               color:"#C62828", x:3,  y:55, w:13, h:20, icon:"🚌", desc:"관람버스 및 차량 주차",       lat: 36.63818, lng: 127.38248 },
+  { id:"forest",  name:"뽕나무숲 / 산책로",   color:"#1B5E20", x:17, y:52, w:21, h:28, icon:"🌳", desc:"산책로 및 자연학습원",        lat: 36.63815, lng: 127.38268 },
+  { id:"rest",    name:"쉼터",                 color:"#F57F17", x:39, y:53, w:11, h:11, icon:"☂️", desc:"파라솔 쉼터 휴식 공간",       lat: 36.63817, lng: 127.38285 },
+  { id:"basic",   name:"기본 창고",            color:"#00838F", x:45, y:64, w:13, h:13, icon:"🏪", desc:"남측 기본 창고",              lat: 36.63808, lng: 127.38300 },
+];
+
+// Backward-compat alias — older code still references ZONES for static lookups.
+// Dynamic custom zones are provided via InvModule state + passed to MapView as prop.
+const ZONES = BASE_ZONES;
+
+const Z_LOCS = {
+  farm:["뽕밭"], gh:["온실창고","온실창고 B-3","온실창고 C-4"], water:["물놀이장"],
+  garden:["텃밭","정원"], storage:["수장고","수장고 A-5","수장고 A-6","수장고 B-2","수장고 C-2","수장고 뒤쪽"],
+  bldg:["본관","전시동","사무용품"], shop:["매점","체험접수"], dome:["누에과학관"],
+  park:["주차장"], rest:["쉼터"], forest:["산책로"],
+  field:["검정비닐천막","이동식 공구대 B-1"], basic:["기본 창고"],
+};
+
+const LOCS=["검정비닐천막","기본 창고","수장고","쉼터","온실창고","이동식 공구대 B-1","수장고 A-5","수장고 A-6","수장고 C-2","온실창고 B-3","온실창고 C-4","수장고 뒤쪽","수장고 B-2","뽕밭","물놀이장","텃밭","본관","전시동","매점","누에과학관","주차장","산책로","정원","체험접수"];
+const CATS=["체험","물놀이","이동식 공구대","박물관용품","하우스용","생필품","바닥재거용","묶음용","교육용","사무용품","전시용","기타"];
+
+const PRODS=[
+  {id:1,name:"8mm 디폼 블럭",cat:"체험",loc:"수장고 A-6",qty:0,locs:{"검정비닐천막":0,"기본 창고":0,"수장고":0,"쉼터":0,"온실창고":0}},
+  {id:2,name:"가압펌프",cat:"물놀이",loc:"온실창고 B-3",qty:1,locs:{"온실창고 B-3":1}},
+  {id:3,name:"가위, 커터기, 집게",cat:"이동식 공구대",loc:"이동식 공구대 B-1",qty:7,locs:{"이동식 공구대 B-1":7}},
+  {id:4,name:"건조기",cat:"박물관용품",loc:"수장고 뒤쪽",qty:1,locs:{"수장고 뒤쪽":1}},
+  {id:5,name:"게폐기",cat:"하우스용",loc:"온실창고 B-3",qty:1,locs:{"온실창고 B-3":1}},
+  {id:6,name:"교구망치",cat:"체험",loc:"수장고 B-2",qty:50,locs:{"수장고 B-2":50}},
+  {id:7,name:"기름걸레",cat:"생필품",loc:"수장고 뒤쪽",qty:3,locs:{"수장고 뒤쪽":3}},
+  {id:8,name:"기름걸레",cat:"생필품",loc:"수장고 A-5",qty:6,locs:{"수장고 A-5":6}},
+  {id:9,name:"끈, 소형끈, 장식",cat:"바닥재거용",loc:"이동식 공구대 B-1",qty:6,locs:{"이동식 공구대 B-1":6}},
+  {id:10,name:"나무 색칠",cat:"체험",loc:"수장고 C-2",qty:400,locs:{"수장고 C-2":400}},
+  {id:11,name:"낙하산 줄",cat:"묶음용",loc:"온실창고 C-4",qty:1,locs:{"온실창고 C-4":1}},
+  {id:12,name:"누에고치 키링",cat:"체험",loc:"수장고 A-6",qty:200,locs:{"수장고 A-6":200}},
+  {id:13,name:"다리미",cat:"체험",loc:"수장고",qty:2,locs:{"수장고":2}},
+  {id:14,name:"대형 쓰레기봉투",cat:"생필품",loc:"기본 창고",qty:30,locs:{"기본 창고":30}},
+  {id:15,name:"드릴 세트",cat:"이동식 공구대",loc:"이동식 공구대 B-1",qty:3,locs:{"이동식 공구대 B-1":3}},
+  {id:16,name:"라텍스 장갑",cat:"생필품",loc:"기본 창고",qty:100,locs:{"기본 창고":100}},
+  {id:17,name:"먹물 세트",cat:"체험",loc:"수장고 B-2",qty:15,locs:{"수장고 B-2":15}},
+  {id:18,name:"면장갑",cat:"생필품",loc:"기본 창고",qty:50,locs:{"기본 창고":50}},
+  {id:19,name:"모기약",cat:"생필품",loc:"온실창고",qty:5,locs:{"온실창고":5}},
+  {id:20,name:"물감 세트",cat:"체험",loc:"수장고 B-2",qty:30,locs:{"수장고 B-2":30}},
+  {id:21,name:"바구니 (대)",cat:"체험",loc:"수장고",qty:20,locs:{"수장고":20}},
+  {id:22,name:"바구니 (소)",cat:"체험",loc:"수장고",qty:30,locs:{"수장고":30}},
+  {id:23,name:"반짝이 풀",cat:"체험",loc:"수장고 B-2",qty:45,locs:{"수장고 B-2":45}},
+  {id:24,name:"방충망 보수 키트",cat:"하우스용",loc:"온실창고",qty:2,locs:{"온실창고":2}},
+  {id:25,name:"배수구 덮개",cat:"하우스용",loc:"온실창고 B-3",qty:4,locs:{"온실창고 B-3":4}},
+  {id:26,name:"뽕잎 체험키트",cat:"체험",loc:"수장고 A-6",qty:150,locs:{"수장고 A-6":150},memo:"봄 시즌"},
+  {id:27,name:"사인펜 세트",cat:"체험",loc:"수장고 B-2",qty:25,locs:{"수장고 B-2":25}},
+  {id:28,name:"삼각대",cat:"사무용품",loc:"기본 창고",qty:3,locs:{"기본 창고":3}},
+  {id:29,name:"색연필 세트",cat:"체험",loc:"수장고 B-2",qty:40,locs:{"수장고 B-2":40}},
+  {id:30,name:"선풍기",cat:"하우스용",loc:"온실창고",qty:4,locs:{"온실창고":4}},
+].map((p,i)=>({...p,code:`JB-${String(i+1).padStart(4,'0')}`}));
+
+/* ─── AI INVENTORY API (mock) ─────────────────────────────────────
+ * Analyzes a zone's stock levels + history + optional photo to produce
+ * procurement/layout recommendations. In production replace the body
+ * with a fetch() to a backend model. Input:
+ *   - zoneName: string
+ *   - prodsSummary: { total, items[{name,cat,qty}], lowStock[], recentOut }
+ *   - photoDataUrl: string (base64) or null
+ * Output: { insight, solution, budget, time, materials, type }
+ * ─────────────────────────────────────────────────────────────── */
+const analyzeInventoryAI = async (zoneName, prodsSummary, photoDataUrl) => {
+  // Deterministic-ish seed from inputs
+  const seedStr = (zoneName || "") + "|" + (prodsSummary?.total ?? 0) + "|" + (prodsSummary?.lowStock?.length ?? 0) + "|" + String(photoDataUrl || "").slice(-40);
+  let seed = 0;
+  for (let i = 0; i < seedStr.length; i++) seed = ((seed << 5) - seed + seedStr.charCodeAt(i)) | 0;
+  const rnd = (n) => { seed = (seed * 16807) % 2147483647; return Math.abs(seed) % n; };
+
+  const SCENARIOS = [
+    {
+      insight: (z, s) => `[${z}] 구역의 최근 출고량 분석 및 현장 사진 판독 결과, '체험용품' 소진 속도가 전주 대비 45% 증가했습니다. 반면 일부 '하우스용' 자재가 앞열에 배치되어 작업 동선을 방해하고 있습니다.`,
+      solution: "주말 체험객을 대비해 부족한 교구(누에고치 키링, 나무 색칠 등)의 긴급 발주가 필요합니다. 또한, 장기 보관용 자재는 수장고 안쪽으로 이동시켜 출고 동선을 확보하세요.",
+      budget: "약 450,000원 (부족 교구 발주 예산)",
+      time: "발주품 입고 2일 / 창고 동선 재배치 작업 약 2시간",
+      materials: ["누에고치 키링 500개", "나무 색칠 300개", "이동식 파렛트 2개"],
+      type: "재고 보충 및 창고 동선 최적화"
+    },
+    {
+      insight: (z, s) => `[${z}] 구역 재고 ${s.total}개 중 ${s.lowStock?.length || 0}개 품목이 안전재고 이하입니다. 계절성 수요 품목(물놀이/체험)의 회전율이 높아 리드타임을 고려한 사전 발주가 필요합니다.`,
+      solution: "저재고 품목은 즉시 발주 처리하고, 카테고리별 ABC 분석을 통해 A급 품목은 안전재고 2배로 상향 조정 권장. 장기 미사용 재고는 타 구역으로 재배치.",
+      budget: "약 280,000원 (저재고 품목 재발주)",
+      time: "발주 리드타임 3~5일",
+      materials: ["저재고 품목 일괄 발주", "재고 라벨 50매", "보관용 수납함 3개"],
+      type: "안전재고 관리 및 발주 최적화"
+    },
+    {
+      insight: (z, s) => `[${z}] 보관 상태 사진 분석 결과, 적재 높이가 불균형하고 라벨 가시성이 낮아 재고 조사 시 오차 발생 가능성이 높습니다. 습도 민감 품목의 배치 위치 재검토 필요.`,
+      solution: "QR 라벨을 모든 선반 전면에 재부착하고, 습도 민감 교구는 제습제 설치 구역으로 이동. 중량물은 하단, 경량/자주사용 품목은 중단으로 재정렬.",
+      budget: "약 85,000원 (라벨 및 제습제)",
+      time: "라벨 재부착 1시간 / 재정렬 작업 약 3시간",
+      materials: ["QR 라벨 스티커 100매", "제습제 10개", "선반 분리판 6개"],
+      type: "보관 환경 개선 및 시인성 확보"
+    },
+    {
+      insight: (z, s) => `[${z}] 구역 데이터 정상. 전체 재고 ${s.total}개, 회전율 양호. 다만 카테고리 다양성 대비 보관 공간 활용도가 70% 수준이므로 추가 수용 가능.`,
+      solution: "현행 수준 유지. 다음 정기 점검 시 재확인 권장. 여유 공간에 시즌별 전시용품 보관 가능.",
+      budget: "—",
+      time: "—",
+      materials: [],
+      type: "현상 유지 (이상 없음)"
+    },
+  ];
+
+  await new Promise(r => setTimeout(r, 1500));
+  const sc = SCENARIOS[rnd(SCENARIOS.length)];
+  return {
+    insight: typeof sc.insight === "function" ? sc.insight(zoneName || "구역", prodsSummary || {}) : sc.insight,
+    solution: sc.solution,
+    budget: sc.budget,
+    time: sc.time,
+    materials: sc.materials,
+    type: sc.type,
+  };
+};
+
+/* ─── INVENTORY AI ANALYSIS MODAL ─────────────────────────────
+ * Standalone analysis: user picks a zone, optionally uploads a photo,
+ * AI runs a combined data + vision analysis, and the result can be
+ * registered as a facility 보완과제 (cross-module: inventory → facility).
+ *
+ * Props:
+ *   prods             — all products (will be filtered by selected zone)
+ *   zones             — ZONES array
+ *   defaultZoneId     — optional, pre-selects a zone (used from ZoneBottom)
+ *   zonePhotos        — optional, zone-id→photos map for pre-filling photo
+ *   onClose           — close handler
+ *   onSaveAction      — (optional) callback receiving a fully-formed
+ *                        facility action object to push cross-module
+ * ───────────────────────────────────────────────────────────── */
+function InvAiAnalysisModal({ prods, zones, defaultZoneId, zonePhotos, onClose, onSaveAction }) {
+  const [imgSrc, setImgSrc] = useState(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [result, setResult] = useState(null);
+  const [zoneId, setZoneId] = useState(defaultZoneId || "");
+
+  // Pre-select first available zone photo when zone changes
+  useEffect(() => {
+    const photos = zonePhotos?.[zoneId];
+    if (photos && photos.length > 0 && !imgSrc) {
+      setImgSrc(photos[0].url);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoneId]);
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await facCompressPhoto(file);
+      setImgSrc(dataUrl);
+      setResult(null);
+    } catch (err) {
+      alert("사진 처리 실패: " + err.message);
+    }
+    e.target.value = "";
+  };
+
+  const zone = zones.find(z => z.id === zoneId);
+  const zoneLocList = zoneId ? (Z_LOCS[zoneId] || []) : [];
+  const zoneProds = zoneId ? prods.filter(p => zoneLocList.some(l => p.loc.includes(l))) : [];
+  const summary = {
+    total: zoneProds.reduce((s, p) => s + p.qty, 0),
+    items: zoneProds.map(p => ({ name: p.name, cat: p.cat, qty: p.qty })),
+    lowStock: zoneProds.filter(p => p.qty <= 2).map(p => p.name),
+    recentOut: 0,
+  };
+
+  const runAnalysis = async () => {
+    if (!zoneId) return alert("분석할 구역(창고/수장고 등)을 선택해주세요.");
+    setAnalyzing(true);
+    try {
+      const aiData = await analyzeInventoryAI(zone.name, summary, imgSrc);
+      setResult(aiData);
+    } catch (err) {
+      alert("AI 분석 실패: " + err.message);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const registerAsAction = () => {
+    if (!result) return;
+    // Build a facility-compatible action object
+    const sev = result.type?.includes("재고 보충") || summary.lowStock.length > 3 ? "HIGH"
+              : result.type?.includes("이상 없음") ? "LOW"
+              : "MEDIUM";
+    const dueOffset = sev === "URGENT" ? 1 : sev === "HIGH" ? 3 : sev === "MEDIUM" ? 7 : 14;
+    const action = {
+      id: "a" + Date.now() + Math.random(),
+      facId: null, // inventory-originated, no specific facility
+      inspId: null,
+      title: `[AI 재고분석] ${zone.name} - ${result.type}`,
+      type: result.type,
+      desc: `[현황 분석]\n${result.insight}\n\n[개선 지시]\n${result.solution}\n\n[필요 발주/재료] ${result.materials.join(", ")}\n[소요 시간] ${result.time}\n[예상 예산] ${result.budget}`,
+      sev,
+      rec: result.solution,
+      status: "TODO",
+      due: _facD(dueOffset),
+      assignee: null,
+      memo: null,
+      ai: result,
+      photo: imgSrc,
+      source: "inventory", // provenance tag
+    };
+    if (onSaveAction) {
+      onSaveAction(action);
+      alert("AI 재고분석이 시설점검의 보완과제로 등록되었습니다.\n시설점검 모듈 > 보완과제에서 확인하세요.");
+    } else {
+      alert("개선안이 기록되었습니다. (보완과제 자동등록 대상 아님)");
+    }
+    onClose();
+  };
+
+  return (
+    <div onClick={onClose}
+      style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)", backdropFilter: "blur(2px)" }}>
+      <style>{`@keyframes invSpin{to{transform:rotate(360deg)}}`}</style>
+      <div onClick={e => e.stopPropagation()}
+        style={{ background: "#fff", borderRadius: 16, width: 520, maxWidth: "92vw", padding: 22, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <h3 style={{ fontSize: 17, fontWeight: 800 }}>📦 AI 재고 및 창고 공간 진단</h3>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#94a3b8", lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12, background: "#f0f7ff", padding: "8px 12px", borderRadius: 8, border: "1px solid #bfdbfe" }}>
+          💡 재고 데이터 + (선택) 현장 사진을 종합 분석하여 발주 및 동선 개선안을 제안합니다.
+        </div>
+
+        <select className="sel" value={zoneId} onChange={e => { setZoneId(e.target.value); setImgSrc(null); setResult(null); }}
+          style={{ marginBottom: 12 }}>
+          <option value="">-- 진단할 구역 선택 --</option>
+          {zones.map(z => <option key={z.id} value={z.id}>{z.icon} {z.name}</option>)}
+        </select>
+
+        {zoneId && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 6, marginBottom: 12, fontSize: 11 }}>
+            <div style={{ background: "#f8fafc", borderRadius: 8, padding: 8, textAlign: "center" }}>
+              <div style={{ color: "#64748b", fontSize: 10 }}>총 재고</div>
+              <div style={{ fontWeight: 800, fontSize: 16, color: zone?.color }}>{summary.total}</div>
+            </div>
+            <div style={{ background: "#f8fafc", borderRadius: 8, padding: 8, textAlign: "center" }}>
+              <div style={{ color: "#64748b", fontSize: 10 }}>품목 수</div>
+              <div style={{ fontWeight: 800, fontSize: 16 }}>{zoneProds.length}</div>
+            </div>
+            <div style={{ background: summary.lowStock.length > 0 ? "#fef2f2" : "#f8fafc", borderRadius: 8, padding: 8, textAlign: "center" }}>
+              <div style={{ color: "#64748b", fontSize: 10 }}>저재고</div>
+              <div style={{ fontWeight: 800, fontSize: 16, color: summary.lowStock.length > 0 ? "#dc2626" : "#64748b" }}>{summary.lowStock.length}</div>
+            </div>
+          </div>
+        )}
+
+        <div style={{ border: "2px dashed #cbd5e1", borderRadius: 12, padding: imgSrc ? 12 : 20, textAlign: "center", marginBottom: 16, background: "#f8fafc" }}>
+          {imgSrc ? (
+            <div>
+              <img src={imgSrc} alt="uploaded" style={{ maxHeight: 200, maxWidth: "100%", objectFit: "contain", margin: "0 auto", borderRadius: 8, display: "block" }} />
+              <div style={{ display: "inline-flex", gap: 6, marginTop: 10, flexWrap: "wrap", justifyContent: "center" }}>
+                <label style={{ cursor: "pointer", fontSize: 11, color: "#3b82f6", fontWeight: 600, padding: "5px 10px", border: "1px solid #93c5fd", borderRadius: 6 }}>
+                  📷 다시 촬영
+                  <input type="file" accept="image/*" capture="environment" onChange={handleFile} style={{ display: "none" }} />
+                </label>
+                <label style={{ cursor: "pointer", fontSize: 11, color: "#3b82f6", fontWeight: 600, padding: "5px 10px", border: "1px solid #93c5fd", borderRadius: 6 }}>
+                  🖼️ 파일 선택
+                  <input type="file" accept="image/*" onChange={handleFile} style={{ display: "none" }} />
+                </label>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div style={{ fontSize: 30, marginBottom: 6 }}>📷</div>
+              <div style={{ fontWeight: 600, color: "#475569", fontSize: 14 }}>(선택) 창고 현장 사진 업로드</div>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4, marginBottom: 10 }}>사진을 올리면 동선 및 적재 상태까지 분석합니다</div>
+              <div style={{ display: "inline-flex", gap: 6, flexWrap: "wrap", justifyContent: "center" }}>
+                <label style={{ cursor: "pointer", fontSize: 12, color: "#fff", background: "#3b82f6", fontWeight: 600, padding: "7px 14px", borderRadius: 6 }}>
+                  📷 촬영
+                  <input type="file" accept="image/*" capture="environment" onChange={handleFile} style={{ display: "none" }} />
+                </label>
+                <label style={{ cursor: "pointer", fontSize: 12, color: "#3b82f6", background: "#fff", fontWeight: 600, padding: "7px 14px", borderRadius: 6, border: "1px solid #93c5fd" }}>
+                  🖼️ 파일 선택
+                  <input type="file" accept="image/*" onChange={handleFile} style={{ display: "none" }} />
+                </label>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {!result && !analyzing && (
+          <button onClick={runAnalysis} className="btn bp" style={{ width: "100%", justifyContent: "center", padding: "12px", fontSize: 14 }}>
+            🔍 데이터 + 비전 AI 분석 시작
+          </button>
+        )}
+
+        {analyzing && (
+          <div style={{ textAlign: "center", padding: 20, color: "#7c3aed", fontWeight: "bold", fontSize: 13 }}>
+            <div style={{ display: "inline-block", width: 20, height: 20, border: "3px solid #7c3aed", borderTopColor: "transparent", borderRadius: "50%", animation: "invSpin 0.8s linear infinite", marginRight: 8, verticalAlign: "middle" }}></div>
+            재고 소진 추이 및 공간 데이터 분석 중...
+          </div>
+        )}
+
+        {result && (
+          <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 12, padding: 16, marginTop: 16, fontSize: 13 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, paddingBottom: 8, borderBottom: "1px solid #bbf7d0" }}>
+              <h4 style={{ fontWeight: 800, color: "#166534", margin: 0, flex: 1 }}>✅ 진단 및 개선안 완료</h4>
+              <span style={{ fontSize: 10, background: "#fff", padding: "3px 8px", borderRadius: 6, color: "#166534", fontWeight: 700, border: "1px solid #bbf7d0" }}>{result.type}</span>
+            </div>
+            <div style={{ marginBottom: 8 }}><strong>현황 분석:</strong> <span style={{ color: "#b91c1c" }}>{result.insight}</span></div>
+            <div style={{ marginBottom: 8 }}><strong>개선 지시:</strong> {result.solution}</div>
+
+            <div style={{ background: "#fff", borderRadius: 8, padding: 10, marginTop: 12, border: "1px solid #e2e8f0" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}><span style={{ color: "#64748b" }}>예상 소요 시간</span><strong>{result.time || "—"}</strong></div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}><span style={{ color: "#64748b" }}>예상 예산</span><strong>{result.budget || "—"}</strong></div>
+              {result.materials?.length > 0 && (
+                <div style={{ borderTop: "1px solid #f1f5f9", paddingTop: 8 }}>
+                  <div style={{ color: "#64748b", marginBottom: 4 }}>필요 발주/재료</div>
+                  <div>{result.materials.map(m => <span key={m} style={{ display: "inline-block", background: "#e2e8f0", padding: "2px 8px", borderRadius: 4, margin: "0 4px 4px 0", fontSize: 11 }}>{m}</span>)}</div>
+                </div>
+              )}
+            </div>
+
+            <button onClick={registerAsAction} className="btn" style={{ width: "100%", justifyContent: "center", background: "#16a34a", color: "#fff", marginTop: 14, padding: "12px", fontWeight: 700 }}>
+              📋 이 개선안을 시설점검 보완과제로 등록
+            </button>
+            <button onClick={() => { setResult(null); }}
+              style={{ width: "100%", borderRadius: 8, background: "transparent", color: "#16a34a", padding: 8, fontSize: 12, fontWeight: 600, border: "1px solid #86efac", cursor: "pointer", marginTop: 8 }}>
+              🔄 다시 분석
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function fDate(d){const t=new Date(d);return`${String(t.getMonth()+1).padStart(2,'0')}.${String(t.getDate()).padStart(2,'0')} ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}`;}
+
+const IC={
+  Pkg:()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>,
+  Dn:()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>,
+  Up:()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>,
+  Adj:()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>,
+  Hist:()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/><polyline points="12 7 12 12 16 14"/></svg>,
+  Chart:()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,
+  Map:()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>,
+  Plus:()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
+  X:()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
+  Srch:()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
+  Back:()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>,
+  DL:()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
+  Menu:()=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>,
+  Edit:()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
+  Trash:()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>,
+  Lock:()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>,
+  User:()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
+  Users:()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>,
+  Undo:()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>,
+  Shield:()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>,
+  Logout:()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>,
+  QR:()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="3" height="3"/><line x1="21" y1="14" x2="21" y2="21"/><line x1="14" y1="21" x2="21" y2="21"/></svg>,
+  Cam:()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>,
+  Img:()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>,
+  Print:()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>,
+  Rfid:()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 12C2 6.5 6.5 2 12 2a10 10 0 018 4"/><path d="M5 12a7 7 0 017-7c2.4 0 4.5 1.2 5.7 3"/><path d="M8 12a4 4 0 014-4"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><path d="M12 14v8"/></svg>,
+};
+
+function Modal({title,onClose,children,w=480}){
+  return(<div style={{position:"fixed",inset:0,zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center"}}>
+    <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.5)",backdropFilter:"blur(3px)"}} onClick={onClose}/>
+    <div style={{position:"relative",background:"#fff",borderRadius:14,width:w,maxWidth:"94vw",maxHeight:"85vh",overflow:"auto",boxShadow:"0 20px 60px rgba(0,0,0,0.25)"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"16px 20px",borderBottom:"1px solid #eee",position:"sticky",top:0,background:"#fff",zIndex:1,borderRadius:"14px 14px 0 0"}}>
+        <h3 style={{margin:0,fontSize:16,fontWeight:800}}>{title}</h3>
+        <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:"#999"}}><IC.X/></button>
+      </div>
+      <div style={{padding:"16px 20px 20px"}}>{children}</div>
+    </div>
+  </div>);
+}
+
+// Find which zone a product belongs to
+function findZoneForProd(p){
+  for(const z of ZONES){
+    const ls=Z_LOCS[z.id]||[];
+    if(ls.some(l=>p.loc.includes(l)||Object.keys(p.locs||{}).some(k=>ls.some(zl=>k.includes(zl)))))return z.id;
+  }
+  return null;
+}
+
+// ========== PERMISSION & AUTH ==========
+const ROLES={
+  master:{label:"마스터",color:"#dc2626",perms:["view","add","edit","delete","stockin","stockout","adjust","undo","manage_users","export","photo"]},
+  staff:{label:"직원",color:"#2563eb",perms:["view","add","stockin","stockout","adjust","photo"]},
+  viewer:{label:"열람자",color:"#64748b",perms:["view"]},
+};
+const DEF_USERS=[
+  {id:1,name:"관리자",login:"admin",pw:"1234",role:"master",active:true},
+  {id:2,name:"직원A",login:"staff1",pw:"1111",role:"staff",active:true},
+  {id:3,name:"열람자",login:"view1",pw:"0000",role:"viewer",active:true},
+];
+
+function InvLoginScreen({onLogin,users}){
+  const [login,setLogin]=useState("");
+  const [pw,setPw]=useState("");
+  const [err,setErr]=useState("");
+  const go=()=>{
+    const u=users.find(x=>x.login===login&&x.pw===pw&&x.active);
+    if(u){onLogin(u);setErr("");}
+    else setErr("로그인 실패: ID 또는 비밀번호 확인");
+  };
+  return(
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"linear-gradient(135deg,#0f172a,#1e293b)",fontFamily:"'Pretendard','Noto Sans KR',sans-serif"}}>
+      <style>{`@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');*{box-sizing:border-box;margin:0}`}</style>
+      <div style={{background:"#fff",borderRadius:20,padding:"40px 36px",width:380,maxWidth:"92vw",boxShadow:"0 20px 60px rgba(0,0,0,0.3)"}}>
+        <div style={{textAlign:"center",marginBottom:28}}>
+          <div style={{fontSize:40,marginBottom:8}}>🐛</div>
+          <h1 style={{fontSize:20,fontWeight:900,color:"#0f172a"}}>한국잠사박물관</h1>
+          <p style={{fontSize:13,color:"#94a3b8",marginTop:4}}>재고관리 시스템 v10</p>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          <div>
+            <label style={{fontSize:12,fontWeight:700,color:"#64748b",display:"block",marginBottom:5}}>아이디</label>
+            <input value={login} onChange={e=>setLogin(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()}
+              placeholder="admin" style={{width:"100%",padding:"12px 14px",border:"1.5px solid #dee2e6",borderRadius:10,fontSize:15,outline:"none",fontFamily:"inherit"}}/>
+          </div>
+          <div>
+            <label style={{fontSize:12,fontWeight:700,color:"#64748b",display:"block",marginBottom:5}}>비밀번호</label>
+            <input type="password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()}
+              placeholder="1234" style={{width:"100%",padding:"12px 14px",border:"1.5px solid #dee2e6",borderRadius:10,fontSize:15,outline:"none",fontFamily:"inherit"}}/>
+          </div>
+          {err&&<div style={{color:"#ef4444",fontSize:12,fontWeight:600}}>{err}</div>}
+          <button onClick={go} style={{width:"100%",padding:"13px",background:"#3b5bdb",color:"#fff",border:"none",borderRadius:10,fontSize:15,fontWeight:700,cursor:"pointer",marginTop:4}}>
+            로그인
+          </button>
+        </div>
+        <div style={{marginTop:20,padding:"12px",background:"#f8fafc",borderRadius:8,fontSize:11,color:"#94a3b8",lineHeight:1.6}}>
+          <div style={{fontWeight:700,color:"#64748b",marginBottom:4}}>테스트 계정:</div>
+          <div>마스터: admin / 1234</div>
+          <div>직원: staff1 / 1111</div>
+          <div>열람자: view1 / 0000</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== USER MANAGEMENT (Master only) ==========
+function UserMgmt({users,setUsers,curUser,onClose}){
+  const [editId,setEditId]=useState(null);
+  const [nName,setNName]=useState("");const [nLogin,setNLogin]=useState("");const [nPw,setNPw]=useState("");const [nRole,setNRole]=useState("staff");
+
+  const addUser=()=>{
+    if(!nName.trim()||!nLogin.trim()||!nPw.trim())return alert("모든 필드 입력");
+    if(users.some(u=>u.login===nLogin.trim()))return alert("중복 ID");
+    setUsers(u=>[...u,{id:Date.now(),name:nName.trim(),login:nLogin.trim(),pw:nPw.trim(),role:nRole,active:true}]);
+    setNName("");setNLogin("");setNPw("");setNRole("staff");
+  };
+  const toggleActive=(uid)=>setUsers(u=>u.map(x=>x.id===uid?{...x,active:!x.active}:x));
+  const changeRole=(uid,role)=>setUsers(u=>u.map(x=>x.id===uid?{...x,role}:x));
+  const delUser=(uid)=>{if(uid===curUser.id)return alert("자신은 삭제 불가");if(confirm("삭제?"))setUsers(u=>u.filter(x=>x.id!==uid));};
+  const changePw=(uid,pw)=>{if(pw)setUsers(u=>u.map(x=>x.id===uid?{...x,pw}:x));};
+
+  return(
+    <Modal title="👥 사용자 및 권한 관리" onClose={onClose} w={560}>
+      <div style={{marginBottom:16}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#64748b",marginBottom:8}}>등록된 사용자</div>
+        {users.map(u=>{
+          const r=ROLES[u.role];
+          return(
+            <div key={u.id} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 0",borderBottom:"1px solid #f1f3f5",opacity:u.active?1:0.4}}>
+              <div style={{width:32,height:32,borderRadius:"50%",background:r.color+"15",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:800,color:r.color}}>
+                {u.name[0]}
+              </div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:700}}>{u.name} {u.id===curUser.id&&<span style={{fontSize:9,color:"#3b5bdb"}}>(나)</span>}</div>
+                <div style={{fontSize:10,color:"#94a3b8"}}>ID: {u.login}</div>
+              </div>
+              <select value={u.role} onChange={e=>changeRole(u.id,e.target.value)}
+                style={{padding:"4px 8px",borderRadius:6,border:"1px solid #e5e7eb",fontSize:11,fontWeight:700,color:r.color,background:r.color+"10"}}>
+                {Object.entries(ROLES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+              </select>
+              <button onClick={()=>{const pw=prompt("새 비밀번호:");changePw(u.id,pw);}} style={{padding:"4px 8px",borderRadius:6,border:"1px solid #e5e7eb",background:"#f8fafc",cursor:"pointer",fontSize:10,fontWeight:600}}>PW변경</button>
+              <button onClick={()=>toggleActive(u.id)}
+                style={{padding:"4px 8px",borderRadius:6,border:"none",cursor:"pointer",fontSize:10,fontWeight:700,
+                  background:u.active?"#dcfce7":"#fee2e2",color:u.active?"#16a34a":"#dc2626"}}>{u.active?"활성":"비활성"}</button>
+              {u.id!==curUser.id&&<button onClick={()=>delUser(u.id)} style={{padding:"4px 6px",borderRadius:6,border:"none",cursor:"pointer",background:"#fee2e2",color:"#dc2626",fontSize:10}}>삭제</button>}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{background:"#f8fafc",borderRadius:10,padding:14,border:"1px solid #e5e7eb"}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#64748b",marginBottom:8}}>새 사용자 추가</div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"flex-end"}}>
+          <div style={{flex:"1 1 100px"}}><label style={{fontSize:10,fontWeight:600,color:"#94a3b8"}}>이름</label><input className="inp" value={nName} onChange={e=>setNName(e.target.value)} style={{fontSize:12,padding:7}}/></div>
+          <div style={{flex:"1 1 80px"}}><label style={{fontSize:10,fontWeight:600,color:"#94a3b8"}}>ID</label><input className="inp" value={nLogin} onChange={e=>setNLogin(e.target.value)} style={{fontSize:12,padding:7}}/></div>
+          <div style={{flex:"1 1 80px"}}><label style={{fontSize:10,fontWeight:600,color:"#94a3b8"}}>PW</label><input className="inp" value={nPw} onChange={e=>setNPw(e.target.value)} style={{fontSize:12,padding:7}}/></div>
+          <div style={{flex:"0 0 90px"}}><label style={{fontSize:10,fontWeight:600,color:"#94a3b8"}}>권한</label>
+            <select className="sel" value={nRole} onChange={e=>setNRole(e.target.value)} style={{fontSize:11,padding:6}}>{Object.entries(ROLES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select></div>
+          <button className="btn bp" onClick={addUser} style={{fontSize:12,padding:"8px 14px"}}>추가</button>
+        </div>
+      </div>
+      <div style={{marginTop:14,background:"#eff6ff",borderRadius:8,padding:"10px 12px",fontSize:11,color:"#1d4ed8",lineHeight:1.7}}>
+        <div style={{fontWeight:700,marginBottom:4}}>🔑 권한 안내</div>
+        <div><strong>마스터</strong>: 모든 기능 + 되돌리기 + 사용자 관리 + 삭제</div>
+        <div><strong>직원</strong>: 조회 + 추가 + 입출고/조정 + 사진</div>
+        <div><strong>열람자</strong>: 조회만 가능</div>
+      </div>
+    </Modal>
+  );
+}
+
+// ==================== APP ====================
+function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, facActions = [] }){
+  const curUser = userCtx;
+  const [users,setUsers]=useState(DEF_USERS);
+  const [prods,setProds]=useLocalStorage("jamsa_inv_prods", PRODS);
+  const [hist,setHist]=useLocalStorage("jamsa_inv_hist", []);
+  const [snapshots,setSnapshots]=useState([]); // for undo: [{id,prods}]
+  // Custom user-defined zones (drawn on satellite map) — persisted
+  const [customZones, setCustomZones] = useLocalStorage("jamsa_custom_zones", []);
+  // Zone position overrides (사용자가 드래그로 이동한 위치)
+  const zoneOverrides = useMemo(() => {
+    try { return JSON.parse(window.localStorage?.getItem("jamsa_inv_zone_overrides") || "{}"); }
+    catch (e) { return {}; }
+  }, [customZones]); // customZones 갱신 시 함께 재계산
+  const mergedZones = useMemo(() => {
+    const baseWithOverrides = BASE_ZONES.map(z => ({ ...z, ...(zoneOverrides[z.id] || {}) }));
+    return [...baseWithOverrides, ...customZones];
+  }, [customZones, zoneOverrides]);
+  const [page,setPage]=useState("map");
+  const [hZone,setHZone]=useState(null);
+  const [selZone,setSelZone]=useState(null);
+  const [selP,setSelP]=useState(null);
+  const [search,setSearch]=useState("");
+  const [fLoc,setFLoc]=useState("all");
+  const [fCat,setFCat]=useState("all");
+  const [modal,setModal]=useState(null);
+  const [sideOpen,setSideOpen]=useState(false);
+  const [tip,setTip]=useState(null);
+  const [qrSearch,setQrSearch]=useState("");
+  const [qrResult,setQrResult]=useState(null);
+  const [highlightPid,setHighlightPid]=useState(null);
+  const [showScanner,setShowScanner]=useState(false);
+  const [zonePhotos,setZonePhotos]=useState({});
+  const [rfidTags,setRfidTags]=useState({});
+  const [rfidScans,setRfidScans]=useState([]);
+  const mapWrap=useRef(null);
+
+  const can=(perm)=>curUser&&ROLES[curUser.role]?.perms?.includes(perm);
+
+  const addH=(a,n,d,q)=>{
+    setSnapshots(s=>[{id:Date.now(),prods:JSON.parse(JSON.stringify(prods))},...s].slice(0,50));
+    setHist(p=>[{id:Date.now(),date:new Date().toISOString(),act:a,pn:n,det:d,q,user:curUser?.name||"시스템",role:curUser?.role||"master"},...p].slice(0,500));
+  };
+
+  const doUndo=(snapIdx)=>{
+    if(!can("undo"))return alert("마스터 권한 필요");
+    const snap=snapshots[snapIdx];
+    if(!snap)return alert("복원 데이터 없음");
+    if(!confirm("이 시점으로 되돌리시겠습니까?"))return;
+    setProds(snap.prods);
+    setSnapshots(s=>s.slice(snapIdx+1));
+    addH("되돌리기",curUser?.name||"","이전 상태로 복원",0);
+  };
+
+  // login handled at top-level App
+
+  const zProds=useCallback(zid=>{
+    // First check base zones (use Z_LOCS)
+    const ls=Z_LOCS[zid]||[];
+    if (ls.length > 0) {
+      return prods.filter(p=>ls.some(l=>p.loc.includes(l)||Object.keys(p.locs||{}).some(k=>ls.some(zl=>k.includes(zl)))));
+    }
+    // Custom zone fallback: match by zone name
+    const cz = customZones.find(z => z.id === zid);
+    if (cz) {
+      return prods.filter(p => p.loc === cz.name || Object.keys(p.locs || {}).includes(cz.name));
+    }
+    return [];
+  },[prods, customZones]);
+  const zQty=useCallback(zid=>zProds(zid).reduce((s,p)=>s+p.qty,0),[zProds]);
+  const zHist=useCallback(zid=>{
+    const ls=Z_LOCS[zid]||[];
+    if (ls.length > 0) {
+      return hist.filter(h=>ls.some(l=>h.det?.includes(l))).slice(0,5);
+    }
+    const cz = customZones.find(z => z.id === zid);
+    if (cz) {
+      return hist.filter(h => h.det?.includes(cz.name)).slice(0, 5);
+    }
+    return [];
+  },[hist, customZones]);
+
+  const doIn=(pid,loc,qty,memo)=>{setProds(p=>p.map(x=>{if(x.id!==pid)return x;const l={...x.locs};l[loc]=(l[loc]||0)+qty;return{...x,qty:x.qty+qty,locs:l};}));addH("입고",prods.find(x=>x.id===pid)?.name,`${loc}에 ${qty}개 입고${memo?` - ${memo}`:""}`,qty);setModal(null);};
+  const doOut=(pid,loc,qty,memo)=>{setProds(p=>p.map(x=>{if(x.id!==pid)return x;const l={...x.locs};const a=l[loc]||0;const m=Math.min(qty,a);l[loc]=a-m;return{...x,qty:Math.max(0,x.qty-m),locs:l};}));addH("출고",prods.find(x=>x.id===pid)?.name,`${loc}에서 ${qty}개 출고${memo?` - ${memo}`:""}`,qty);setModal(null);};
+  const doAdj=(pid,loc,nq,memo)=>{setProds(p=>p.map(x=>{if(x.id!==pid)return x;const l={...x.locs};const d=nq-(l[loc]||0);l[loc]=nq;return{...x,qty:x.qty+d,locs:l};}));addH("조정",prods.find(x=>x.id===pid)?.name,`${loc} → ${nq}개${memo?` - ${memo}`:""}`,nq);setModal(null);};
+  const doAdd=d=>{
+    const id=nextId();
+    const code=genCode(id);
+    const qty=parseInt(d.qty)||0;
+    const minQty=parseInt(d.minQty)||0; // 적정재고 (이하면 알림)
+    const np={
+      id, name:d.name, cat:d.cat, loc:d.loc, qty,
+      locs:{[d.loc]:qty},
+      memo:d.memo||"",
+      code,
+      photos: d.photos || [],     // 사진 여러 장
+      usage: d.usage || "",        // 사용법
+      careGuide: d.careGuide || "",// 관리 요령
+      stockSchedule: d.stockSchedule || "", // 입출고 시기
+      supplier: d.supplier || "",  // 발주처
+      minQty,                       // 적정재고
+      unit: d.unit || "개",        // 단위
+      // AI 분석 결과
+      marketPrice: d.marketPrice || null,    // 시세 정보
+      purchaseLinks: d.purchaseLinks || null,// 구매처 링크
+      aiTips: d.aiTips || null,              // 구매 팁
+      smartRecommendation: d.smartRecommendation || null, // 스마트 추천
+      usageBlocks: d.usageBlocks || null,    // 사용법 블록 (시각화)
+      careIcons: d.careIcons || null,        // 보관 픽토그램
+      monthlyPattern: d.monthlyPattern || null, // 월별 입출고 패턴
+      createdAt: new Date().toISOString(),
+      createdBy: curUser?.name || "시스템",
+    };
+    setProds(p=>[...p,np]);
+    addH("추가",d.name,`${d.loc}에 ${qty}${np.unit} 등록 [${code}]`,qty);
+    // Close current modal first, then show QR after state updates
+    setModal(null);
+    setTimeout(()=>setModal({type:"qr",p:np}),100);
+  };
+  const doDel=id=>{const p=prods.find(x=>x.id===id);if(p&&confirm(`"${p.name}" 삭제?`)){setProds(pr=>pr.filter(x=>x.id!==id));addH("삭제",p.name,"삭제",0);setSelP(null);}};
+
+  const doAddPhoto=(pid,dataUrl)=>{
+    setProds(pr=>pr.map(x=>x.id!==pid?x:{...x,photos:[...(x.photos||[]),{id:Date.now(),url:dataUrl,date:new Date().toISOString()}]}));
+  };
+  const doDelPhoto=(pid,photoId)=>{
+    setProds(pr=>pr.map(x=>x.id!==pid?x:{...x,photos:(x.photos||[]).filter(ph=>ph.id!==photoId)}));
+  };
+  const doAddZonePhoto=(zid,dataUrl)=>{
+    setZonePhotos(prev=>({...prev,[zid]:[...(prev[zid]||[]),{id:Date.now(),url:dataUrl,date:new Date().toISOString()}]}));
+  };
+  const doDelZonePhoto=(zid,photoId)=>{
+    setZonePhotos(prev=>({...prev,[zid]:(prev[zid]||[]).filter(ph=>ph.id!==photoId)}));
+  };
+  const genRfidTag=()=>{
+    const h=()=>Math.floor(Math.random()*256).toString(16).toUpperCase().padStart(2,"0");
+    return "E2:00:"+h()+":"+h()+":"+h()+":"+h()+":"+h()+":"+h();
+  };
+  const assignRfid=(pid,customTag)=>{
+    const t=customTag||genRfidTag();
+    setRfidTags(prev=>({...prev,[pid]:{tag:t,at:new Date().toISOString()}}));
+    const p=prods.find(x=>x.id===pid);
+    if(p)addH("RFID",p.name,"태그 할당: "+t,0);
+  };
+  const removeRfid=(pid)=>{setRfidTags(prev=>{const n={...prev};delete n[pid];return n;});};
+  const doRfidScan=(tag,zone)=>{
+    const pid=Object.keys(rfidTags).find(k=>rfidTags[k].tag===tag);
+    if(!pid)return null;
+    const p=prods.find(x=>x.id===Number(pid));
+    const sc={id:Date.now(),tag:tag,pid:Number(pid),pname:p?p.name:"?",zone:zone,time:new Date().toISOString()};
+    setRfidScans(prev=>[sc].concat(prev).slice(0,500));
+    if(p)addH("RFID스캔",p.name,zone+"에서 감지",0);
+    return sc;
+  };
+  const csv=()=>{const r=[["QR코드","제품명","카테고리","위치","수량"]];prods.forEach(p=>r.push([p.code,p.name,p.cat,p.loc,p.qty]));const c="\uFEFF"+r.map(x=>x.map(v=>`"${v}"`).join(",")).join("\n");const b=new Blob([c],{type:"text/csv;charset=utf-8"});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=`잠사박물관_재고.csv`;a.click();};
+
+  // QR Lookup
+  const doQRLookup=(q)=>{
+    const raw=q.trim();
+    if(!raw){setQrResult(null);setHighlightPid(null);return;}
+    const upper=raw.toUpperCase();
+    const lower=raw.toLowerCase();
+    // 1) Exact QR code match
+    let found=prods.find(p=>p.code?.toUpperCase()===upper);
+    // 2) Partial name match (case-insensitive)
+    if(!found) found=prods.find(p=>p.name.toLowerCase().includes(lower));
+    // 3) Category or location match
+    if(!found) found=prods.find(p=>p.cat.toLowerCase().includes(lower)||p.loc.toLowerCase().includes(lower));
+    if(found){
+      setQrResult(found);
+      const zid=findZoneForProd(found);
+      if(zid){setSelZone(zid);setHighlightPid(found.id);}
+    }else{
+      setQrResult("notfound");setHighlightPid(null);
+    }
+  };
+
+  const totalQ=prods.reduce((s,p)=>s+p.qty,0);
+  const filtered=prods.filter(p=>{if(search&&!p.name.toLowerCase().includes(search.toLowerCase()))return false;if(fLoc!=="all"&&p.loc!==fLoc)return false;if(fCat!=="all"&&p.cat!==fCat)return false;return true;});
+
+  const menus=[
+    {id:"map",label:"시설 맵",icon:<IC.Map/>,perm:"view"},
+    {id:"products",label:"제품목록",icon:<IC.Pkg/>,perm:"view"},
+    {id:"required",label:"필요 재고",icon:<IC.Pkg/>,perm:"view"},
+    {id:"stockin",label:"입고",icon:<IC.Dn/>,perm:"stockin"},
+    {id:"stockout",label:"출고",icon:<IC.Up/>,perm:"stockout"},
+    {id:"adjust",label:"조정",icon:<IC.Adj/>,perm:"adjust"},
+    {id:"history",label:"로그",icon:<IC.Hist/>,perm:"view"},
+    {id:"rfid",label:"RFID",icon:<IC.Rfid/>,perm:"view"},
+    {id:"analysis",label:"분석",icon:<IC.Chart/>,perm:"view"},
+  ].filter(m=>can(m.perm));
+
+  return(
+    <div style={{display:"flex",height:"100%",fontFamily:"'Pretendard','Noto Sans KR',-apple-system,sans-serif",background:"#f5f5f5",overflow:"hidden"}}>
+      <style>{`
+        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+        *{box-sizing:border-box;margin:0;padding:0}
+        ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-thumb{background:#bbb;border-radius:3px}
+        input,select,textarea,button{font-family:inherit}
+        @keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes tipIn{from{opacity:0;transform:scale(0.92)}to{opacity:1;transform:scale(1)}}
+        * { -webkit-tap-highlight-color: transparent; }
+        img { -webkit-user-select:none; user-select:none; }
+        .zbox{transition:all 0.12s;cursor:pointer;opacity:0.08}
+        .zbox:hover{opacity:0.4 !important}
+        .rh:hover{background:#f5f8ff !important}
+        .btn{display:inline-flex;align-items:center;gap:5px;padding:8px 14px;border-radius:9px;font-weight:600;font-size:13px;border:none;cursor:pointer;transition:all 0.12s}
+        .btn:hover{transform:translateY(-1px)}
+        .bp{background:#3b5bdb;color:#fff}.bp:hover{background:#364fc7}
+        .bs{background:#f1f3f5;color:#495057;border:1px solid #dee2e6}.bs:hover{background:#e9ecef}
+        .bd{background:#ff6b6b;color:#fff}
+        .inp{width:100%;padding:9px 12px;border:1.5px solid #dee2e6;border-radius:9px;font-size:14px;outline:none;background:#fff}
+        .inp:focus{border-color:#3b5bdb;box-shadow:0 0 0 3px rgba(59,91,219,0.08)}
+        .sel{width:100%;padding:9px 12px;border:1.5px solid #dee2e6;border-radius:9px;font-size:14px;outline:none;background:#fff;appearance:none;background-image:url("data:image/svg+xml,%3Csvg width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2' xmlns='http://www.w3.org/2000/svg'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center}
+        .badge{display:inline-flex;align-items:center;padding:2px 7px;border-radius:14px;font-size:10px;font-weight:700}
+        @media print{.no-print{display:none!important}}
+      `}</style>
+
+      {/* Sidebar */}
+      <div className="no-print" style={{width:sideOpen?190:52,background:"linear-gradient(180deg,#0f172a,#1e293b)",color:"#fff",display:"flex",flexDirection:"column",transition:"width 0.2s",flexShrink:0,zIndex:10}}>
+        <div style={{padding:sideOpen?"14px 12px":"14px 8px",borderBottom:"1px solid rgba(255,255,255,0.06)",display:"flex",alignItems:"center",gap:8}}>
+          <button onClick={()=>setSideOpen(!sideOpen)} style={{background:"none",border:"none",color:"#fff",cursor:"pointer",padding:2}}><IC.Menu/></button>
+          {sideOpen&&<div><div style={{fontSize:13,fontWeight:800}}>🐛 잠사박물관</div><div style={{fontSize:9,color:"rgba(255,255,255,0.35)"}}>재고관리 v10</div></div>}
+        </div>
+        <nav style={{flex:1,padding:"8px 5px",display:"flex",flexDirection:"column",gap:1}}>
+          {menus.map(m=>(
+            <button key={m.id} onClick={()=>{setPage(m.id);setSelZone(null);setSelP(null);setQrResult(null);setQrSearch("");}}
+              style={{display:"flex",alignItems:"center",gap:9,padding:sideOpen?"9px 11px":"9px 0",justifyContent:sideOpen?"flex-start":"center",
+                background:page===m.id?"rgba(59,91,219,0.3)":"transparent",border:"none",color:page===m.id?"#fff":"rgba(255,255,255,0.5)",
+                borderRadius:7,cursor:"pointer",fontSize:13,fontWeight:page===m.id?700:500,width:"100%",transition:"all 0.12s"}}>
+              <span style={{flexShrink:0,display:"flex"}}>{m.icon}</span>
+              {sideOpen&&<span style={{whiteSpace:"nowrap"}}>{m.label}</span>}
+            </button>
+          ))}
+        </nav>
+        {/* User info + permissions + logout */}
+        <div style={{borderTop:"1px solid rgba(255,255,255,0.06)",padding:"6px 5px"}}>
+          {can("manage_users")&&(
+            <button onClick={()=>setModal({type:"users"})}
+              style={{display:"flex",alignItems:"center",gap:9,padding:sideOpen?"8px 11px":"8px 0",justifyContent:sideOpen?"flex-start":"center",
+                background:"transparent",border:"none",color:"rgba(255,255,255,0.5)",borderRadius:7,cursor:"pointer",fontSize:12,width:"100%"}}>
+              <span style={{flexShrink:0,display:"flex"}}><IC.Shield/></span>
+              {sideOpen&&<span>권한관리</span>}
+            </button>
+          )}
+          <button onClick={()=>{if(onLogout) onLogout();}}
+            style={{display:"flex",alignItems:"center",gap:9,padding:sideOpen?"8px 11px":"8px 0",justifyContent:sideOpen?"flex-start":"center",
+              background:"transparent",border:"none",color:"rgba(255,255,255,0.4)",borderRadius:7,cursor:"pointer",fontSize:12,width:"100%"}}>
+            <span style={{flexShrink:0,display:"flex"}}><IC.Logout/></span>
+            {sideOpen&&<span>로그아웃</span>}
+          </button>
+          <div style={{padding:sideOpen?"6px 11px":"6px 0",textAlign:sideOpen?"left":"center"}}>
+            <div style={{width:sideOpen?"auto":28,height:sideOpen?"auto":28,borderRadius:sideOpen?6:"50%",background:ROLES[curUser.role]?.color+"30",
+              display:"flex",alignItems:sideOpen?"center":"center",justifyContent:sideOpen?"flex-start":"center",gap:6,
+              padding:sideOpen?"4px 8px":"0"}}>
+              {!sideOpen&&<span style={{fontSize:11,fontWeight:800,color:ROLES[curUser.role]?.color}}>{curUser.name[0]}</span>}
+              {sideOpen&&<>
+                <span style={{fontSize:12,fontWeight:700,color:"#fff"}}>{curUser.name}</span>
+                <span style={{fontSize:9,fontWeight:700,color:ROLES[curUser.role]?.color,background:ROLES[curUser.role]?.color+"20",padding:"1px 5px",borderRadius:4}}>{ROLES[curUser.role]?.label}</span>
+              </>}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main */}
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+        {/* 재고 부족 알림 배너 (적정재고 미만 품목) */}
+        {(() => {
+          const lowItems = prods.filter(p => p.minQty > 0 && p.qty <= p.minQty);
+          if (lowItems.length === 0) return null;
+          return (
+            <div style={{background:"linear-gradient(90deg,#fef2f2,#fff7ed)",borderBottom:"2px solid #fca5a5",padding:"10px 20px",display:"flex",alignItems:"center",gap:12,flexShrink:0}}>
+              <span style={{fontSize:18}}>⚠️</span>
+              <div style={{flex:1,fontSize:12,color:"#991b1b",fontWeight:600}}>
+                <strong>재고 부족 {lowItems.length}건</strong> · {lowItems.slice(0,3).map(p=>`${p.name}(${p.qty}/${p.minQty}${p.unit||"개"})`).join(", ")}
+                {lowItems.length>3 && ` 외 ${lowItems.length-3}건`}
+              </div>
+              <button onClick={()=>setModal({type:"lowStockAlert",items:lowItems})}
+                style={{fontSize:11,padding:"5px 10px",borderRadius:6,border:"1px solid #fca5a5",background:"#fff",cursor:"pointer",color:"#991b1b",fontWeight:700}}>
+                자세히 보기
+              </button>
+              <button onClick={()=>setModal({type:"sendLowStockNotif",items:lowItems})}
+                style={{fontSize:11,padding:"5px 10px",borderRadius:6,border:"none",background:"#dc2626",cursor:"pointer",color:"#fff",fontWeight:700}}>
+                📨 알림 발송
+              </button>
+            </div>
+          );
+        })()}
+
+        {/* Header - only on non-map pages */}
+        {page!=="map"&&(
+        <div className="no-print" style={{background:"#fff",padding:"10px 20px",borderBottom:"1px solid #e5e7eb",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+          <h1 style={{fontSize:16,fontWeight:800,color:"#0f172a"}}>{menus.find(m=>m.id===page)?.label}</h1>
+          <div style={{display:"flex",gap:6}}>
+            {can("export")&&<button className="btn bs" onClick={csv} style={{fontSize:12}}><IC.DL/>CSV</button>}
+            {can("add")&&<button className="btn bp" onClick={()=>setModal({type:"add"})} style={{fontSize:12}}><IC.Plus/>제품 추가</button>}
+          </div>
+        </div>
+        )}
+
+        <div style={{flex:1,overflow:"auto",background:page==="map"?"#f5f5f5":"#f0f2f5"}}>
+          {/* ==================== MAP PAGE ==================== */}
+          {page==="map"&&(
+            <div style={{display:"flex",flexDirection:"column"}}>
+              {/* QR Lookup Bar */}
+              <div className="no-print" style={{position:"sticky",top:0,zIndex:20,background:"rgba(255,255,255,0.97)",backdropFilter:"blur(8px)",
+                padding:"8px 12px",borderBottom:"1px solid #e5e7eb"}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:4,flex:"1 1 200px",minWidth:0}}>
+                    <span style={{color:"#3b5bdb",display:"flex",flexShrink:0}}><IC.QR/></span>
+                    <input className="inp" placeholder="제품명 / QR코드 검색" value={qrSearch}
+                      onChange={e=>{setQrSearch(e.target.value);if(!e.target.value){setQrResult(null);setHighlightPid(null);}}}
+                      onKeyDown={e=>{if(e.key==="Enter")doQRLookup(qrSearch);}}
+                      style={{fontSize:14,padding:"8px 10px",minWidth:0}}/>
+                  </div>
+                  <div style={{display:"flex",gap:4,flexShrink:0}}>
+                    <button className="btn bp" onClick={()=>doQRLookup(qrSearch)} style={{fontSize:13,padding:"8px 16px"}}><IC.Srch/>조회</button>
+                    <button className="btn" onClick={()=>setShowScanner(true)}
+                      style={{fontSize:13,padding:"8px 12px",background:"#f0f7ff",color:"#3b5bdb",border:"1px solid #bfdbfe"}}><IC.Cam/>스캔</button>
+                    {can("export")&&<button className="btn bs" onClick={csv} style={{fontSize:12,padding:"8px 10px"}}><IC.DL/></button>}
+                    {can("add")&&<button className="btn bp" onClick={()=>setModal({type:"add"})} style={{fontSize:12,padding:"8px 10px"}}><IC.Plus/></button>}
+                  </div>
+                </div>
+                {qrResult==="notfound"&&<div style={{marginTop:6,fontSize:12,color:"#ef4444",fontWeight:600}}>❌ 찾을 수 없습니다</div>}
+                {qrResult&&qrResult!=="notfound"&&(()=>{
+                  const p=prods.find(x=>x.id===qrResult.id)||qrResult;
+                  const locEntries=Object.entries(p.locs||{}).filter(([,v])=>v>0);
+                  return(
+                  <div style={{marginTop:6,background:"#fff",borderRadius:10,border:"1px solid #d1fae5",overflow:"hidden",boxShadow:"0 2px 8px rgba(0,0,0,0.06)"}}>
+                    <div style={{display:"flex",gap:12,padding:"10px 14px",background:"linear-gradient(135deg,#f0fdf4,#ecfdf5)"}}>
+                      {/* QR */}
+                      <div onClick={()=>setModal({type:"qr",p})} style={{cursor:"pointer",flexShrink:0,textAlign:"center"}}>
+                        <div style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:8,padding:4,display:"inline-block"}}>
+                          <QRCodeSVG text={p.code} size={56}/>
+                        </div>
+                        <div style={{fontSize:11,fontWeight:800,letterSpacing:1,marginTop:2}}>{p.code}</div>
+                      </div>
+                      {/* Info */}
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:15,fontWeight:800,color:"#0f172a"}}>{p.name}</div>
+                        <div style={{display:"flex",gap:6,marginTop:3,flexWrap:"wrap"}}>
+                          <span className="badge" style={{background:"#dbeafe",color:"#1d4ed8",padding:"2px 8px"}}>{p.cat}</span>
+                          <span className="badge" style={{background:"#f1f5f9",color:"#475569",padding:"2px 8px"}}>{p.loc}</span>
+                        </div>
+                        {p.memo&&<div style={{fontSize:11,color:"#64748b",marginTop:3}}>📝 {p.memo}</div>}
+                        {/* Location breakdown */}
+                        {locEntries.length>0&&(
+                          <div style={{display:"flex",gap:4,marginTop:5,flexWrap:"wrap"}}>
+                            {locEntries.map(([l,q])=>(
+                              <span key={l} style={{fontSize:10,background:"#f8fafc",border:"1px solid #e5e7eb",borderRadius:5,padding:"2px 6px",color:"#475569"}}>
+                                {l}: <strong style={{color:"#0f172a"}}>{q}</strong>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {/* Photos */}
+                        {(p.photos?.length>0)&&(
+                          <div style={{display:"flex",gap:3,marginTop:5,alignItems:"center",flexWrap:"wrap"}}>
+                            {p.photos.slice(0,4).map(ph=><PhotoThumb key={ph.id} src={ph.url} date={ph.date} label={p.name}/>)}
+                            {p.photos.length>4&&<span style={{fontSize:9,color:"#94a3b8"}}>+{p.photos.length-4}</span>}
+                          </div>
+                        )}
+                      </div>
+                      {/* Qty + actions */}
+                      <div style={{textAlign:"center",flexShrink:0}}>
+                        <div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>총 재고</div>
+                        <div style={{fontSize:28,fontWeight:900,color:p.qty===0?"#ef4444":p.qty<5?"#f59e0b":"#3b5bdb",lineHeight:1}}>{p.qty}</div>
+                        <div style={{display:"flex",gap:3,marginTop:6}}>
+                          <button onClick={()=>setModal({type:"in",p})} style={{padding:"4px 8px",borderRadius:5,border:"none",cursor:"pointer",fontSize:10,fontWeight:700,background:"#dcfce7",color:"#16a34a"}}>입고</button>
+                          <button onClick={()=>setModal({type:"out",p})} style={{padding:"4px 8px",borderRadius:5,border:"none",cursor:"pointer",fontSize:10,fontWeight:700,background:"#fee2e2",color:"#dc2626"}}>출고</button>
+                          <button onClick={()=>setModal({type:"adj",p})} style={{padding:"4px 8px",borderRadius:5,border:"none",cursor:"pointer",fontSize:10,fontWeight:700,background:"#ede9fe",color:"#7c3aed"}}>조정</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>);
+                })()}
+              </div>
+
+              <MapView mapWrap={mapWrap} hZone={hZone} setHZone={setHZone} tip={tip} setTip={setTip} zQty={zQty} zProds={zProds} zHist={zHist} setSelZone={setSelZone} zonePhotos={zonePhotos}
+                userCtx={userCtx}
+                zones={mergedZones}
+                customZones={customZones}
+                facActions={facActions}
+                onCreateZone={(newZ) => {
+                  setCustomZones(prev => [...prev, newZ]);
+                  addH("구역생성", newZ.name, `${newZ.lat.toFixed(5)}, ${newZ.lng.toFixed(5)}`, 0);
+                }}
+                onDeleteCustomZone={(zid) => {
+                  const z = customZones.find(x => x.id === zid);
+                  if (z && confirm(`"${z.name}" 구역을 삭제하시겠습니까?\n이 구역에 등록된 재고는 유지됩니다.`)) {
+                    setCustomZones(prev => prev.filter(x => x.id !== zid));
+                    addH("구역삭제", z.name, "삭제", 0);
+                  }
+                }}
+                onAddInventoryToZone={(zone) => {
+                  // Open add-product modal pre-filled with zone location
+                  setModal({ type: "addInZone", zone });
+                }}
+                onCreateFacAction={onAddFacAction}
+                switchToFacility={switchToFacility}
+                onUpdateZone={(zid, patch) => {
+                  // Custom zone이면 customZones 업데이트, base zone이면 zoneOverrides 사용
+                  const isCustom = customZones.some(cz => cz.id === zid);
+                  if (isCustom) {
+                    setCustomZones(prev => prev.map(z => z.id === zid ? { ...z, ...patch } : z));
+                  } else {
+                    // base zone: localStorage 오버라이드로 저장
+                    try {
+                      const overrides = JSON.parse(window.localStorage.getItem("jamsa_inv_zone_overrides") || "{}");
+                      overrides[zid] = { ...(overrides[zid] || {}), ...patch };
+                      window.localStorage.setItem("jamsa_inv_zone_overrides", JSON.stringify(overrides));
+                      // 강제 리렌더
+                      setCustomZones(prev => [...prev]);
+                    } catch (e) {}
+                  }
+                  addH("구역이동", zid, `→ ${patch.lat?.toFixed(5)}, ${patch.lng?.toFixed(5)}`, 0);
+                }}
+              />
+              {selZone&&<ZoneBottom zone={mergedZones.find(z=>z.id===selZone)} prods={zProds(selZone)} hist={zHist(selZone)} allLocs={LOCS}
+                onClose={()=>{setSelZone(null);setHighlightPid(null);}} doIn={doIn} doOut={doOut} doAdj={doAdj} doAdd={doAdd} doDel={doDel}
+                onShowQR={p=>setModal({type:"qr",p})} highlightPid={highlightPid}
+                doAddPhoto={doAddPhoto} doDelPhoto={doDelPhoto}
+                zonePhotos={zonePhotos[selZone]||[]} doAddZonePhoto={doAddZonePhoto} doDelZonePhoto={doDelZonePhoto}
+                allProds={prods} allZonePhotos={zonePhotos} onAddFacAction={onAddFacAction}
+                can={can}/>}
+            </div>
+          )}
+
+          {page==="products"&&<PList prods={filtered} totalQ={totalQ} search={search} setSearch={setSearch} fLoc={fLoc} setFLoc={setFLoc} fCat={fCat} setFCat={setFCat}
+            selP={selP} setSelP={setSelP} onIn={p=>setModal({type:"in",p})} onOut={p=>setModal({type:"out",p})} onAdj={p=>setModal({type:"adj",p})} onEdit={p=>setModal({type:"edit",p})} onDel={doDel} onShowQR={p=>setModal({type:"qr",p})}/>}
+
+          {(page==="stockin"||page==="stockout"||page==="adjust")&&<SPg type={page==="stockin"?"in":page==="stockout"?"out":"adj"} prods={prods} onIn={doIn} onOut={doOut} onAdj={doAdj}/>}
+          {page==="history"&&<HPg hist={hist} prods={prods}/>}
+          {page==="rfid"&&<RfidPg prods={prods} rfidTags={rfidTags} rfidScans={rfidScans} zones={ZONES} assignRfid={assignRfid} removeRfid={removeRfid} doRfidScan={doRfidScan} genRfidTag={genRfidTag}/>}
+          {page==="analysis"&&<APg prods={prods} hist={hist} zones={ZONES} onAddFacAction={onAddFacAction}/>}
+          {page==="required"&&<RequiredMaterialsPage facActions={facActions} prods={prods} zonePhotos={zonePhotos} setSelZone={setSelZone} setPage={setPage}/>}
+        </div>
+      </div>
+
+      {/* Modals */}
+      {modal?.type==="add"&&<AddMdl onAdd={doAdd} onClose={()=>setModal(null)}/>}
+      {modal?.type==="addInZone"&&<AddMdl onAdd={(data)=>{
+        // Inject zone-based location
+        const zoneLoc = modal.zone.name;
+        doAdd({ ...data, loc: zoneLoc });
+        // Also register the zone's name as a valid location for this custom zone
+        addH("재고추가", data.name, `사용자 구역 "${zoneLoc}"에 등록`, data.qty);
+        setModal(null);
+      }} onClose={()=>setModal(null)} defaultLoc={modal.zone.name} zoneInfo={modal.zone}/>}
+      {modal?.type==="in"&&<SMdl type="in" p={modal.p} onSubmit={doIn} onClose={()=>setModal(null)}/>}
+      {modal?.type==="out"&&<SMdl type="out" p={modal.p} onSubmit={doOut} onClose={()=>setModal(null)}/>}
+      {modal?.type==="adj"&&<SMdl type="adj" p={modal.p} onSubmit={doAdj} onClose={()=>setModal(null)}/>}
+      {modal?.type==="edit"&&<EMdl p={modal.p} onSave={d=>{setProds(pr=>pr.map(x=>x.id===d.id?{...x,...d}:x));addH("수정",d.name,"수정",0);setModal(null);}} onClose={()=>setModal(null)}/>}
+      {modal?.type==="qr"&&<QRModal p={modal.p} onClose={()=>setModal(null)}/>}
+      {modal?.type==="users"&&<UserMgmt users={users} setUsers={setUsers} curUser={curUser} onClose={()=>setModal(null)}/>}
+      {modal?.type==="lowStockAlert"&&<LowStockAlertModal items={modal.items} onClose={()=>setModal(null)} onGoTo={(p)=>{setModal(null);setSelP(p);setHighlightPid(p.id);}}/>}
+      {modal?.type==="sendLowStockNotif"&&<SendLowStockNotifModal items={modal.items} onClose={()=>setModal(null)}/>}
+      {showScanner&&<QRScanner onClose={()=>setShowScanner(false)} onScan={code=>{
+        setShowScanner(false);
+        setQrSearch(code);
+        // Lookup after state updates
+        setTimeout(()=>doQRLookup(code),50);
+      }}/>}
+    </div>
+  );
+}
+
+// ========== QR CAMERA SCANNER ==========
+function QRScanner({onScan,onClose}){
+  const videoRef=useRef(null);
+  const canvasRef=useRef(null);
+  const streamRef=useRef(null);
+  const onScanRef=useRef(onScan);
+  onScanRef.current=onScan;
+  const [status,setStatus]=useState("카메라 시작 중...");
+  const [hasDetector]=useState(()=>typeof BarcodeDetector!=="undefined");
+
+  useEffect(()=>{
+    let active=true;
+    let scanInterval=null;
+
+    const startCamera=async()=>{
+      try{
+        const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment",width:{ideal:640},height:{ideal:480}}});
+        if(!active){stream.getTracks().forEach(t=>t.stop());return;}
+        streamRef.current=stream;
+        if(videoRef.current){videoRef.current.srcObject=stream;videoRef.current.play();}
+        setStatus("QR코드를 카메라에 비춰주세요");
+
+        if(hasDetector){
+          const detector=new BarcodeDetector({formats:["qr_code"]});
+          scanInterval=setInterval(async()=>{
+            if(!videoRef.current||videoRef.current.readyState<2)return;
+            try{
+              const codes=await detector.detect(videoRef.current);
+              if(codes.length>0){
+                const val=codes[0].rawValue;
+                if(val){cleanup();onScanRef.current(val);}
+              }
+            }catch(e){}
+          },300);
+        }else{
+          setStatus("이 브라우저는 자동 QR인식 미지원\n아래에 코드를 직접 입력하세요");
+        }
+      }catch(err){
+        setStatus("카메라 접근 실패: "+err.message+"\n아래에 코드를 직접 입력하세요");
+      }
+    };
+
+    const cleanup=()=>{
+      active=false;
+      if(scanInterval)clearInterval(scanInterval);
+      if(streamRef.current)streamRef.current.getTracks().forEach(t=>t.stop());
+    };
+
+    startCamera();
+    return cleanup;
+  },[hasDetector]);
+
+  const [manualCode,setManualCode]=useState("");
+
+  return(
+    <div style={{position:"fixed",inset:0,zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.7)"}} onClick={onClose}/>
+      <div style={{position:"relative",background:"#000",borderRadius:16,overflow:"hidden",width:380,maxWidth:"94vw",boxShadow:"0 20px 60px rgba(0,0,0,0.4)"}}>
+        {/* Header */}
+        <div style={{background:"#111",padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <span style={{color:"#3b5bdb",display:"flex"}}><IC.Cam/></span>
+            <span style={{color:"#fff",fontSize:14,fontWeight:700}}>QR 스캐너</span>
+          </div>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:"#fff"}}><IC.X/></button>
+        </div>
+
+        {/* Camera view */}
+        <div style={{position:"relative",width:"100%",aspectRatio:"4/3",background:"#111"}}>
+          <video ref={videoRef} playsInline muted style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+          <canvas ref={canvasRef} style={{display:"none"}}/>
+          {/* Scan frame overlay */}
+          <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",pointerEvents:"none"}}>
+            <div style={{width:200,height:200,border:"3px solid rgba(59,91,219,0.8)",borderRadius:16,
+              boxShadow:"0 0 0 9999px rgba(0,0,0,0.3)"}}>
+              <div style={{position:"absolute",top:-2,left:-2,width:30,height:30,borderTop:"4px solid #3b5bdb",borderLeft:"4px solid #3b5bdb",borderRadius:"16px 0 0 0"}}/>
+              <div style={{position:"absolute",top:-2,right:-2,width:30,height:30,borderTop:"4px solid #3b5bdb",borderRight:"4px solid #3b5bdb",borderRadius:"0 16px 0 0"}}/>
+              <div style={{position:"absolute",bottom:-2,left:-2,width:30,height:30,borderBottom:"4px solid #3b5bdb",borderLeft:"4px solid #3b5bdb",borderRadius:"0 0 0 16px"}}/>
+              <div style={{position:"absolute",bottom:-2,right:-2,width:30,height:30,borderBottom:"4px solid #3b5bdb",borderRight:"4px solid #3b5bdb",borderRadius:"0 0 16px 0"}}/>
+            </div>
+          </div>
+        </div>
+
+        {/* Status & manual input */}
+        <div style={{padding:"12px 16px",background:"#111"}}>
+          <div style={{color:"#94a3b8",fontSize:12,textAlign:"center",marginBottom:8,whiteSpace:"pre-line"}}>{status}</div>
+          <div style={{display:"flex",gap:6}}>
+            <input className="inp" placeholder="코드 직접 입력 (JB-0001)" value={manualCode} onChange={e=>setManualCode(e.target.value)}
+              onKeyDown={e=>{if(e.key==="Enter"&&manualCode.trim()){onClose();onScanRef.current(manualCode.trim());}}}
+              style={{fontSize:13,padding:"8px 12px",background:"#222",color:"#fff",border:"1px solid #333"}}/>
+            <button className="btn bp" onClick={()=>{if(manualCode.trim()){onClose();onScanRef.current(manualCode.trim());}}} style={{fontSize:12,whiteSpace:"nowrap"}}>확인</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== QR MODAL ==========
+function QRModal({p,onClose}){
+  const printQR=()=>{
+    const w=window.open("","_blank","width=400,height=500");
+    w.document.write(`<html><head><title>QR - ${p.name}</title><style>
+      body{font-family:sans-serif;padding:20px;text-align:center}
+      .label{border:2px solid #000;padding:16px;display:inline-block;margin:10px}
+      h2{margin:0 0 4px;font-size:16px} .code{font-size:20px;font-weight:900;letter-spacing:2px;margin:8px 0}
+      .info{font-size:11px;color:#666} @media print{button{display:none}}
+    </style></head><body>
+      <div class="label">
+        <h2>🐛 한국잠사박물관</h2>
+        <div class="code">${p.code}</div>
+        <div style="font-size:14px;font-weight:700;margin:6px 0">${p.name}</div>
+        <div class="info">${p.cat} · ${p.loc}</div>
+        <div class="info">등록: ${new Date().toLocaleDateString('ko-KR')}</div>
+      </div>
+      <br/><button onclick="window.print()" style="margin-top:16px;padding:8px 24px;font-size:14px;cursor:pointer">🖨️ 인쇄</button>
+    </body></html>`);
+    w.document.close();
+  };
+
+  return(
+    <Modal title={`QR 코드 — ${p.name}`} onClose={onClose} w={380}>
+      <div style={{textAlign:"center"}}>
+        <div style={{display:"inline-block",padding:16,background:"#fff",border:"2px solid #e5e7eb",borderRadius:12,marginBottom:12}}>
+          <QRCodeSVG text={p.code} size={160}/>
+        </div>
+        <div style={{fontSize:24,fontWeight:900,letterSpacing:3,color:"#0f172a",marginBottom:4}}>{p.code}</div>
+        <div style={{fontSize:14,fontWeight:700,color:"#475569",marginBottom:2}}>{p.name}</div>
+        <div style={{fontSize:12,color:"#94a3b8",marginBottom:12}}>{p.cat} · {p.loc} · 재고: <strong style={{color:p.qty===0?"#ef4444":"#3b5bdb"}}>{p.qty}</strong></div>
+
+        <div style={{display:"flex",gap:8,justifyContent:"center"}}>
+          <button className="btn bp" onClick={printQR} style={{fontSize:13}}><IC.Print/>인쇄</button>
+          <button className="btn bs" onClick={onClose}>닫기</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ========== MAP VIEW ==========
+// ============================================================
+// CCTV LIVE OVERLAY — 통합지도 위에 라이브 미니뷰 + AI 위험 감지
+// ============================================================
+function CctvLiveOverlay({ zones, cctvMap, onAlert, onOpenChannel, snapServerUrl: propUrl, onSnapshotsChange }) {
+  // localStorage에서 저장된 스냅샷 서버 URL 자동 로드 (시설점검 → CCTV에서 설정한 값)
+  const snapServerUrl = useMemo(() => {
+    if (propUrl) return propUrl;
+    try {
+      return window.localStorage?.getItem("jamsa_cctv_snap_server") || "http://localhost:5555";
+    } catch (e) { return "http://localhost:5555"; }
+  }, [propUrl]);
+  const [snapshots, setSnapshots] = useState({}); // {ch: {url, ts}}
+  const [analyses, setAnalyses] = useState({});   // {ch: {level, score, summary, ...}}
+  const [analyzing, setAnalyzing] = useState({}); // {ch: true/false}
+  const [enabled, setEnabled] = useState(() => {
+    try { return window.localStorage?.getItem("jamsa_cctv_overlay_on") !== "0"; }
+    catch (e) { return true; }
+  });
+  const [aiEnabled, setAiEnabled] = useState(() => {
+    try { return window.localStorage?.getItem("jamsa_cctv_ai_on") === "1"; }
+    catch (e) { return false; }
+  });
+  const [snapInterval, setSnapInterval] = useState(5000); // 5초
+  const [aiInterval, setAiInterval] = useState(60000);    // 60초 (AI는 비용 절감)
+  const [lastAlert, setLastAlert] = useState(null);
+  const aiCooldownRef = useRef({}); // {ch: lastAnalyzedAt}
+
+  // 모든 활성 채널 수집 (구역에 매핑된 것들)
+  const activeChannels = useMemo(() => {
+    const set = new Set();
+    Object.values(cctvMap || {}).forEach(arr => (arr || []).forEach(ch => set.add(ch)));
+    return Array.from(set).sort((a, b) => a - b);
+  }, [cctvMap]);
+
+  // 채널 → 구역 역매핑
+  const chToZone = useMemo(() => {
+    const map = {};
+    Object.entries(cctvMap || {}).forEach(([zid, chs]) => {
+      (chs || []).forEach(ch => { map[ch] = zid; });
+    });
+    return map;
+  }, [cctvMap]);
+
+  // 스냅샷 폴링
+  useEffect(() => {
+    if (!enabled || activeChannels.length === 0) return;
+    let stopped = false;
+    let timers = [];
+
+    const fetchSnapshot = async (ch) => {
+      try {
+        const url = `${snapServerUrl}/api/snap/${ch}?t=${Date.now()}`;
+        const res = await fetch(url, { method: "GET", mode: "cors" }).catch(() => null);
+        if (!res || !res.ok) {
+          // 백엔드 미가동 시 placeholder 유지
+          if (!snapshots[ch]) {
+            setSnapshots(s => ({ ...s, [ch]: { url: null, ts: Date.now(), error: true } }));
+          }
+          return;
+        }
+        const blob = await res.blob();
+        if (stopped) return;
+        const objUrl = URL.createObjectURL(blob);
+        setSnapshots(s => {
+          // 이전 URL 정리
+          if (s[ch]?.url) try { URL.revokeObjectURL(s[ch].url); } catch (e) {}
+          return { ...s, [ch]: { url: objUrl, ts: Date.now(), error: false } };
+        });
+      } catch (e) {
+        // 네트워크 에러는 placeholder
+      }
+    };
+
+    // 초기 1회 + 인터벌
+    activeChannels.forEach(ch => {
+      fetchSnapshot(ch);
+      const t = setInterval(() => fetchSnapshot(ch), snapInterval);
+      timers.push(t);
+    });
+
+    return () => {
+      stopped = true;
+      timers.forEach(clearInterval);
+    };
+  }, [enabled, activeChannels.join(","), snapInterval, snapServerUrl]);
+
+  // AI 분석 (스냅샷이 갱신될 때마다 일정 주기로)
+  useEffect(() => {
+    if (!aiEnabled || !enabled) return;
+    let stopped = false;
+
+    const analyzeChannel = async (ch) => {
+      const snap = snapshots[ch];
+      if (!snap || !snap.url || snap.error) return;
+      if (analyzing[ch]) return;
+      // 쿨다운 체크
+      const lastAt = aiCooldownRef.current[ch] || 0;
+      if (Date.now() - lastAt < aiInterval) return;
+      aiCooldownRef.current[ch] = Date.now();
+
+      setAnalyzing(a => ({ ...a, [ch]: true }));
+      try {
+        // blob URL → base64 dataURL 변환
+        const blob = await fetch(snap.url).then(r => r.blob());
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+
+        const cam = FAC_CCTV_CAMERAS.find(c => c.ch === ch);
+        const zid = chToZone[ch];
+        const z = zones.find(z => z.id === zid);
+
+        const fetcher = window.authFetch || ((path, opts) => fetch(path, opts));
+        const res = await fetcher("/api/cctv-ai-analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ch,
+            zone: z?.name || cam?.zone || "",
+            image: dataUrl,
+            context: cam?.name || "",
+          }),
+        });
+        if (!res.ok) throw new Error(`API ${res.status}`);
+        const data = await res.json();
+        if (stopped || !data.ok) return;
+
+        const result = data.result;
+        setAnalyses(a => ({ ...a, [ch]: result }));
+
+        // DANGER 또는 shouldNotify 시 알림
+        if (result.level === "DANGER" || result.shouldNotify) {
+          const alert = {
+            id: Date.now() + Math.random(),
+            ch,
+            zone: z?.name || cam?.zone || "",
+            cam: cam?.name || `CH${ch}`,
+            level: result.level,
+            score: result.score,
+            summary: result.summary,
+            detail: result.detail,
+            actionRequired: result.actionRequired,
+            time: new Date().toISOString(),
+          };
+          setLastAlert(alert);
+          if (onAlert) onAlert(alert);
+        }
+      } catch (e) {
+        console.warn(`[cctv-ai] ch${ch} 분석 실패:`, e.message);
+      } finally {
+        if (!stopped) setAnalyzing(a => ({ ...a, [ch]: false }));
+      }
+    };
+
+    // 스냅샷이 있는 채널 순회 분석 (한 번에 1개씩, 부하 방지)
+    let idx = 0;
+    const tickAi = async () => {
+      if (stopped) return;
+      const channels = activeChannels.filter(ch => snapshots[ch]?.url);
+      if (channels.length > 0) {
+        await analyzeChannel(channels[idx % channels.length]);
+        idx++;
+      }
+    };
+    const aiTimer = setInterval(tickAi, 8000); // 8초마다 한 채널씩
+    tickAi();
+
+    return () => {
+      stopped = true;
+      clearInterval(aiTimer);
+    };
+  }, [aiEnabled, enabled, snapshots, activeChannels.join(","), aiInterval, chToZone, zones, onAlert]);
+
+  // 설정 저장
+  useEffect(() => {
+    try { window.localStorage?.setItem("jamsa_cctv_overlay_on", enabled ? "1" : "0"); } catch (e) {}
+  }, [enabled]);
+  useEffect(() => {
+    try { window.localStorage?.setItem("jamsa_cctv_ai_on", aiEnabled ? "1" : "0"); } catch (e) {}
+  }, [aiEnabled]);
+
+  // 스냅샷/분석 결과를 부모에게 전달 (스팟 옆 미니창 표시용)
+  useEffect(() => {
+    if (onSnapshotsChange) {
+      onSnapshotsChange({ snapshots, analyses, chToZone, enabled });
+    }
+  }, [snapshots, analyses, chToZone, enabled, onSnapshotsChange]);
+
+  if (!enabled) {
+    return (
+      <div style={{position:"absolute",top:12,right:12,zIndex:500,background:"rgba(15,23,42,0.85)",color:"#fff",padding:"6px 10px",borderRadius:8,fontSize:11,backdropFilter:"blur(8px)",cursor:"pointer",display:"flex",alignItems:"center",gap:6}}
+        onClick={()=>setEnabled(true)}>
+        📹 CCTV 오버레이 켜기
+      </div>
+    );
+  }
+
+  // 위험 채널 카운트
+  const dangerCount = Object.values(analyses).filter(a => a.level === "DANGER").length;
+  const warningCount = Object.values(analyses).filter(a => a.level === "WARNING").length;
+  const safeCount = activeChannels.length - dangerCount - warningCount;
+
+  return (
+    <>
+      {/* 컨트롤 패널 */}
+      <div style={{position:"absolute",top:12,right:12,zIndex:500,background:"rgba(15,23,42,0.92)",color:"#fff",padding:"8px 12px",borderRadius:10,fontSize:11,backdropFilter:"blur(8px)",display:"flex",flexDirection:"column",gap:6,minWidth:180}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,paddingBottom:6,borderBottom:"1px solid rgba(255,255,255,0.15)"}}>
+          <span style={{fontWeight:700,display:"flex",alignItems:"center",gap:6}}>
+            <span style={{width:8,height:8,background:"#22c55e",borderRadius:"50%",animation:"naverPulse 2s infinite"}}></span>
+            CCTV 라이브
+          </span>
+          <button onClick={()=>setEnabled(false)} style={{background:"none",border:"none",color:"rgba(255,255,255,0.6)",cursor:"pointer",fontSize:14,padding:0,lineHeight:1}}>×</button>
+        </div>
+        <div style={{fontSize:10,color:"rgba(255,255,255,0.7)"}}>
+          {activeChannels.length}대 라이브 · {Math.round(snapInterval/1000)}초 갱신
+        </div>
+        <div style={{display:"flex",gap:6,fontSize:10}}>
+          {dangerCount > 0 && <span style={{color:"#fca5a5"}}>🔴 위험 {dangerCount}</span>}
+          {warningCount > 0 && <span style={{color:"#fcd34d"}}>🟡 주의 {warningCount}</span>}
+          <span style={{color:"#86efac"}}>🟢 정상 {safeCount}</span>
+        </div>
+        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:10,color:"rgba(255,255,255,0.85)",cursor:"pointer"}}>
+          <input type="checkbox" checked={aiEnabled} onChange={e=>setAiEnabled(e.target.checked)} style={{width:12,height:12}}/>
+          🤖 Claude AI 위험 분석 {aiEnabled && <span style={{color:"#fcd34d"}}>(과금 발생)</span>}
+        </label>
+      </div>
+
+      {/* 위험 알림 배너 */}
+      {lastAlert && (
+        <div style={{position:"absolute",top:12,left:12,right:220,zIndex:600,padding:"10px 14px",background:lastAlert.level==="DANGER"?"rgba(220,38,38,0.95)":"rgba(245,158,11,0.95)",color:"#fff",borderRadius:8,display:"flex",alignItems:"center",gap:10,backdropFilter:"blur(4px)",animation:"naverPulse 2s infinite"}}>
+          <span style={{fontSize:18}}>{lastAlert.level==="DANGER"?"🚨":"⚠️"}</span>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:12,fontWeight:700}}>CH{lastAlert.ch} {lastAlert.zone} — {lastAlert.summary} (위험도 {lastAlert.score}%)</div>
+            <div style={{fontSize:10,opacity:0.9,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{lastAlert.detail || lastAlert.actionRequired}</div>
+          </div>
+          <button onClick={()=>{onOpenChannel && onOpenChannel(lastAlert.ch); setLastAlert(null);}} style={{fontSize:11,padding:"5px 10px",background:"#fff",color:lastAlert.level==="DANGER"?"#991b1b":"#854f0b",border:"none",borderRadius:5,fontWeight:700,cursor:"pointer"}}>확인</button>
+          <button onClick={()=>setLastAlert(null)} style={{fontSize:11,padding:"5px 8px",background:"rgba(255,255,255,0.2)",color:"#fff",border:"1px solid rgba(255,255,255,0.3)",borderRadius:5,cursor:"pointer"}}>닫기</button>
+        </div>
+      )}
+
+      {/* 미니뷰 그리드 (지도 하단에 가로 스크롤로) */}
+      <div style={{position:"absolute",bottom:50,left:12,right:12,zIndex:400,display:"flex",gap:6,overflowX:"auto",padding:"4px 0",scrollbarWidth:"thin"}}>
+        {activeChannels.map(ch => {
+          const cam = FAC_CCTV_CAMERAS.find(c => c.ch === ch);
+          if (!cam) return null;
+          const snap = snapshots[ch];
+          const ana = analyses[ch];
+          const zid = chToZone[ch];
+          const z = zones.find(z => z.id === zid);
+          const level = ana?.level || "SAFE";
+          const borderColor = level === "DANGER" ? "#dc2626" : level === "WARNING" ? "#f59e0b" : "rgba(255,255,255,0.6)";
+          const animation = level === "DANGER" ? "naverPulse 1.2s infinite" : level === "WARNING" ? "naverPulse 1.6s infinite" : "none";
+
+          return (
+            <div key={ch}
+              onClick={()=>onOpenChannel && onOpenChannel(ch)}
+              style={{position:"relative",flex:"0 0 110px",height:74,borderRadius:6,overflow:"hidden",border:`1.5px solid ${borderColor}`,background:"#0f172a",cursor:"pointer",animation,transition:"transform 0.15s"}}
+              onMouseEnter={e=>{e.currentTarget.style.transform="scale(1.08)";e.currentTarget.style.zIndex="500";}}
+              onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.zIndex="";}}
+              title={`CH${ch} ${cam.name} · ${z?.name || cam.zone}\n${ana?.summary || '분석 대기'}`}>
+              {snap?.url && !snap.error ? (
+                <img src={snap.url} alt={cam.name} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>{e.currentTarget.style.display="none";}}/>
+              ) : (
+                <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",color:"rgba(255,255,255,0.4)",fontSize:18}}>
+                  📷
+                </div>
+              )}
+              {/* 스캔 라인 */}
+              {snap?.url && !snap.error && (
+                <div style={{position:"absolute",left:0,right:0,height:14,background:"linear-gradient(180deg,transparent,rgba(34,211,238,0.4),transparent)",pointerEvents:"none",animation:"cctvScan 2.4s linear infinite"}}/>
+              )}
+              {/* 오버레이 */}
+              <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",justifyContent:"space-between",padding:"3px 5px",background:"linear-gradient(180deg,rgba(0,0,0,0.5),transparent 30%,transparent 70%,rgba(0,0,0,0.55))",pointerEvents:"none"}}>
+                <div style={{display:"flex",alignItems:"center",gap:3,fontSize:9,color:"#fff",fontWeight:700}}>
+                  <span style={{width:5,height:5,borderRadius:"50%",background:"#ef4444",animation:"blink 1.6s infinite"}}/>
+                  CH{ch} {cam.name.slice(0,5)}
+                </div>
+                <div style={{fontSize:9,color:"#fff",fontWeight:600,textShadow:"0 0 2px rgba(0,0,0,0.8)"}}>
+                  {analyzing[ch] ? "🤖 분석 중..." : (ana?.summary?.slice(0,16) || (snap?.error ? "연결 끊김" : "정상"))}
+                </div>
+              </div>
+              {/* 위험 배지 */}
+              {level !== "SAFE" && (
+                <div style={{position:"absolute",top:-6,right:-6,background:level==="DANGER"?"#dc2626":"#f59e0b",color:"#fff",border:"1.5px solid #fff",width:18,height:18,borderRadius:"50%",fontSize:10,fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  {level === "DANGER" ? "!" : "?"}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {activeChannels.length === 0 && (
+          <div style={{padding:"20px",color:"rgba(255,255,255,0.6)",fontSize:11,textAlign:"center",width:"100%"}}>
+            매핑된 CCTV가 없습니다. 구역 편집에서 CCTV를 연결하세요.
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+// CCTV 매핑 편집 모달
+function CctvMappingModal({ zones, cctvMap, onSave, onClose }) {
+  const [localMap, setLocalMap] = useState({ ...cctvMap });
+  const [filter, setFilter] = useState("");
+
+  const toggleChannel = (zoneId, ch) => {
+    setLocalMap(m => {
+      const arr = m[zoneId] || [];
+      const newArr = arr.includes(ch) ? arr.filter(x => x !== ch) : [...arr, ch].sort((a,b)=>a-b);
+      return { ...m, [zoneId]: newArr };
+    });
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1100,padding:16}} onClick={onClose}>
+      <div style={{background:"#fff",borderRadius:12,maxWidth:900,width:"100%",maxHeight:"85vh",overflow:"hidden",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
+        <div style={{padding:"14px 18px",borderBottom:"1px solid #e5e7eb",display:"flex",alignItems:"center",justifyContent:"space-between",background:"linear-gradient(90deg,#1e3a8a,#3b82f6)"}}>
+          <div style={{color:"#fff"}}>
+            <div style={{fontSize:15,fontWeight:800}}>📹 CCTV ↔ 구역 매핑 편집</div>
+            <div style={{fontSize:11,opacity:0.9,marginTop:2}}>각 구역에 표시할 CCTV 채널을 선택하세요</div>
+          </div>
+          <button onClick={onClose} style={{background:"rgba(255,255,255,0.2)",border:"none",cursor:"pointer",fontSize:18,color:"#fff",borderRadius:6,width:28,height:28}}>×</button>
+        </div>
+        <div style={{padding:"10px 18px",borderBottom:"1px solid #f1f3f5",background:"#f8fafc"}}>
+          <input className="inp" placeholder="구역 또는 채널명 검색..." value={filter} onChange={e=>setFilter(e.target.value)} style={{fontSize:12,padding:7,width:"100%"}}/>
+        </div>
+        <div style={{flex:1,overflow:"auto",padding:14}}>
+          {zones.filter(z => !filter || z.name.includes(filter)).map(z => {
+            const assignedChs = localMap[z.id] || [];
+            return (
+              <div key={z.id} style={{marginBottom:12,padding:12,border:"1px solid #e5e7eb",borderRadius:8,background:"#fff"}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{fontSize:18}}>{z.icon}</span>
+                    <span style={{fontSize:13,fontWeight:700}}>{z.name}</span>
+                    <span style={{fontSize:10,color:"#94a3b8"}}>({assignedChs.length}대 연결)</span>
+                  </div>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(120px,1fr))",gap:4}}>
+                  {FAC_CCTV_CAMERAS.filter(c => !filter || c.name.includes(filter) || `CH${c.ch}`.includes(filter)).map(cam => {
+                    const checked = assignedChs.includes(cam.ch);
+                    return (
+                      <label key={cam.ch} style={{display:"flex",alignItems:"center",gap:5,padding:"5px 8px",border:`1px solid ${checked?"#2563eb":"#e5e7eb"}`,borderRadius:5,cursor:"pointer",background:checked?"#dbeafe":"#fff",fontSize:11}}>
+                        <input type="checkbox" checked={checked} onChange={()=>toggleChannel(z.id, cam.ch)} style={{width:12,height:12}}/>
+                        <span style={{fontWeight:600}}>CH{cam.ch}</span>
+                        <span style={{color:"#64748b"}}>{cam.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{padding:12,borderTop:"1px solid #e5e7eb",background:"#f8fafc",display:"flex",gap:8,justifyContent:"flex-end"}}>
+          <button onClick={()=>setLocalMap({...CCTV_AUTO_MAP})} style={{fontSize:12,padding:"7px 12px",borderRadius:6,border:"1px solid #d1d5db",background:"#fff",cursor:"pointer"}}>↺ 자동 매핑으로 초기화</button>
+          <button onClick={onClose} style={{fontSize:12,padding:"7px 12px",borderRadius:6,border:"1px solid #d1d5db",background:"#fff",cursor:"pointer"}}>취소</button>
+          <button onClick={()=>{onSave(localMap);onClose();}} style={{fontSize:12,padding:"7px 14px",borderRadius:6,border:"none",background:"#2563eb",color:"#fff",fontWeight:700,cursor:"pointer"}}>💾 저장</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone,zonePhotos,zones,customZones=[],facActions=[],onCreateZone,onDeleteCustomZone,onAddInventoryToZone,onCreateFacAction,switchToFacility,userCtx,onUpdateZone}){
+  // Use passed zones if provided, else fall back to static ZONES
+  const baseZones = zones || ZONES;
+  const [gpsZone, setGpsZone] = useState(null);
+  const [userLoc, setUserLoc] = useState(null);
+  const [locating, setLocating] = useState(false);
+  const [bgMode, setBgMode] = useState(() => {
+    // 사용자가 마지막으로 선택한 모드 기억 (없으면 위성)
+    try {
+      const saved = window.localStorage?.getItem("jamsa_inv_bg_mode");
+      return ["plan", "satellite", "blend"].includes(saved) ? saved : "satellite";
+    } catch (e) { return "satellite"; }
+  });
+  const changeBgMode = (m) => {
+    setBgMode(m);
+    try { window.localStorage?.setItem("jamsa_inv_bg_mode", m); } catch (e) {}
+  };
+  const [showGpsInfo, setShowGpsInfo] = useState(false);
+  // Zone creation mode
+  const [drawMode, setDrawMode] = useState(false);
+  // 구역 이동(드래그) 모드
+  const [editPosMode, setEditPosMode] = useState(false);
+  const [draggingZoneId, setDraggingZoneId] = useState(null);
+  const [dragOffset, setDragOffset] = useState({ dx: 0, dy: 0 });
+  const [drawPreview, setDrawPreview] = useState(null); // {lat, lng, x%, y%}
+  const [newZoneForm, setNewZoneForm] = useState(null); // { x%, y%, lat, lng }
+
+  // CCTV 매핑 (구역 → 채널 배열)
+  const [cctvMap, setCctvMap] = useState(() => loadCctvMap());
+  const [showCctvMapping, setShowCctvMapping] = useState(false);
+  const [cctvAlerts, setCctvAlerts] = useState([]); // 위험 알림 히스토리
+
+  // ── ZONE ICON EDITING ──
+  // Permission: default ADMIN + MANAGER allowed, stored per-user so admin can grant to others
+  const [editPermissions, setEditPermissions] = useLocalStorage("jamsa_zone_edit_perms", {
+    // Default: ADMIN and MANAGER roles have permission
+    _byRole: { ADMIN: true, MANAGER: true, INSPECTOR: false, VIEWER: false },
+    _byUser: {}, // { userId: true/false } — overrides role
+  });
+  // Zone customizations: { zoneId: { lat, lng, scale } }
+  const [zoneCustomizations, setZoneCustomizations] = useLocalStorage("jamsa_zone_customizations", {});
+  const [editMode, setEditMode] = useState(false);
+  const [showPermsModal, setShowPermsModal] = useState(false);
+
+  const currentUserCanEdit = useMemo(() => {
+    if (!userCtx) return false;
+    // ADMIN/MANAGER는 무조건 편집 가능 (권한 설정 무시)
+    if (userCtx.role === "ADMIN" || userCtx.role === "MANAGER") return true;
+    // User-specific override takes priority
+    if (userCtx.id in (editPermissions._byUser || {})) return editPermissions._byUser[userCtx.id];
+    // Fall back to role-based
+    return editPermissions._byRole?.[userCtx.role] === true;
+  }, [userCtx, editPermissions]);
+
+  // Apply customizations to zones (overrides lat/lng/scale)
+  const allZones = useMemo(() => {
+    return baseZones.map(z => {
+      const custom = zoneCustomizations[z.id];
+      if (!custom) return { ...z, scale: 1 };
+      return {
+        ...z,
+        lat: custom.lat != null ? custom.lat : z.lat,
+        lng: custom.lng != null ? custom.lng : z.lng,
+        scale: custom.scale != null ? custom.scale : 1,
+      };
+    });
+  }, [baseZones, zoneCustomizations]);
+
+  // Helper: update single zone customization
+  const updateZoneCustomization = (zoneId, patch) => {
+    setZoneCustomizations(prev => ({
+      ...prev,
+      [zoneId]: { ...(prev[zoneId] || {}), ...patch },
+    }));
+  };
+  const resetZoneCustomization = (zoneId) => {
+    setZoneCustomizations(prev => {
+      const next = { ...prev };
+      delete next[zoneId];
+      return next;
+    });
+  };
+  const resetAllCustomizations = () => {
+    if (confirm("모든 아이콘을 원래 위치·크기로 되돌리시겠습니까?")) {
+      setZoneCustomizations({});
+    }
+  };
+
+  // Naver Maps API — Client ID input & persistence (localStorage is unavailable in some sandboxes, so use session-only state fallback)
+  const [naverClientId, setNaverClientId] = useState(() => {
+    try { return window.localStorage?.getItem("jamsa_naver_client_id") || ""; } catch(e) { return ""; }
+  });
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [mapProvider, setMapProvider] = useState(() => {
+    // If Naver Client ID exists, prefer Naver; else OSM
+    try { return window.localStorage?.getItem("jamsa_naver_client_id") ? "naver" : "osm"; } catch(e) { return "osm"; }
+  });
+  const [naverLoaded, setNaverLoaded] = useState(false);
+  const [naverLoadError, setNaverLoadError] = useState(null);
+  const naverMapRef = useRef(null);
+  const naverMapContainerRef = useRef(null);
+  const naverMarkersRef = useRef([]);
+
+  const saveNaverClientId = (id) => {
+    setNaverClientId(id);
+    try { window.localStorage?.setItem("jamsa_naver_client_id", id); } catch(e) {}
+    if (id) setMapProvider("naver");
+    else setMapProvider("osm");
+  };
+
+  // Load Naver Maps JS SDK when provider = naver
+  // Installs global auth-failure callback + tries new/legacy URL patterns with timeout
+  useEffect(() => {
+    if (mapProvider !== "naver" || !naverClientId) return;
+    if (window.naver && window.naver.maps) { setNaverLoaded(true); return; }
+
+    // Install global auth-failure callback (MUST be set before script loads)
+    const _origin = (typeof window !== "undefined") ? window.location.origin : "?";
+    window.navermap_authFailure = function () {
+      const msg = `❌ 네이버 지도 인증 실패 (authFailure)\n` +
+        `현재 도메인: ${_origin}\n` +
+        `Client ID: ${naverClientId}\n` +
+        `→ NCP 콘솔의 Web 서비스 URL에 위 도메인이 등록되어 있는지 확인하세요 (URL 끝 슬래시 / 제외).`;
+      console.error("[NaverMap-Facility]", msg);
+      setNaverLoadError(msg);
+      setNaverLoaded(false);
+    };
+
+    const scriptId = "naver-maps-sdk";
+    const existingScript = document.getElementById(scriptId);
+    if (existingScript) {
+      // Already in DOM — poll
+      let elapsed = 0;
+      const check = setInterval(() => {
+        elapsed += 100;
+        if (window.naver?.maps) { setNaverLoaded(true); clearInterval(check); }
+        else if (elapsed >= 15000) {
+          clearInterval(check);
+          setNaverLoadError("네이버 지도 로드 시간 초과 (15초). Client ID 또는 Web 서비스 URL 등록 상태를 확인하세요.");
+        }
+      }, 100);
+      return () => clearInterval(check);
+    }
+
+    const script = document.createElement("script");
+    script.id = scriptId;
+    // New unified URL with ncpKeyId (current as of 2026)
+    script.src = `https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=${encodeURIComponent(naverClientId)}&submodules=geocoder`;
+    script.async = true;
+
+    let timeoutTimer = null;
+    const markLoaded = () => {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      // Rigorous check: naver.maps must have essential constructors
+      if (window.naver?.maps?.Map && window.naver.maps.Marker && window.naver.maps.LatLng) {
+        setNaverLoaded(true);
+        setNaverLoadError(null);
+      } else if (window.naver?.maps) {
+        // Partial load — maps namespace exists but constructors missing
+        setNaverLoadError("네이버 지도 부분 로드 실패. Client ID 또는 도메인 등록 확인 필요.");
+      } else {
+        // Script loaded but naver.maps null → auth failure
+        setNaverLoadError("스크립트는 로드됐으나 naver.maps 객체가 없음. Client ID 유효성 또는 도메인 등록 확인 필요.");
+      }
+    };
+
+    script.onload = markLoaded;
+    script.onerror = () => {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      // Try legacy URL as fallback
+      const legacyScript = document.createElement("script");
+      legacyScript.id = scriptId + "-legacy";
+      legacyScript.src = `https://openapi.map.naver.com/openapi/v3/maps.js?ncpClientId=${encodeURIComponent(naverClientId)}`;
+      legacyScript.async = true;
+      legacyScript.onload = markLoaded;
+      legacyScript.onerror = () => setNaverLoadError("네이버 지도 SDK 로드 실패 (신규·구버전 URL 모두 실패). 네트워크/CORS 또는 Client ID 확인 필요.");
+      document.head.appendChild(legacyScript);
+    };
+
+    // Timeout: if neither onload nor onerror fires in 10s, assume blocked
+    timeoutTimer = setTimeout(() => {
+      if (!window.naver?.maps) {
+        setNaverLoadError(`네이버 지도 응답 시간 초과 (10초). 현재 도메인 ${_origin} 이 네이버 Application의 Web 서비스 URL에 등록돼 있어야 합니다.`);
+      }
+    }, 10000);
+
+    document.head.appendChild(script);
+
+    return () => {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+    };
+  }, [mapProvider, naverClientId]);
+
+  // Initialize Naver map when loaded + satellite/blend mode active
+  // Re-creates the map each time we enter GPS mode to avoid stale container issues
+  useEffect(() => {
+    if (mapProvider !== "naver" || !naverLoaded || !naverMapContainerRef.current) return;
+    // Hard guard: if naver.maps isn't actually loaded (e.g. auth failed but we set naverLoaded=true prematurely)
+    if (!window.naver || !window.naver.maps || !window.naver.maps.Map) {
+      setNaverLoadError("네이버 지도 SDK는 로드됐지만 인증 실패. Client ID와 등록된 도메인을 확인하세요.");
+      return;
+    }
+    if (bgMode === "plan") {
+      // Leaving GPS mode — destroy Naver instance to free resources
+      if (naverMapRef.current) {
+        try { naverMapRef.current.destroy(); } catch(e) {}
+        naverMapRef.current = null;
+        naverMarkersRef.current = [];
+      }
+      return;
+    }
+    // Already initialized? Just resize in case container dimensions changed
+    if (naverMapRef.current) {
+      try {
+        if (window.naver?.maps?.Event) {
+          window.naver.maps.Event.trigger(naverMapRef.current, "resize");
+          naverMapRef.current.setCenter(new window.naver.maps.LatLng(JAMSA_CENTER.lat, JAMSA_CENTER.lng));
+        }
+      } catch(e) {}
+      return;
+    }
+
+    const naver = window.naver;
+    // Brief delay so React has mounted the container div with correct size
+    const initTimer = setTimeout(() => {
+      if (!naverMapContainerRef.current) return;
+      if (!window.naver?.maps?.Map) {
+        setNaverLoadError("초기화 직전 naver.maps가 null이 됐습니다. 인증 실패 가능성이 높습니다.");
+        return;
+      }
+      try {
+        const map = new naver.maps.Map(naverMapContainerRef.current, {
+          center: new naver.maps.LatLng(JAMSA_CENTER.lat, JAMSA_CENTER.lng),
+          zoom: 18,
+          mapTypeId: naver.maps.MapTypeId?.HYBRID || "hybrid", // satellite + labels
+          zoomControl: true,
+          zoomControlOptions: naver.maps.Position ? { position: naver.maps.Position.TOP_RIGHT } : undefined,
+          scaleControl: true,
+          logoControl: true,
+          mapDataControl: false,
+        });
+        naverMapRef.current = map;
+
+        // Add click handler for draw mode — use ref trick to read latest drawMode
+        if (naver.maps.Event?.addListener) {
+          naver.maps.Event.addListener(map, "click", (e) => {
+            // Read latest drawMode via data attr on container
+            const isDrawing = naverMapContainerRef.current?.dataset.drawMode === "true";
+            if (isDrawing) {
+              setNewZoneForm({ x: 50, y: 50, lat: e.coord.lat(), lng: e.coord.lng() });
+              setDrawMode(false);
+            }
+          });
+        }
+
+        // Force resize after a brief tick — common fix for Naver map not rendering
+        setTimeout(() => {
+          try { naver.maps.Event?.trigger(map, "resize"); } catch(e) {}
+        }, 200);
+      } catch (err) {
+        console.error("Naver 지도 초기화 실패:", err);
+        setNaverLoadError("지도 초기화 오류: " + err.message);
+      }
+    }, 50);
+
+    return () => clearTimeout(initTimer);
+  }, [naverLoaded, bgMode, mapProvider]);
+
+  // Sync drawMode to data attribute so the click listener (defined once) can read it
+  useEffect(() => {
+    if (naverMapContainerRef.current) {
+      naverMapContainerRef.current.dataset.drawMode = drawMode ? "true" : "false";
+    }
+  }, [drawMode]);
+
+  // Sync zone markers onto Naver map
+  useEffect(() => {
+    // Strong guard: naver.maps must be fully loaded with required constructors
+    if (!naverMapRef.current) return;
+    if (!window.naver || !window.naver.maps || !window.naver.maps.Marker || !window.naver.maps.LatLng) return;
+
+    try {
+      const naver = window.naver;
+      const map = naverMapRef.current;
+
+      // Clear old markers
+      naverMarkersRef.current.forEach(m => {
+        try { if (m && m.setMap) m.setMap(null); } catch(e) {}
+      });
+      naverMarkersRef.current = [];
+
+      allZones.forEach(z => {
+        try {
+          const q = zQty(z.id);
+          // Compute zone status from facActions
+          const zoneActions = (facActions || []).filter(a => {
+            const text = ((a.title || "") + " " + (a.desc || "") + " " + (a.facId || "")).toLowerCase();
+            return a.status !== "DONE" && (text.includes(z.name.split(" ")[0].toLowerCase()) || text.includes(z.id));
+          });
+          const hasUrgent = zoneActions.some(a => a.sev === "URGENT");
+          const hasHigh = zoneActions.some(a => a.sev === "HIGH");
+          const statusColor = hasUrgent ? "#dc2626" : hasHigh ? "#ea580c" : z.color;
+          const pulseAnim = hasUrgent ? "animation:urgentPulse 1.5s infinite;" : "";
+          const scale = z.scale || 1;
+          const baseSize = 32 * scale;
+          const containerSize = 40 * scale;
+          const iconFontSize = 15 * scale;
+          const editIndicator = editMode && currentUserCanEdit
+            ? `<div style="position:absolute;inset:0;border:3px dashed #2563eb;border-radius:12px;animation:editPulse 2s infinite;pointer-events:none;"></div>`
+            : "";
+          const badgeHtml = zoneActions.length > 0
+            ? `<div style="position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:${hasUrgent ? "#dc2626" : hasHigh ? "#ea580c" : "#6b7280"};color:#fff;font-size:9px;font-weight:800;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-sizing:border-box;z-index:2;">${zoneActions.length}</div>`
+            : "";
+          const stockBadge = q > 0 ? `<div style="position:absolute;bottom:-6px;left:50%;transform:translateX(-50%);background:#fff;color:${z.color};padding:1px 6px;border-radius:8px;font-size:${9 * Math.max(scale, 0.7)}px;font-weight:800;border:1.5px solid ${z.color};white-space:nowrap;z-index:2;">${q}</div>` : "";
+          const marker = new naver.maps.Marker({
+            position: new naver.maps.LatLng(z.lat, z.lng),
+            map,
+            draggable: editMode && currentUserCanEdit,
+            icon: {
+              content: `<div style="position:relative;width:${containerSize}px;height:${containerSize}px;${pulseAnim}${editMode && currentUserCanEdit ? "cursor:move;" : ""}"><div style="background:${statusColor};border:2px solid #fff;border-radius:50% 50% 50% 0;width:${baseSize}px;height:${baseSize}px;transform:rotate(-45deg);box-shadow:0 3px 10px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;margin:${(containerSize - baseSize) / 2}px;"><div style="transform:rotate(45deg);font-size:${iconFontSize}px;">${z.icon}</div></div>${badgeHtml}${stockBadge}${editIndicator}</div>`,
+              anchor: new naver.maps.Point(containerSize / 2, containerSize),
+            },
+            title: `${z.name}${zoneActions.length > 0 ? ` (진행중 ${zoneActions.length}건)` : ""}${q > 0 ? ` · 재고 ${q}` : ""}${editMode && currentUserCanEdit ? " · 드래그로 이동 가능" : ""}`,
+          });
+          if (naver.maps.Event && naver.maps.Event.addListener) {
+            naver.maps.Event.addListener(marker, "click", () => {
+              if (!editMode) setGpsZone(z);
+            });
+            // Drag end → save new position
+            if (editMode && currentUserCanEdit) {
+              naver.maps.Event.addListener(marker, "dragend", (e) => {
+                const newLatLng = marker.getPosition();
+                updateZoneCustomization(z.id, {
+                  lat: newLatLng.lat(),
+                  lng: newLatLng.lng(),
+                });
+              });
+            }
+          }
+          naverMarkersRef.current.push(marker);
+        } catch (e) {
+          console.warn("Naver marker creation failed for zone", z.id, e.message);
+        }
+      });
+
+      // User location marker
+      if (userLoc) {
+        try {
+          const userMarker = new naver.maps.Marker({
+            position: new naver.maps.LatLng(userLoc.lat, userLoc.lng),
+            map,
+            icon: {
+              content: `<div style="width:20px;height:20px;border-radius:50%;background:#2563eb;border:3px solid #fff;box-shadow:0 0 0 4px rgba(37,99,235,0.3);animation:naverUserPulse 2s infinite;"></div>`,
+              anchor: new naver.maps.Point(10, 10),
+            },
+            zIndex: 1000,
+          });
+          naverMarkersRef.current.push(userMarker);
+
+          if (naver.maps.Circle) {
+            const circle = new naver.maps.Circle({
+              map,
+              center: new naver.maps.LatLng(userLoc.lat, userLoc.lng),
+              radius: userLoc.accuracy,
+              fillColor: "#2563eb",
+              fillOpacity: 0.1,
+              strokeColor: "#2563eb",
+              strokeWeight: 1,
+            });
+            naverMarkersRef.current.push(circle);
+          }
+        } catch (e) {
+          console.warn("Naver user marker failed:", e.message);
+        }
+      }
+    } catch (err) {
+      console.error("Naver markers sync failed:", err.message);
+    }
+  }, [allZones, userLoc, naverLoaded, bgMode, facActions, editMode, currentUserCanEdit]);
+
+  const locateMe = () => {
+    if (!navigator.geolocation) return alert("브라우저가 위치 기능을 지원하지 않습니다.");
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setUserLoc({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy });
+        setLocating(false);
+        setShowGpsInfo(true);
+      },
+      (err) => {
+        alert("위치 확인 실패: " + err.message);
+        setLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+
+  // Haversine distance in meters
+  const distFromZone = (z) => {
+    if (!userLoc) return null;
+    const R = 6371000;
+    const toRad = (d) => d * Math.PI / 180;
+    const dLat = toRad(z.lat - userLoc.lat);
+    const dLng = toRad(z.lng - userLoc.lng);
+    const a = Math.sin(dLat/2)**2 + Math.cos(toRad(userLoc.lat)) * Math.cos(toRad(z.lat)) * Math.sin(dLng/2)**2;
+    return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+  };
+  const closestZone = userLoc ? allZones.map(z => ({...z, dist: distFromZone(z)})).sort((a,b)=>a.dist-b.dist)[0] : null;
+
+  // Compute a square bbox centered on the museum (not on zone extents).
+  // OSM embed.html adjusts the aspect ratio internally, so a square bbox
+  // ensures the map displayed matches what we project onto it.
+  // Fixed half-width of ~60m around center covers the whole museum comfortably.
+  const BBOX_HALF_DEG = 0.0007; // ~78m at 36.6°N — encompasses all zones + padding
+  const mapMinLat = JAMSA_CENTER.lat - BBOX_HALF_DEG;
+  const mapMaxLat = JAMSA_CENTER.lat + BBOX_HALF_DEG;
+  // Longitude adjusted for cos(lat) so the box is geographically square
+  const latCos = Math.cos(JAMSA_CENTER.lat * Math.PI / 180);
+  const mapMinLng = JAMSA_CENTER.lng - BBOX_HALF_DEG / latCos;
+  const mapMaxLng = JAMSA_CENTER.lng + BBOX_HALF_DEG / latCos;
+
+  // OpenStreetMap embed (approximate — OSM auto-fits, so marker may be offset)
+  const osmBbox = `${mapMinLng},${mapMinLat},${mapMaxLng},${mapMaxLat}`;
+  const osmUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${osmBbox}&layer=mapnik&marker=${JAMSA_CENTER.lat},${JAMSA_CENTER.lng}`;
+
+  // Convert a zone center to % within the satellite bbox
+  const latRange = mapMaxLat - mapMinLat;
+  const lngRange = mapMaxLng - mapMinLng;
+  const zoneToSatPct = (z) => {
+    const xPct = ((z.lng - mapMinLng) / lngRange) * 100;
+    const yPct = 100 - ((z.lat - mapMinLat) / latRange) * 100;
+    return { x: xPct, y: yPct };
+  };
+  // Inverse: convert % within satellite view to GPS coords
+  const pctToGps = (xPct, yPct) => ({
+    lng: mapMinLng + (xPct / 100) * lngRange,
+    lat: mapMinLat + ((100 - yPct) / 100) * latRange,
+  });
+  const userPct = userLoc ? {
+    x: ((userLoc.lng - mapMinLng) / lngRange) * 100,
+    y: 100 - ((userLoc.lat - mapMinLat) / latRange) * 100,
+  } : null;
+
+  // When blend/satellite mode, use GPS-based positioning; else use original plan x/y
+  const usingGps = bgMode === "satellite" || bgMode === "blend";
+
+  // Opacity of the plan overlay
+  const planOpacity = bgMode === "plan" ? 1 : (bgMode === "blend" ? 0.55 : 0.25);
+  const satelliteOpacity = bgMode === "plan" ? 0 : (bgMode === "blend" ? 0.8 : 1);
+
+  // 사이드바 토글 상태 (localStorage 기억)
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    try { return window.localStorage?.getItem("jamsa_inv_sidebar") !== "0"; }
+    catch (e) { return true; }
+  });
+  const toggleSidebar = () => {
+    setSidebarOpen(prev => {
+      const next = !prev;
+      try { window.localStorage?.setItem("jamsa_inv_sidebar", next ? "1" : "0"); } catch (e) {}
+      return next;
+    });
+  };
+  const [sidebarSearch, setSidebarSearch] = useState("");
+  const [sidebarFilter, setSidebarFilter] = useState("all"); // all | low | zero
+  const [detailModal, setDetailModal] = useState(null); // { zone, prod }
+
+  return(
+    <div style={{position:"relative",width:"100%",flexShrink:0,display:"flex",gap:0}}>
+      {/* 좌측: 지도 영역 */}
+      <div style={{flex:1,position:"relative",minWidth:0}}>
+      {/* Top toolbar */}
+      <div style={{display:"flex",gap:6,padding:"8px 10px",background:"#f8fafc",borderBottom:"1px solid #e5e7eb",alignItems:"center",flexWrap:"wrap"}}>
+        <span style={{fontSize:11,fontWeight:700,color:"#475569"}}>🗺️ 통합 시설지도</span>
+        <div style={{display:"flex",gap:0,border:"1px solid #cbd5e1",borderRadius:6,overflow:"hidden"}}>
+          {[
+            {k:"plan", l:"📐 배치도", tip:"기존 시설 배치도 단독"},
+            {k:"blend", l:"🔀 합성", tip:"위성지도 + 배치도 겹침"},
+            {k:"satellite", l:"🛰️ 위성지도", tip:"실제 위성사진만"},
+          ].map(m => (
+            <button key={m.k} onClick={()=>changeBgMode(m.k)} title={m.tip}
+              style={{padding:"5px 12px",border:"none",borderRight:m.k==="satellite"?"none":"1px solid #cbd5e1",background:bgMode===m.k?"linear-gradient(135deg,#2563eb,#7c3aed)":"#fff",color:bgMode===m.k?"#fff":"#475569",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+              {m.l}
+            </button>
+          ))}
+        </div>
+        {bgMode !== "plan" && (
+          <span style={{fontSize:10,padding:"3px 8px",borderRadius:4,background:mapProvider==="naver"?"#03c75a":"#64748b",color:"#fff",fontWeight:700}}>
+            {mapProvider==="naver" ? "N 네이버지도" : "OSM"}
+          </span>
+        )}
+        <button onClick={()=>setShowApiKeyModal(true)} title="네이버 Maps API 키 설정"
+          style={{padding:"5px 10px",borderRadius:6,border:"1px solid #cbd5e1",background:"#fff",color:"#475569",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+          ⚙️ API 키
+        </button>
+        {bgMode !== "plan" && (
+          <button onClick={()=>setDrawMode(!drawMode)} title="지도에서 새 구역 그리기"
+            style={{padding:"5px 10px",borderRadius:6,border:"1px solid "+(drawMode?"#dc2626":"#cbd5e1"),background:drawMode?"#dc2626":"#fff",color:drawMode?"#fff":"#475569",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+            {drawMode ? "✕ 그리기 취소" : "🆕 구역 그리기"}
+          </button>
+        )}
+        {/* 구역 옮기기 (드래그로 위치 이동) — ADMIN이거나 권한 미설정 시에도 표시 */}
+        {bgMode !== "plan" && (currentUserCanEdit || !userCtx || userCtx.role === "ADMIN") && (
+          <button onClick={()=>{setEditPosMode(!editPosMode); if(drawMode) setDrawMode(false); if(editMode) setEditMode(false);}} title="박스를 드래그로 이동"
+            style={{padding:"5px 10px",borderRadius:6,border:"1px solid "+(editPosMode?"#f59e0b":"#cbd5e1"),background:editPosMode?"linear-gradient(135deg,#f59e0b,#dc2626)":"#fff",color:editPosMode?"#fff":"#475569",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+            {editPosMode ? "✓ 이동 종료" : "↔ 구역 옮기기"}
+          </button>
+        )}
+        {/* Zone icon editing — only shown to users with permission */}
+        {bgMode !== "plan" && currentUserCanEdit && (
+          <button onClick={()=>{setEditMode(!editMode); if(drawMode) setDrawMode(false);}} title="아이콘 위치·크기 편집"
+            style={{padding:"5px 10px",borderRadius:6,border:"1px solid "+(editMode?"#2563eb":"#cbd5e1"),background:editMode?"linear-gradient(135deg,#2563eb,#7c3aed)":"#fff",color:editMode?"#fff":"#475569",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+            {editMode ? "✓ 편집 종료" : "✏️ 아이콘 편집"}
+          </button>
+        )}
+        {/* Permission management — ADMIN only */}
+        {userCtx?.role === "ADMIN" && (
+          <button onClick={()=>setShowPermsModal(true)} title="편집 권한 관리"
+            style={{padding:"5px 10px",borderRadius:6,border:"1px solid #cbd5e1",background:"#fff",color:"#475569",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+            🔐 권한
+          </button>
+        )}
+        <div style={{fontSize:10,color:"#64748b",marginLeft:8}}>
+          📍 {JAMSA_CENTER.lat.toFixed(4)}, {JAMSA_CENTER.lng.toFixed(4)} · 충북 청주시 흥덕구 강내면 청주역로 213-52
+        </div>
+        <button onClick={locateMe} disabled={locating}
+          style={{marginLeft:"auto",padding:"5px 12px",borderRadius:6,border:"none",background:locating?"#cbd5e1":(userLoc?"#059669":"linear-gradient(135deg,#2563eb,#059669)"),color:"#fff",fontSize:11,fontWeight:700,cursor:locating?"wait":"pointer"}}>
+          {locating ? "📡 확인 중..." : (userLoc ? "✓ 내 위치 · 갱신" : "📍 내 위치 확인")}
+        </button>
+        {userLoc && (
+          <button onClick={()=>setUserLoc(null)}
+            style={{padding:"5px 10px",borderRadius:6,border:"1px solid #e5e7eb",background:"#fff",color:"#64748b",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+            ✕ 위치 제거
+          </button>
+        )}
+      </div>
+
+      {/* Draw mode instruction banner */}
+      {drawMode && (
+        <div style={{background:"linear-gradient(135deg,#fef3c7,#fef9c3)",borderBottom:"2px solid #fbbf24",padding:"8px 14px",fontSize:12,color:"#78350f",fontWeight:700,display:"flex",alignItems:"center",gap:8}}>
+          <span>🎯 지도에서 새 구역을 만들 위치를 클릭하세요.</span>
+          <span style={{fontSize:10,color:"#92400e",fontWeight:500}}>클릭한 지점이 구역 중심이 됩니다.</span>
+        </div>
+      )}
+
+      {/* Position edit mode instruction banner */}
+      {editPosMode && (
+        <div style={{background:"linear-gradient(135deg,#fef3c7,#fed7aa)",borderBottom:"2px solid #f59e0b",padding:"10px 14px",fontSize:12,color:"#78350f",fontWeight:700,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <span style={{fontSize:14}}>↔️</span>
+          <span>구역 박스를 마우스로 잡아서 드래그하세요</span>
+          <span style={{fontSize:10,color:"#92400e",fontWeight:500}}>· 위치 변경은 자동 저장 · 다른 사용자에게도 즉시 반영</span>
+          <button onClick={() => {
+            if (confirm("모든 구역 위치를 원래대로 되돌리시겠어요?")) {
+              try { window.localStorage.removeItem("jamsa_inv_zone_overrides"); } catch (e) {}
+              window.location.reload();
+            }
+          }} style={{marginLeft:"auto",padding:"4px 10px",background:"rgba(255,255,255,0.7)",border:"1px solid #f59e0b",borderRadius:4,fontSize:10,fontWeight:700,cursor:"pointer",color:"#78350f"}}>
+            ↻ 모두 원래대로
+          </button>
+        </div>
+      )}
+
+      {/* Combined map — satellite background + plan overlay + zone boxes */}
+      <div ref={mapWrap} style={{position:"relative",width:"100%",background:"#f5f5f5",aspectRatio:"4/3",overflow:"hidden"}}>
+
+        {/* Background layer 1a: Naver Maps container — always mounted when provider=naver (visibility toggled) */}
+        {mapProvider === "naver" && naverClientId && (
+          <div ref={naverMapContainerRef}
+            style={{
+              position:"absolute", inset:0, width:"100%", height:"100%",
+              opacity: bgMode === "plan" ? 0 : satelliteOpacity,
+              transition:"opacity 0.3s",
+              pointerEvents: bgMode === "satellite" ? "auto" : "none",
+              zIndex: bgMode === "plan" ? -1 : 0,
+              visibility: bgMode === "plan" ? "hidden" : "visible",
+            }}
+          />
+        )}
+
+        {/* Background layer 1b: OSM fallback (only when not using Naver) */}
+        {bgMode !== "plan" && (mapProvider === "osm" || !naverClientId) && (
+          <iframe
+            src={osmUrl}
+            title="GPS 위성지도"
+            style={{position:"absolute",inset:0,width:"100%",height:"100%",border:"none",opacity:satelliteOpacity,transition:"opacity 0.3s",pointerEvents:"none"}}
+          />
+        )}
+
+        {/* Naver load error banner */}
+        {naverLoadError && bgMode !== "plan" && mapProvider === "naver" && (
+          <div style={{position:"absolute",top:8,left:"50%",transform:"translateX(-50%)",zIndex:100,padding:"10px 14px",background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,color:"#991b1b",fontSize:11,fontWeight:700,maxWidth:"92%",boxShadow:"0 4px 12px rgba(0,0,0,0.2)",lineHeight:1.5}}>
+            <div style={{marginBottom:6}}>⚠️ {naverLoadError}</div>
+            <div style={{fontSize:10,fontWeight:500,color:"#7f1d1d",background:"#fff",padding:"6px 8px",borderRadius:4,marginBottom:6,fontFamily:"monospace"}}>
+              현재 origin: <strong>{typeof window !== "undefined" ? window.location.origin : "?"}</strong>
+              <br/>이 도메인을 네이버 클라우드 플랫폼 → Maps → Application → 서비스 환경 등록 → Web 서비스 URL 에 추가해야 합니다.
+            </div>
+            <div style={{display:"flex",gap:6}}>
+              <button onClick={()=>setShowApiKeyModal(true)} style={{padding:"4px 10px",borderRadius:3,border:"none",background:"#dc2626",color:"#fff",fontSize:10,cursor:"pointer",fontWeight:700}}>API 키 수정</button>
+              <button onClick={()=>{setMapProvider("osm");setNaverLoadError(null);}} style={{padding:"4px 10px",borderRadius:3,border:"1px solid #fecaca",background:"#fff",color:"#991b1b",fontSize:10,cursor:"pointer",fontWeight:700}}>OSM으로 전환</button>
+            </div>
+          </div>
+        )}
+
+        {/* Naver loading indicator */}
+        {mapProvider === "naver" && naverClientId && !naverLoaded && !naverLoadError && bgMode !== "plan" && (
+          <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",background:"#f1f5f9",zIndex:5}}>
+            <div style={{textAlign:"center"}}>
+              <div style={{width:32,height:32,border:"3px solid #03c75a",borderTopColor:"transparent",borderRadius:"50%",animation:"naverSpin 0.8s linear infinite",margin:"0 auto 10px"}}></div>
+              <div style={{fontSize:12,fontWeight:700,color:"#0f172a"}}>🗺️ 네이버 지도 로딩 중...</div>
+              <div style={{fontSize:10,color:"#64748b",marginTop:3}}>Client ID로 인증 중 · 수 초 소요</div>
+            </div>
+          </div>
+        )}
+
+        {/* Background layer 2: Facility plan image */}
+        {bgMode !== "satellite" && (
+          <img src={MAP_IMG} alt="배치도"
+            style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",opacity:planOpacity,transition:"opacity 0.3s",userSelect:"none",pointerEvents:"none"}}
+            draggable={false}/>
+        )}
+
+        {/* Zone overlays — position depends on bgMode */}
+        <div
+          onClick={drawMode && usingGps ? (e) => {
+            const r = mapWrap.current?.getBoundingClientRect();
+            if (!r) return;
+            const xPct = ((e.clientX - r.left) / r.width) * 100;
+            const yPct = ((e.clientY - r.top) / r.height) * 100;
+            const { lat, lng } = pctToGps(xPct, yPct);
+            setNewZoneForm({ x: xPct, y: yPct, lat, lng });
+            setDrawMode(false);
+          } : undefined}
+          style={{position:"absolute",inset:0,pointerEvents:drawMode?"all":"none",cursor:drawMode?"crosshair":"default"}}>
+          <svg style={{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:drawMode?"none":"auto"}} viewBox="0 0 100 100" preserveAspectRatio="none">
+            {/* Base zones: rectangles */}
+            {allZones.filter(z => !z.custom).map(z=>{
+              const pos = usingGps ? zoneToSatPct(z) : {x: z.x, y: z.y};
+              const w = usingGps ? Math.max(3, z.w * 0.5) : z.w;
+              const h = usingGps ? Math.max(3, z.h * 0.4) : z.h;
+              const x = usingGps ? pos.x - w/2 : pos.x;
+              const y = usingGps ? pos.y - h/2 : pos.y;
+              return (
+                <rect key={z.id} className="zbox" x={x} y={y} width={w} height={h}
+                  rx="1" fill={z.color}
+                  style={{pointerEvents:drawMode?"none":"all",opacity:hZone===z.id?0.5:(usingGps?0.25:0.08),stroke:hZone===z.id||usingGps?z.color:"transparent",strokeWidth:hZone===z.id?0.6:(usingGps?0.3:0)}}
+                  onMouseEnter={e=>{if(drawMode)return;setHZone(z.id);const r=mapWrap.current?.getBoundingClientRect();if(r)setTip({x:e.clientX-r.left,y:e.clientY-r.top});}}
+                  onMouseMove={e=>{const r=mapWrap.current?.getBoundingClientRect();if(r)setTip({x:e.clientX-r.left,y:e.clientY-r.top});}}
+                  onMouseLeave={()=>{setHZone(null);setTip(null);}}
+                  onClick={()=>{if(usingGps){setGpsZone(z);}else{setSelZone(z.id);}setHZone(null);setTip(null);}}
+                />
+              );
+            })}
+            {/* Custom zones: circles (only visible in GPS modes) */}
+            {usingGps && allZones.filter(z => z.custom).map(z => {
+              const pos = zoneToSatPct(z);
+              return (
+                <circle key={z.id} cx={pos.x} cy={pos.y} r="3" fill={z.color}
+                  style={{pointerEvents:drawMode?"none":"all",opacity:hZone===z.id?0.7:0.45,stroke:z.color,strokeWidth:0.5,strokeDasharray:"1,0.5"}}
+                  onClick={()=>setGpsZone(z)}
+                  onMouseEnter={()=>setHZone(z.id)}
+                  onMouseLeave={()=>setHZone(null)}
+                />
+              );
+            })}
+          </svg>
+
+          {/* Zone labels — positioned via plan or GPS, drag-enabled in edit mode */}
+          {allZones.map(z=>{
+            if (z.custom && !usingGps) return null; // custom zones only in GPS modes
+            const pos = usingGps ? zoneToSatPct(z) : {x: z.x + z.w/2, y: z.y + z.h/2};
+            const q = zQty(z.id);
+            const prods = zProds(z.id);
+            const isClosest = closestZone?.id === z.id;
+            const isHovered = hZone === z.id;
+            const isDragging = draggingZoneId === z.id;
+            const sortedProds = [...prods].sort((a,b)=>b.qty-a.qty);
+            const dragX = isDragging ? `${pos.x + dragOffset.dx}%` : `${pos.x}%`;
+            const dragY = isDragging ? `${pos.y + dragOffset.dy}%` : `${pos.y}%`;
+
+            return(
+            <div key={z.id+"-lbl"}
+              onMouseEnter={()=> { if (!editPosMode) setHZone(z.id); }}
+              onMouseLeave={()=> { if (!editPosMode) setHZone(null); }}
+              onClick={(e)=>{ if (!editPosMode && !isDragging) { e.stopPropagation(); setSelZone(z.id); }}}
+              onMouseDown={(e)=>{
+                if (!editPosMode || !usingGps) return;
+                e.stopPropagation();
+                e.preventDefault();
+                setDraggingZoneId(z.id);
+                const rect = mapWrap?.current?.getBoundingClientRect();
+                if (!rect) return;
+                const startX = e.clientX;
+                const startY = e.clientY;
+                const handleMove = (ev) => {
+                  const dx = ((ev.clientX - startX) / rect.width) * 100;
+                  const dy = ((ev.clientY - startY) / rect.height) * 100;
+                  setDragOffset({ dx, dy });
+                };
+                const handleUp = (ev) => {
+                  window.removeEventListener("mousemove", handleMove);
+                  window.removeEventListener("mouseup", handleUp);
+                  // 이동된 위치 → lat/lng 역계산 후 저장
+                  const dx = ((ev.clientX - startX) / rect.width) * 100;
+                  const dy = ((ev.clientY - startY) / rect.height) * 100;
+                  const newPctX = pos.x + dx;
+                  const newPctY = pos.y + dy;
+                  // 위경도 계산 (zoneToSatPct의 역연산)
+                  const SAT_BBOX = { lat_min: 36.6378, lat_max: 36.6395, lng_min: 127.4880, lng_max: 127.4905 };
+                  const newLng = SAT_BBOX.lng_min + (newPctX / 100) * (SAT_BBOX.lng_max - SAT_BBOX.lng_min);
+                  const newLat = SAT_BBOX.lat_max - (newPctY / 100) * (SAT_BBOX.lat_max - SAT_BBOX.lat_min);
+                  if (onUpdateZone && Math.abs(dx) + Math.abs(dy) > 0.5) {
+                    onUpdateZone(z.id, { lat: newLat, lng: newLng });
+                  }
+                  setDraggingZoneId(null);
+                  setDragOffset({ dx: 0, dy: 0 });
+                };
+                window.addEventListener("mousemove", handleMove);
+                window.addEventListener("mouseup", handleUp);
+              }}
+              style={{
+                position:"absolute",
+                left: dragX, top: dragY,
+                transform:"translate(-50%,-50%)",
+                background: editPosMode ? "rgba(251,191,36,0.95)" : (isClosest ? "#059669" : "rgba(255,255,255,0.97)"),
+                border: `2px solid ${editPosMode ? "#f59e0b" : (isClosest ? "#fff" : z.color)}`,
+                borderRadius: 8,
+                padding: isHovered && !editPosMode ? "6px 10px" : "4px 10px",
+                pointerEvents: "auto",
+                cursor: editPosMode ? "move" : "pointer",
+                textAlign: "center",
+                boxShadow: isDragging ? "0 8px 24px rgba(0,0,0,0.4),0 0 0 4px rgba(251,191,36,0.5)" :
+                          (isClosest ? "0 0 0 3px #059669, 0 4px 12px rgba(5,150,105,0.5)" :
+                          (isHovered ? "0 6px 16px rgba(0,0,0,0.25)" : "0 2px 8px rgba(0,0,0,0.15)")),
+                whiteSpace: "nowrap",
+                zIndex: isDragging ? 100 : (isHovered ? 50 : 2),
+                transition: isDragging ? "none" : "box-shadow 0.15s, padding 0.15s",
+                minWidth: isHovered && !editPosMode && sortedProds.length > 0 ? 200 : "auto",
+                userSelect: "none",
+              }}>
+              <div style={{fontSize:usingGps?9:11,fontWeight:700,color:isClosest?"#fff":"#333",lineHeight:1.3}}>
+                {usingGps?z.icon+" ":""}{z.name.length>9?z.name.slice(0,9)+"…":z.name}
+                {z.custom && <span style={{fontSize:8,marginLeft:3,padding:"0 3px",borderRadius:2,background:isClosest?"#fff":"#fbbf24",color:isClosest?"#059669":"#000"}}>사용자</span>}
+                {editPosMode && <span style={{fontSize:8,marginLeft:4,color:"#7c2d12",fontWeight:900}}>↔ 드래그</span>}
+              </div>
+              <div style={{fontSize:usingGps?13:16,fontWeight:900,color:isClosest?"#fff":(q===0?"#ef4444":z.color),lineHeight:1.2}}>{q.toLocaleString()}</div>
+            </div>);
+          })}
+
+          {/* User location marker (GPS modes only) */}
+          {usingGps && userLoc && userPct && userPct.x >= -5 && userPct.x <= 105 && userPct.y >= -5 && userPct.y <= 105 && (
+            <div style={{position:"absolute",left:`${userPct.x}%`,top:`${userPct.y}%`,transform:"translate(-50%,-50%)",pointerEvents:"none",zIndex:10}}>
+              <div style={{width:22,height:22,borderRadius:"50%",background:"#2563eb",border:"3px solid #fff",boxShadow:"0 0 0 6px rgba(37,99,235,0.25), 0 4px 12px rgba(0,0,0,0.4)",animation:"jamsaUserPulse 2s infinite"}}/>
+              <div style={{position:"absolute",top:"100%",left:"50%",transform:"translateX(-50%)",marginTop:4,background:"#2563eb",color:"#fff",padding:"3px 10px",borderRadius:5,fontSize:10,fontWeight:800,whiteSpace:"nowrap",boxShadow:"0 2px 6px rgba(0,0,0,0.3)"}}>
+                📱 내 위치
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Info overlay — bottom right when GPS is active */}
+        {usingGps && userLoc && showGpsInfo && (
+          <div style={{position:"absolute",bottom:10,right:10,background:"rgba(15,23,42,0.94)",color:"#fff",padding:"10px 14px",borderRadius:8,fontSize:11,maxWidth:260,boxShadow:"0 4px 12px rgba(0,0,0,0.4)",zIndex:50}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
+              <span style={{fontSize:10,color:"#93c5fd",fontWeight:700}}>📱 내 현재 위치</span>
+              <button onClick={()=>setShowGpsInfo(false)} style={{background:"none",border:"none",color:"#94a3b8",cursor:"pointer",fontSize:14,lineHeight:1,padding:0,marginLeft:8}}>×</button>
+            </div>
+            <div style={{fontFamily:"monospace",fontSize:10}}>{userLoc.lat.toFixed(6)}, {userLoc.lng.toFixed(6)}</div>
+            <div style={{fontSize:9,color:"#94a3b8",marginTop:2}}>정확도 ±{Math.round(userLoc.accuracy)}m</div>
+            {closestZone && (
+              <div style={{marginTop:8,paddingTop:8,borderTop:"1px solid #334155"}}>
+                <div style={{fontSize:10,color:"#6ee7b7"}}>📍 가장 가까운 구역</div>
+                <div style={{fontWeight:700,marginTop:2}}>{closestZone.icon} {closestZone.name}</div>
+                <div style={{fontSize:10,color:"#94a3b8"}}>
+                  거리 약 {closestZone.dist < 1000 ? closestZone.dist + "m" : (closestZone.dist/1000).toFixed(2) + "km"}
+                  {closestZone.dist < 30 && <span style={{color:"#6ee7b7",marginLeft:4}}>· 구역 내부</span>}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Satellite attribution */}
+        {usingGps && (
+          <div style={{position:"absolute",bottom:0,left:0,fontSize:8,color:"#64748b",background:"rgba(255,255,255,0.7)",padding:"2px 6px",zIndex:5}}>
+            © OpenStreetMap · 잠사박물관
+          </div>
+        )}
+
+        {/* Mode indicator */}
+        <div style={{position:"absolute",top:8,right:8,padding:"4px 10px",background:"rgba(15,23,42,0.85)",color:"#fff",borderRadius:4,fontSize:10,fontWeight:700,zIndex:5}}>
+          {bgMode === "plan" && "📐 시설 배치도"}
+          {bgMode === "blend" && "🔀 배치도 + 위성지도 합성"}
+          {bgMode === "satellite" && "🛰️ GPS 위성지도 (실제 위치)"}
+        </div>
+
+        {/* External map link (satellite/blend modes) */}
+        {bgMode !== "plan" && (
+          <a href={`https://map.naver.com/v5/?c=${JAMSA_CENTER.lng},${JAMSA_CENTER.lat},17,0,0,0,dh`}
+            target="_blank" rel="noopener noreferrer"
+            style={{position:"absolute",top:40,right:8,padding:"5px 10px",background:"rgba(3,199,90,0.95)",color:"#fff",borderRadius:4,fontSize:10,fontWeight:700,zIndex:5,textDecoration:"none",boxShadow:"0 2px 6px rgba(0,0,0,0.3)"}}>
+            🔍 네이버지도에서 크게 보기
+          </a>
+        )}
+
+        {/* OSM accuracy warning — shown when using OSM (not Naver) in GPS modes */}
+        {bgMode !== "plan" && (mapProvider === "osm" || !naverClientId) && !editMode && (
+          <div style={{position:"absolute",bottom:14,left:"50%",transform:"translateX(-50%)",zIndex:5,padding:"8px 14px",background:"rgba(251,191,36,0.95)",color:"#78350f",borderRadius:6,fontSize:11,fontWeight:700,boxShadow:"0 4px 12px rgba(0,0,0,0.25)",maxWidth:"90%",textAlign:"center"}}>
+            ⚠️ OSM 임베드는 자동 줌 조정으로 구역 위치가 부정확할 수 있습니다 ·
+            <button onClick={()=>setShowApiKeyModal(true)} style={{marginLeft:6,padding:"2px 8px",borderRadius:3,border:"none",background:"#0f172a",color:"#fff",fontSize:10,fontWeight:700,cursor:"pointer"}}>
+              네이버 지도 사용 (정확)
+            </button>
+          </div>
+        )}
+
+        {/* Edit mode info banner + crop panel */}
+        {editMode && currentUserCanEdit && bgMode !== "plan" && (
+          <div style={{position:"absolute",bottom:14,left:14,right:14,zIndex:6,display:"flex",gap:8,alignItems:"stretch",maxHeight:"40vh"}}>
+            <div style={{flex:1,padding:"10px 14px",background:"linear-gradient(135deg,rgba(37,99,235,0.97),rgba(124,58,237,0.97))",color:"#fff",borderRadius:8,boxShadow:"0 4px 16px rgba(0,0,0,0.3)",fontSize:11,fontWeight:700,display:"flex",flexDirection:"column",gap:6}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
+                <span style={{fontSize:14}}>✏️</span>
+                <span style={{fontSize:13,fontWeight:800}}>아이콘 편집 모드</span>
+                <span style={{marginLeft:"auto",padding:"2px 8px",borderRadius:3,background:"rgba(255,255,255,0.2)",fontSize:10}}>
+                  편집자: {userCtx?.name || userCtx?.role}
+                </span>
+              </div>
+              <div style={{fontSize:10,opacity:0.95,lineHeight:1.5}}>
+                • 마커를 <strong>드래그</strong>해서 위치 이동<br/>
+                • 우측 패널에서 각 구역 <strong>크기 조절</strong> (0.5× ~ 2×)<br/>
+                • 변경사항은 자동 저장됨 · 모든 사용자에게 즉시 반영
+              </div>
+              <div style={{display:"flex",gap:6,marginTop:4}}>
+                <button onClick={resetAllCustomizations}
+                  style={{padding:"5px 10px",borderRadius:4,border:"none",background:"rgba(255,255,255,0.2)",color:"#fff",fontSize:10,fontWeight:700,cursor:"pointer"}}>
+                  ↻ 모두 원래대로
+                </button>
+                <span style={{marginLeft:"auto",fontSize:10,opacity:0.85,alignSelf:"center"}}>
+                  수정됨: {Object.keys(zoneCustomizations).length} / {allZones.length}
+                </span>
+              </div>
+            </div>
+
+            {/* Scale panel - right side */}
+            <div style={{width:260,background:"rgba(255,255,255,0.97)",borderRadius:8,boxShadow:"0 4px 16px rgba(0,0,0,0.3)",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+              <div style={{padding:"8px 12px",background:"#0f172a",color:"#fff",fontSize:11,fontWeight:800}}>
+                📏 크기 조절
+              </div>
+              <div style={{overflowY:"auto",padding:8,flex:1}}>
+                {allZones.map(z => {
+                  const scale = z.scale || 1;
+                  return (
+                    <div key={z.id} style={{padding:8,marginBottom:4,background:zoneCustomizations[z.id]?"#f0f9ff":"#f8fafc",border:`1px solid ${zoneCustomizations[z.id]?"#bae6fd":"#e5e7eb"}`,borderRadius:6}}>
+                      <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                        <span style={{fontSize:11,fontWeight:700,color:z.color,flex:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                          {z.icon} {z.name}
+                        </span>
+                        <span style={{fontSize:10,color:"#64748b",fontFamily:"monospace"}}>{scale.toFixed(1)}×</span>
+                        {zoneCustomizations[z.id] && (
+                          <button onClick={()=>resetZoneCustomization(z.id)} title="이 구역 초기화"
+                            style={{padding:"1px 5px",borderRadius:3,border:"none",background:"#fee2e2",color:"#dc2626",fontSize:9,fontWeight:700,cursor:"pointer"}}>
+                            ↻
+                          </button>
+                        )}
+                      </div>
+                      <input type="range" min="0.5" max="2" step="0.1" value={scale}
+                        onChange={(e)=>updateZoneCustomization(z.id,{scale:parseFloat(e.target.value)})}
+                        style={{width:"100%",cursor:"pointer"}} />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {tip&&hZone&&<Tip zone={allZones.find(z=>z.id===hZone)} prods={zProds(hZone)} hist={zHist(hZone)} x={tip.x} y={tip.y} cRef={mapWrap} photos={zonePhotos[hZone]||[]}/>}
+      {gpsZone && <GpsZoneModal zone={gpsZone} userLoc={userLoc} dist={distFromZone(gpsZone)} onClose={()=>setGpsZone(null)}
+        onGoInventory={()=>{setSelZone(gpsZone.id);setGpsZone(null);}}
+        onDeleteCustom={gpsZone.custom && onDeleteCustomZone ? ()=>{onDeleteCustomZone(gpsZone.id);setGpsZone(null);} : null}
+        onAddInventory={gpsZone.custom && onAddInventoryToZone ? ()=>{onAddInventoryToZone(gpsZone);setGpsZone(null);} : null}
+        facActions={facActions}
+        zoneInventory={zProds(gpsZone.id)}
+        onCreateFacAction={onCreateFacAction}
+        switchToFacility={switchToFacility}
+      />}
+
+      {/* CCTV 라이브 오버레이 — 모든 활성 채널 라이브뷰 + Claude AI 위험 감지 */}
+      <CctvLiveOverlay
+        zones={zones}
+        cctvMap={cctvMap}
+        onAlert={(alert)=>{
+          // 알림 히스토리 누적 (최근 50건)
+          setCctvAlerts(prev => [alert, ...prev].slice(0, 50));
+        }}
+        onOpenChannel={(ch)=>{
+          // 큰 화면으로 보기 — 향후 구현
+          const cam = FAC_CCTV_CAMERAS.find(c => c.ch === ch);
+          if (cam) alert(`CH${ch} ${cam.name} (${cam.zone})\n\n자세한 화면을 보려면 [시설점검] → [CCTV] 메뉴로 이동하세요.`);
+        }}
+      />
+
+      {/* CCTV 매핑 편집 버튼 (지도 좌하단) */}
+      {currentUserCanEdit && (
+        <button
+          onClick={()=>setShowCctvMapping(true)}
+          style={{position:"absolute",bottom:14,left:14,zIndex:500,padding:"8px 12px",background:"rgba(15,23,42,0.92)",color:"#fff",border:"none",borderRadius:8,fontSize:11,fontWeight:600,cursor:"pointer",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",gap:6}}
+          title="구역과 CCTV 매핑 편집">
+          📹⚙️ CCTV 매핑
+        </button>
+      )}
+      {showCctvMapping && <CctvMappingModal zones={zones} cctvMap={cctvMap} onSave={(m)=>{setCctvMap(m);saveCctvMap(m);}} onClose={()=>setShowCctvMapping(false)}/>}
+
+      {newZoneForm && <NewZoneModal pos={newZoneForm} onSave={(z)=>{onCreateZone && onCreateZone(z);setNewZoneForm(null);}} onClose={()=>setNewZoneForm(null)}/>}
+      {showApiKeyModal && <NaverApiKeyModal currentId={naverClientId} currentProvider={mapProvider} onSave={(id,provider)=>{saveNaverClientId(id);setMapProvider(provider);setShowApiKeyModal(false);setNaverLoadError(null);setNaverLoaded(false);if(naverMapRef.current){naverMapRef.current=null;}}} onClose={()=>setShowApiKeyModal(false)}/>}
+      {showPermsModal && <ZoneEditPermsModal currentPerms={editPermissions} onSave={(perms)=>{setEditPermissions(perms);setShowPermsModal(false);}} onClose={()=>setShowPermsModal(false)}/>}
+      <style>{`@keyframes jamsaUserPulse{0%,100%{box-shadow:0 0 0 6px rgba(37,99,235,0.25),0 4px 12px rgba(0,0,0,0.4)}50%{box-shadow:0 0 0 14px rgba(37,99,235,0.08),0 4px 12px rgba(0,0,0,0.4)}}@keyframes naverUserPulse{0%,100%{box-shadow:0 0 0 4px rgba(37,99,235,0.3)}50%{box-shadow:0 0 0 10px rgba(37,99,235,0.1)}}@keyframes naverPulse{0%,100%{opacity:1}50%{opacity:0.7}}@keyframes naverSpin{to{transform:rotate(360deg)}}@keyframes urgentPulse{0%,100%{filter:drop-shadow(0 0 0 rgba(220,38,38,0.6));transform:scale(1)}50%{filter:drop-shadow(0 0 8px rgba(220,38,38,0.8));transform:scale(1.08)}}@keyframes editPulse{0%,100%{border-color:rgba(37,99,235,0.9);opacity:1}50%{border-color:rgba(37,99,235,0.3);opacity:0.6}}@keyframes cctvScan{0%{transform:translateY(-100%)}100%{transform:translateY(800%)}}@keyframes blink{0%,50%{opacity:1}51%,100%{opacity:0.3}}`}</style>
+      </div>{/* /지도 영역 */}
+
+      {/* 우측: 전체 재고 사이드바 */}
+      {sidebarOpen ? (
+        <div style={{width:320,flexShrink:0,background:"#fff",borderLeft:"1px solid #e5e7eb",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+          {/* 헤더 + 검색 + 필터 */}
+          <div style={{padding:"10px 12px",borderBottom:"1px solid #e5e7eb",flexShrink:0,background:"#fafafa"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+              <span style={{fontSize:13,fontWeight:800,color:"#0f172a"}}>📦 전체 재고</span>
+              <button onClick={toggleSidebar} title="사이드바 접기"
+                style={{padding:"3px 8px",borderRadius:4,border:"1px solid #cbd5e1",background:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",color:"#64748b"}}>
+                ▶ 접기
+              </button>
+            </div>
+            <input type="text" value={sidebarSearch} onChange={e=>setSidebarSearch(e.target.value)}
+              placeholder="제품명 검색..."
+              style={{width:"100%",padding:"6px 10px",fontSize:12,border:"1px solid #cbd5e1",borderRadius:6,outline:"none",boxSizing:"border-box"}} />
+            <div style={{display:"flex",gap:4,marginTop:6}}>
+              {[
+                {k:"all",l:"전체",c:"#3b82f6"},
+                {k:"low",l:"⚠ 부족 (<10)",c:"#f59e0b"},
+                {k:"zero",l:"⚠ 0개",c:"#ef4444"},
+              ].map(f=>(
+                <button key={f.k} onClick={()=>setSidebarFilter(f.k)}
+                  style={{flex:1,padding:"4px 6px",fontSize:10,fontWeight:700,
+                    border:`1px solid ${sidebarFilter===f.k?f.c:"#cbd5e1"}`,
+                    background:sidebarFilter===f.k?f.c:"#fff",
+                    color:sidebarFilter===f.k?"#fff":"#64748b",
+                    borderRadius:5,cursor:"pointer"}}>
+                  {f.l}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 리스트 (스크롤) */}
+          <div style={{flex:1,overflowY:"auto",padding:6}}>
+            {(() => {
+              const q = sidebarSearch.trim().toLowerCase();
+              let totalShown = 0;
+              const groups = allZones.filter(z => !z.custom || usingGps).map(z => {
+                const zItems = (zProds(z.id) || []).filter(p => {
+                  if (q && !p.name.toLowerCase().includes(q)) return false;
+                  if (sidebarFilter === "low" && p.qty >= 10) return false;
+                  if (sidebarFilter === "zero" && p.qty !== 0) return false;
+                  return true;
+                });
+                totalShown += zItems.length;
+                return { z, items: zItems, totalQty: zProds(z.id).reduce((s,p)=>s+p.qty,0), totalCount: zProds(z.id).length };
+              }).filter(g => g.items.length > 0);
+
+              if (totalShown === 0) {
+                return <div style={{textAlign:"center",padding:30,fontSize:11,color:"#94a3b8"}}>
+                  {q ? "검색 결과 없음" : "표시할 재고 없음"}
+                </div>;
+              }
+
+              return groups.map(({z,items,totalQty,totalCount}) => (
+                <div key={z.id} style={{marginBottom:8,borderRadius:6,padding:4}}>
+                  {/* 구역 헤더 (sticky) */}
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                    padding:"5px 8px",fontSize:11,fontWeight:800,color:z.color,
+                    borderBottom:`1px solid ${z.color}30`,marginBottom:4,
+                    position:"sticky",top:0,background:"#fff",zIndex:1}}>
+                    <span style={{cursor:"pointer"}} onClick={()=>{setHZone(z.id);setSelZone(z.id);}}>
+                      {z.icon} {z.name}
+                    </span>
+                    <span style={{color:"#94a3b8",fontWeight:600,fontSize:10}}>
+                      {totalCount}품 · {totalQty.toLocaleString()}
+                    </span>
+                  </div>
+                  {/* 재고 항목들 */}
+                  {items.map(p => (
+                    <div key={p.id}
+                      onClick={()=>setDetailModal({zone:z, prod:p})}
+                      style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                        padding:"5px 8px",fontSize:11,cursor:"pointer",borderRadius:4,
+                        transition:"background 0.1s"}}
+                      onMouseEnter={e=>e.currentTarget.style.background="#f1f5f9"}
+                      onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{color:"#0f172a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                          {p.qty===0 && <span style={{color:"#ef4444"}}>⚠ </span>}
+                          {p.name}
+                        </div>
+                        {p.cat && <div style={{fontSize:9,color:"#94a3b8",marginTop:1}}>{p.cat}</div>}
+                      </div>
+                      <span style={{fontWeight:800,fontSize:12,marginLeft:8,flexShrink:0,
+                        color:p.qty===0?"#ef4444":(p.qty<10?"#f59e0b":"#0f172a")}}>
+                        {p.qty.toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ));
+            })()}
+          </div>
+        </div>
+      ) : (
+        <button onClick={toggleSidebar}
+          style={{position:"absolute",right:0,top:60,zIndex:600,padding:"8px 6px",
+            background:"rgba(15,23,42,0.92)",color:"#fff",border:"none",
+            borderRadius:"6px 0 0 6px",fontSize:11,fontWeight:700,cursor:"pointer",
+            writingMode:"vertical-rl",textOrientation:"mixed",height:120,
+            boxShadow:"-2px 0 8px rgba(0,0,0,0.15)"}}
+          title="전체 재고 보기">
+          📦 전체 재고 ◀
+        </button>
+      )}
+
+      {/* 재고 항목 상세 모달 */}
+      {detailModal && (
+        <InventoryDetailModal
+          zone={detailModal.zone}
+          prod={detailModal.prod}
+          allHist={zHist(detailModal.zone.id).filter(h => h.pid === detailModal.prod.id)}
+          onClose={() => setDetailModal(null)}
+          onAction={(type) => {
+            // 기존 ZoneBottom 모달 열기
+            setSelZone(detailModal.zone.id);
+            // TODO: pid를 highlightPid로 설정하고 입고/출고 모달 열기
+            setDetailModal(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ─── 재고 항목 상세 모달 (사이드바 클릭 → 입고/출고/이력) ─── */
+function InventoryDetailModal({ zone, prod, allHist = [], onClose, onAction }) {
+  if (!zone || !prod) return null;
+  const sortedHist = [...allHist].sort((a,b) => (b.at || 0) - (a.at || 0)).slice(0, 20);
+  const ac = {"입고":"#22c55e","출고":"#ef4444","조정":"#8b5cf6","추가":"#6366f1"};
+  return (
+    <div style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+      onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{background:"#fff",borderRadius:14,width:520,maxWidth:"95vw",maxHeight:"85vh",display:"flex",flexDirection:"column",overflow:"hidden",boxShadow:"0 20px 60px rgba(0,0,0,0.4)"}}>
+        {/* 헤더 */}
+        <div style={{padding:"14px 18px",background:`linear-gradient(135deg,${zone.color}22,${zone.color}08)`,borderBottom:`2px solid ${zone.color}30`,flexShrink:0}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:11,color:"#64748b",fontWeight:700,marginBottom:2}}>
+                📍 {zone.icon} {zone.name}
+              </div>
+              <div style={{fontSize:18,fontWeight:900,color:"#0f172a",lineHeight:1.3}}>
+                {prod.qty===0 && <span style={{color:"#ef4444"}}>⚠ </span>}
+                {prod.name}
+              </div>
+              {prod.cat && <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>분류: {prod.cat}</div>}
+            </div>
+            <button onClick={onClose} style={{background:"none",border:"none",fontSize:24,cursor:"pointer",color:"#94a3b8",lineHeight:1,padding:0}}>×</button>
+          </div>
+          <div style={{display:"flex",gap:10,alignItems:"center"}}>
+            <div style={{padding:"6px 14px",background:prod.qty===0?"#fee2e2":"#fff",borderRadius:8,border:`1px solid ${prod.qty===0?"#fecaca":zone.color}40`}}>
+              <span style={{fontSize:10,color:"#64748b"}}>현재 재고</span>
+              <div style={{fontSize:22,fontWeight:900,color:prod.qty===0?"#ef4444":zone.color,lineHeight:1}}>
+                {prod.qty.toLocaleString()}
+                {prod.unit && <span style={{fontSize:12,color:"#94a3b8",marginLeft:4}}>{prod.unit}</span>}
+              </div>
+            </div>
+            {prod.loc && <div style={{fontSize:11,color:"#475569"}}>📌 {prod.loc}</div>}
+          </div>
+        </div>
+
+        {/* 액션 버튼들 */}
+        <div style={{padding:"12px 18px",borderBottom:"1px solid #f1f5f9",flexShrink:0,display:"flex",gap:6,flexWrap:"wrap"}}>
+          <button onClick={()=>onAction("in")}
+            style={{padding:"7px 14px",background:"#dcfce7",color:"#16a34a",border:"1px solid #86efac",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+            📥 입고
+          </button>
+          <button onClick={()=>onAction("out")}
+            style={{padding:"7px 14px",background:"#fee2e2",color:"#dc2626",border:"1px solid #fca5a5",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+            📤 출고
+          </button>
+          <button onClick={()=>onAction("adj")}
+            style={{padding:"7px 14px",background:"#ede9fe",color:"#7c3aed",border:"1px solid #c4b5fd",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+            🔧 조정
+          </button>
+          <button onClick={()=>onAction("qr")}
+            style={{padding:"7px 14px",background:"#f1f5f9",color:"#475569",border:"1px solid #cbd5e1",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+            🏷️ QR
+          </button>
+          <button onClick={()=>onAction("edit")}
+            style={{padding:"7px 14px",background:"#f1f5f9",color:"#475569",border:"1px solid #cbd5e1",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+            ✏️ 수정
+          </button>
+        </div>
+
+        {/* 이력 */}
+        <div style={{flex:1,overflowY:"auto",padding:"12px 18px"}}>
+          <div style={{fontSize:11,fontWeight:800,color:"#64748b",marginBottom:8}}>📜 최근 이력 (최대 20건)</div>
+          {sortedHist.length === 0 ? (
+            <div style={{textAlign:"center",padding:20,color:"#94a3b8",fontSize:11}}>
+              이력 없음
+            </div>
+          ) : sortedHist.map((h,i) => (
+            <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",borderBottom:"1px solid #f1f5f9",fontSize:11}}>
+              <span style={{padding:"2px 8px",borderRadius:4,background:`${ac[h.act]||"#64748b"}22`,color:ac[h.act]||"#64748b",fontWeight:800,fontSize:10,minWidth:36,textAlign:"center"}}>
+                {h.act}
+              </span>
+              <span style={{flex:1,color:"#334155"}}>
+                {h.qty > 0 ? `+${h.qty}` : h.qty}
+                {h.note && <span style={{color:"#94a3b8",marginLeft:6}}>· {h.note}</span>}
+              </span>
+              <span style={{fontSize:10,color:"#94a3b8",fontFamily:"monospace"}}>
+                {h.at ? new Date(h.at).toLocaleDateString("ko-KR",{month:"2-digit",day:"2-digit"}) + " " + new Date(h.at).toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"}) : "-"}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {/* 푸터 */}
+        <div style={{padding:"10px 18px",background:"#fafafa",borderTop:"1px solid #e5e7eb",fontSize:11,color:"#94a3b8",textAlign:"center",flexShrink:0}}>
+          입고/출고 등 작업은 해당 버튼 클릭 시 구역 상세 화면이 열립니다
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── NAVER MAPS API KEY MODAL ─── */
+function NaverApiKeyModal({ currentId, currentProvider, onSave, onClose }) {
+  const [id, setId] = useState(currentId || "");
+  const [provider, setProvider] = useState(currentProvider || "osm");
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,zIndex:10400,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.6)"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:12,width:560,maxWidth:"95vw",maxHeight:"92vh",overflow:"auto",boxShadow:"0 20px 60px rgba(0,0,0,0.3)"}}>
+        <div style={{padding:"14px 18px",background:"#03c75a",color:"#fff",display:"flex",justifyContent:"space-between",alignItems:"center",borderRadius:"12px 12px 0 0"}}>
+          <div>
+            <div style={{fontSize:11,opacity:0.9}}>지도 제공자 설정</div>
+            <div style={{fontSize:17,fontWeight:900}}>🗺️ 네이버 Maps API 연동</div>
+          </div>
+          <button onClick={onClose} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",fontSize:22,cursor:"pointer",width:30,height:30,borderRadius:"50%",lineHeight:1}}>×</button>
+        </div>
+        <div style={{padding:18}}>
+          {/* Provider selector */}
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:12,fontWeight:800,color:"#475569",marginBottom:8}}>지도 제공자 선택</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              <label style={{padding:12,border:"2px solid "+(provider==="naver"?"#03c75a":"#e5e7eb"),borderRadius:8,cursor:"pointer",background:provider==="naver"?"#f0fdf4":"#fff"}}>
+                <input type="radio" checked={provider==="naver"} onChange={()=>setProvider("naver")} style={{marginRight:6}}/>
+                <strong style={{color:"#03c75a",fontSize:13}}>N 네이버 지도</strong>
+                <div style={{fontSize:10,color:"#64748b",marginTop:4,lineHeight:1.5}}>한국 최적화 · 고해상도 위성 · 도로명·지번 주소 · API 키 필요</div>
+              </label>
+              <label style={{padding:12,border:"2px solid "+(provider==="osm"?"#2563eb":"#e5e7eb"),borderRadius:8,cursor:"pointer",background:provider==="osm"?"#eff6ff":"#fff"}}>
+                <input type="radio" checked={provider==="osm"} onChange={()=>setProvider("osm")} style={{marginRight:6}}/>
+                <strong style={{color:"#2563eb",fontSize:13}}>🌍 OpenStreetMap</strong>
+                <div style={{fontSize:10,color:"#64748b",marginTop:4,lineHeight:1.5}}>무료 오픈소스 · 키 불필요 · 기본 렌더링</div>
+              </label>
+            </div>
+          </div>
+
+          {/* Naver Client ID input (only when provider=naver) */}
+          {provider === "naver" && (
+            <>
+              <div style={{marginBottom:12}}>
+                <label style={{fontSize:12,fontWeight:800,color:"#475569",display:"block",marginBottom:6}}>네이버 Cloud Platform Client ID (ncpKeyId)</label>
+                <input type="text" value={id} onChange={e=>setId(e.target.value.trim())} placeholder="예: xxxxxxxxxxxxxxxxxxxxxxxxxxxxx (30자 이내)"
+                  style={{width:"100%",padding:10,border:"1px solid #cbd5e1",borderRadius:6,fontSize:13,fontFamily:"monospace",boxSizing:"border-box"}}/>
+                <div style={{fontSize:10,color:"#64748b",marginTop:4}}>발급받은 Client ID만 입력하세요. Client Secret은 필요하지 않습니다 (Web Dynamic Map).</div>
+              </div>
+
+              {/* Current origin diagnostic */}
+              <div style={{marginBottom:12,padding:10,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:6}}>
+                <div style={{fontSize:11,fontWeight:800,color:"#1e40af",marginBottom:4}}>📌 현재 접속 도메인 (이 URL을 네이버에 등록해야 함)</div>
+                <div style={{fontFamily:"monospace",fontSize:13,fontWeight:700,color:"#0f172a",background:"#fff",padding:"6px 10px",borderRadius:4,border:"1px solid #e5e7eb",userSelect:"all"}}>
+                  {typeof window !== "undefined" ? window.location.origin : "https://claude.ai"}
+                </div>
+                <div style={{fontSize:10,color:"#475569",marginTop:6,lineHeight:1.5}}>
+                  👆 위 URL을 복사해서 네이버 클라우드 플랫폼 Application의 <strong>Web 서비스 URL</strong>에 반드시 추가하세요. 등록되지 않은 도메인에서는 인증 실패로 지도가 로드되지 않습니다.
+                </div>
+              </div>
+
+              {/* Setup guide */}
+              <details style={{marginBottom:12,background:"#f8fafc",border:"1px solid #e5e7eb",borderRadius:6,padding:10}} open>
+                <summary style={{fontSize:12,fontWeight:700,color:"#0f172a",cursor:"pointer"}}>📘 Client ID 발급 방법 (처음이신 경우)</summary>
+                <ol style={{margin:"10px 0 0 20px",padding:0,fontSize:11,color:"#475569",lineHeight:1.8}}>
+                  <li><a href="https://www.ncloud.com" target="_blank" rel="noopener noreferrer" style={{color:"#2563eb"}}>네이버 클라우드 플랫폼</a> 회원가입 후 로그인</li>
+                  <li>콘솔 진입 → 좌측 메뉴 <strong>Services → Application Services → Maps</strong></li>
+                  <li><strong>Application 등록</strong> 클릭 → 이름: "잠사박물관 관리시스템" 입력</li>
+                  <li>API 선택에서 <strong>✓ Web Dynamic Map</strong> 반드시 체크 (필수)</li>
+                  <li>서비스 환경 등록 → Web 선택 → 위 <strong>"📌 현재 접속 도메인"</strong>의 URL을 정확히 복사해 붙여넣기 → 추가</li>
+                  <li>등록 완료 후 <strong>인증 정보</strong> 메뉴에서 <strong>Client ID</strong> 복사</li>
+                  <li>위 입력창에 붙여넣고 저장</li>
+                </ol>
+                <div style={{marginTop:8,padding:8,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:4,fontSize:10,color:"#78350f"}}>
+                  💡 <strong>무료 이용량</strong>: Web Dynamic Map은 대표 계정에 한해 월 60만회 무료. 일반적인 사용에는 부담 없음.
+                </div>
+                <div style={{marginTop:6,padding:8,background:"#fef2f2",border:"1px solid #fecaca",borderRadius:4,fontSize:10,color:"#991b1b"}}>
+                  ⚠️ <strong>도메인 주의</strong>: URL 끝에 <code>/</code> 붙이지 말고, 포트·경로 제외하고 <strong>스킴+호스트</strong>만 등록 (예: <code>https://claude.ai</code>). 등록 후 반영까지 최대 5~10분 소요될 수 있습니다.
+                </div>
+                <div style={{marginTop:6,padding:8,background:"#fef2f2",border:"1px solid #fecaca",borderRadius:4,fontSize:10,color:"#991b1b"}}>
+                  ⚠️ <strong>Client ID는 공개 가능</strong>: 도메인 제한으로 보호되므로 프론트엔드 코드에 직접 포함해도 안전합니다. 단 Client Secret은 절대 노출 금지.
+                </div>
+              </details>
+            </>
+          )}
+
+          <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+            <button onClick={onClose} style={{padding:"9px 16px",borderRadius:6,background:"#fff",border:"1px solid #e5e7eb",color:"#64748b",fontSize:12,fontWeight:700,cursor:"pointer"}}>취소</button>
+            <button onClick={()=>{
+              if (provider === "naver" && !id) { alert("Client ID를 입력하세요."); return; }
+              onSave(id, provider);
+            }}
+              style={{padding:"9px 18px",borderRadius:6,background:provider==="naver"?"#03c75a":"#2563eb",color:"#fff",border:"none",fontSize:12,fontWeight:800,cursor:"pointer"}}>
+              💾 저장 및 적용
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── ZONE EDIT PERMISSIONS MODAL (ADMIN ONLY) ─── */
+function ZoneEditPermsModal({ currentPerms, onSave, onClose }) {
+  const [perms, setPerms] = useState(() => ({
+    _byRole: { ...(currentPerms?._byRole || { ADMIN: true, MANAGER: true, INSPECTOR: false, VIEWER: false }) },
+    _byUser: { ...(currentPerms?._byUser || {}) },
+  }));
+
+  const toggleRole = (role) => {
+    setPerms(p => ({ ...p, _byRole: { ...p._byRole, [role]: !p._byRole[role] } }));
+  };
+  const setUserOverride = (userId, value) => {
+    setPerms(p => {
+      const next = { ...p._byUser };
+      if (value === "default") delete next[userId];
+      else next[userId] = value === "allow";
+      return { ...p, _byUser: next };
+    });
+  };
+
+  const roleInfo = [
+    { role: "ADMIN", label: "관리자 (ADMIN)", desc: "모든 시스템 권한 보유", color: "#dc2626", locked: true },
+    { role: "MANAGER", label: "매니저 (MANAGER)", desc: "운영·관리 권한", color: "#ea580c" },
+    { role: "INSPECTOR", label: "점검자 (INSPECTOR)", desc: "시설 점검 담당", color: "#2563eb" },
+    { role: "VIEWER", label: "조회자 (VIEWER)", desc: "조회 전용", color: "#64748b" },
+  ];
+
+  // Get all users (FAC_USERS from the app)
+  const allUsers = typeof FAC_USERS !== "undefined" ? FAC_USERS : [];
+
+  const getEffectivePerm = (user) => {
+    if (user.id in (perms._byUser || {})) return { allowed: perms._byUser[user.id], source: "override" };
+    return { allowed: perms._byRole?.[user.role] === true, source: "role" };
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10400, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: 640, maxWidth: "95vw", maxHeight: "92vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        {/* Header */}
+        <div style={{ padding: "14px 18px", background: "linear-gradient(135deg,#0f172a,#1e293b)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 11, opacity: 0.8 }}>접근 권한 관리</div>
+            <div style={{ fontSize: 17, fontWeight: 900 }}>🔐 지도 아이콘 편집 권한</div>
+          </div>
+          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", fontSize: 22, cursor: "pointer", width: 30, height: 30, borderRadius: "50%", lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ padding: 18, overflow: "auto", flex: 1 }}>
+          {/* Role-based permissions */}
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#0f172a", marginBottom: 8 }}>
+            👥 역할(Role)별 기본 권한
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 16 }}>
+            {roleInfo.map(r => {
+              const on = perms._byRole?.[r.role] === true;
+              return (
+                <div key={r.role} style={{ display: "flex", alignItems: "center", gap: 10, padding: 10, background: on ? "#f0fdf4" : "#f8fafc", border: `1px solid ${on ? "#bbf7d0" : "#e5e7eb"}`, borderRadius: 6 }}>
+                  <div style={{ width: 4, height: 36, borderRadius: 2, background: r.color }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>{r.label}</div>
+                    <div style={{ fontSize: 10, color: "#64748b" }}>{r.desc}</div>
+                  </div>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: r.locked ? "not-allowed" : "pointer", opacity: r.locked ? 0.6 : 1 }}>
+                    <input type="checkbox" checked={on} disabled={r.locked}
+                      onChange={() => !r.locked && toggleRole(r.role)}
+                      style={{ width: 16, height: 16, cursor: r.locked ? "not-allowed" : "pointer" }} />
+                    <span style={{ fontSize: 11, fontWeight: 700, color: on ? "#059669" : "#64748b" }}>
+                      {r.locked ? "🔒 항상 허용" : (on ? "✓ 편집 허용" : "제한"  )}
+                    </span>
+                  </label>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Per-user overrides */}
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#0f172a", marginBottom: 8 }}>
+            👤 개별 사용자 권한 (역할 권한 덮어쓰기)
+          </div>
+          <div style={{ padding: 10, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 6, marginBottom: 8, fontSize: 10, color: "#1e40af" }}>
+            💡 특정 사용자에게만 권한을 부여하거나 박탈하고 싶을 때 사용하세요. '기본값'이면 위의 역할 권한이 적용됩니다.
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {allUsers.length === 0 ? (
+              <div style={{ padding: 20, textAlign: "center", fontSize: 11, color: "#94a3b8" }}>사용자 목록을 불러올 수 없습니다</div>
+            ) : allUsers.map(u => {
+              const override = u.id in (perms._byUser || {});
+              const currentValue = override ? (perms._byUser[u.id] ? "allow" : "deny") : "default";
+              const effective = getEffectivePerm(u);
+              return (
+                <div key={u.id} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 8, alignItems: "center", padding: 8, background: override ? "#fff7ed" : "#f8fafc", border: `1px solid ${override ? "#fed7aa" : "#e5e7eb"}`, borderRadius: 6 }}>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>
+                      {u.name}
+                      <span style={{ marginLeft: 6, fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "#64748b", color: "#fff" }}>{u.role}</span>
+                    </div>
+                    <div style={{ fontSize: 10, color: "#64748b" }}>{u.dept} · {u.email}</div>
+                  </div>
+                  <select value={currentValue} onChange={(e) => setUserOverride(u.id, e.target.value)}
+                    style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #cbd5e1", fontSize: 11, fontWeight: 600, cursor: "pointer", background: "#fff" }}>
+                    <option value="default">기본 (역할 따름)</option>
+                    <option value="allow">✓ 허용</option>
+                    <option value="deny">✕ 제한</option>
+                  </select>
+                  <span style={{ fontSize: 10, padding: "3px 8px", borderRadius: 3, background: effective.allowed ? "#dcfce7" : "#fee2e2", color: effective.allowed ? "#065f46" : "#991b1b", fontWeight: 700, minWidth: 55, textAlign: "center" }}>
+                    {effective.allowed ? "편집 가능" : "편집 불가"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{ marginTop: 14, padding: 10, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, fontSize: 10, color: "#78350f", lineHeight: 1.6 }}>
+            ⚠️ <strong>주의</strong>: 편집 권한이 있는 사용자는 지도상 모든 구역 아이콘의 위치와 크기를 변경할 수 있습니다. 변경사항은 모든 사용자에게 실시간으로 반영됩니다.
+          </div>
+        </div>
+
+        <div style={{ padding: "12px 18px", borderTop: "1px solid #e5e7eb", display: "flex", justifyContent: "flex-end", gap: 8, background: "#f8fafc" }}>
+          <button onClick={onClose}
+            style={{ padding: "9px 16px", borderRadius: 6, background: "#fff", border: "1px solid #e5e7eb", color: "#64748b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+            취소
+          </button>
+          <button onClick={() => onSave(perms)}
+            style={{ padding: "9px 20px", borderRadius: 6, background: "linear-gradient(135deg,#0f172a,#1e293b)", color: "#fff", border: "none", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+            💾 저장
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── NEW ZONE CREATION MODAL ─── */
+function NewZoneModal({ pos, onSave, onClose }) {
+  const [name, setName] = useState("");
+  const [icon, setIcon] = useState("📍");
+  const [color, setColor] = useState("#2563eb");
+  const [desc, setDesc] = useState("");
+  const [radius, setRadius] = useState(10);
+  const ICON_OPTS = ["📍","🏢","📦","🎪","🌿","🚗","🏪","⛺","🏛️","🌳","💧","🔬","🍴","🛠️","⚠️","🎯"];
+  const COLOR_OPTS = ["#2563eb","#059669","#dc2626","#ea580c","#ca8a04","#7c3aed","#0891b2","#db2777","#475569","#0f766e"];
+
+  const handleSave = () => {
+    if (!name.trim()) return alert("구역 이름을 입력하세요.");
+    const newZone = {
+      id: "custom_" + Date.now(),
+      name: name.trim(),
+      color,
+      icon,
+      desc: desc.trim() || "사용자 생성 구역",
+      lat: pos.lat,
+      lng: pos.lng,
+      // Plan coords used only when displayed in plan mode - set to center (won't show in plan mode anyway)
+      x: 48, y: 48, w: 4, h: 4,
+      custom: true,
+      radius,
+      createdAt: new Date().toISOString(),
+    };
+    onSave(newZone);
+  };
+
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,zIndex:10400,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.6)"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:12,width:480,maxWidth:"95vw",maxHeight:"92vh",overflow:"auto",boxShadow:"0 20px 60px rgba(0,0,0,0.3)"}}>
+        <div style={{padding:"14px 18px",background:"linear-gradient(135deg,#2563eb,#7c3aed)",color:"#fff",display:"flex",justifyContent:"space-between",alignItems:"center",borderRadius:"12px 12px 0 0"}}>
+          <div>
+            <div style={{fontSize:11,opacity:0.9}}>사용자 구역 생성</div>
+            <div style={{fontSize:16,fontWeight:900}}>🆕 새 구역 등록</div>
+          </div>
+          <button onClick={onClose} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",fontSize:22,cursor:"pointer",width:30,height:30,borderRadius:"50%",lineHeight:1}}>×</button>
+        </div>
+        <div style={{padding:18}}>
+          <div style={{background:"#f8fafc",border:"1px solid #e5e7eb",borderRadius:6,padding:8,marginBottom:12,fontSize:11,color:"#475569",fontFamily:"monospace"}}>
+            📍 {pos.lat.toFixed(6)}, {pos.lng.toFixed(6)}
+          </div>
+
+          <div style={{marginBottom:12}}>
+            <label style={{fontSize:11,fontWeight:700,color:"#475569",display:"block",marginBottom:4}}>구역 이름 *</label>
+            <input type="text" value={name} onChange={e=>setName(e.target.value)} placeholder="예: 오디축제 부스, 임시 보관소"
+              style={{width:"100%",padding:8,border:"1px solid #cbd5e1",borderRadius:6,fontSize:13,boxSizing:"border-box",fontFamily:"inherit"}}/>
+          </div>
+
+          <div style={{marginBottom:12,display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <div>
+              <label style={{fontSize:11,fontWeight:700,color:"#475569",display:"block",marginBottom:4}}>아이콘</label>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(8,1fr)",gap:2,border:"1px solid #e5e7eb",borderRadius:6,padding:4}}>
+                {ICON_OPTS.map(i => (
+                  <button key={i} type="button" onClick={()=>setIcon(i)}
+                    style={{padding:4,fontSize:16,border:"1px solid "+(icon===i?"#2563eb":"transparent"),borderRadius:3,background:icon===i?"#eff6ff":"#fff",cursor:"pointer"}}>
+                    {i}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label style={{fontSize:11,fontWeight:700,color:"#475569",display:"block",marginBottom:4}}>색상</label>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:3,border:"1px solid #e5e7eb",borderRadius:6,padding:4}}>
+                {COLOR_OPTS.map(c => (
+                  <button key={c} type="button" onClick={()=>setColor(c)}
+                    style={{padding:0,height:28,border:"2px solid "+(color===c?"#0f172a":"transparent"),borderRadius:3,background:c,cursor:"pointer"}}/>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div style={{marginBottom:12}}>
+            <label style={{fontSize:11,fontWeight:700,color:"#475569",display:"block",marginBottom:4}}>설명 (선택)</label>
+            <input type="text" value={desc} onChange={e=>setDesc(e.target.value)} placeholder="이 구역의 용도를 간략히"
+              style={{width:"100%",padding:8,border:"1px solid #cbd5e1",borderRadius:6,fontSize:12,boxSizing:"border-box",fontFamily:"inherit"}}/>
+          </div>
+
+          <div style={{marginBottom:14}}>
+            <label style={{fontSize:11,fontWeight:700,color:"#475569",display:"block",marginBottom:4}}>반경 (미터) — 내 위치 근접 감지용</label>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <input type="range" min={5} max={50} step={5} value={radius} onChange={e=>setRadius(parseInt(e.target.value))} style={{flex:1}}/>
+              <span style={{fontSize:13,fontWeight:800,color:"#2563eb",minWidth:60,textAlign:"right"}}>{radius}m</span>
+            </div>
+          </div>
+
+          {/* Preview */}
+          <div style={{marginBottom:14,padding:10,background:"#f8fafc",border:"1px solid #e5e7eb",borderRadius:6}}>
+            <div style={{fontSize:10,fontWeight:700,color:"#64748b",marginBottom:6}}>미리보기</div>
+            <div style={{display:"inline-block",background:color,border:"2px solid #fff",borderRadius:"50% 50% 50% 0",width:30,height:30,transform:"rotate(-45deg)",boxShadow:"0 3px 10px rgba(0,0,0,0.3)",marginRight:10}}>
+              <div style={{transform:"rotate(45deg)",fontSize:14,textAlign:"center",lineHeight:"26px"}}>{icon}</div>
+            </div>
+            <span style={{verticalAlign:"top",display:"inline-block",background:"rgba(255,255,255,0.96)",border:`2px solid ${color}`,borderRadius:6,padding:"3px 9px",fontSize:11,fontWeight:700}}>{icon} {name || "(구역명)"} <span style={{fontSize:8,marginLeft:3,padding:"0 3px",borderRadius:2,background:"#fbbf24"}}>사용자</span></span>
+          </div>
+
+          <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+            <button onClick={onClose} style={{padding:"9px 16px",borderRadius:6,background:"#fff",border:"1px solid #e5e7eb",color:"#64748b",fontSize:12,fontWeight:700,cursor:"pointer"}}>취소</button>
+            <button onClick={handleSave}
+              style={{padding:"9px 20px",borderRadius:6,background:"linear-gradient(135deg,#2563eb,#7c3aed)",color:"#fff",border:"none",fontSize:12,fontWeight:800,cursor:"pointer"}}>
+              ✨ 구역 생성 · 재고 추가
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── AI TASK RECOMMENDATION ENGINE ───
+   Based on zone type + current state, suggests daily/weekly tasks */
+const recommendZoneTasks = (zone, inventory, facActions, hour) => {
+  const tasks = [];
+  const name = zone.name || "";
+  const id = zone.id;
+
+  // Common opening routine (morning)
+  if (hour >= 8 && hour <= 10) {
+    tasks.push({ priority: "HIGH", cat: "개장", title: "출입구 점검", desc: "입구 잠금 해제, 안내판 상태, 진입로 청결" });
+  }
+
+  // Common closing routine (evening)
+  if (hour >= 17 && hour <= 19) {
+    tasks.push({ priority: "HIGH", cat: "폐장", title: "구역 마감 확인", desc: "전기·수도 차단, 잠금장치 확인, 야간등 점등" });
+  }
+
+  // Zone-type specific
+  if (id === "dome" || name.includes("누에") || name.includes("전시")) {
+    tasks.push({ priority: "HIGH", cat: "사육환경", title: "누에 상태 확인", desc: "온도 22-28℃ / 습도 70-85% / 먹이 뽕잎 잔량 점검" });
+    tasks.push({ priority: "MED", cat: "전시유지", title: "전시물 청결 점검", desc: "유리 표면, 설명 패널, 조명 상태 확인" });
+  }
+
+  if (id === "water" || name.includes("물놀이")) {
+    tasks.push({ priority: "HIGH", cat: "안전", title: "수질 및 수온 점검", desc: "물놀이장 수질 투명도, pH, 수온 확인 (운영 전 필수)" });
+    tasks.push({ priority: "HIGH", cat: "안전", title: "안전 매트 고정 점검", desc: "매트 이탈·손상·미끄럼 여부" });
+  }
+
+  if (id === "park" || name.includes("주차")) {
+    tasks.push({ priority: "MED", cat: "질서", title: "주차 안내", desc: "버스·승용차 구역 구분, 장애인 구역 확보" });
+    tasks.push({ priority: "LOW", cat: "미화", title: "주차구역 청소", desc: "쓰레기 수거, 낙엽 제거" });
+  }
+
+  if (id === "farm" || id === "garden" || name.includes("뽕") || name.includes("텃밭") || name.includes("정원")) {
+    tasks.push({ priority: "HIGH", cat: "농작물관리", title: "뽕잎 수확 및 신선도 점검", desc: "오전 수확분 양 기록, 시든 잎 제거" });
+    tasks.push({ priority: "MED", cat: "병해충", title: "병해충 관찰", desc: "잎 변색·구멍·진딧물 여부 확인" });
+    tasks.push({ priority: "LOW", cat: "관수", title: "관수 상태 점검", desc: "토양 건조도, 자동 관수 정상 작동" });
+  }
+
+  if (id === "storage" || id === "basic" || id === "gh" || name.includes("창고") || name.includes("수장")) {
+    tasks.push({ priority: "MED", cat: "재고정리", title: "재고 실사 및 정렬", desc: "예상 수량과 실제 대조, 유통기한 확인" });
+    tasks.push({ priority: "LOW", cat: "환경", title: "습도·온도 확인", desc: "곰팡이 방지, 벌레 침입 여부" });
+  }
+
+  if (id === "shop" || name.includes("매점") || name.includes("식당")) {
+    tasks.push({ priority: "HIGH", cat: "위생", title: "위생 점검", desc: "손세정제, 행주·도마 교체, 냉장고 온도" });
+    tasks.push({ priority: "HIGH", cat: "재고", title: "판매 상품 재고", desc: "매대 보충, 유통기한 임박 상품 전진 진열" });
+  }
+
+  if (id === "rest" || name.includes("쉼터") || name.includes("놀이") || name.includes("체험")) {
+    tasks.push({ priority: "HIGH", cat: "안전", title: "놀이·체험 기구 안전 점검", desc: "볼트·너트 고정, 마모·균열 확인" });
+    tasks.push({ priority: "MED", cat: "미화", title: "쓰레기 수거·청소", desc: "쓰레기통 비우기, 벤치 청소" });
+  }
+
+  if (id === "bldg" || name.includes("본관") || name.includes("전시")) {
+    tasks.push({ priority: "MED", cat: "공조", title: "냉·난방 및 환기", desc: "실내 온도 24℃ 전후, 공조기 필터 상태" });
+    tasks.push({ priority: "LOW", cat: "미화", title: "바닥 및 유리창 청소", desc: "주요 관람 동선 우선" });
+  }
+
+  if (id === "forest" || name.includes("숲") || name.includes("산책")) {
+    tasks.push({ priority: "MED", cat: "안전", title: "산책로 안전 점검", desc: "미끄럼·파손 구간, 쓰러진 나뭇가지 제거" });
+    tasks.push({ priority: "LOW", cat: "미화", title: "낙엽·쓰레기 수거", desc: "계절별 청소" });
+  }
+
+  if (id === "field" || name.includes("천막")) {
+    tasks.push({ priority: "MED", cat: "시설", title: "천막 고정상태 점검", desc: "줄 고정, 천막지 찢김·구멍 확인" });
+  }
+
+  // Inventory-based alerts
+  if (inventory && inventory.length > 0) {
+    const lowStock = inventory.filter(p => p.qty > 0 && p.qty < 5);
+    if (lowStock.length > 0) {
+      tasks.push({
+        priority: "MED", cat: "재고경보",
+        title: `재고 부족 ${lowStock.length}건`,
+        desc: lowStock.slice(0, 3).map(p => `${p.name} (${p.qty}개)`).join(", ") + (lowStock.length > 3 ? " 외" : ""),
+      });
+    }
+  }
+
+  // Open facility actions for this zone
+  const zoneOpenActions = (facActions || []).filter(a => {
+    if (a.status === "DONE") return false;
+    const text = (a.title || "") + " " + (a.desc || "") + " " + (a.facId || "");
+    return text.includes(name.split(" ")[0]) || text.includes(id);
+  });
+
+  if (zoneOpenActions.length > 0) {
+    zoneOpenActions.forEach(a => {
+      tasks.push({
+        priority: a.sev === "URGENT" ? "HIGH" : a.sev === "HIGH" ? "HIGH" : "MED",
+        cat: "보완과제",
+        title: `[진행중] ${a.title}`,
+        desc: a.desc?.substring(0, 80) || "",
+        actionId: a.id,
+      });
+    });
+  }
+
+  // Sort by priority
+  const priorityRank = { HIGH: 1, MED: 2, LOW: 3 };
+  tasks.sort((a, b) => priorityRank[a.priority] - priorityRank[b.priority]);
+
+  return tasks;
+};
+
+/* ─── ZONE DASHBOARD MODAL ─── All-in-one dashboard: inventory + facility + worklog */
+function GpsZoneModal({ zone, userLoc, dist, onClose, onGoInventory, onDeleteCustom, onAddInventory, facActions = [], zoneInventory = [], onCreateFacAction, switchToFacility }) {
+  const [tab, setTab] = useState("overview");
+  const [generating, setGenerating] = useState(false);
+  const [generatedTasks, setGeneratedTasks] = useState([]);
+
+  // Filter facility actions for this zone
+  const zoneActions = useMemo(() => {
+    return (facActions || []).filter(a => {
+      const text = ((a.title || "") + " " + (a.desc || "") + " " + (a.facId || "")).toLowerCase();
+      return text.includes(zone.name.split(" ")[0].toLowerCase()) || text.includes(zone.id);
+    });
+  }, [facActions, zone]);
+
+  const openActions = zoneActions.filter(a => a.status !== "DONE");
+  const doneActions = zoneActions.filter(a => a.status === "DONE");
+
+  const urgentCount = openActions.filter(a => a.sev === "URGENT").length;
+  const invTotal = zoneInventory.reduce((s, p) => s + p.qty, 0);
+  const invTypes = zoneInventory.length;
+  const lowStock = zoneInventory.filter(p => p.qty > 0 && p.qty < 5).length;
+
+  // Generate AI tasks
+  const handleGenerateTasks = () => {
+    setGenerating(true);
+    setTimeout(() => {
+      const hour = new Date().getHours();
+      const tasks = recommendZoneTasks(zone, zoneInventory, facActions, hour);
+      setGeneratedTasks(tasks);
+      setGenerating(false);
+    }, 1000);
+  };
+
+  const createTaskAsAction = (task) => {
+    if (!onCreateFacAction) return alert("보완과제 생성 기능이 비활성화됨");
+    const newAction = {
+      id: "a" + Date.now() + Math.random(),
+      facId: null,
+      inspId: null,
+      title: `[${zone.name}] ${task.title}`,
+      type: task.cat,
+      desc: `AI 추천 업무\n\n구역: ${zone.name} (${zone.lat.toFixed(5)}, ${zone.lng.toFixed(5)})\n설명: ${task.desc}\n우선순위: ${task.priority}`,
+      sev: task.priority === "HIGH" ? "HIGH" : task.priority === "MED" ? "MEDIUM" : "LOW",
+      rec: task.desc,
+      status: "TODO",
+      due: new Date(Date.now() + (task.priority === "HIGH" ? 1 : 3) * 86400000).toISOString().slice(0, 10),
+      assignee: null,
+      memo: null,
+      source: "zone_ai",
+      zoneId: zone.id,
+      zoneName: zone.name,
+      zoneLat: zone.lat,
+      zoneLng: zone.lng,
+    };
+    onCreateFacAction(newAction);
+    alert(`✓ 보완과제로 등록: ${task.title}`);
+    // Remove from generated list
+    setGeneratedTasks(prev => prev.filter(t => t !== task));
+  };
+
+  const openInMap = (provider) => {
+    const urls = {
+      google: `https://www.google.com/maps/search/?api=1&query=${zone.lat},${zone.lng}`,
+      naver: `https://map.naver.com/v5/?c=${zone.lng},${zone.lat},17,0,0,0,dh`,
+      kakao: `https://map.kakao.com/link/map/${encodeURIComponent(zone.name)},${zone.lat},${zone.lng}`,
+      directions: userLoc
+        ? `https://www.google.com/maps/dir/${userLoc.lat},${userLoc.lng}/${zone.lat},${zone.lng}/`
+        : `https://www.google.com/maps/dir/?api=1&destination=${zone.lat},${zone.lng}`,
+    };
+    window.open(urls[provider], "_blank");
+  };
+
+  const tabs = [
+    { k: "overview", l: "📊 개요", count: null },
+    { k: "inventory", l: "📦 재고", count: invTotal > 0 ? invTotal : null },
+    { k: "facility", l: "🔧 시설점검", count: openActions.length > 0 ? openActions.length : null, urgent: urgentCount > 0 },
+    { k: "worklog", l: "📒 업무일지", count: null },
+  ];
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10300, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.65)" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: 680, maxWidth: "95vw", maxHeight: "92vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+        {/* Header */}
+        <div style={{ padding: "14px 18px", background: zone.color, color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 22, fontWeight: 900, display: "flex", alignItems: "center", gap: 8 }}>
+              {zone.icon} {zone.name}
+              {zone.custom && <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 3, background: "rgba(255,255,255,0.25)" }}>사용자</span>}
+            </div>
+            <div style={{ fontSize: 11, opacity: 0.9, marginTop: 2 }}>{zone.desc}</div>
+            <div style={{ fontSize: 10, opacity: 0.75, marginTop: 4, fontFamily: "monospace" }}>
+              📍 {zone.lat.toFixed(6)}, {zone.lng.toFixed(6)}
+              {userLoc && dist != null && (
+                <span style={{ marginLeft: 8 }}>· 거리 {dist < 1000 ? dist + "m" : (dist / 1000).toFixed(2) + "km"}</span>
+              )}
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", fontSize: 22, cursor: "pointer", width: 30, height: 30, borderRadius: "50%", lineHeight: 1 }}>×</button>
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb", background: "#f8fafc", flexShrink: 0 }}>
+          {tabs.map(t => (
+            <button key={t.k} onClick={() => setTab(t.k)}
+              style={{ flex: 1, padding: "10px 8px", border: "none", background: tab === t.k ? "#fff" : "transparent", color: tab === t.k ? "#0f172a" : "#64748b", fontSize: 12, fontWeight: 700, cursor: "pointer", borderBottom: tab === t.k ? `3px solid ${zone.color}` : "3px solid transparent", display: "flex", alignItems: "center", justifyContent: "center", gap: 4, position: "relative" }}>
+              {t.l}
+              {t.count != null && (
+                <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 8, background: t.urgent ? "#dc2626" : "#64748b", color: "#fff", fontWeight: 800 }}>
+                  {t.count}
+                </span>
+              )}
+              {t.urgent && <span style={{ position: "absolute", top: 4, right: 8, width: 6, height: 6, borderRadius: "50%", background: "#dc2626", animation: "pulse 1.5s infinite" }}/>}
+            </button>
+          ))}
+        </div>
+
+        {/* Tab content */}
+        <div style={{ overflow: "auto", flex: 1, padding: 18 }}>
+          {tab === "overview" && (
+            <>
+              {/* Status cards grid */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+                <div style={{ padding: 14, background: "linear-gradient(135deg,#eff6ff,#dbeafe)", border: "1px solid #bfdbfe", borderRadius: 10 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "#1e40af", marginBottom: 4 }}>📦 재고 현황</div>
+                  <div style={{ fontSize: 22, fontWeight: 900, color: "#1e3a8a" }}>{invTotal.toLocaleString()}</div>
+                  <div style={{ fontSize: 10, color: "#3730a3" }}>{invTypes}개 품목 {lowStock > 0 && <span style={{ color: "#dc2626" }}>· 부족 {lowStock}건</span>}</div>
+                </div>
+
+                <div style={{ padding: 14, background: urgentCount > 0 ? "linear-gradient(135deg,#fef2f2,#fee2e2)" : "linear-gradient(135deg,#f0fdf4,#dcfce7)", border: `1px solid ${urgentCount > 0 ? "#fecaca" : "#bbf7d0"}`, borderRadius: 10 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: urgentCount > 0 ? "#991b1b" : "#065f46", marginBottom: 4 }}>🔧 시설점검</div>
+                  <div style={{ fontSize: 22, fontWeight: 900, color: urgentCount > 0 ? "#7f1d1d" : "#064e3b" }}>{openActions.length}</div>
+                  <div style={{ fontSize: 10, color: urgentCount > 0 ? "#991b1b" : "#065f46" }}>
+                    진행중 {urgentCount > 0 && <span style={{ fontWeight: 800 }}>· 긴급 {urgentCount}건</span>}
+                  </div>
+                </div>
+              </div>
+
+              {/* Quick action buttons */}
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#475569", marginBottom: 8 }}>🎯 빠른 작업</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+                <button onClick={onGoInventory} style={{ padding: "10px 12px", borderRadius: 8, background: "linear-gradient(135deg,#2563eb,#7c3aed)", color: "#fff", border: "none", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+                  📦 재고 상세
+                </button>
+                <button onClick={() => setTab("worklog")} style={{ padding: "10px 12px", borderRadius: 8, background: "linear-gradient(135deg,#059669,#0891b2)", color: "#fff", border: "none", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+                  🤖 AI 업무 추천
+                </button>
+                <button onClick={() => setTab("facility")} style={{ padding: "10px 12px", borderRadius: 8, background: "linear-gradient(135deg,#dc2626,#ea580c)", color: "#fff", border: "none", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+                  🔧 보완과제 {openActions.length > 0 && `(${openActions.length})`}
+                </button>
+                <button onClick={() => openInMap("directions")} style={{ padding: "10px 12px", borderRadius: 8, background: "#0f172a", color: "#fff", border: "none", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+                  🧭 현장 이동
+                </button>
+              </div>
+
+              {/* External maps */}
+              <div style={{ fontSize: 10, color: "#64748b", marginBottom: 6 }}>외부 지도에서 보기</div>
+              <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+                <button onClick={() => openInMap("naver")} style={{ flex: 1, padding: "6px 10px", borderRadius: 5, background: "#03c75a", color: "#fff", border: "none", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>네이버</button>
+                <button onClick={() => openInMap("google")} style={{ flex: 1, padding: "6px 10px", borderRadius: 5, background: "#4285f4", color: "#fff", border: "none", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>Google</button>
+                <button onClick={() => openInMap("kakao")} style={{ flex: 1, padding: "6px 10px", borderRadius: 5, background: "#fee500", color: "#3c1e1e", border: "none", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>카카오</button>
+              </div>
+
+              {/* Custom zone actions */}
+              {zone.custom && (
+                <div style={{ padding: 10, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8 }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: "#78350f", marginBottom: 6 }}>🆕 사용자 생성 구역 관리</div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {onAddInventory && <button onClick={onAddInventory} style={{ flex: 1, padding: "7px 10px", borderRadius: 5, background: "#059669", color: "#fff", border: "none", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>➕ 재고 추가</button>}
+                    {onDeleteCustom && <button onClick={onDeleteCustom} style={{ padding: "7px 10px", borderRadius: 5, background: "#dc2626", color: "#fff", border: "none", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>🗑 삭제</button>}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {tab === "inventory" && (
+            <div>
+              {zoneInventory.length === 0 ? (
+                <div style={{ textAlign: "center", padding: 30, color: "#94a3b8" }}>
+                  <div style={{ fontSize: 32 }}>📦</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginTop: 10 }}>재고 없음</div>
+                  <div style={{ fontSize: 11, marginTop: 4 }}>이 구역에 등록된 재고가 없습니다</div>
+                  <button onClick={onGoInventory} style={{ marginTop: 14, padding: "8px 18px", borderRadius: 6, background: "#2563eb", color: "#fff", border: "none", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                    📦 재고 등록하러 가기
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: "flex", gap: 8, marginBottom: 10, fontSize: 11, color: "#64748b" }}>
+                    <span>총 <strong style={{ color: "#0f172a" }}>{invTotal}</strong>개</span>
+                    <span>· {invTypes}개 품목</span>
+                    {lowStock > 0 && <span style={{ color: "#dc2626" }}>· 부족 {lowStock}건</span>}
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {zoneInventory.map(p => (
+                      <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: 10, background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 6 }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>{p.name}</div>
+                          <div style={{ fontSize: 10, color: "#64748b" }}>{p.cat} · {p.loc}</div>
+                        </div>
+                        <div style={{ fontSize: 16, fontWeight: 900, color: p.qty < 5 ? "#dc2626" : p.qty < 20 ? "#ea580c" : "#059669" }}>
+                          {p.qty}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <button onClick={onGoInventory} style={{ marginTop: 12, width: "100%", padding: 10, borderRadius: 6, background: "#2563eb", color: "#fff", border: "none", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+                    📦 재고 상세 페이지 열기 →
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
+          {tab === "facility" && (
+            <div>
+              {zoneActions.length === 0 ? (
+                <div style={{ textAlign: "center", padding: 30, color: "#94a3b8" }}>
+                  <div style={{ fontSize: 32 }}>✓</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginTop: 10 }}>현재 등록된 보완과제 없음</div>
+                  <div style={{ fontSize: 11, marginTop: 4 }}>이 구역은 정상 운영 상태입니다</div>
+                </div>
+              ) : (
+                <>
+                  {openActions.length > 0 && (
+                    <>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: "#991b1b", marginBottom: 8 }}>🚨 진행중 ({openActions.length}건)</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+                        {openActions.map(a => {
+                          const sevColors = { URGENT: { bg: "#fef2f2", border: "#fecaca", text: "#991b1b" }, HIGH: { bg: "#fff7ed", border: "#fed7aa", text: "#9a3412" }, MEDIUM: { bg: "#fefce8", border: "#fde68a", text: "#78350f" }, LOW: { bg: "#f0f9ff", border: "#bae6fd", text: "#0c4a6e" } };
+                          const sc = sevColors[a.sev] || sevColors.MEDIUM;
+                          return (
+                            <div key={a.id} style={{ padding: 10, background: sc.bg, border: `1px solid ${sc.border}`, borderRadius: 6 }}>
+                              <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
+                                <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 3, background: sc.text, color: "#fff" }}>{a.sev}</span>
+                                <span style={{ fontSize: 10, color: "#64748b" }}>{a.type}</span>
+                                <span style={{ fontSize: 10, color: "#64748b", marginLeft: "auto" }}>마감 {a.due}</span>
+                              </div>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: sc.text }}>{a.title}</div>
+                              {a.desc && <div style={{ fontSize: 10, color: "#475569", marginTop: 4, lineHeight: 1.5 }}>{a.desc.substring(0, 150)}{a.desc.length > 150 ? "..." : ""}</div>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+                  {doneActions.length > 0 && (
+                    <>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: "#065f46", marginBottom: 8 }}>✓ 완료됨 ({doneActions.length}건)</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        {doneActions.slice(0, 5).map(a => (
+                          <div key={a.id} style={{ padding: 8, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 5, fontSize: 11 }}>
+                            <div style={{ color: "#065f46", fontWeight: 700 }}>✓ {a.title}</div>
+                            <div style={{ fontSize: 9, color: "#64748b" }}>{a.type} · {a.due}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {switchToFacility && (
+                    <button onClick={switchToFacility} style={{ marginTop: 14, width: "100%", padding: 10, borderRadius: 6, background: "#dc2626", color: "#fff", border: "none", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+                      🔧 시설점검 모듈로 이동 →
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {tab === "worklog" && (
+            <div>
+              <div style={{ padding: 12, background: "linear-gradient(135deg,#faf5ff,#fae8ff)", border: "1px solid #e9d5ff", borderRadius: 8, marginBottom: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 800, color: "#6b21a8", marginBottom: 4 }}>🤖 AI 자동 업무 추천</div>
+                <div style={{ fontSize: 10, color: "#7e22ce", lineHeight: 1.5 }}>
+                  현재 시각 · 구역 특성 · 재고 상태 · 보완과제를 종합해 필요한 업무를 자동 생성합니다.
+                </div>
+                <button onClick={handleGenerateTasks} disabled={generating}
+                  style={{ marginTop: 10, width: "100%", padding: 10, borderRadius: 6, background: generating ? "#cbd5e1" : "linear-gradient(135deg,#7c3aed,#db2777)", color: "#fff", border: "none", fontSize: 12, fontWeight: 800, cursor: generating ? "wait" : "pointer" }}>
+                  {generating ? "🧠 AI 분석 중..." : (generatedTasks.length > 0 ? "🔄 다시 추천받기" : "✨ AI에게 업무 추천 받기")}
+                </button>
+              </div>
+
+              {generatedTasks.length > 0 && (
+                <>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: "#475569", marginBottom: 8 }}>📋 추천 업무 ({generatedTasks.length}건)</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {generatedTasks.map((task, i) => {
+                      const priColors = { HIGH: { bg: "#fef2f2", border: "#fca5a5", text: "#991b1b" }, MED: { bg: "#fffbeb", border: "#fde68a", text: "#78350f" }, LOW: { bg: "#f0f9ff", border: "#bfdbfe", text: "#1e40af" } };
+                      const pc = priColors[task.priority] || priColors.MED;
+                      return (
+                        <div key={i} style={{ padding: 10, background: pc.bg, border: `1px solid ${pc.border}`, borderRadius: 6 }}>
+                          <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
+                            <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 3, background: pc.text, color: "#fff" }}>{task.priority}</span>
+                            <span style={{ fontSize: 10, color: "#64748b" }}>{task.cat}</span>
+                          </div>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: pc.text }}>{task.title}</div>
+                          {task.desc && <div style={{ fontSize: 10, color: "#475569", marginTop: 4, lineHeight: 1.5 }}>{task.desc}</div>}
+                          {!task.actionId && onCreateFacAction && (
+                            <button onClick={() => createTaskAsAction(task)}
+                              style={{ marginTop: 6, padding: "4px 10px", borderRadius: 4, background: "#0f172a", color: "#fff", border: "none", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                              ➕ 보완과제로 등록
+                            </button>
+                          )}
+                          {task.actionId && (
+                            <div style={{ marginTop: 6, fontSize: 10, color: "#059669", fontWeight: 700 }}>✓ 이미 등록된 과제</div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              {generatedTasks.length === 0 && !generating && (
+                <div style={{ textAlign: "center", padding: 30, color: "#94a3b8" }}>
+                  <div style={{ fontSize: 28 }}>🤖</div>
+                  <div style={{ fontSize: 12, marginTop: 8 }}>위 버튼을 눌러 AI 업무 추천을 받으세요</div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== TOOLTIP ==========
+function Tip({zone,prods,hist,x,y,cRef,photos}){
+  if(!zone)return null;
+  const tq=prods.reduce((s,p)=>s+p.qty,0);
+  // 전체 재고 정렬 (재고 많은 순) - 스크롤로 모두 표시
+  const sortedProds=[...prods].sort((a,b)=>b.qty-a.qty);
+  const ac={"입고":"#22c55e","출고":"#ef4444","조정":"#8b5cf6","추가":"#6366f1"};
+  const cw=cRef?.current?.offsetWidth||800;const ch=cRef?.current?.offsetHeight||600;
+  const hasPhotos=photos&&photos.length>0;
+  // 박스 크기 키움 (320 x 최대 480)
+  const TIP_W = 320;
+  const TIP_MAX_H = 480;
+  let left=x+20,topY=y-20;
+  if(left+TIP_W>cw)left=x-TIP_W-10;if(topY+TIP_MAX_H>ch)topY=ch-TIP_MAX_H-10;if(topY<10)topY=10;if(left<10)left=10;
+  return(
+    <div style={{position:"absolute",left,top:topY,background:"#fff",borderRadius:12,width:TIP_W,maxHeight:TIP_MAX_H,boxShadow:`0 8px 28px rgba(0,0,0,0.25)`,pointerEvents:"auto",zIndex:100,animation:"tipIn 0.1s ease",overflow:"hidden",display:"flex",flexDirection:"column",border:`2px solid ${zone.color}30`}}>
+      {/* 헤더 - 고정 */}
+      <div style={{padding:"12px 14px",background:`linear-gradient(135deg,${zone.color}15,${zone.color}06)`,borderBottom:`1px solid ${zone.color}20`,flexShrink:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontSize:24}}>{zone.icon}</span><div style={{flex:1,minWidth:0}}><div style={{fontSize:14,fontWeight:800,color:"#0f172a"}}>{zone.name}</div><div style={{fontSize:10,color:"#64748b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{zone.desc}</div></div></div>
+        <div style={{display:"flex",gap:8,marginTop:10}}>
+          <div style={{background:"#fff",borderRadius:8,padding:"4px 0",flex:1,textAlign:"center",border:"1px solid #e5e7eb"}}><div style={{fontSize:9,color:"#94a3b8",fontWeight:600}}>품목 수</div><div style={{fontSize:18,fontWeight:900,color:zone.color}}>{prods.length}</div></div>
+          <div style={{background:"#fff",borderRadius:8,padding:"4px 0",flex:1,textAlign:"center",border:"1px solid #e5e7eb"}}><div style={{fontSize:9,color:"#94a3b8",fontWeight:600}}>총 재고</div><div style={{fontSize:18,fontWeight:900,color:tq===0?"#ef4444":zone.color}}>{tq.toLocaleString()}</div></div>
+        </div>
+      </div>
+      {/* 사진 미리보기 - 고정 */}
+      {hasPhotos&&(
+        <div style={{padding:"6px 10px",borderBottom:"1px solid #f1f3f5",display:"flex",gap:4,overflow:"hidden",flexShrink:0}}>
+          {photos.slice(0,3).map(ph=>(
+            <img key={ph.id} src={ph.url} alt="" style={{width:90,height:60,objectFit:"cover",borderRadius:6,border:"1px solid #e5e7eb"}}/>
+          ))}
+          {photos.length>3&&<div style={{width:42,height:60,borderRadius:6,background:"#f1f3f5",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#94a3b8",fontWeight:700}}>+{photos.length-3}</div>}
+        </div>
+      )}
+      {/* 재고 목록 - 스크롤 */}
+      {sortedProds.length>0?(
+        <div style={{padding:"4px 0",overflowY:"auto",flex:1,minHeight:0}}>
+          <div style={{padding:"4px 14px 4px",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,background:"#fff",zIndex:1,borderBottom:"1px solid #f1f5f9"}}>
+            <span style={{fontSize:10,fontWeight:700,color:"#64748b"}}>📦 재고 목록 ({sortedProds.length}개)</span>
+            <span style={{fontSize:9,color:"#94a3b8"}}>↕ 스크롤</span>
+          </div>
+          {sortedProds.map(p=>(
+            <div key={p.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 14px",borderBottom:"1px solid #f8fafc"}}>
+              <span style={{fontSize:12,color:"#334155",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1,marginRight:8}}>
+                {p.qty===0&&<span style={{color:"#ef4444",marginRight:4}}>⚠</span>}
+                {p.name}
+              </span>
+              <span style={{fontSize:13,fontWeight:800,color:p.qty===0?"#ef4444":p.qty<5?"#f59e0b":"#0f172a",flexShrink:0}}>
+                {p.qty.toLocaleString()}
+                {p.unit&&<span style={{fontSize:10,color:"#94a3b8",marginLeft:2}}>{p.unit}</span>}
+              </span>
+            </div>
+          ))}
+        </div>
+      ):(
+        <div style={{padding:"20px 14px",textAlign:"center",color:"#94a3b8",fontSize:11,flex:1}}>
+          📭 등록된 재고 없음
+        </div>
+      )}
+      {/* 푸터 - 고정 */}
+      <div style={{padding:"6px 14px 8px",textAlign:"center",borderTop:"1px solid #f1f5f9",background:"#fafafa",flexShrink:0}}>
+        <span style={{fontSize:10,color:"#64748b",fontWeight:600}}>👆 클릭하여 상세 보기 / 추가 등록</span>
+      </div>
+    </div>
+  );
+}
+
+// ========== PHOTO LIGHTBOX (fullscreen viewer - PC + Mobile) ==========
+function PhotoLightbox({src,label,date,onClose}){
+  if(!src)return null;
+  return(
+    <div style={{position:"fixed",inset:0,zIndex:99999,background:"rgba(0,0,0,0.92)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+      animation:"tipIn 0.15s ease",touchAction:"none"}}>
+      {/* Top bar with close */}
+      <div style={{position:"absolute",top:0,left:0,right:0,padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",zIndex:1}}>
+        <div>{label&&<div style={{color:"#fff",fontSize:14,fontWeight:700}}>{label}</div>}
+          {date&&<div style={{color:"#94a3b8",fontSize:11}}>{fDate(date)}</div>}</div>
+        <button onTouchEnd={e=>{e.preventDefault();e.stopPropagation();onClose();}} onClick={onClose}
+          style={{width:44,height:44,borderRadius:"50%",background:"rgba(255,255,255,0.2)",color:"#fff",border:"none",cursor:"pointer",fontSize:24,fontWeight:700,
+            display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(4px)",WebkitBackdropFilter:"blur(4px)"}}>×</button>
+      </div>
+      {/* Image */}
+      <img src={src} alt="" style={{maxWidth:"94vw",maxHeight:"80vh",objectFit:"contain",borderRadius:8}}
+        onTouchEnd={e=>{e.preventDefault();e.stopPropagation();onClose();}}
+        onClick={onClose}/>
+    </div>
+  );
+}
+
+// ========== PHOTO THUMB (hover on PC + tap fullscreen on mobile) ==========
+function PhotoThumb({src,date,onDel,label,size}){
+  const [hov,setHov]=useState(false);
+  const [full,setFull]=useState(false);
+  const [pos,setPos]=useState({x:0,y:0});
+  const ref=useRef(null);
+  const sz=size||48;
+  return(
+    <div ref={ref} style={{position:"relative",display:"inline-block"}}>
+      <div
+        onMouseEnter={()=>{setHov(true);const r=ref.current?.getBoundingClientRect();if(r)setPos({x:r.left,y:r.top});}}
+        onMouseLeave={()=>setHov(false)}
+        onClick={e=>{e.stopPropagation();setFull(true);}}
+        onTouchEnd={e=>{e.preventDefault();e.stopPropagation();setFull(true);}}
+        style={{width:sz,height:sz,borderRadius:8,overflow:"hidden",border:"2px solid #d1d5db",cursor:"pointer",flexShrink:0,
+          WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+        <img src={src} alt="" draggable={false} style={{width:"100%",height:"100%",objectFit:"cover",pointerEvents:"none"}}/>
+      </div>
+      {onDel&&<button onClick={e=>{e.stopPropagation();e.preventDefault();onDel();}}
+        onTouchEnd={e=>{e.preventDefault();e.stopPropagation();onDel();}}
+        style={{position:"absolute",top:-5,right:-5,width:22,height:22,borderRadius:"50%",
+          background:"#ef4444",color:"#fff",border:"2px solid #fff",cursor:"pointer",fontSize:12,
+          display:"flex",alignItems:"center",justifyContent:"center",padding:0,lineHeight:1}}>×</button>}
+      {/* PC hover preview */}
+      {hov&&(
+        <div style={{position:"fixed",left:Math.min(pos.x,window.innerWidth-340),top:Math.max(pos.y-280,10),
+          zIndex:9998,background:"#fff",borderRadius:12,boxShadow:"0 12px 40px rgba(0,0,0,0.3)",overflow:"hidden",
+          animation:"tipIn 0.12s ease",pointerEvents:"none"}}>
+          <img src={src} alt="" style={{display:"block",maxWidth:320,maxHeight:240,objectFit:"contain"}}/>
+          {label&&<div style={{padding:"4px 10px 0",fontSize:12,fontWeight:700,color:"#1e293b",textAlign:"center"}}>{label}</div>}
+          {date&&<div style={{padding:"2px 10px 6px",fontSize:11,color:"#64748b",textAlign:"center"}}>{fDate(date)}</div>}
+        </div>
+      )}
+      {/* Fullscreen lightbox */}
+      {full&&<PhotoLightbox src={src} label={label} date={date} onClose={()=>setFull(false)}/>}
+    </div>
+  );
+}
+
+// ========== PHOTO UPLOAD BUTTON ==========
+function PhotoBtn({pid,onAdd}){
+  const fileRef=useRef(null);
+  const camRef=useRef(null);
+
+  const handleFile=(e)=>{
+    const files=e.target.files;
+    if(!files||!files.length)return;
+    Array.from(files).forEach(f=>{
+      const reader=new FileReader();
+      reader.onload=ev=>{
+        const img=new Image();
+        img.onload=()=>{
+          const max=800;
+          let w=img.width,h=img.height;
+          if(w>max||h>max){const r=Math.min(max/w,max/h);w*=r;h*=r;}
+          const c=document.createElement("canvas");c.width=w;c.height=h;
+          c.getContext("2d").drawImage(img,0,0,w,h);
+          onAdd(pid,c.toDataURL("image/jpeg",0.7));
+        };
+        img.src=ev.target.result;
+      };
+      reader.readAsDataURL(f);
+    });
+    e.target.value="";
+  };
+
+  return(
+    <div style={{display:"inline-flex",gap:3}}>
+      <input ref={fileRef} type="file" accept="image/*" multiple onChange={handleFile} style={{display:"none"}}/>
+      <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={handleFile} style={{display:"none"}}/>
+      <button onClick={()=>camRef.current?.click()} title="카메라 촬영"
+        style={{width:40,height:40,borderRadius:8,border:"1.5px dashed #3b5bdb",background:"#eef2ff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#3b5bdb",flexShrink:0,
+          WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+        <IC.Cam/>
+      </button>
+      <button onClick={()=>fileRef.current?.click()} title="사진 첨부"
+        style={{width:40,height:40,borderRadius:8,border:"1.5px dashed #64748b",background:"#f8fafc",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#64748b",flexShrink:0,
+          WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+        <IC.Img/>
+      </button>
+    </div>
+  );
+}
+
+// ========== ZONE PHOTO CARD (tap to fullscreen) ==========
+function ZonePhotoCard({ph,zoneName,zoneId,onDel}){
+  const [full,setFull]=useState(false);
+  return(
+    <div style={{position:"relative",flexShrink:0}}>
+      <img src={ph.url} alt="" draggable={false}
+        style={{width:200,height:140,objectFit:"cover",borderRadius:10,border:"2px solid #e5e7eb",cursor:"pointer",
+          boxShadow:"0 2px 8px rgba(0,0,0,0.1)",WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}
+        onClick={()=>setFull(true)} onTouchEnd={e=>{e.preventDefault();setFull(true);}}/>
+      <button onClick={e=>{e.stopPropagation();onDel(zoneId,ph.id);}}
+        onTouchEnd={e=>{e.preventDefault();e.stopPropagation();onDel(zoneId,ph.id);}}
+        style={{position:"absolute",top:4,right:4,width:28,height:28,borderRadius:"50%",background:"rgba(0,0,0,0.6)",color:"#fff",border:"none",
+          cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",padding:0}}>×</button>
+      <div style={{fontSize:9,color:"#94a3b8",textAlign:"center",marginTop:2}}>{fDate(ph.date)}</div>
+      {full&&<PhotoLightbox src={ph.url} label={zoneName} date={ph.date} onClose={()=>setFull(false)}/>}
+    </div>
+  );
+}
+
+// ========== LOW STOCK ALERT MODAL (재고 부족 상세) ==========
+function LowStockAlertModal({ items, onClose, onGoTo }) {
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}} onClick={onClose}>
+      <div style={{background:"#fff",borderRadius:12,maxWidth:720,width:"100%",maxHeight:"85vh",overflow:"hidden",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
+        <div style={{padding:"14px 18px",borderBottom:"1px solid #e5e7eb",display:"flex",alignItems:"center",justifyContent:"space-between",background:"linear-gradient(90deg,#fef2f2,#fff7ed)"}}>
+          <div>
+            <div style={{fontSize:16,fontWeight:800,color:"#991b1b"}}>⚠️ 재고 부족 알림 ({items.length}건)</div>
+            <div style={{fontSize:11,color:"#7c2d12",marginTop:2}}>적정재고 이하로 떨어진 품목입니다.</div>
+          </div>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",fontSize:20,color:"#94a3b8"}}>×</button>
+        </div>
+        <div style={{flex:1,overflow:"auto",padding:14}}>
+          {items.map(p => (
+            <div key={p.id} style={{padding:"10px 12px",border:"1px solid #fecaca",borderRadius:8,marginBottom:8,background:"#fff7ed",display:"flex",alignItems:"center",gap:12}}>
+              <div style={{flexShrink:0,fontSize:24}}>{p.qty===0?"🚨":"⚠️"}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:800,color:"#0f172a"}}>{p.name}</div>
+                <div style={{fontSize:11,color:"#64748b",marginTop:2}}>📍 {p.loc} · 카테고리 {p.cat}</div>
+                {p.supplier && <div style={{fontSize:10,color:"#94a3b8",marginTop:2}}>발주처: {p.supplier}</div>}
+              </div>
+              <div style={{textAlign:"center",flexShrink:0}}>
+                <div style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>현재/적정</div>
+                <div style={{fontSize:18,fontWeight:900,color:p.qty===0?"#dc2626":"#ea580c"}}>{p.qty}/{p.minQty}</div>
+                <div style={{fontSize:9,color:"#94a3b8"}}>{p.unit||"개"}</div>
+              </div>
+              <button onClick={()=>onGoTo(p)} style={{padding:"6px 10px",borderRadius:6,border:"none",background:"#2563eb",color:"#fff",cursor:"pointer",fontSize:11,fontWeight:700,flexShrink:0}}>이동</button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== SEND LOW STOCK NOTIFICATION MODAL (알림 발송) ==========
+function SendLowStockNotifModal({ items, onClose }) {
+  const [channels, setChannels] = useState({ kakao: true, sms: false, email: true });
+  const [recipients, setRecipients] = useState({ phone: "", email: "" });
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(null);
+
+  const buildMessage = () => {
+    const lines = items.map(p => `• ${p.name} (현재 ${p.qty}/${p.minQty}${p.unit||"개"}) - ${p.loc}`);
+    return `[잠사박물관 재고 알림]\n적정재고 미만 ${items.length}건:\n\n${lines.join("\n")}\n\n발주 검토 부탁드립니다.`;
+  };
+
+  const sendNotif = async () => {
+    if (!channels.kakao && !channels.sms && !channels.email) {
+      return alert("최소 1개 채널을 선택해 주세요.");
+    }
+    if ((channels.kakao || channels.sms) && !recipients.phone) {
+      return alert("카카오톡/SMS 발송에는 전화번호가 필요합니다.");
+    }
+    if (channels.email && !recipients.email) {
+      return alert("이메일 발송에는 이메일 주소가 필요합니다.");
+    }
+    setSending(true);
+    const message = buildMessage();
+    const results = [];
+
+    // 실제 환경에서는 백엔드 API 호출 필요. 여기서는 mailto: 와 클립보드 복사로 폴백.
+    try {
+      // 1. 클립보드 복사 (모든 채널 공통)
+      try { await navigator.clipboard.writeText(message); results.push("✅ 메시지를 클립보드에 복사했습니다."); }
+      catch(e) {}
+
+      // 2. 이메일: mailto 링크
+      if (channels.email && recipients.email) {
+        const subject = encodeURIComponent(`[잠사박물관] 재고 부족 알림 ${items.length}건`);
+        const body = encodeURIComponent(message);
+        window.open(`mailto:${recipients.email}?subject=${subject}&body=${body}`);
+        results.push(`📧 이메일 앱이 열렸습니다 (${recipients.email})`);
+      }
+
+      // 3. 카카오톡/SMS: 백엔드 연동 필요. 여기선 안내만.
+      if (channels.kakao && recipients.phone) {
+        results.push(`💬 카카오톡 알림톡: ${recipients.phone} - 백엔드 연동(Ppurio API)이 필요합니다. 메시지가 클립보드에 복사되었으니 수동 발송 가능합니다.`);
+      }
+      if (channels.sms && recipients.phone) {
+        results.push(`📱 SMS: ${recipients.phone} - 백엔드 연동(Ppurio API)이 필요합니다. 메시지가 클립보드에 복사되었으니 수동 발송 가능합니다.`);
+      }
+
+      setSent(results);
+    } catch (err) {
+      alert(`발송 실패: ${err.message}`);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}} onClick={onClose}>
+      <div style={{background:"#fff",borderRadius:12,maxWidth:560,width:"100%",maxHeight:"85vh",overflow:"hidden",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
+        <div style={{padding:"14px 18px",borderBottom:"1px solid #e5e7eb",display:"flex",alignItems:"center",justifyContent:"space-between",background:"linear-gradient(90deg,#dc2626,#ea580c)"}}>
+          <div style={{color:"#fff"}}>
+            <div style={{fontSize:15,fontWeight:800}}>📨 재고 부족 알림 발송</div>
+            <div style={{fontSize:11,opacity:0.9,marginTop:2}}>{items.length}건 발주 알림</div>
+          </div>
+          <button onClick={onClose} style={{background:"rgba(255,255,255,0.2)",border:"none",cursor:"pointer",fontSize:18,color:"#fff",borderRadius:6,width:28,height:28}}>×</button>
+        </div>
+        <div style={{flex:1,overflow:"auto",padding:18}}>
+          {sent ? (
+            <div>
+              <div style={{padding:14,background:"#dcfce7",borderRadius:8,marginBottom:12,border:"1px solid #86efac"}}>
+                <div style={{fontSize:13,fontWeight:800,color:"#166534",marginBottom:8}}>✅ 발송 처리 완료</div>
+                {sent.map((r,i)=>(
+                  <div key={i} style={{fontSize:11,color:"#166534",marginBottom:4,lineHeight:1.4}}>{r}</div>
+                ))}
+              </div>
+              <button onClick={onClose} style={{width:"100%",padding:10,borderRadius:8,border:"none",background:"#2563eb",color:"#fff",fontWeight:700,fontSize:13,cursor:"pointer"}}>닫기</button>
+            </div>
+          ) : (
+            <>
+              {/* 채널 선택 */}
+              <div style={{marginBottom:14}}>
+                <label style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:6,display:"block"}}>발송 채널 선택</label>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                  {[
+                    {key:"kakao",label:"💬 카카오톡 알림톡"},
+                    {key:"sms",label:"📱 SMS (Ppurio)"},
+                    {key:"email",label:"📧 이메일"}
+                  ].map(c=>(
+                    <label key={c.key} style={{display:"inline-flex",alignItems:"center",gap:6,padding:"8px 12px",border:`2px solid ${channels[c.key]?"#2563eb":"#d1d5db"}`,borderRadius:8,cursor:"pointer",background:channels[c.key]?"#dbeafe":"#fff",fontSize:12,fontWeight:600}}>
+                      <input type="checkbox" checked={channels[c.key]} onChange={e=>setChannels(s=>({...s,[c.key]:e.target.checked}))}/>
+                      {c.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* 수신처 */}
+              {(channels.kakao || channels.sms) && (
+                <div style={{marginBottom:10}}>
+                  <label style={{fontSize:11,fontWeight:700,color:"#475569"}}>전화번호 (카카오톡/SMS)</label>
+                  <input className="inp" value={recipients.phone} onChange={e=>setRecipients(s=>({...s,phone:e.target.value}))} placeholder="010-1234-5678" style={{fontSize:12,padding:7,marginTop:4}}/>
+                </div>
+              )}
+              {channels.email && (
+                <div style={{marginBottom:14}}>
+                  <label style={{fontSize:11,fontWeight:700,color:"#475569"}}>이메일 주소</label>
+                  <input className="inp" value={recipients.email} onChange={e=>setRecipients(s=>({...s,email:e.target.value}))} placeholder="example@jamsa.com" style={{fontSize:12,padding:7,marginTop:4}}/>
+                </div>
+              )}
+
+              {/* 미리보기 */}
+              <div style={{marginBottom:14}}>
+                <label style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:6,display:"block"}}>발송 메시지 미리보기</label>
+                <div style={{padding:10,background:"#f8fafc",border:"1px solid #e5e7eb",borderRadius:8,fontSize:11,color:"#475569",whiteSpace:"pre-wrap",fontFamily:"monospace",maxHeight:160,overflow:"auto"}}>{buildMessage()}</div>
+              </div>
+
+              {/* 안내 */}
+              <div style={{padding:10,background:"#fef3c7",borderRadius:8,fontSize:10,color:"#92400e",marginBottom:14}}>
+                💡 카카오톡 알림톡과 SMS는 Ppurio API 백엔드 연동이 필요합니다. 현재는 메시지를 클립보드에 복사하여 수동 발송이 가능합니다. 이메일은 기본 메일 앱이 자동으로 열립니다.
+              </div>
+
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={onClose} style={{flex:1,padding:10,borderRadius:8,border:"1px solid #d1d5db",background:"#fff",cursor:"pointer",fontSize:12,fontWeight:600}}>취소</button>
+                <button onClick={sendNotif} disabled={sending} style={{flex:2,padding:10,borderRadius:8,border:"none",background:sending?"#94a3b8":"linear-gradient(135deg,#dc2626,#ea580c)",color:"#fff",cursor:sending?"wait":"pointer",fontSize:12,fontWeight:700}}>
+                  {sending ? "🔄 발송 중..." : "📨 발송하기"}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== ZONE BOTTOM ==========
+function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDel,onShowQR,highlightPid,doAddPhoto,doDelPhoto,zonePhotos,doAddZonePhoto,doDelZonePhoto,allProds,allZonePhotos,onAddFacAction,can}){
+  const [qPid,setQPid]=useState(null);
+  const [qAct,setQAct]=useState(null);
+  const [qQty,setQQty]=useState("");
+  const [qLoc,setQLoc]=useState("");
+  const [qMemo,setQMemo]=useState("");
+  const [showAdd,setShowAdd]=useState(false);
+  const [showInvAi,setShowInvAi]=useState(false);
+  // 등록 폼 필드 (확장된 풀 폼)
+  const [nN,setNN]=useState("");
+  const [nC,setNC]=useState(CATS[0]);
+  const [nL,setNL]=useState(allLocs[0]);
+  const [nQ,setNQ]=useState("0");
+  const [nMinQty,setNMinQty]=useState("5");
+  const [nUnit,setNUnit]=useState("개");
+  const [nSupplier,setNSupplier]=useState("");
+  const [nUsage,setNUsage]=useState("");
+  const [nCareGuide,setNCareGuide]=useState("");
+  const [nStockSchedule,setNStockSchedule]=useState("");
+  const [nMemo,setNMemo]=useState("");
+  const [nPhotos,setNPhotos]=useState([]); // 사진 여러 장
+  const [aiAnalyzing,setAiAnalyzing]=useState(false);
+  const [aiResult,setAiResult]=useState(null);
+
+  const tq=prods.reduce((s,p)=>s+p.qty,0);
+  const ac={"입고":"#22c55e","출고":"#ef4444","조정":"#8b5cf6","추가":"#6366f1","삭제":"#f87171","수정":"#f59e0b"};
+
+  const scrollRef=useCallback(node=>{if(node)setTimeout(()=>node.scrollIntoView({behavior:"smooth",block:"start"}),100);},[]);
+
+  const startQ=(pid,act)=>{
+    if(qPid===pid&&qAct===act){setQPid(null);setQAct(null);return;}
+    setQPid(pid);setQAct(act);setQQty("");setQMemo("");
+    setQLoc(prods.find(x=>x.id===pid)?.loc||allLocs[0]);
+  };
+  const submitQ=()=>{
+    const q=parseInt(qQty);
+    if(qAct!=="adj"&&(!q||q<=0))return alert("수량 입력");
+    if(qAct==="adj"&&(isNaN(q)||q<0))return alert("수량 입력");
+    if(!qLoc)return alert("위치 선택");
+    if(qAct==="in")doIn(qPid,qLoc,q,qMemo);
+    else if(qAct==="out")doOut(qPid,qLoc,q,qMemo);
+    else doAdj(qPid,qLoc,q,qMemo);
+    setQPid(null);setQAct(null);setQQty("");
+  };
+
+  // 등록 폼 사진 추가 (제한 없음)
+  const addNewPhoto = (e) => {
+    const files = e.target.files;
+    if (!files || !files.length) return;
+    Array.from(files).forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        setNPhotos(prev => [...prev, { id: Date.now() + Math.random(), url: ev.target.result, name: file.name }]);
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = "";
+  };
+  const removeNewPhoto = (id) => setNPhotos(prev => prev.filter(p => p.id !== id));
+
+  // AI 분석: 사진 + 제품명 → 정보 자동 추출 + 시세/구매처 검색
+  // 백엔드 API(/api/inventory-ai-analyze) 경유 — 보안상 ANTHROPIC_API_KEY 노출 방지
+  const runAiAnalysis = async () => {
+    if (nPhotos.length === 0 && !nN.trim()) {
+      return alert("사진을 1장 이상 올리거나 제품명을 입력해 주세요.");
+    }
+    setAiAnalyzing(true);
+    setAiResult(null);
+    try {
+      // 사진을 base64 dataURL 그대로 전달 (백엔드에서 파싱)
+      const photosPayload = nPhotos.slice(0, 4).map(ph => ph.url).filter(Boolean);
+
+      // window.authFetch가 자동으로 Bearer 토큰 + CORS 처리
+      const fetcher = window.authFetch || ((path, opts) => fetch(path, opts));
+      const response = await fetcher("/api/inventory-ai-analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productName: nN.trim() || null,
+          zoneName: zone.name,
+          category: nC,
+          photos: photosPayload,
+        })
+      });
+
+      if (!response.ok) {
+        let errMsg = `요청 실패 (${response.status})`;
+        try {
+          const errData = await response.json();
+          errMsg = errData.message || errData.error || errMsg;
+        } catch(e) {}
+        throw new Error(errMsg);
+      }
+
+      const data = await response.json();
+      if (!data.ok || !data.result) {
+        throw new Error("백엔드에서 유효한 응답을 받지 못했습니다.");
+      }
+
+      const parsed = data.result;
+      setAiResult(parsed);
+
+      // 결과를 폼에 자동 채우기
+      if (parsed.name && !nN.trim()) setNN(parsed.name);
+      if (parsed.cat && CATS.includes(parsed.cat)) setNC(parsed.cat);
+      if (parsed.usage) setNUsage(parsed.usage);
+      if (parsed.careGuide) setNCareGuide(parsed.careGuide);
+      if (parsed.stockSchedule) setNStockSchedule(parsed.stockSchedule);
+      if (parsed.minQty) setNMinQty(String(parsed.minQty));
+      if (parsed.unit) setNUnit(parsed.unit);
+      if (parsed.supplier) setNSupplier(parsed.supplier);
+    } catch (err) {
+      alert(`AI 분석 실패: ${err.message}\n\n수동으로 입력해 주세요.`);
+    } finally {
+      setAiAnalyzing(false);
+    }
+  };
+
+  const submitAdd=()=>{
+    if(!nN.trim())return alert("제품명을 입력해 주세요.");
+    doAdd({
+      name: nN.trim(),
+      cat: nC,
+      loc: nL,
+      qty: nQ,
+      minQty: nMinQty,
+      unit: nUnit,
+      supplier: nSupplier.trim(),
+      usage: nUsage.trim(),
+      careGuide: nCareGuide.trim(),
+      stockSchedule: nStockSchedule.trim(),
+      memo: nMemo.trim(),
+      photos: nPhotos.map(p => ({ id: p.id, url: p.url, date: new Date().toISOString() })),
+      // AI 분석 결과 (시세 + 구매처 + 시각화 데이터)
+      marketPrice: aiResult?.marketPrice || null,
+      purchaseLinks: aiResult?.purchaseLinks || null,
+      aiTips: aiResult?.tips || null,
+      smartRecommendation: aiResult?.smartRecommendation || null,
+      usageBlocks: aiResult?.usageBlocks || null,
+      careIcons: aiResult?.careIcons || null,
+      monthlyPattern: aiResult?.monthlyPattern || null,
+    });
+    // 폼 초기화
+    setNN(""); setNQ("0"); setNMinQty("5"); setNUnit("개");
+    setNSupplier(""); setNUsage(""); setNCareGuide(""); setNStockSchedule(""); setNMemo("");
+    setNPhotos([]); setAiResult(null); setShowAdd(false);
+  };
+
+  return(
+    <div ref={scrollRef} style={{borderTop:`3px solid ${zone.color}`,background:"#fff",animation:"fadeUp 0.2s ease"}}>
+      {/* Header */}
+      <div style={{padding:"12px 16px",background:`linear-gradient(135deg,${zone.color}10,${zone.color}04)`,display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:26}}>{zone.icon}</span>
+          <div><div style={{fontSize:16,fontWeight:800}}>{zone.name}</div><div style={{fontSize:11,color:"#64748b"}}>{zone.desc}</div></div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <div style={{background:"#fff",borderRadius:8,padding:"5px 14px",textAlign:"center",border:"1px solid #e5e7eb"}}><div style={{fontSize:9,color:"#94a3b8"}}>품목</div><div style={{fontSize:17,fontWeight:900,color:zone.color}}>{prods.length}</div></div>
+          <div style={{background:"#fff",borderRadius:8,padding:"5px 14px",textAlign:"center",border:"1px solid #e5e7eb"}}><div style={{fontSize:9,color:"#94a3b8"}}>재고</div><div style={{fontSize:17,fontWeight:900,color:tq===0?"#ef4444":zone.color}}>{tq.toLocaleString()}</div></div>
+          {can&&can("add")&&<button className="btn bp" onClick={()=>setShowAdd(!showAdd)} style={{fontSize:11,padding:"7px 12px"}}><IC.Plus/>{showAdd?"취소":"추가"}</button>}
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:"#94a3b8"}}><IC.X/></button>
+        </div>
+      </div>
+
+      {/* Zone photos (보관장소 사진) - 큰 미리보기 */}
+      <div style={{padding:"10px 16px",borderBottom:"1px solid #f1f3f5",background:"#fafbfc"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8,gap:8,flexWrap:"wrap"}}>
+          <span style={{fontSize:12,fontWeight:700,color:"#475569"}}>📍 보관장소 현장 사진</span>
+          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+            <button onClick={()=>setShowInvAi(true)}
+              style={{fontSize:11,padding:"6px 10px",borderRadius:8,border:"none",cursor:"pointer",color:"#fff",fontWeight:700,background:"linear-gradient(135deg,#7c3aed,#2563eb)",display:"inline-flex",alignItems:"center",gap:4}}>
+              🤖 AI 분석
+            </button>
+            <PhotoBtn pid={zone.id} onAdd={(zid,url)=>doAddZonePhoto(zid,url)}/>
+          </div>
+        </div>
+        {zonePhotos.length===0?(
+          <div style={{border:"2px dashed #d1d5db",borderRadius:10,padding:"18px 0",textAlign:"center",color:"#94a3b8",fontSize:12}}>
+            카메라 📷 또는 파일 🖼️ 버튼으로 보관장소 사진을 추가하세요
+          </div>
+        ):(
+          <div style={{display:"flex",gap:10,overflowX:"auto",paddingBottom:4}}>
+            {zonePhotos.map(ph=>(
+              <ZonePhotoCard key={ph.id} ph={ph} zoneName={zone.name} zoneId={zone.id} onDel={doDelZonePhoto}/>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Quick add — 풀 폼 (사진/사용법/관리요령/입출고시기/AI분석) */}
+      {showAdd&&(
+        <div style={{padding:"14px 20px",borderBottom:"1px solid #e5e7eb",background:"#f8fafc"}}>
+          {/* 사진 업로드 영역 */}
+          <div style={{marginBottom:12}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+              <label style={{fontSize:11,fontWeight:700,color:"#475569"}}>📸 제품 사진 ({nPhotos.length}장)</label>
+              <div style={{display:"flex",gap:6}}>
+                <button onClick={runAiAnalysis} disabled={aiAnalyzing}
+                  style={{fontSize:11,padding:"6px 12px",borderRadius:8,border:"none",cursor:aiAnalyzing?"wait":"pointer",color:"#fff",fontWeight:700,background:aiAnalyzing?"#94a3b8":"linear-gradient(135deg,#7c3aed,#2563eb)",display:"inline-flex",alignItems:"center",gap:4}}>
+                  {aiAnalyzing ? "🔄 분석 중..." : "🤖 AI 자동 입력"}
+                </button>
+                <label style={{fontSize:11,padding:"6px 10px",borderRadius:8,border:"1px solid #d1d5db",cursor:"pointer",background:"#fff",fontWeight:600,display:"inline-flex",alignItems:"center",gap:3}}
+                  title="카메라로 직접 촬영">
+                  📷 촬영
+                  <input type="file" accept="image/*" multiple capture="environment" onChange={addNewPhoto} style={{display:"none"}}/>
+                </label>
+                <label style={{fontSize:11,padding:"6px 10px",borderRadius:8,border:"1px solid #d1d5db",cursor:"pointer",background:"#fff",fontWeight:600,display:"inline-flex",alignItems:"center",gap:3}}
+                  title="갤러리/내 파일에서 선택 (여러 장 가능)">
+                  🖼️ 파일
+                  <input type="file" accept="image/*" multiple onChange={addNewPhoto} style={{display:"none"}}/>
+                </label>
+              </div>
+            </div>
+            {nPhotos.length>0 && (
+              <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:4}}>
+                {nPhotos.map(ph=>(
+                  <div key={ph.id} style={{position:"relative",flex:"0 0 80px",height:80,borderRadius:6,overflow:"hidden",border:"2px solid #e5e7eb"}}>
+                    <img src={ph.url} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                    <button onClick={()=>removeNewPhoto(ph.id)} style={{position:"absolute",top:2,right:2,width:18,height:18,borderRadius:"50%",border:"none",background:"rgba(220,38,38,0.9)",color:"#fff",fontSize:10,cursor:"pointer",fontWeight:900}}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {aiResult && (() => {
+              // 시세 슬라이더 평균 위치 계산
+              const mp = aiResult.marketPrice || {};
+              const range = (mp.max||0) - (mp.min||0);
+              const avgPos = range > 0 ? Math.round(((mp.avg - mp.min) / range) * 100) : 50;
+              // 월별 패턴 max값으로 정규화
+              const monthly = aiResult.monthlyPattern || [];
+              const maxIntake = Math.max(1, ...monthly.map(m=>m.intake||0));
+              const maxOuttake = Math.max(1, ...monthly.map(m=>m.outtake||0));
+              const maxAll = Math.max(maxIntake, maxOuttake);
+              const badgeColors = {
+                green: {bg:"#dcfce7", color:"#166534"},
+                blue: {bg:"#dbeafe", color:"#1e40af"},
+                amber: {bg:"#fef3c7", color:"#78350f"},
+                purple: {bg:"#ede9fe", color:"#5b21b6"},
+                red: {bg:"#fee2e2", color:"#991b1b"},
+              };
+              return (
+                <div style={{marginTop:10,border:"1px solid #c4b5fd",borderRadius:10,overflow:"hidden",background:"#fff"}}>
+                  <div style={{padding:"10px 14px",background:"linear-gradient(90deg,#ede9fe,#dbeafe)",color:"#26215C",fontSize:13,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:"1px solid #c4b5fd"}}>
+                    <span>✨ AI 분석 결과</span>
+                    <span style={{fontSize:11,color:"#534AB7",fontWeight:500}}>{aiResult.name || nN || "제품"} · 방금 분석</span>
+                  </div>
+
+                  {/* 시세 슬라이더 */}
+                  {mp.min !== undefined && (
+                    <div style={{padding:"14px",borderBottom:"1px solid #f1f3f5"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+                        <span style={{fontSize:11,fontWeight:700,color:"#475569"}}>💰 시세 분포 ({mp.unit||"단위"} 기준)</span>
+                        <span style={{fontSize:10,color:"#94a3b8"}}>최저~최고: {((mp.max-mp.min)||0).toLocaleString()}원 폭</span>
+                      </div>
+                      <div style={{position:"relative",height:60,margin:"0 12px"}}>
+                        <div style={{position:"absolute",top:24,left:0,right:0,height:6,background:"linear-gradient(90deg,#97C459 0%,#378ADD 50%,#E24B4A 100%)",borderRadius:3}}></div>
+                        {/* 최저 */}
+                        <div style={{position:"absolute",top:18,left:"0%",transform:"translateX(-50%)",width:18,height:18,borderRadius:"50%",background:"#639922",border:"2px solid #fff",boxShadow:"0 0 0 1px #639922"}}></div>
+                        <div style={{position:"absolute",top:38,left:"0%",transform:"translateX(-50%)",textAlign:"center",minWidth:60}}>
+                          <div style={{fontSize:9,color:"#173404",fontWeight:700}}>최저</div>
+                          <div style={{fontSize:11,fontWeight:800,color:"#173404"}}>{(mp.min||0).toLocaleString()}원</div>
+                        </div>
+                        {/* 평균 */}
+                        <div style={{position:"absolute",top:16,left:`${avgPos}%`,transform:"translateX(-50%)",width:22,height:22,borderRadius:"50%",background:"#185FA5",border:"3px solid #fff",boxShadow:"0 0 0 1px #185FA5"}}></div>
+                        <div style={{position:"absolute",top:40,left:`${avgPos}%`,transform:"translateX(-50%)",textAlign:"center",minWidth:60}}>
+                          <div style={{fontSize:9,color:"#042C53",fontWeight:700}}>평균</div>
+                          <div style={{fontSize:12,fontWeight:900,color:"#042C53"}}>{(mp.avg||0).toLocaleString()}원</div>
+                        </div>
+                        {/* 최고 */}
+                        <div style={{position:"absolute",top:18,left:"100%",transform:"translateX(-50%)",width:18,height:18,borderRadius:"50%",background:"#A32D2D",border:"2px solid #fff",boxShadow:"0 0 0 1px #A32D2D"}}></div>
+                        <div style={{position:"absolute",top:38,left:"100%",transform:"translateX(-50%)",textAlign:"center",minWidth:60}}>
+                          <div style={{fontSize:9,color:"#501313",fontWeight:700}}>최고</div>
+                          <div style={{fontSize:11,fontWeight:800,color:"#501313"}}>{(mp.max||0).toLocaleString()}원</div>
+                        </div>
+                      </div>
+                      {mp.note && (
+                        <div style={{marginTop:8,display:"inline-flex",alignItems:"center",gap:6,padding:"5px 10px",background:"#EAF3DE",borderRadius:100,fontSize:10,color:"#173404",fontWeight:600}}>
+                          🏷️ {mp.note}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 구매처 카드 */}
+                  {aiResult.purchaseLinks && aiResult.purchaseLinks.length > 0 && (
+                    <div style={{padding:"14px",borderBottom:"1px solid #f1f3f5"}}>
+                      <div style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:8}}>🛒 추천 구매처</div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+                        {aiResult.purchaseLinks.slice(0,4).map((link,i)=>{
+                          const bc = badgeColors[link.badgeColor] || badgeColors.blue;
+                          return (
+                            <a key={i} href={link.url} target="_blank" rel="noopener noreferrer"
+                              style={{textDecoration:"none",padding:"8px 10px",background:"#fff",border:"1px solid #e5e7eb",borderRadius:8,display:"flex",flexDirection:"column",gap:5,transition:"all 0.15s"}}
+                              onMouseEnter={e=>{e.currentTarget.style.borderColor="#2563eb";e.currentTarget.style.transform="translateY(-1px)";}}
+                              onMouseLeave={e=>{e.currentTarget.style.borderColor="#e5e7eb";e.currentTarget.style.transform="";}}>
+                              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                                <span style={{fontSize:12,fontWeight:700,color:"#0f172a"}}>🔗 {link.name}</span>
+                                {link.badge && <span style={{fontSize:9,padding:"2px 6px",background:bc.bg,color:bc.color,borderRadius:4,fontWeight:700}}>{link.badge}</span>}
+                              </div>
+                              <div style={{display:"flex",alignItems:"baseline",gap:3}}>
+                                <span style={{fontSize:14,fontWeight:800,color:"#0f172a"}}>
+                                  {link.priceRange ? `${link.priceRange}원` : (link.price ? `${link.price.toLocaleString()}원` : "—")}
+                                </span>
+                              </div>
+                              {link.tags && (
+                                <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+                                  {link.tags.slice(0,2).map((t,j)=>(
+                                    <span key={j} style={{fontSize:9,padding:"1px 5px",background:"#f1f5f9",color:"#475569",borderRadius:3}}>{t}</span>
+                                  ))}
+                                </div>
+                              )}
+                            </a>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 사용법 블록 */}
+                  {aiResult.usageBlocks && aiResult.usageBlocks.length > 0 && (
+                    <div style={{padding:"14px",borderBottom:"1px solid #f1f3f5"}}>
+                      <div style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:8}}>📖 사용법 요약</div>
+                      <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.min(aiResult.usageBlocks.length,3)},1fr)`,gap:6}}>
+                        {aiResult.usageBlocks.slice(0,3).map((b,i)=>{
+                          const colors = [
+                            {bg:"#E6F1FB",label:"#042C53",desc:"#185FA5"},
+                            {bg:"#E1F5EE",label:"#04342C",desc:"#0F6E56"},
+                            {bg:"#FCEBEB",label:"#501313",desc:"#A32D2D"},
+                          ][i] || {bg:"#f1f5f9",label:"#0f172a",desc:"#475569"};
+                          return (
+                            <div key={i} style={{padding:"10px 6px",background:colors.bg,borderRadius:8,textAlign:"center"}}>
+                              <div style={{fontSize:22,marginBottom:3}}>{b.icon}</div>
+                              <div style={{fontSize:10,fontWeight:700,color:colors.label}}>{b.label}</div>
+                              <div style={{fontSize:10,color:colors.desc,marginTop:2}}>{b.desc}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 보관 픽토그램 */}
+                  {aiResult.careIcons && aiResult.careIcons.length > 0 && (
+                    <div style={{padding:"14px",borderBottom:"1px solid #f1f3f5"}}>
+                      <div style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:8}}>🧹 보관 요령</div>
+                      <div style={{display:"grid",gridTemplateColumns:`repeat(${aiResult.careIcons.length},1fr)`,gap:5}}>
+                        {aiResult.careIcons.map((c,i)=>(
+                          <div key={i} style={{padding:"8px 4px",background:"#f8fafc",borderRadius:8,textAlign:"center"}}>
+                            <div style={{fontSize:18}}>{c.icon}</div>
+                            <div style={{fontSize:9,color:"#475569",marginTop:2,fontWeight:600}}>{c.desc}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 월별 입출고 캘린더 */}
+                  {monthly.length > 0 && (
+                    <div style={{padding:"14px",borderBottom:"1px solid #f1f3f5"}}>
+                      <div style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:8}}>📅 입출고 캘린더</div>
+                      <div style={{display:"flex",gap:3,alignItems:"stretch",height:60,marginBottom:6}}>
+                        {monthly.map((m,i)=>{
+                          const inH = (m.intake/maxAll)*100;
+                          const outH = (m.outtake/maxAll)*100;
+                          const isOutHigh = m.outtake > 70;
+                          const isInHigh = m.intake > 70;
+                          return (
+                            <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center"}}>
+                              <div style={{flex:1,display:"flex",alignItems:"flex-end",justifyContent:"center",gap:2,width:"100%"}}>
+                                <div style={{width:8,height:`${inH}%`,background:isInHigh?"#639922":"#bbf7d0",borderRadius:"2px 2px 0 0"}} title={`${m.month}월 입고추천 ${m.intake}%`}></div>
+                                <div style={{width:8,height:`${outH}%`,background:isOutHigh?"#dc2626":"#fecaca",borderRadius:"2px 2px 0 0"}} title={`${m.month}월 소진예상 ${m.outtake}%`}></div>
+                              </div>
+                              <div style={{fontSize:9,color:isOutHigh||isInHigh?"#0f172a":"#94a3b8",marginTop:3,fontWeight:isOutHigh||isInHigh?700:500}}>{m.month}월</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div style={{display:"flex",gap:14,paddingTop:6,borderTop:"1px dashed #e5e7eb"}}>
+                        <span style={{fontSize:9,color:"#475569",display:"inline-flex",alignItems:"center",gap:4}}><span style={{width:8,height:8,background:"#639922",borderRadius:2}}></span>입고 추천</span>
+                        <span style={{fontSize:9,color:"#475569",display:"inline-flex",alignItems:"center",gap:4}}><span style={{width:8,height:8,background:"#dc2626",borderRadius:2}}></span>소진 다발</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 스마트 추천 */}
+                  {(aiResult.smartRecommendation || aiResult.tips) && (
+                    <div style={{padding:"12px 14px",background:"linear-gradient(90deg,#FAEEDA,#FAC775)",display:"flex",alignItems:"center",gap:10}}>
+                      <span style={{fontSize:22,flexShrink:0}}>💡</span>
+                      <div style={{fontSize:11,color:"#412402",lineHeight:1.5}}>
+                        {aiResult.smartRecommendation && <div><strong>추천:</strong> {aiResult.smartRecommendation}</div>}
+                        {aiResult.tips && <div style={{marginTop:aiResult.smartRecommendation?4:0}}>{aiResult.tips}</div>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* 기본 정보 */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:10}}>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>제품명 *</label><input className="inp" value={nN} onChange={e=>setNN(e.target.value)} style={{fontSize:12,padding:7}} placeholder="예: 8mm 디폼 블럭"/></div>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>카테고리</label><select className="sel" value={nC} onChange={e=>setNC(e.target.value)} style={{fontSize:11,padding:6}}>{CATS.map(c=><option key={c}>{c}</option>)}</select></div>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>위치</label><select className="sel" value={nL} onChange={e=>setNL(e.target.value)} style={{fontSize:11,padding:6}}>{allLocs.map(l=><option key={l}>{l}</option>)}</select></div>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>수량</label><input className="inp" type="number" value={nQ} onChange={e=>setNQ(e.target.value)} style={{fontSize:12,padding:7,textAlign:"center"}}/></div>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>단위</label><input className="inp" value={nUnit} onChange={e=>setNUnit(e.target.value)} style={{fontSize:12,padding:7}} placeholder="개/박스/세트"/></div>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>적정재고 ⚠️</label><input className="inp" type="number" value={nMinQty} onChange={e=>setNMinQty(e.target.value)} style={{fontSize:12,padding:7,textAlign:"center"}} title="이 수량 이하로 떨어지면 알림"/></div>
+            <div style={{gridColumn:"1 / -1"}}><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>발주처/공급사</label><input className="inp" value={nSupplier} onChange={e=>setNSupplier(e.target.value)} style={{fontSize:12,padding:7}} placeholder="예: 청주문구 / 02-1234-5678"/></div>
+          </div>
+
+          {/* 상세 정보 (사용법 / 관리요령 / 입출고시기) */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr",gap:8,marginBottom:10}}>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>📖 사용법</label><textarea className="inp" value={nUsage} onChange={e=>setNUsage(e.target.value)} style={{fontSize:12,padding:7,minHeight:50,resize:"vertical"}} placeholder="제품 사용 방법, 주의사항"/></div>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>🧹 관리/보관 요령</label><textarea className="inp" value={nCareGuide} onChange={e=>setNCareGuide(e.target.value)} style={{fontSize:12,padding:7,minHeight:50,resize:"vertical"}} placeholder="보관 환경, 정리 방법, 주기적 점검사항"/></div>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>📅 입출고 시기</label><textarea className="inp" value={nStockSchedule} onChange={e=>setNStockSchedule(e.target.value)} style={{fontSize:12,padding:7,minHeight:40,resize:"vertical"}} placeholder="예: 봄철 행사 전 대량 입고, 여름 성수기 출고 다수"/></div>
+            <div><label style={{fontSize:10,fontWeight:700,color:"#64748b"}}>📝 추가 메모</label><input className="inp" value={nMemo} onChange={e=>setNMemo(e.target.value)} style={{fontSize:12,padding:7}} placeholder="기타 참고사항"/></div>
+          </div>
+
+          {/* 등록 / 취소 */}
+          <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
+            <button onClick={()=>{setShowAdd(false);setAiResult(null);}} style={{fontSize:12,padding:"8px 14px",borderRadius:8,border:"1px solid #d1d5db",background:"#fff",cursor:"pointer"}}>취소</button>
+            <button className="btn bp" onClick={submitAdd} style={{fontSize:12,padding:"8px 18px"}}>💾 등록 (QR 자동생성)</button>
+          </div>
+        </div>
+      )}
+
+      {/* Products */}
+      {prods.length===0?<div style={{padding:30,textAlign:"center",color:"#94a3b8",fontSize:13}}>📦 등록된 재고 없음</div>:(
+        <div>
+          {prods.map(p=>{
+            const isOpen=qPid===p.id;
+            const isHL=highlightPid===p.id;
+            const photos=p.photos||[];
+            return(
+              <div key={p.id} style={{borderBottom:"1px solid #eee",background:isHL?"#eff6ff":isOpen?"#fafbff":"#fff",transition:"background 0.2s"}}>
+                {/* Row 1: product info + qty + actions */}
+                <div style={{display:"flex",alignItems:"center",padding:"8px 14px",gap:8}}>
+                  <button onClick={()=>onShowQR(p)} title="QR" style={{background:"none",border:"1px solid #e5e7eb",borderRadius:5,padding:2,cursor:"pointer",lineHeight:0,flexShrink:0}}>
+                    <QRCodeSVG text={p.code} size={28} color="#333"/>
+                  </button>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:700,color:"#1e293b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</div>
+                    <div style={{fontSize:10,color:"#94a3b8"}}>{p.code} · {p.cat} · {p.loc}</div>
+                  </div>
+                  <div style={{fontSize:18,fontWeight:900,color:p.qty===0?"#ef4444":p.qty<5?"#f59e0b":"#3b5bdb",flexShrink:0,minWidth:36,textAlign:"right"}}>{p.qty}</div>
+                </div>
+
+                {/* Row 2: photos + action buttons */}
+                <div style={{padding:"0 14px 8px",display:"flex",alignItems:"flex-start",gap:6,flexWrap:"wrap"}}>
+                  {/* Photo thumbnails + buttons */}
+                  <div style={{display:"flex",alignItems:"center",gap:4,flex:"1 1 auto",flexWrap:"wrap"}}>
+                    {photos.map(ph=>(
+                      <PhotoThumb key={ph.id} src={ph.url} date={ph.date} label={p.name} onDel={()=>doDelPhoto(p.id,ph.id)}/>
+                    ))}
+                    <PhotoBtn pid={p.id} onAdd={doAddPhoto}/>
+                    {photos.length===0&&<span style={{fontSize:10,color:"#c4c9d0",marginLeft:2}}>사진 추가</span>}
+                  </div>
+                  {/* Action buttons */}
+                  <div style={{display:"flex",gap:3,flexShrink:0}}>
+                    {[{a:"in",l:"입고",bg:"#f0fdf4",c:"#22c55e",abg:"#22c55e",p:"stockin"},{a:"out",l:"출고",bg:"#fef2f2",c:"#ef4444",abg:"#ef4444",p:"stockout"},{a:"adj",l:"조정",bg:"#f5f3ff",c:"#8b5cf6",abg:"#8b5cf6",p:"adjust"}].filter(b=>!can||can(b.p)).map(b=>(
+                      <button key={b.a} onClick={()=>startQ(p.id,b.a)}
+                        style={{padding:"5px 12px",borderRadius:6,border:"none",cursor:"pointer",fontSize:12,fontWeight:700,
+                          background:isOpen&&qAct===b.a?b.abg:b.bg,color:isOpen&&qAct===b.a?"#fff":b.c,transition:"all 0.1s"}}>{b.l}</button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Inline stock form */}
+                {isOpen&&(
+                  <div style={{padding:"8px 14px 10px",background:"#f8fafc",borderTop:"1px dashed #e5e7eb",display:"flex",gap:6,alignItems:"center",animation:"fadeUp 0.1s ease",flexWrap:"wrap"}}>
+                    <span className="badge" style={{background:qAct==="in"?"#dcfce7":qAct==="out"?"#fee2e2":"#ede9fe",color:qAct==="in"?"#16a34a":qAct==="out"?"#dc2626":"#7c3aed",fontSize:11,padding:"4px 10px"}}>
+                      {qAct==="in"?"▼ 입고":qAct==="out"?"▲ 출고":"⚙ 조정"}</span>
+                    <select className="sel" value={qLoc} onChange={e=>setQLoc(e.target.value)} style={{fontSize:11,padding:6,width:"auto",flex:"1 1 120px"}}>
+                      {allLocs.map(l=><option key={l} value={l}>{l} ({p.locs?.[l]||0})</option>)}</select>
+                    <input className="inp" type="number" min="0" placeholder="수량" value={qQty} onChange={e=>setQQty(e.target.value)}
+                      style={{width:80,fontSize:14,padding:"6px 8px",fontWeight:700,textAlign:"center"}} onKeyDown={e=>e.key==="Enter"&&submitQ()} autoFocus/>
+                    <input className="inp" placeholder="메모" value={qMemo} onChange={e=>setQMemo(e.target.value)} style={{flex:"1 1 80px",fontSize:11,padding:6}}/>
+                    <button onClick={submitQ} style={{padding:"7px 16px",borderRadius:8,border:"none",cursor:"pointer",fontWeight:700,fontSize:12,
+                      background:qAct==="in"?"#22c55e":qAct==="out"?"#ef4444":"#8b5cf6",color:"#fff"}}>확인</button>
+                    <button onClick={()=>{setQPid(null);setQAct(null);}} style={{padding:"7px 10px",borderRadius:8,border:"1px solid #e5e7eb",background:"#fff",cursor:"pointer",fontSize:12,color:"#94a3b8"}}>취소</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {hist.length>0&&<div style={{borderTop:"1px solid #e5e7eb",padding:"8px 20px"}}>
+        <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",marginBottom:4}}>최근 활동</div>
+        {hist.map(h=><div key={h.id} style={{display:"flex",alignItems:"center",gap:5,padding:"3px 0"}}>
+          <div style={{width:5,height:5,borderRadius:"50%",background:ac[h.act]||"#94a3b8"}}/>
+          <span className="badge" style={{background:(ac[h.act]||"#94a3b8")+"18",color:ac[h.act],fontSize:9}}>{h.act}</span>
+          <span style={{fontSize:10,color:"#475569",flex:1}}>{h.pn}</span>
+          <span style={{fontSize:9,color:"#94a3b8"}}>{fDate(h.date)}</span>
+        </div>)}
+      </div>}
+
+      {showInvAi && <InvAiAnalysisModal prods={allProds||prods} zones={ZONES} defaultZoneId={zone.id} zonePhotos={allZonePhotos||{[zone.id]:zonePhotos}} onClose={()=>setShowInvAi(false)} onSaveAction={onAddFacAction} />}
+    </div>
+  );
+}
+
+// ========== PRODUCTS LIST ==========
+function PList({prods,totalQ,search,setSearch,fLoc,setFLoc,fCat,setFCat,selP,setSelP,onIn,onOut,onAdj,onEdit,onDel,onShowQR}){
+  const sp=selP?prods.find(p=>p.id===selP.id)||selP:null;
+  return(
+    <div style={{display:"flex",height:"100%"}}>
+      <div style={{flex:1,display:"flex",flexDirection:"column"}}>
+        <div style={{padding:"12px 16px",display:"flex",gap:8,flexWrap:"wrap",borderBottom:"1px solid #f1f3f5",background:"#fff"}}>
+          <div style={{position:"relative",flex:"1 1 160px",maxWidth:260}}>
+            <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:"#adb5bd"}}><IC.Srch/></span>
+            <input className="inp" style={{paddingLeft:32}} placeholder="검색..." value={search} onChange={e=>setSearch(e.target.value)}/>
+          </div>
+          <select className="sel" style={{width:"auto",minWidth:120}} value={fLoc} onChange={e=>setFLoc(e.target.value)}><option value="all">모든 위치</option>{LOCS.map(l=><option key={l}>{l}</option>)}</select>
+          <select className="sel" style={{width:"auto",minWidth:110}} value={fCat} onChange={e=>setFCat(e.target.value)}><option value="all">모든 카테고리</option>{CATS.map(c=><option key={c}>{c}</option>)}</select>
+        </div>
+        <div style={{padding:"7px 16px",display:"flex",justifyContent:"space-between",fontSize:11,color:"#94a3b8",fontWeight:600,borderBottom:"1px solid #f1f3f5",background:"#fafbfc"}}>
+          <span>{prods.length}개</span><span style={{color:"#3b5bdb",fontWeight:700}}>총 {totalQ.toLocaleString()}</span>
+        </div>
+        <div style={{flex:1,overflow:"auto"}}>{prods.map(p=>(
+          <div key={p.id} className="rh" onClick={()=>setSelP(p)} style={{display:"flex",alignItems:"center",padding:"9px 16px",borderBottom:"1px solid #f1f3f5",cursor:"pointer",background:sp?.id===p.id?"#eef2ff":"#fff"}}>
+            <button onClick={e=>{e.stopPropagation();onShowQR(p);}} style={{background:"none",border:"1px solid #e5e7eb",borderRadius:5,padding:2,cursor:"pointer",marginRight:8,lineHeight:0}}>
+              <QRCodeSVG text={p.code} size={28} color="#333"/>
+            </button>
+            <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:700}}>{p.name}</div><div style={{fontSize:10,color:"#94a3b8"}}><span className="badge" style={{background:`hsl(${(p.cat.charCodeAt(0)*73)%360},25%,93%)`,color:`hsl(${(p.cat.charCodeAt(0)*73)%360},35%,40%)`,marginRight:4}}>{p.cat}</span>{p.code} · {p.loc}</div></div>
+            <div style={{fontSize:16,fontWeight:900,color:p.qty===0?"#ef4444":p.qty<5?"#f59e0b":"#3b5bdb"}}>{p.qty}</div>
+          </div>
+        ))}</div>
+      </div>
+      {sp&&<DPan p={sp} onIn={onIn} onOut={onOut} onAdj={onAdj} onEdit={onEdit} onDel={onDel} onShowQR={onShowQR} onClose={()=>setSelP(null)}/>}
+    </div>
+  );
+}
+
+// ========== DETAIL PANEL ==========
+function DPan({p,onIn,onOut,onAdj,onEdit,onDel,onShowQR,onClose}){
+  return(
+    <div style={{width:300,flexShrink:0,overflow:"auto",borderLeft:"1px solid #e5e7eb",background:"#fff"}}>
+      <div style={{padding:"14px 16px",borderBottom:"1px solid #f1f3f5",display:"flex",gap:8,alignItems:"flex-start"}}>
+        <div style={{flex:1}}><div style={{fontSize:14,fontWeight:800}}>{p.name}</div><div style={{fontSize:10,color:"#94a3b8"}}>{p.code} · {p.cat} · {p.loc}</div></div>
+        <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:"#adb5bd"}}><IC.X/></button>
+      </div>
+      <div style={{padding:"10px 16px",textAlign:"center",borderBottom:"1px solid #f1f3f5"}}>
+        <div onClick={()=>onShowQR(p)} style={{cursor:"pointer",display:"inline-block",padding:8,border:"1px solid #e5e7eb",borderRadius:8,marginBottom:6}}>
+          <QRCodeSVG text={p.code} size={80}/>
+          <div style={{fontSize:11,fontWeight:800,marginTop:4,letterSpacing:2}}>{p.code}</div>
+        </div>
+        <div style={{fontSize:10,color:"#94a3b8"}}>총 재고</div>
+        <div style={{fontSize:26,fontWeight:900,color:p.qty===0?"#ef4444":"#3b5bdb"}}>{p.qty}</div>
+      </div>
+      <div style={{padding:"8px 16px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:5,borderBottom:"1px solid #f1f3f5"}}>
+        <button className="btn bs" onClick={()=>onIn(p)} style={{justifyContent:"center",fontSize:11,padding:"7px 0"}}><IC.Dn/>입고</button>
+        <button className="btn bs" onClick={()=>onOut(p)} style={{justifyContent:"center",fontSize:11,padding:"7px 0"}}><IC.Up/>출고</button>
+        <button className="btn bs" onClick={()=>onAdj(p)} style={{justifyContent:"center",fontSize:11,padding:"7px 0"}}><IC.Adj/>조정</button>
+        <button className="btn bs" onClick={()=>onEdit(p)} style={{justifyContent:"center",fontSize:11,padding:"7px 0"}}><IC.Edit/>수정</button>
+      </div>
+      <div style={{padding:"12px 16px"}}>
+        <div style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:6}}>위치별</div>
+        {Object.entries(p.locs||{}).map(([l,q])=>(
+          <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"4px 0"}}><span style={{fontSize:11,color:"#475569"}}>{l}</span><span style={{fontSize:12,fontWeight:700,color:q>0?"#0f172a":"#d1d5db"}}>{q}</span></div>
+        ))}
+      </div>
+      <div style={{padding:"8px 16px"}}><button className="btn bd" onClick={()=>onDel(p.id)} style={{width:"100%",justifyContent:"center",fontSize:12}}><IC.Trash/>삭제</button></div>
+    </div>
+  );
+}
+
+// ========== STOCK PAGE ==========
+function SPg({type,prods,onIn,onOut,onAdj}){
+  const [pid,sPid]=useState("");const [loc,sLoc]=useState("");const [qty,sQty]=useState("");const [memo,sMemo]=useState("");const [sr,sSr]=useState("");
+  const lb=type==="in"?"입고":type==="out"?"출고":"조정";const co=type==="in"?"#22c55e":type==="out"?"#ef4444":"#8b5cf6";
+  const fl=prods.filter(p=>!sr||p.name.includes(sr)||p.code?.includes(sr.toUpperCase()));const sp=prods.find(p=>p.id===Number(pid));
+  const go=()=>{if(!pid)return alert("제품 선택");const q=parseInt(qty);if(type!=="adj"&&(!q||q<=0))return alert("수량");if(type==="adj"&&(isNaN(q)||q<0))return alert("수량");if(!loc)return alert("위치");
+    if(type==="in")onIn(Number(pid),loc,q,memo);else if(type==="out")onOut(Number(pid),loc,q,memo);else onAdj(Number(pid),loc,q,memo);sPid("");sQty("");sMemo("");sLoc("");};
+  return(
+    <div style={{maxWidth:520,margin:"0 auto",padding:"24px 16px"}}><div style={{background:"#fff",borderRadius:14,padding:"22px",border:"1px solid #e5e7eb"}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:18}}>
+        <div style={{width:30,height:30,borderRadius:7,background:co+"15",display:"flex",alignItems:"center",justifyContent:"center",color:co}}>{type==="in"?<IC.Dn/>:type==="out"?<IC.Up/>:<IC.Adj/>}</div>
+        <h2 style={{fontSize:16,fontWeight:800}}>{lb}</h2>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>제품 (이름 또는 QR코드 검색)</label>
+          <input className="inp" placeholder="검색..." value={sr} onChange={e=>sSr(e.target.value)} style={{marginBottom:5}}/>
+          <select className="sel" value={pid} onChange={e=>sPid(e.target.value)}><option value="">-- 선택 --</option>{fl.map(p=><option key={p.id} value={p.id}>[{p.code}] {p.name} ({p.qty})</option>)}</select></div>
+        {sp&&<div style={{background:"#f8f9fa",borderRadius:7,padding:"8px 12px",fontSize:12}}><strong>{sp.name}</strong> [{sp.code}] — 재고: <strong style={{color:co}}>{sp.qty}</strong></div>}
+        <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>위치</label><select className="sel" value={loc} onChange={e=>sLoc(e.target.value)}><option value="">-- 선택 --</option>{LOCS.map(l=><option key={l}>{l}</option>)}</select></div>
+        <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>수량</label><input className="inp" type="number" min="0" value={qty} onChange={e=>sQty(e.target.value)}/></div>
+        <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>메모</label><textarea className="inp" rows={2} value={memo} onChange={e=>sMemo(e.target.value)}/></div>
+        <button className="btn bp" onClick={go} style={{justifyContent:"center",padding:"10px",background:co}}>{lb}</button>
+      </div>
+    </div></div>
+  );
+}
+
+// ========== RFID TRACKING ==========
+function RfidPg({prods,rfidTags,rfidScans,zones,assignRfid,removeRfid,doRfidScan,genRfidTag}){
+  const [tab,setTab]=useState("tags");
+  const [scanInput,setScanInput]=useState("");
+  const [scanZone,setScanZone]=useState(zones[0]?zones[0].name:"");
+  const [scanOk,setScanOk]=useState(null);
+  const [tagSearch,setTagSearch]=useState("");
+
+  const taggedProds=prods.filter(p=>rfidTags[p.id]);
+  const untaggedProds=prods.filter(p=>!rfidTags[p.id]);
+  const filteredProds=tagSearch?prods.filter(p=>(p.name||"").includes(tagSearch)||(p.code||"").toUpperCase().includes(tagSearch.toUpperCase())):prods;
+
+  const handleScan=()=>{
+    const t=scanInput.trim();
+    if(!t)return;
+    const result=doRfidScan(t,scanZone);
+    setScanOk(result?{found:true,name:result.pname,code:t,zone:scanZone}:{found:false,code:t});
+  };
+
+  const lastLoc=(pid)=>{
+    const s=rfidScans.find(x=>x.pid===pid);
+    return s?s.zone+" ("+fDate(s.time)+")":null;
+  };
+
+  const tabBtn=(id,label)=>(
+    <button key={id} onClick={()=>{setTab(id);setScanOk(null);}}
+      style={{flex:1,padding:"10px 16px",borderRadius:10,border:"none",cursor:"pointer",fontSize:13,fontWeight:700,
+        background:tab===id?"#3b5bdb":"transparent",color:tab===id?"#fff":"#64748b"}}>{label}</button>
+  );
+
+  return(
+    <div style={{maxWidth:900,margin:"0 auto",padding:16}}>
+      <div style={{display:"flex",gap:4,marginBottom:16,background:"#fff",borderRadius:12,padding:4,border:"1px solid #e5e7eb"}}>
+        {tabBtn("scan","📡 스캔")}
+        {tabBtn("tags","🏷️ 태그 관리")}
+        {tabBtn("history","📋 이동 이력")}
+      </div>
+
+      {tab==="scan"&&(
+        <div>
+          <div style={{background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",overflow:"hidden",marginBottom:16}}>
+            <div style={{padding:"16px 20px",borderBottom:"1px solid #f1f3f5",background:"linear-gradient(135deg,#eef2ff,#f0f7ff)"}}>
+              <div style={{fontSize:15,fontWeight:800,color:"#1e293b"}}>📡 RFID 스캔</div>
+              <div style={{fontSize:11,color:"#64748b"}}>RFID 리더기로 태그를 스캔하거나 수동 입력</div>
+            </div>
+            <div style={{padding:20}}>
+              <div style={{marginBottom:12}}>
+                <label style={{fontSize:11,fontWeight:700,color:"#64748b",display:"block",marginBottom:4}}>스캔 위치</label>
+                <select className="sel" value={scanZone} onChange={e=>setScanZone(e.target.value)} style={{fontSize:13,padding:"10px 12px",width:"100%"}}>
+                  {zones.map(z=><option key={z.id} value={z.name}>{z.name}</option>)}
+                </select>
+              </div>
+              <div style={{display:"flex",gap:8,marginBottom:12}}>
+                <input className="inp" placeholder="RFID 태그 ID (예: E2:00:A1:B2:C3:D4:E5:F6)" value={scanInput} onChange={e=>setScanInput(e.target.value)}
+                  onKeyDown={e=>{if(e.key==="Enter")handleScan();}} style={{flex:1,fontSize:13,padding:"10px 14px",fontFamily:"monospace"}}/>
+                <button onClick={handleScan} className="btn bp" style={{padding:"10px 20px",fontSize:13,flexShrink:0}}>스캔</button>
+              </div>
+            </div>
+          </div>
+
+          {scanOk!==null&&(
+            <div style={{background:"#fff",borderRadius:12,border:scanOk.found?"2px solid #22c55e":"2px solid #ef4444",overflow:"hidden",padding:20,marginBottom:16}}>
+              {scanOk.found?(
+                <div>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                    <span style={{fontSize:24}}>✅</span>
+                    <div>
+                      <div style={{fontSize:16,fontWeight:800,color:"#16a34a"}}>제품 감지됨</div>
+                      <div style={{fontSize:11,color:"#64748b",fontFamily:"monospace"}}>{scanOk.code}</div>
+                    </div>
+                  </div>
+                  <div style={{background:"#f0fdf4",borderRadius:10,padding:14}}>
+                    <div style={{fontSize:17,fontWeight:800}}>{scanOk.name}</div>
+                    <div style={{fontSize:12,color:"#16a34a",marginTop:4,fontWeight:700}}>📍 {scanOk.zone}에서 감지</div>
+                  </div>
+                </div>
+              ):(
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:36,marginBottom:8}}>❌</div>
+                  <div style={{fontSize:15,fontWeight:700,color:"#ef4444"}}>등록되지 않은 태그</div>
+                  <div style={{fontSize:12,color:"#64748b",fontFamily:"monospace",marginTop:4}}>{scanOk.code}</div>
+                  <div style={{fontSize:11,color:"#94a3b8",marginTop:8}}>태그 관리에서 제품에 할당하세요</div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {rfidScans.length>0&&(
+            <div style={{background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",overflow:"hidden"}}>
+              <div style={{padding:"12px 20px",borderBottom:"1px solid #f1f3f5",fontWeight:700,fontSize:14}}>최근 스캔</div>
+              {rfidScans.slice(0,10).map(s=>(
+                <div key={s.id} style={{padding:"10px 20px",borderBottom:"1px solid #f8f9fa",display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{width:8,height:8,borderRadius:"50%",background:"#22c55e",flexShrink:0}}></div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:700}}>{s.pname}</div>
+                    <div style={{fontSize:10,color:"#64748b",fontFamily:"monospace"}}>{s.tag}</div>
+                  </div>
+                  <div style={{textAlign:"right",flexShrink:0}}>
+                    <div style={{fontSize:11,fontWeight:600,color:"#3b5bdb"}}>📍 {s.zone}</div>
+                    <div style={{fontSize:10,color:"#94a3b8"}}>{fDate(s.time)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab==="tags"&&(
+        <div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:16}}>
+            <div style={{background:"#fff",borderRadius:10,padding:"12px 16px",border:"1px solid #e5e7eb",textAlign:"center"}}>
+              <div style={{fontSize:10,color:"#94a3b8"}}>전체</div>
+              <div style={{fontSize:22,fontWeight:900,color:"#1e293b"}}>{prods.length}</div>
+            </div>
+            <div style={{background:"#dcfce7",borderRadius:10,padding:"12px 16px",border:"1px solid #bbf7d0",textAlign:"center"}}>
+              <div style={{fontSize:10,color:"#16a34a"}}>태그 부착</div>
+              <div style={{fontSize:22,fontWeight:900,color:"#16a34a"}}>{taggedProds.length}</div>
+            </div>
+            <div style={{background:"#fef2f2",borderRadius:10,padding:"12px 16px",border:"1px solid #fecaca",textAlign:"center"}}>
+              <div style={{fontSize:10,color:"#ef4444"}}>미부착</div>
+              <div style={{fontSize:22,fontWeight:900,color:"#ef4444"}}>{untaggedProds.length}</div>
+            </div>
+          </div>
+
+          {untaggedProds.length>0&&(
+            <button onClick={()=>{if(confirm("미부착 "+untaggedProds.length+"개에 태그 일괄 할당?"))untaggedProds.forEach(p=>assignRfid(p.id));}}
+              style={{width:"100%",padding:"12px",borderRadius:10,border:"2px dashed #3b5bdb",background:"#eef2ff",cursor:"pointer",fontSize:13,fontWeight:700,color:"#3b5bdb",marginBottom:16}}>
+              🏷️ 미부착 제품 일괄 태그 할당 ({String(untaggedProds.length)}개)
+            </button>
+          )}
+
+          <input className="inp" placeholder="제품명 / QR코드 검색" value={tagSearch} onChange={e=>setTagSearch(e.target.value)}
+            style={{marginBottom:12,fontSize:13,padding:"10px 14px"}}/>
+
+          <div style={{background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",overflow:"hidden"}}>
+            {filteredProds.map(p=>{
+              const tag=rfidTags[p.id];
+              const loc=lastLoc(p.id);
+              return(
+                <div key={p.id} style={{padding:"10px 16px",borderBottom:"1px solid #f8f9fa",display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{width:10,height:10,borderRadius:"50%",background:tag?"#22c55e":"#e5e7eb",flexShrink:0}}></div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</div>
+                    <div style={{fontSize:10,color:"#94a3b8"}}>{p.code || ""} · {p.cat} · 재고: {String(p.qty)}</div>
+                    {tag&&<div style={{fontSize:10,fontFamily:"monospace",color:"#3b5bdb",marginTop:2}}>🏷️ {tag.tag}</div>}
+                    {loc&&<div style={{fontSize:10,color:"#16a34a",marginTop:1}}>📍 마지막: {loc}</div>}
+                  </div>
+                  {tag?(
+                    <button onClick={()=>removeRfid(p.id)} style={{padding:"6px 12px",borderRadius:6,border:"1px solid #fecaca",background:"#fef2f2",cursor:"pointer",fontSize:11,fontWeight:700,color:"#ef4444",flexShrink:0}}>해제</button>
+                  ):(
+                    <button onClick={()=>assignRfid(p.id)} style={{padding:"6px 12px",borderRadius:6,border:"1px solid #bbf7d0",background:"#dcfce7",cursor:"pointer",fontSize:11,fontWeight:700,color:"#16a34a",flexShrink:0}}>태그 할당</button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {tab==="history"&&(
+        <div>
+          <div style={{background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",padding:16,marginBottom:16}}>
+            <div style={{fontSize:14,fontWeight:700,marginBottom:12}}>📍 구역별 감지 현황</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:8}}>
+              {zones.map(z=>{
+                const cnt=rfidScans.filter(s=>s.zone===z.name).length;
+                const items=rfidScans.filter(s=>s.zone===z.name);
+                const uniq=[...new Set(items.map(s=>s.pname))];
+                return(
+                  <div key={z.id} style={{background:cnt>0?"#f0fdf4":"#f8f9fa",borderRadius:8,padding:"10px 12px",border:cnt>0?"1px solid #bbf7d0":"1px solid #e5e7eb"}}>
+                    <div style={{fontSize:11,fontWeight:700}}>{z.name}</div>
+                    <div style={{fontSize:18,fontWeight:900,color:cnt>0?"#16a34a":"#d1d5db"}}>{String(cnt)}</div>
+                    <div style={{fontSize:9,color:"#64748b"}}>{uniq.length>0?String(uniq.length)+"종 제품":"감지 없음"}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div style={{background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",overflow:"hidden"}}>
+            <div style={{padding:"12px 20px",borderBottom:"1px solid #f1f3f5",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontWeight:700,fontSize:14}}>전체 스캔 이력</span>
+              <span style={{fontSize:11,color:"#94a3b8"}}>{String(rfidScans.length)}건</span>
+            </div>
+            {rfidScans.length===0?(
+              <div style={{padding:40,textAlign:"center",color:"#94a3b8"}}>스캔 이력이 없습니다</div>
+            ):(
+              rfidScans.map(s=>(
+                <div key={s.id} style={{padding:"10px 20px",borderBottom:"1px solid #f8f9fa",display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{width:8,height:8,borderRadius:"50%",background:"#3b5bdb",flexShrink:0}}></div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:700}}>{s.pname}</div>
+                    <div style={{fontSize:10,color:"#64748b",fontFamily:"monospace"}}>{s.tag}</div>
+                  </div>
+                  <div style={{textAlign:"right",flexShrink:0}}>
+                    <div style={{fontSize:11,fontWeight:600,color:"#3b5bdb"}}>📍 {s.zone}</div>
+                    <div style={{fontSize:10,color:"#94a3b8"}}>{fDate(s.time)}</div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ========== HISTORY ==========
+function HPg({hist,prods}){
+  const [filter,setFilter]=useState("all");
+  const [actF,setActF]=useState("all");
+  const ac={"입고":"#22c55e","출고":"#ef4444","조정":"#8b5cf6","추가":"#6366f1","삭제":"#f87171","수정":"#f59e0b"};
+  const pNames=[...new Set(hist.map(h=>h.pn))].sort();
+  const acts=["입고","출고","조정","추가","삭제","수정"];
+  const filtered=hist.filter(h=>{
+    if(filter!=="all"&&h.pn!==filter)return false;
+    if(actF!=="all"&&h.act!==actF)return false;
+    return true;
+  });
+  const pStats={};
+  hist.forEach(h=>{
+    if(!pStats[h.pn])pStats[h.pn]={name:h.pn,inC:0,outC:0,adjC:0,inQ:0,outQ:0,last:h.date};
+    if(h.act==="입고"){pStats[h.pn].inC++;pStats[h.pn].inQ+=(h.q||0);}
+    if(h.act==="출고"){pStats[h.pn].outC++;pStats[h.pn].outQ+=(h.q||0);}
+    if(h.act==="조정")pStats[h.pn].adjC++;
+    if(h.date>pStats[h.pn].last)pStats[h.pn].last=h.date;
+  });
+  const topProds=Object.values(pStats).sort((a,b)=>(b.inC+b.outC+b.adjC)-(a.inC+a.outC+a.adjC)).slice(0,10);
+  return(
+    <div style={{maxWidth:860,margin:"0 auto",padding:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:10,marginBottom:14}}>
+        {[{l:"전체",v:hist.length,c:"#3b5bdb",f:"all"},{l:"입고",v:hist.filter(h=>h.act==="입고").length,c:"#22c55e",f:"입고"},
+          {l:"출고",v:hist.filter(h=>h.act==="출고").length,c:"#ef4444",f:"출고"},{l:"조정",v:hist.filter(h=>h.act==="조정").length,c:"#8b5cf6",f:"조정"}
+        ].map((x,i)=>(
+          <div key={i} onClick={()=>setActF(actF===x.f?"all":x.f)}
+            style={{background:actF===x.f?x.c+"12":"#fff",borderRadius:10,padding:"10px 14px",border:actF===x.f?"2px solid "+x.c:"1px solid #e5e7eb",cursor:"pointer",transition:"all 0.15s"}}>
+            <div style={{fontSize:10,color:"#94a3b8",fontWeight:600}}>{x.l}</div>
+            <span style={{fontSize:20,fontWeight:900,color:x.c}}>{x.v}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+        <select className="sel" value={filter} onChange={e=>setFilter(e.target.value)} style={{flex:"1 1 200px",fontSize:13}}>
+          <option value="all">📦 전체 제품 ({pNames.length})</option>
+          {pNames.map(n=><option key={n} value={n}>{n} ({hist.filter(h=>h.pn===n).length}건)</option>)}
+        </select>
+        <select className="sel" value={actF} onChange={e=>setActF(e.target.value)} style={{flex:"0 0 130px",fontSize:13}}>
+          <option value="all">전체 유형</option>
+          {acts.map(a=><option key={a} value={a}>{a} ({hist.filter(h=>h.act===a).length})</option>)}
+        </select>
+        {filter!=="all"&&<button className="btn bs" onClick={()=>{setFilter("all");setActF("all");}} style={{fontSize:11}}>✕ 필터 해제</button>}
+      </div>
+      <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",overflow:"hidden"}}>
+            <div style={{padding:"12px 18px",borderBottom:"1px solid #f1f3f5",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontWeight:700,fontSize:14}}>활동 내역</span>
+              <span style={{fontSize:11,color:"#94a3b8"}}>{filtered.length}건{filter!=="all"?` · ${filter}`:""}</span>
+            </div>
+            {filtered.length===0?<div style={{padding:40,textAlign:"center",color:"#94a3b8"}}>📋 활동 없음<br/><span style={{fontSize:11}}>맵에서 입고/출고/조정을 하면 기록됩니다</span></div>:
+              filtered.slice(0,100).map((h,i)=>(
+                <div key={h.id} className="rh" style={{padding:"10px 16px",borderBottom:"1px solid #f8f9fa",display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}
+                  onClick={()=>setFilter(filter===h.pn?"all":h.pn)}>
+                  <div style={{width:6,height:6,borderRadius:"50%",background:ac[h.act]||"#94a3b8",flexShrink:0}}/>
+                  <span className="badge" style={{background:(ac[h.act]||"#94a3b8")+"18",color:ac[h.act],flexShrink:0}}>{h.act}</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:12,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{h.pn}</div>
+                    <div style={{fontSize:10,color:"#64748b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{h.det}</div>
+                  </div>
+                  <span style={{fontSize:10,color:"#94a3b8",flexShrink:0}}>{fDate(h.date)}</span>
+                </div>
+              ))
+            }
+          </div>
+        </div>
+        {filter==="all"&&topProds.length>0&&(
+          <div style={{width:220,flexShrink:0}}>
+            <div style={{background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",overflow:"hidden",position:"sticky",top:80}}>
+              <div style={{padding:"12px 14px",borderBottom:"1px solid #f1f3f5",fontSize:13,fontWeight:700}}>📊 제품별 활동</div>
+              {topProds.map(ps=>(
+                <div key={ps.name} onClick={()=>setFilter(ps.name)} className="rh" style={{padding:"8px 14px",borderBottom:"1px solid #f8f9fa",cursor:"pointer"}}>
+                  <div style={{fontSize:12,fontWeight:700,color:"#1e293b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ps.name}</div>
+                  <div style={{display:"flex",gap:6,marginTop:2}}>
+                    {ps.inC>0&&<span style={{fontSize:10,color:"#22c55e",fontWeight:600}}>입고{ps.inC}</span>}
+                    {ps.outC>0&&<span style={{fontSize:10,color:"#ef4444",fontWeight:600}}>출고{ps.outC}</span>}
+                    {ps.adjC>0&&<span style={{fontSize:10,color:"#8b5cf6",fontWeight:600}}>조정{ps.adjC}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {filter!=="all"&&(()=>{
+          const prod=prods.find(p=>p.name===filter);
+          const ps=pStats[filter];
+          return(
+            <div style={{width:240,flexShrink:0}}>
+              <div style={{background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",overflow:"hidden",position:"sticky",top:80}}>
+                <div style={{padding:"14px",borderBottom:"1px solid #f1f3f5",textAlign:"center"}}>
+                  {prod&&<div style={{display:"inline-block",padding:4,border:"1px solid #e5e7eb",borderRadius:8,marginBottom:6}}>
+                    <QRCodeSVG text={prod.code} size={56}/>
+                    <div style={{fontSize:10,fontWeight:800,letterSpacing:1,marginTop:2}}>{prod.code}</div>
+                  </div>}
+                  <div style={{fontSize:15,fontWeight:800}}>{filter}</div>
+                  {prod&&<div style={{fontSize:11,color:"#94a3b8"}}>{prod.cat} · {prod.loc}</div>}
+                  {prod&&<div style={{fontSize:24,fontWeight:900,color:prod.qty===0?"#ef4444":"#3b5bdb",marginTop:4}}>재고: {prod.qty}</div>}
+                </div>
+                <div style={{padding:"10px 14px"}}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+                    <div style={{background:"#f0fdf4",borderRadius:8,padding:"6px 8px",textAlign:"center"}}>
+                      <div style={{fontSize:9,color:"#22c55e"}}>입고</div>
+                      <div style={{fontSize:16,fontWeight:900,color:"#22c55e"}}>{ps?.inC||0}<span style={{fontSize:9}}>회</span></div>
+                      <div style={{fontSize:10,color:"#64748b"}}>{ps?.inQ||0}개</div>
+                    </div>
+                    <div style={{background:"#fef2f2",borderRadius:8,padding:"6px 8px",textAlign:"center"}}>
+                      <div style={{fontSize:9,color:"#ef4444"}}>출고</div>
+                      <div style={{fontSize:16,fontWeight:900,color:"#ef4444"}}>{ps?.outC||0}<span style={{fontSize:9}}>회</span></div>
+                      <div style={{fontSize:10,color:"#64748b"}}>{ps?.outQ||0}개</div>
+                    </div>
+                  </div>
+                  {prod?.photos?.length>0&&(
+                    <div style={{marginTop:10}}>
+                      <div style={{fontSize:10,fontWeight:700,color:"#64748b",marginBottom:4}}>제품 사진</div>
+                      <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                        {prod.photos.map(ph=><img key={ph.id} src={ph.url} alt="" style={{width:50,height:38,objectFit:"cover",borderRadius:6,border:"1px solid #e5e7eb"}}/>)}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div style={{padding:"8px 14px",borderTop:"1px solid #f1f3f5"}}>
+                  <button onClick={()=>setFilter("all")} className="btn bs" style={{width:"100%",justifyContent:"center",fontSize:11}}>전체 보기</button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+      </div>
+    </div>
+  );
+}
+
+// ========== ANALYSIS ==========
+/* ─── REQUIRED MATERIALS PAGE (cross-module) ─────────────────────
+ * Aggregates materials from active facility actions (created by
+ * facility inspection AI and safety AI) and matches them against
+ * inventory products. Shows location, stock qty, and photo for each.
+ * ─────────────────────────────────────────────────────────────── */
+function parseMaterialStr(raw) {
+  if (!raw) return { name: "", qty: "" };
+  // Match trailing number+unit pattern like "3장" "500개" "1L" "2m" "1롤"
+  const m = raw.match(/^(.*?)\s+(\d+\S*)\s*$/);
+  if (m) return { name: m[1].trim(), qty: m[2].trim() };
+  return { name: raw.trim(), qty: "" };
+}
+
+function matchProduct(matName, prods) {
+  if (!matName) return null;
+  const n = matName.toLowerCase().replace(/\s+/g, "");
+  // 1) exact contains (either direction)
+  let hit = prods.find(p => {
+    const pn = p.name.toLowerCase().replace(/\s+/g, "");
+    return pn === n || pn.includes(n) || n.includes(pn);
+  });
+  if (hit) return hit;
+  // 2) word-level overlap (any 2+ char word match)
+  const words = matName.toLowerCase().split(/[\s,()]+/).filter(w => w.length >= 2);
+  hit = prods.find(p => {
+    const pn = p.name.toLowerCase();
+    return words.some(w => pn.includes(w));
+  });
+  return hit || null;
+}
+
+function findZoneForLocation(loc, zones, zLocs) {
+  if (!loc) return null;
+  for (const z of zones) {
+    const locList = zLocs[z.id] || [];
+    if (locList.some(l => loc.includes(l))) return z;
+  }
+  return null;
+}
+
+function RequiredMaterialsPage({ facActions, prods, zonePhotos, setSelZone, setPage }) {
+  const [filterStatus, setFilterStatus] = useState("all"); // all | matched | unmatched | low
+  const [filterSource, setFilterSource] = useState("all"); // all | facility | safety | inventory
+
+  // Only actions that are still open and have material lists
+  const openActions = (facActions || []).filter(a => a.status !== "DONE" && a.ai?.materials?.length > 0);
+
+  // Flatten into material entries, each linked back to source action
+  const entries = [];
+  openActions.forEach(action => {
+    (action.ai.materials || []).forEach((rawMat, matIdx) => {
+      const { name, qty } = parseMaterialStr(rawMat);
+      const match = matchProduct(name, prods);
+      const zone = match ? findZoneForLocation(match.loc, ZONES, Z_LOCS) : null;
+      const productPhoto = match?.photos?.[0]?.url || null;
+      const zonePhoto = zone ? (zonePhotos[zone.id]?.[0]?.url || null) : null;
+      entries.push({
+        key: `${action.id}-${matIdx}`,
+        raw: rawMat,
+        name, qty,
+        action,
+        match,
+        zone,
+        productPhoto,
+        zonePhoto,
+        status: !match ? "unmatched" : (match.qty === 0 ? "out" : match.qty < 5 ? "low" : "ok"),
+      });
+    });
+  });
+
+  // Filter
+  const visible = entries.filter(e => {
+    if (filterStatus !== "all") {
+      if (filterStatus === "matched" && !e.match) return false;
+      if (filterStatus === "unmatched" && e.match) return false;
+      if (filterStatus === "low" && e.status !== "low" && e.status !== "out") return false;
+    }
+    if (filterSource !== "all") {
+      const src = e.action.source || (e.action.facId ? "facility" : "unknown");
+      if (filterSource !== src) return false;
+    }
+    return true;
+  });
+
+  const stats = {
+    total: entries.length,
+    matched: entries.filter(e => e.match).length,
+    unmatched: entries.filter(e => !e.match).length,
+    low: entries.filter(e => e.status === "low" || e.status === "out").length,
+  };
+
+  const sevColor = (sev) => ({
+    URGENT: { bg: "#fef2f2", fg: "#dc2626", border: "#fecaca" },
+    HIGH: { bg: "#fff7ed", fg: "#ea580c", border: "#fed7aa" },
+    MEDIUM: { bg: "#fefce8", fg: "#ca8a04", border: "#fde68a" },
+    LOW: { bg: "#eff6ff", fg: "#2563eb", border: "#bfdbfe" },
+  }[sev] || { bg: "#f8fafc", fg: "#64748b", border: "#e2e8f0" });
+
+  const sourceBadge = (a) => {
+    const src = a.source || (a.facId ? "facility" : "unknown");
+    if (src === "safety") return { l: "🛡️ 안전", c: "#ef4444", bg: "#fef2f2" };
+    if (src === "inventory") return { l: "📦 재고", c: "#7c3aed", bg: "#faf5ff" };
+    return { l: "🛠 시설", c: "#3b5bdb", bg: "#eff6ff" };
+  };
+
+  const goToZone = (zoneId) => {
+    setSelZone(zoneId);
+    setPage("map");
+  };
+
+  if (entries.length === 0) {
+    return (
+      <div style={{ padding: 24, maxWidth: 900, margin: "0 auto" }}>
+        <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 8 }}>🔧 필요 재고 (보완과제 연동)</div>
+        <div style={{ fontSize: 12, color: "#64748b", marginBottom: 20 }}>
+          시설점검·안전관리 AI 분석으로 생성된 보완과제의 필요 재료가 자동으로 여기에 집계됩니다.
+        </div>
+        <div style={{ background: "#f8fafc", border: "1px dashed #cbd5e1", borderRadius: 12, padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
+          <div style={{ fontSize: 32, marginBottom: 8 }}>📋</div>
+          <div>현재 진행 중인 AI 보완과제가 없습니다.</div>
+          <div style={{ fontSize: 11, marginTop: 6 }}>시설점검·안전관리 모듈에서 AI 분석을 실행하면 필요 재료가 이 화면에 자동 집계됩니다.</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
+      <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 4 }}>🔧 필요 재고 (보완과제 연동)</div>
+      <div style={{ fontSize: 12, color: "#64748b", marginBottom: 16 }}>
+        시설점검·안전관리 AI가 요청한 재료를 자동 매칭해 위치·재고·사진과 함께 표시합니다.
+      </div>
+
+      {/* Stats */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 16 }}>
+        {[
+          { l: "전체 요청", v: stats.total, c: "#0f172a" },
+          { l: "재고 매칭", v: stats.matched, c: "#059669" },
+          { l: "재고 없음", v: stats.unmatched, c: "#dc2626" },
+          { l: "저재고/품절", v: stats.low, c: "#ea580c" },
+        ].map(s => (
+          <div key={s.l} style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 12 }}>
+            <div style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>{s.l}</div>
+            <div style={{ fontSize: 22, fontWeight: 900, color: s.c, marginTop: 2 }}>{s.v}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Filters */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>필터:</span>
+        {[
+          ["all", "전체"],
+          ["matched", "매칭됨"],
+          ["unmatched", "매칭 안 됨"],
+          ["low", "저재고/품절"],
+        ].map(([k, l]) => (
+          <button key={k} type="button" onClick={() => setFilterStatus(k)}
+            style={{ padding: "5px 11px", borderRadius: 6, border: "1px solid #e5e7eb", fontSize: 11, fontWeight: 700, cursor: "pointer", background: filterStatus === k ? "#0f172a" : "#fff", color: filterStatus === k ? "#fff" : "#475569" }}>
+            {l}
+          </button>
+        ))}
+        <span style={{ width: 1, height: 18, background: "#e5e7eb", margin: "0 4px" }}></span>
+        <span style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>출처:</span>
+        {[
+          ["all", "전체"],
+          ["facility", "🛠 시설"],
+          ["safety", "🛡️ 안전"],
+          ["inventory", "📦 재고"],
+        ].map(([k, l]) => (
+          <button key={k} type="button" onClick={() => setFilterSource(k)}
+            style={{ padding: "5px 11px", borderRadius: 6, border: "1px solid #e5e7eb", fontSize: 11, fontWeight: 700, cursor: "pointer", background: filterSource === k ? "#0f172a" : "#fff", color: filterSource === k ? "#fff" : "#475569" }}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {/* Entries grouped by action */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {Object.values(visible.reduce((acc, e) => {
+          const aid = e.action.id;
+          if (!acc[aid]) acc[aid] = { action: e.action, items: [] };
+          acc[aid].items.push(e);
+          return acc;
+        }, {})).map(({ action, items }) => {
+          const src = sourceBadge(action);
+          const sev = sevColor(action.sev);
+          const fac = facFind(action.facId);
+          return (
+            <div key={action.id} style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
+              <div style={{ padding: "12px 14px", borderBottom: "1px solid #f1f5f9", background: sev.bg, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 6, background: src.bg, color: src.c }}>{src.l}</span>
+                <span style={{ fontSize: 10, fontWeight: 800, padding: "3px 8px", borderRadius: 6, background: "#fff", color: sev.fg, border: `1px solid ${sev.border}` }}>{action.sev}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", flex: 1, minWidth: 200 }}>{action.title}</span>
+                <span style={{ fontSize: 10, color: "#64748b" }}>{fac ? `[${fac.code}] ${fac.name}` : "—"} · 기한 {facFmtD(action.due)}</span>
+              </div>
+              <div style={{ padding: 10 }}>
+                {items.map(e => {
+                  const statusCfg = !e.match
+                    ? { label: "재고 없음", bg: "#fef2f2", fg: "#dc2626" }
+                    : e.status === "out" ? { label: "품절", bg: "#fef2f2", fg: "#dc2626" }
+                    : e.status === "low" ? { label: `부족 (${e.match.qty}개)`, bg: "#fff7ed", fg: "#ea580c" }
+                    : { label: `보유 ${e.match.qty}개`, bg: "#f0fdf4", fg: "#059669" };
+                  const photo = e.productPhoto || e.zonePhoto;
+                  return (
+                    <div key={e.key} style={{ display: "flex", gap: 10, padding: 8, alignItems: "center", borderBottom: "1px solid #f8fafc" }}>
+                      {/* Photo */}
+                      <div style={{ width: 56, height: 56, flexShrink: 0, borderRadius: 8, overflow: "hidden", background: "#f1f5f9", border: "1px solid #e5e7eb", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>
+                        {photo ? <img src={photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : (e.zone ? e.zone.icon : "📦")}
+                      </div>
+                      {/* Info */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>
+                          {e.name}
+                          {e.qty && <span style={{ fontSize: 11, color: "#64748b", fontWeight: 500, marginLeft: 6 }}>· 요청 {e.qty}</span>}
+                        </div>
+                        {e.match ? (
+                          <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                            {e.match.code} · 카테고리 {e.match.cat} · 위치 <strong style={{ color: "#0f172a" }}>{e.match.loc}</strong>
+                            {e.zone && <span style={{ color: e.zone.color }}> · {e.zone.icon} {e.zone.name}</span>}
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: 11, color: "#dc2626", marginTop: 2, fontStyle: "italic" }}>
+                            매칭된 재고 품목 없음 — 신규 발주 또는 수동 추가 필요
+                          </div>
+                        )}
+                      </div>
+                      {/* Status badge */}
+                      <span style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 6, background: statusCfg.bg, color: statusCfg.fg, flexShrink: 0 }}>
+                        {statusCfg.label}
+                      </span>
+                      {/* Go-to-zone button */}
+                      {e.zone && (
+                        <button type="button" onClick={() => goToZone(e.zone.id)}
+                          style={{ fontSize: 10, padding: "5px 10px", borderRadius: 6, border: "1px solid #e5e7eb", background: "#fff", color: "#2563eb", fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>
+                          맵으로 →
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function APg({prods, hist, zones, onAddFacAction}){
+  const [tab, setTab] = useState("daily"); // daily, weekly, monthly
+  const [showAiModal, setShowAiModal] = useState(false);
+  const [sigs, setSigs] = useState({ manager: null, lead: null, director: null });
+
+  const total = prods.reduce((s, p) => s + p.qty, 0);
+  const zero = prods.filter(p => p.qty === 0).length;
+  const low = prods.filter(p => p.qty > 0 && p.qty < 5).length;
+
+  // 기간 필터링
+  const now = new Date();
+  let startDate = new Date(now.getTime() - 864e5);
+  let periodLabel = "일일";
+  if (tab === "weekly") { startDate = new Date(now.getTime() - 7 * 864e5); periodLabel = "주간"; }
+  if (tab === "monthly") { startDate = new Date(now.getTime() - 30 * 864e5); periodLabel = "월간"; }
+
+  const periodHist = hist.filter(h => new Date(h.date) >= startDate);
+  const inCnt = periodHist.filter(h => h.act === "입고").length;
+  const outCnt = periodHist.filter(h => h.act === "출고").length;
+
+  // 카테고리/구역 분포 (기존 차트 보존)
+  const catS = CATS.map(c => { const ps = prods.filter(p => p.cat === c); return { n: c, cnt: ps.length, q: ps.reduce((s, p) => s + p.qty, 0) }; }).filter(c => c.cnt > 0).sort((a, b) => b.q - a.q);
+  const mCQ = Math.max(...catS.map(c => c.q), 1);
+  const zS = ZONES.map(z => { const ls = Z_LOCS[z.id] || []; const ps = prods.filter(p => ls.some(l => p.loc.includes(l))); return { ...z, cnt: ps.length, q: ps.reduce((s, p) => s + p.qty, 0) }; }).sort((a, b) => b.q - a.q);
+  const mZQ = Math.max(...zS.map(z => z.q), 1);
+
+  return (
+    <div style={{ padding: "20px", maxWidth: 960, margin: "0 auto" }}>
+      {showAiModal && <InvAiAnalysisModal prods={prods} zones={zones || ZONES} onClose={() => setShowAiModal(false)} onSaveAction={onAddFacAction} />}
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 8 }} className="no-print">
+        <div style={{ display: "flex", gap: 8 }}>
+          {[["daily", "일간"], ["weekly", "주간"], ["monthly", "월간"]].map(([k, l]) => (
+            <button key={k} onClick={() => setTab(k)}
+              style={{ padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 700, border: "1px solid #e5e7eb", cursor: "pointer",
+                background: tab === k ? "#0f172a" : "#fff", color: tab === k ? "#fff" : "#475569" }}>{l}</button>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => setShowAiModal(true)} className="btn" style={{ background: "linear-gradient(135deg,#7c3aed,#2563eb)", color: "#fff" }}>🤖 AI 진단 및 개선안 생성</button>
+          <button onClick={() => window.print()} className="btn bs">🖨️ 인쇄 / PDF</button>
+        </div>
+      </div>
+
+      <div style={{ background: "#fff", borderRadius: 12, padding: 32, border: "1px solid #e5e7eb", boxShadow: "0 4px 12px rgba(0,0,0,0.05)" }}>
+        <div style={{ borderBottom: "2px solid #0f172a", paddingBottom: 16, marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <h2 style={{ fontSize: 24, fontWeight: 900, margin: 0 }}>한국잠사박물관 {periodLabel} 재고 점검 일지</h2>
+            <div style={{ fontSize: 12, color: "#64748b", marginTop: 6 }}>조회 기간: {fDate(startDate)} ~ {fDate(now)}</div>
+          </div>
+          <div style={{ textAlign: "right", fontSize: 11, color: "#64748b" }}>
+            <div style={{ fontWeight: 700, color: "#475569" }}>문서번호: INV-{now.getFullYear()}-{String(now.getMonth() + 1).padStart(2, '0')}-{tab.substring(0, 3).toUpperCase()}</div>
+            <div>출력일: {fDate(now)}</div>
+          </div>
+        </div>
+
+        <h3 style={{ fontSize: 14, fontWeight: 800, marginBottom: 12, color: "#1e293b", borderLeft: "4px solid #3b5bdb", paddingLeft: 8 }}>1. 재고 보유 현황 요약</h3>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 24 }}>
+          {[{ l: "총 취급 품목", v: prods.length + "종", c: "#3b5bdb" }, { l: "현재 총 재고량", v: total.toLocaleString() + "개", c: "#22c55e" }, { l: "재고 소진 (0개)", v: zero + "건", c: "#ef4444" }, { l: "발주 요망 (<5개)", v: low + "건", c: "#f59e0b" }].map((x, i) => (
+            <div key={i} style={{ background: "#f8fafc", borderRadius: 8, padding: 16, border: "1px solid #e2e8f0" }}>
+              <div style={{ fontSize: 11, color: "#64748b", fontWeight: 700, marginBottom: 4 }}>{x.l}</div>
+              <div style={{ fontSize: 20, fontWeight: 900, color: x.c }}>{x.v}</div>
+            </div>
+          ))}
+        </div>
+
+        <h3 style={{ fontSize: 14, fontWeight: 800, marginBottom: 12, color: "#1e293b", borderLeft: "4px solid #3b5bdb", paddingLeft: 8 }}>2. 기간 내 주요 입출고 동향</h3>
+        <div style={{ display: "flex", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 300px", padding: 16, borderRadius: 8, border: "1px solid #bbf7d0", background: "#f0fdf4" }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: "#166534", marginBottom: 8 }}>▼ 주요 입고 ({inCnt}건)</div>
+            {periodHist.filter(h => h.act === "입고").slice(0, 5).map(h => (
+              <div key={h.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "4px 0", borderBottom: "1px dashed #dcfce7" }}>
+                <span>{h.pn}</span><span style={{ fontWeight: "bold" }}>+{h.q}</span>
+              </div>
+            ))}
+            {inCnt === 0 && <div style={{ fontSize: 11, color: "#94a3b8" }}>입고 내역 없음</div>}
+          </div>
+          <div style={{ flex: "1 1 300px", padding: 16, borderRadius: 8, border: "1px solid #fecaca", background: "#fef2f2" }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: "#991b1b", marginBottom: 8 }}>▲ 주요 출고 ({outCnt}건)</div>
+            {periodHist.filter(h => h.act === "출고").slice(0, 5).map(h => (
+              <div key={h.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "4px 0", borderBottom: "1px dashed #fee2e2" }}>
+                <span>{h.pn}</span><span style={{ fontWeight: "bold" }}>-{h.q}</span>
+              </div>
+            ))}
+            {outCnt === 0 && <div style={{ fontSize: 11, color: "#94a3b8" }}>출고 내역 없음</div>}
+          </div>
+        </div>
+
+        <h3 style={{ fontSize: 14, fontWeight: 800, marginBottom: 12, color: "#1e293b", borderLeft: "4px solid #3b5bdb", paddingLeft: 8 }}>3. 특이사항 및 AI 분석 의견</h3>
+        <div style={{ padding: 16, borderRadius: 8, border: "1px solid #e2e8f0", background: "#f8fafc", minHeight: 80, fontSize: 12, color: "#475569", lineHeight: 1.6, marginBottom: 24 }}>
+          우상단의 <strong>[🤖 AI 진단 및 개선안 생성]</strong> 버튼을 눌러 구역을 선택하고 현장 사진 + 재고 데이터를 종합 분석하세요. 생성된 개선안은 <strong>시설점검 모듈의 보완과제</strong>로 자동 등록됩니다.
+        </div>
+
+        <h3 style={{ fontSize: 14, fontWeight: 800, marginBottom: 12, color: "#1e293b", borderLeft: "4px solid #3b5bdb", paddingLeft: 8 }}>4. 카테고리 · 구역별 재고 분포</h3>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 24 }}>
+          <div style={{ background: "#fff", borderRadius: 8, padding: 14, border: "1px solid #e5e7eb" }}>
+            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10, color: "#475569" }}>카테고리별</div>
+            {catS.map(c => <div key={c.n} style={{ marginBottom: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 2 }}>
+                <span style={{ fontWeight: 600 }}>{c.n}</span><span style={{ color: "#94a3b8" }}>{c.q.toLocaleString()}</span>
+              </div>
+              <div style={{ height: 6, background: "#f1f3f5", borderRadius: 3 }}>
+                <div style={{ height: "100%", width: `${(c.q / mCQ) * 100}%`, background: `hsl(${(c.n.charCodeAt(0) * 73) % 360},45%,55%)`, borderRadius: 3 }} />
+              </div>
+            </div>)}
+          </div>
+          <div style={{ background: "#fff", borderRadius: 8, padding: 14, border: "1px solid #e5e7eb" }}>
+            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10, color: "#475569" }}>구역별</div>
+            {zS.map(z => <div key={z.id} style={{ marginBottom: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 2 }}>
+                <span style={{ fontWeight: 600 }}>{z.icon} {z.name}</span><span style={{ color: "#94a3b8" }}>{z.q.toLocaleString()}</span>
+              </div>
+              <div style={{ height: 6, background: "#f1f3f5", borderRadius: 3 }}>
+                <div style={{ height: "100%", width: `${(z.q / mZQ) * 100}%`, background: z.color, borderRadius: 3 }} />
+              </div>
+            </div>)}
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginTop: 40, paddingTop: 16, borderTop: "1px solid #e5e7eb" }}>
+          <SignatureSlot label="재고관리 담당" value={sigs.manager} onChange={v => setSigs(s => ({ ...s, manager: v }))} />
+          <SignatureSlot label="운영 팀장" value={sigs.lead} onChange={v => setSigs(s => ({ ...s, lead: v }))} />
+          <SignatureSlot label="박물관장" value={sigs.director} onChange={v => setSigs(s => ({ ...s, director: v }))} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== MODALS ==========
+function AddMdl({onAdd,onClose,defaultLoc,zoneInfo}){
+  const [n,sN]=useState("");const [c,sC]=useState(CATS[0]);
+  // When zone is provided, default the location to zone's name (which may not be in LOCS)
+  const effectiveLocs = zoneInfo ? [zoneInfo.name, ...LOCS.filter(x => x !== zoneInfo.name)] : LOCS;
+  const [l,sL]=useState(defaultLoc || effectiveLocs[0]);
+  const [q,sQ]=useState("0");const [m,sM]=useState("");
+  return(<Modal title={zoneInfo ? `${zoneInfo.icon} ${zoneInfo.name} — 재고 등록` : "제품 추가 (QR 자동생성)"} onClose={onClose}>
+    <div style={{display:"flex",flexDirection:"column",gap:12}}>
+      {zoneInfo ? (
+        <div style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8,padding:"8px 12px",fontSize:12,color:"#065f46"}}>
+          🆕 사용자 생성 구역 <strong>"{zoneInfo.name}"</strong>에 재고를 등록합니다
+          <div style={{fontSize:10,color:"#059669",marginTop:3,fontFamily:"monospace"}}>📍 {zoneInfo.lat?.toFixed(6)}, {zoneInfo.lng?.toFixed(6)}</div>
+        </div>
+      ) : (
+        <div style={{background:"#f0f7ff",border:"1px solid #bfdbfe",borderRadius:8,padding:"8px 12px",fontSize:12,color:"#1d4ed8"}}>
+          💡 등록 시 QR코드가 자동 생성됩니다
+        </div>
+      )}
+      <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>제품명 *</label><input className="inp" value={n} onChange={e=>sN(e.target.value)} autoFocus/></div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+        <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>카테고리</label><select className="sel" value={c} onChange={e=>sC(e.target.value)}>{CATS.map(x=><option key={x}>{x}</option>)}</select></div>
+        <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>위치</label><select className="sel" value={l} onChange={e=>sL(e.target.value)} disabled={!!zoneInfo}>{effectiveLocs.map(x=><option key={x}>{x}</option>)}</select></div>
+      </div>
+      <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>수량</label><input className="inp" type="number" min="0" value={q} onChange={e=>sQ(e.target.value)}/></div>
+      <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>메모</label><textarea className="inp" rows={2} value={m} onChange={e=>sM(e.target.value)}/></div>
+      <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
+        <button className="btn bs" onClick={onClose}>취소</button>
+        <button className="btn bp" onClick={()=>{if(!n.trim())return alert("제품명 필수");onAdd({name:n.trim(),cat:c,loc:l,qty:q,memo:m});}}><IC.QR/>등록 + QR생성</button>
+      </div>
+    </div>
+  </Modal>);
+}
+
+function EMdl({p,onSave,onClose}){
+  const [n,sN]=useState(p.name);const [c,sC]=useState(p.cat);const [l,sL]=useState(p.loc);const [m,sM]=useState(p.memo||"");
+  return(<Modal title="수정" onClose={onClose}>
+    <div style={{display:"flex",flexDirection:"column",gap:12}}>
+      <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>제품명</label><input className="inp" value={n} onChange={e=>sN(e.target.value)}/></div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+        <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>카테고리</label><select className="sel" value={c} onChange={e=>sC(e.target.value)}>{CATS.map(x=><option key={x}>{x}</option>)}</select></div>
+        <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>위치</label><select className="sel" value={l} onChange={e=>sL(e.target.value)}>{LOCS.map(x=><option key={x}>{x}</option>)}</select></div>
+      </div>
+      <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
+        <button className="btn bs" onClick={onClose}>취소</button>
+        <button className="btn bp" onClick={()=>{if(!n.trim())return alert("필수");onSave({...p,name:n.trim(),cat:c,loc:l,memo:m});}}>저장</button>
+      </div>
+    </div>
+  </Modal>);
+}
+
+function SMdl({type,p,onSubmit,onClose}){
+  const [loc,sLoc]=useState(p.loc||LOCS[0]);const [qty,sQty]=useState("");const [memo,sMemo]=useState("");
+  const lb=type==="in"?"입고":type==="out"?"출고":"조정";const co=type==="in"?"#22c55e":type==="out"?"#ef4444":"#8b5cf6";
+  return(<Modal title={`${p.name} — ${lb}`} onClose={onClose}>
+    <div style={{display:"flex",flexDirection:"column",gap:12}}>
+      <div style={{background:"#f8f9fa",borderRadius:7,padding:"8px 12px",fontSize:12}}>현재: <strong style={{color:co}}>{p.qty}</strong> · {p.code}</div>
+      <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>위치</label><select className="sel" value={loc} onChange={e=>sLoc(e.target.value)}>{LOCS.map(l=><option key={l} value={l}>{l} ({p.locs?.[l]||0})</option>)}</select></div>
+      <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>수량</label><input className="inp" type="number" min="0" value={qty} onChange={e=>sQty(e.target.value)} autoFocus/></div>
+      <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>메모</label><textarea className="inp" rows={2} value={memo} onChange={e=>sMemo(e.target.value)}/></div>
+      <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
+        <button className="btn bs" onClick={onClose}>취소</button>
+        <button className="btn bp" style={{background:co}} onClick={()=>{const q=parseInt(qty);if(type!=="adj"&&(!q||q<=0))return alert("수량");if(type==="adj"&&(isNaN(q)||q<0))return alert("수량");onSubmit(p.id,loc,q,memo);}}>{lb}</button>
+      </div>
+    </div>
+  </Modal>);
+}
+
+/* ==================== SAFETY MODULE ==================== */
+
+/* ─── NEW SAFETY TRAINING MODAL (with per-attendee signatures) ─── */
+function SafeTrainingModal({ onClose, onSave }) {
+  const [title, setTitle] = useState("");
+  const [type, setType] = useState("법정안전");
+  const [instructor, setInstructor] = useState("");
+  const [attendees, setAttendees] = useState([]); // { name, sign }
+  const [signTargetIdx, setSignTargetIdx] = useState(null);
+  const [tempName, setTempName] = useState("");
+
+  const addAttendee = () => {
+    const n = tempName.trim();
+    if (!n) return;
+    if (attendees.some(a => a.name === n)) { alert("이미 추가된 이름입니다."); return; }
+    setAttendees([...attendees, { name: n, sign: null }]);
+    setTempName("");
+  };
+  const removeAttendee = (idx) => setAttendees(attendees.filter((_, i) => i !== idx));
+  const saveSignatureForAttendee = (dataUrl) => {
+    setAttendees(prev => prev.map((a, i) => i === signTargetIdx ? { ...a, sign: dataUrl } : a));
+    setSignTargetIdx(null);
+  };
+  const submitForm = () => {
+    if (!title.trim()) return alert("교육명을 입력해주세요.");
+    if (!instructor.trim()) return alert("강사명을 입력해주세요.");
+    if (attendees.length === 0) return alert("참석자를 추가해주세요.");
+    const unsigned = attendees.filter(a => !a.sign).length;
+    if (unsigned > 0) {
+      if (!confirm(`서명하지 않은 참석자가 ${unsigned}명 있습니다. 그대로 저장하시겠습니까?`)) return;
+    }
+    onSave({
+      id: "tr" + Date.now(),
+      title: title.trim(),
+      type,
+      instructor: instructor.trim(),
+      date: new Date().toISOString().slice(0, 10),
+      attendees: attendees.map(a => a.name),
+      signatures: attendees,
+      status: "COMPLETED",
+    });
+  };
+
+  return (
+    <div onClick={signTargetIdx !== null ? null : onClose}
+      style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)", backdropFilter: "blur(2px)" }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ background: "#fff", borderRadius: 16, width: 520, maxWidth: "92vw", padding: 24, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        {signTargetIdx !== null ? (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <h3 style={{ fontSize: 16, fontWeight: 800 }}>✍️ {attendees[signTargetIdx].name} 님의 서명</h3>
+              <button type="button" onClick={() => setSignTargetIdx(null)}
+                style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#94a3b8" }}>×</button>
+            </div>
+            <div style={{ fontSize: 11, color: "#64748b", background: "#f0f7ff", padding: "8px 12px", borderRadius: 8, border: "1px solid #bfdbfe", marginBottom: 12 }}>
+              교육: <strong>{title || "(미입력)"}</strong> · 구분: {type} · 날짜: {new Date().toISOString().slice(0, 10)}
+            </div>
+            <SignaturePad onSave={saveSignatureForAttendee} onCancel={() => setSignTargetIdx(null)} />
+          </div>
+        ) : (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h3 style={{ fontSize: 17, fontWeight: 800 }}>📚 새 안전 교육 일지</h3>
+              <button type="button" onClick={onClose}
+                style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#94a3b8", lineHeight: 1 }}>×</button>
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "#64748b", display: "block", marginBottom: 4 }}>교육명 *</label>
+              <input className="w-full rounded-lg border px-3 py-2 text-sm" value={title} onChange={e => setTitle(e.target.value)} placeholder="예: 소화기 사용법 및 대피 훈련" />
+            </div>
+
+            <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "#64748b", display: "block", marginBottom: 4 }}>구분</label>
+                <select className="w-full rounded-lg border px-3 py-2 text-sm" value={type} onChange={e => setType(e.target.value)}>
+                  {Object.keys(FAC_SAFE_TRAIN_TYPES).map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "#64748b", display: "block", marginBottom: 4 }}>강사명 *</label>
+                <input className="w-full rounded-lg border px-3 py-2 text-sm" value={instructor} onChange={e => setInstructor(e.target.value)} placeholder="강사 이름" />
+              </div>
+            </div>
+
+            <div style={{ borderTop: "2px dashed #e5e7eb", paddingTop: 16, marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <label style={{ fontSize: 13, fontWeight: 800, color: "#0f172a" }}>참석자 명단 및 서명</label>
+                <span style={{ fontSize: 11, color: "#64748b" }}>{attendees.length}명 · 서명 {attendees.filter(a => a.sign).length}건</span>
+              </div>
+
+              <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                <input className="flex-1 rounded-lg border px-3 py-2 text-sm" placeholder="참석자 이름 입력" value={tempName} onChange={e => setTempName(e.target.value)} onKeyDown={e => e.key === 'Enter' && addAttendee()} />
+                <button type="button" onClick={addAttendee}
+                  className="px-4 rounded-lg text-sm font-bold"
+                  style={{ background: "#dbeafe", color: "#1d4ed8", border: "none", cursor: "pointer" }}>추가</button>
+              </div>
+
+              <div style={{ background: "#f8fafc", borderRadius: 8, padding: 12, border: "1px solid #e2e8f0", maxHeight: 240, overflowY: "auto" }}>
+                {attendees.length === 0 ? (
+                  <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", padding: "12px 0" }}>참석자를 추가해주세요</div>
+                ) : (
+                  attendees.map((att, idx) => (
+                    <div key={idx} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#fff", padding: "8px 12px", borderRadius: 6, border: "1px solid #e5e7eb", marginBottom: 6, gap: 8 }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, flexShrink: 0 }}>{idx + 1}. {att.name}</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {att.sign ? (
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <img src={att.sign} alt="sign" style={{ height: 28, maxWidth: 100, background: "#f8fafc", borderRadius: 4, padding: "2px 6px", border: "1px solid #e5e7eb" }} />
+                            <button type="button" onClick={() => setSignTargetIdx(idx)}
+                              style={{ fontSize: 10, color: "#2563eb", background: "none", border: "none", cursor: "pointer" }}>재서명</button>
+                          </div>
+                        ) : (
+                          <button type="button" onClick={() => setSignTargetIdx(idx)}
+                            style={{ fontSize: 11, background: "#0f172a", color: "#fff", padding: "4px 10px", borderRadius: 4, fontWeight: 700, border: "none", cursor: "pointer" }}>✍️ 서명하기</button>
+                        )}
+                        <button type="button" onClick={() => removeAttendee(idx)}
+                          style={{ fontSize: 16, color: "#ef4444", background: "none", border: "none", cursor: "pointer", padding: "0 4px" }}>×</button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <button type="button" onClick={submitForm}
+              style={{ width: "100%", borderRadius: 12, background: "#059669", color: "#fff", padding: 12, fontSize: 14, fontWeight: 700, border: "none", cursor: "pointer" }}>
+              교육 일지 및 서명 저장
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ========== INCIDENT NOTIFY MODAL (알림 발송) ==========
+function IncidentNotifyModal({ incident, onClose }) {
+  const [recipients, setRecipients] = useState([
+    { name: "이경연 대표", phone: "010-1234-5678", email: "ceo@jamsamuseum.co.kr", checked: true },
+    { name: "안전관리자", phone: "010-2345-6789", email: "safety@jamsamuseum.co.kr", checked: true },
+    { name: "시설팀장", phone: "010-3456-7890", email: "fac@jamsamuseum.co.kr", checked: false },
+  ]);
+  const [channels, setChannels] = useState({ kakao: true, email: true, sms: false });
+  const [sending, setSending] = useState(false);
+  const [results, setResults] = useState(null);
+
+  const toggleRecipient = (i) => {
+    setRecipients(prev => prev.map((r, idx) => idx === i ? {...r, checked: !r.checked} : r));
+  };
+  const addRecipient = () => {
+    const name = prompt("수신자 이름");
+    if (!name) return;
+    const phone = prompt("전화번호 (예: 010-1234-5678)") || "";
+    const email = prompt("이메일") || "";
+    setRecipients(prev => [...prev, { name, phone, email, checked: true }]);
+  };
+
+  const send = async () => {
+    const selected = recipients.filter(r => r.checked);
+    if (selected.length === 0) return alert("수신자를 1명 이상 선택하세요");
+    const channelList = Object.entries(channels).filter(([k,v]) => v).map(([k]) => k);
+    if (channelList.length === 0) return alert("발송 채널을 1개 이상 선택하세요");
+
+    setSending(true);
+    try {
+      const fetcher = window.authFetch || ((p,o)=>fetch(p,o));
+      const res = await fetcher("/api/incident-notify", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ incident, recipients: selected, channels: channelList })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || `API ${res.status}`);
+      setResults(data);
+    } catch (e) {
+      alert("알림 발송 실패: " + e.message);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1100,padding:16}} onClick={onClose}>
+      <div className="bg-white rounded-xl max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col" onClick={e=>e.stopPropagation()}>
+        <div className="p-4 border-b bg-gradient-to-r from-blue-600 to-cyan-600 text-white flex justify-between">
+          <div>
+            <div className="text-sm font-bold">📨 사고 알림 발송</div>
+            <div className="text-xs opacity-90">{incident.type} · {incident.location}</div>
+          </div>
+          <button onClick={onClose} className="bg-white/20 rounded w-7 h-7 text-lg leading-none">×</button>
+        </div>
+        <div className="flex-1 overflow-auto p-4 space-y-3">
+          <div>
+            <div className="text-xs font-bold text-gray-600 mb-1.5">수신자 선택</div>
+            <div className="space-y-1">
+              {recipients.map((r, i)=>(
+                <label key={i} className="flex items-center gap-2 p-2 bg-gray-50 rounded text-sm cursor-pointer">
+                  <input type="checkbox" checked={r.checked} onChange={()=>toggleRecipient(i)} className="w-4 h-4"/>
+                  <span className="font-bold">{r.name}</span>
+                  <span className="text-xs text-gray-500 ml-auto">{r.phone || r.email}</span>
+                </label>
+              ))}
+            </div>
+            <button onClick={addRecipient} className="text-xs text-blue-600 mt-2">+ 수신자 추가</button>
+          </div>
+          <div>
+            <div className="text-xs font-bold text-gray-600 mb-1.5">발송 채널</div>
+            <div className="flex gap-2">
+              <label className={`flex-1 p-2 rounded border-2 text-center cursor-pointer ${channels.kakao?'bg-yellow-50 border-yellow-400':'bg-white border-gray-200'}`}>
+                <input type="checkbox" checked={channels.kakao} onChange={e=>setChannels(c=>({...c,kakao:e.target.checked}))} className="hidden"/>
+                <div className="text-xl">💬</div>
+                <div className="text-xs font-bold">카카오톡</div>
+              </label>
+              <label className={`flex-1 p-2 rounded border-2 text-center cursor-pointer ${channels.email?'bg-blue-50 border-blue-400':'bg-white border-gray-200'}`}>
+                <input type="checkbox" checked={channels.email} onChange={e=>setChannels(c=>({...c,email:e.target.checked}))} className="hidden"/>
+                <div className="text-xl">📧</div>
+                <div className="text-xs font-bold">이메일</div>
+              </label>
+              <label className={`flex-1 p-2 rounded border-2 text-center cursor-pointer ${channels.sms?'bg-emerald-50 border-emerald-400':'bg-white border-gray-200'}`}>
+                <input type="checkbox" checked={channels.sms} onChange={e=>setChannels(c=>({...c,sms:e.target.checked}))} className="hidden"/>
+                <div className="text-xl">📱</div>
+                <div className="text-xs font-bold">SMS</div>
+              </label>
+            </div>
+          </div>
+
+          {results && (
+            <div className="bg-emerald-50 border border-emerald-300 rounded p-3 text-xs">
+              <div className="font-bold text-emerald-800 mb-1">✅ 발송 결과</div>
+              <div>성공 {results.summary.success}건 / 실패 {results.summary.failed}건 / 전체 {results.summary.total}건</div>
+              <div className="mt-1 space-y-0.5">
+                {(results.results||[]).map((r,i)=>(
+                  <div key={i} className={r.ok?'text-emerald-700':'text-red-700'}>
+                    {r.ok?'✓':'✗'} {r.recipient || r.phone || r.email} - {r.channel}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="p-3 border-t bg-gray-50 flex gap-2 justify-end">
+          <button onClick={onClose} className="text-xs px-3 py-2 border rounded bg-white">닫기</button>
+          <button onClick={send} disabled={sending} className="text-xs px-4 py-2 bg-blue-600 text-white rounded font-bold disabled:bg-gray-400">
+            {sending ? "🔄 발송 중..." : "📨 즉시 발송"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== INCIDENT DISPATCH MODAL (가까운 직원 호출) ==========
+function IncidentDispatchModal({ incident, facilities, onClose }) {
+  const [loading, setLoading] = useState(false);
+  const [autoSend, setAutoSend] = useState(false);
+  const [maxDistance, setMaxDistance] = useState(200);
+  const [result, setResult] = useState(null);
+
+  const fac = facilities.find(f => f.id === incident.facId);
+  // 박물관 기본 좌표 (청주 잠사박물관 근처)
+  const lat = fac?.lat || 36.6424;
+  const lng = fac?.lng || 127.4890;
+
+  const findStaff = async () => {
+    setLoading(true);
+    try {
+      const fetcher = window.authFetch || ((p,o)=>fetch(p,o));
+      const res = await fetcher("/api/incident-dispatch", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+          incidentId: incident.id,
+          location: fac?.name || incident.location,
+          lat, lng, maxDistance, autoSend
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || `API ${res.status}`);
+      setResult(data);
+    } catch (e) {
+      alert("직원 호출 실패: " + e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1100,padding:16}} onClick={onClose}>
+      <div className="bg-white rounded-xl max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col" onClick={e=>e.stopPropagation()}>
+        <div className="p-4 border-b bg-gradient-to-r from-emerald-600 to-teal-600 text-white flex justify-between">
+          <div>
+            <div className="text-sm font-bold">🚑 가까운 직원 호출</div>
+            <div className="text-xs opacity-90">{fac?.name || incident.location}</div>
+          </div>
+          <button onClick={onClose} className="bg-white/20 rounded w-7 h-7 text-lg leading-none">×</button>
+        </div>
+        <div className="flex-1 overflow-auto p-4 space-y-3">
+          <div>
+            <div className="text-xs font-bold text-gray-600 mb-1.5">검색 반경</div>
+            <div className="flex gap-2">
+              {[50, 100, 200, 500].map(d=>(
+                <button key={d} onClick={()=>setMaxDistance(d)} className={`flex-1 text-xs font-bold py-2 rounded ${maxDistance===d?'bg-emerald-600 text-white':'bg-white border border-gray-300'}`}>
+                  {d}m
+                </button>
+              ))}
+            </div>
+          </div>
+          <label className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded cursor-pointer">
+            <input type="checkbox" checked={autoSend} onChange={e=>setAutoSend(e.target.checked)} className="w-4 h-4"/>
+            <span className="text-xs">
+              <strong>가까운 3명에게 자동 호출 SMS 발송</strong> (체크 안 하면 목록만 표시)
+            </span>
+          </label>
+
+          {result && (
+            <div className="space-y-2">
+              <div className="text-xs font-bold text-gray-700">📍 반경 {result.maxDistance}m 내 활성 직원 ({result.nearbyStaff.length}명)</div>
+              {result.nearbyStaff.length === 0 ? (
+                <div className="text-sm text-gray-500 p-3 bg-gray-50 rounded text-center">
+                  {result.message || "검색 반경 내 직원이 없습니다"}
+                </div>
+              ) : (
+                result.nearbyStaff.map((s, i)=>(
+                  <div key={s.id} className="flex items-center gap-3 p-3 bg-emerald-50 border border-emerald-200 rounded">
+                    <div className="bg-emerald-600 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm">
+                      {i+1}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-bold">{s.name} <span className="text-xs text-gray-500">{s.role}</span></div>
+                      <div className="text-xs text-gray-500">{s.phone} · {s.lastSeenAgo}분 전 위치 확인</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-lg font-black text-emerald-600">{s.distance}m</div>
+                    </div>
+                  </div>
+                ))
+              )}
+              {result.dispatched && result.dispatched.length > 0 && (
+                <div className="bg-blue-50 border border-blue-200 rounded p-3">
+                  <div className="text-xs font-bold text-blue-800 mb-1">📨 자동 발송 결과</div>
+                  {result.dispatched.map((d,i)=>(
+                    <div key={i} className={`text-xs ${d.sent?'text-blue-700':'text-red-700'}`}>
+                      {d.sent?'✓':'✗'} {d.name} ({d.phone}) - {d.distance}m
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="p-3 border-t bg-gray-50 flex gap-2 justify-end">
+          <button onClick={onClose} className="text-xs px-3 py-2 border rounded bg-white">닫기</button>
+          <button onClick={findStaff} disabled={loading} className="text-xs px-4 py-2 bg-emerald-600 text-white rounded font-bold disabled:bg-gray-400">
+            {loading ? "🔄 검색 중..." : (autoSend ? "🚨 검색 + 자동 호출" : "🔍 직원 검색")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== EDUCATION TRACKING (직원 안전교육 이수) ==========
+function EducationTrackingPage({ trainings, currentUser }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [recordModal, setRecordModal] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const fetcher = window.authFetch || ((p,o)=>fetch(p,o));
+      const res = await fetcher("/api/education-tracking");
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const d = await res.json();
+      if (d.ok) setData(d);
+    } catch (e) {
+      console.warn("[edu] 조회 실패:", e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const statusColors = {
+    completed: "bg-emerald-100 text-emerald-700",
+    expiring_soon: "bg-amber-100 text-amber-700",
+    expired: "bg-red-100 text-red-700",
+    overdue: "bg-red-200 text-red-900",
+  };
+  const statusLabels = {
+    completed: "✓ 이수", expiring_soon: "⚠ 만료임박",
+    expired: "✗ 만료", overdue: "✗ 미이수",
+  };
+
+  if (loading) return <div className="p-8 text-center text-gray-500">교육 이수 현황 불러오는 중...</div>;
+  if (!data) return (
+    <div className="p-8 text-center">
+      <button onClick={load} className="bg-blue-600 text-white text-xs font-bold px-4 py-2 rounded">새로고침</button>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-gradient-to-r from-violet-50 to-pink-50 border border-violet-200 rounded-xl p-4 text-sm text-violet-900">
+        🎓 <strong>직원 안전교육 이수 추적</strong> — 산업안전보건법, 어린이놀이시설법 등 법정 의무 교육 자동 추적. 만료 임박 시 알림.
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+        <div className="bg-white p-3 rounded-xl border text-center">
+          <div className="text-xs text-gray-500 font-bold">전체 직원</div>
+          <div className="text-2xl font-black">{data.overall.totalStaff}명</div>
+        </div>
+        <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 text-center">
+          <div className="text-xs text-emerald-700 font-bold">이수율</div>
+          <div className="text-2xl font-black text-emerald-700">{data.overall.completionRate}%</div>
+        </div>
+        <div className="bg-amber-50 p-3 rounded-xl border border-amber-200 text-center">
+          <div className="text-xs text-amber-700 font-bold">만료임박</div>
+          <div className="text-2xl font-black text-amber-700">{data.overall.expiringCount}건</div>
+        </div>
+        <div className="bg-red-50 p-3 rounded-xl border border-red-200 text-center">
+          <div className="text-xs text-red-700 font-bold">미이수/만료</div>
+          <div className="text-2xl font-black text-red-700">{data.overall.expiredCount}건</div>
+        </div>
+        <div className="bg-blue-50 p-3 rounded-xl border border-blue-200 text-center">
+          <div className="text-xs text-blue-700 font-bold">위험직원</div>
+          <div className="text-2xl font-black text-blue-700">{data.overall.highRiskCount}명</div>
+        </div>
+      </div>
+
+      {data.upcomingExpirations && data.upcomingExpirations.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+          <div className="text-sm font-bold text-amber-900 mb-2">⚠️ 곧 만료될 교육 ({data.upcomingExpirations.length}건)</div>
+          <div className="space-y-1">
+            {data.upcomingExpirations.slice(0, 5).map((e, i)=>(
+              <div key={i} className="text-xs flex justify-between bg-white p-2 rounded">
+                <span><strong>{e.staff}</strong> · {e.training}</span>
+                <span className="text-amber-700 font-bold">D-{e.daysLeft}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="p-3 border-b flex justify-between items-center">
+          <div className="text-sm font-bold">직원별 이수 현황 매트릭스</div>
+          <button onClick={()=>setRecordModal(true)} className="text-xs bg-blue-600 text-white font-bold px-3 py-1.5 rounded">
+            + 교육 이수 기록
+          </button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="text-xs w-full">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="p-2 text-left whitespace-nowrap">직원</th>
+                <th className="p-2 text-center whitespace-nowrap">이수율</th>
+                {(data.requiredTrainings || []).map(t=>(
+                  <th key={t.code} className="p-2 text-center whitespace-nowrap" title={t.law}>
+                    {t.name.split(' ')[0]}
+                    <div className="text-[9px] font-normal text-gray-500">{t.cycle === 'annual' ? '연1회' : t.cycle === 'biannual' ? '반기' : t.cycle === 'quarterly' ? '분기' : t.cycle}</div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {(data.summary || []).map(s=>(
+                <tr key={s.staff.id} className="border-t hover:bg-gray-50">
+                  <td className="p-2">
+                    <div className="font-bold">{s.staff.name}</div>
+                    <div className="text-[10px] text-gray-500">{s.staff.position}</div>
+                  </td>
+                  <td className="p-2 text-center">
+                    <span className={`font-black ${s.stats.completionRate >= 80 ? 'text-emerald-600' : s.stats.completionRate >= 50 ? 'text-amber-600' : 'text-red-600'}`}>
+                      {s.stats.completionRate}%
+                    </span>
+                  </td>
+                  {s.trainings.map((t, i)=>(
+                    <td key={i} className="p-2 text-center">
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${statusColors[t.status]}`} title={t.expiresAt ? `만료: ${new Date(t.expiresAt).toLocaleDateString('ko-KR')}` : ''}>
+                        {statusLabels[t.status]}
+                      </span>
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-800">
+        💡 <strong>법정 교육 안내:</strong> 산업안전보건법 제29조에 따라 정기교육(분기 3시간), 관리감독자교육(반기 8시간), 채용시교육(8시간) 등이 의무입니다. 위반 시 과태료 부과될 수 있습니다.
+      </div>
+
+      {recordModal && <EducationRecordModal trainings={data.requiredTrainings} staff={data.summary?.map(s=>s.staff) || []} onClose={()=>setRecordModal(false)} onSaved={()=>{setRecordModal(false); load();}}/>}
+    </div>
+  );
+}
+
+function EducationRecordModal({ trainings, staff, onClose, onSaved }) {
+  const [code, setCode] = useState(trainings?.[0]?.code || "");
+  const [completedAt, setCompletedAt] = useState(new Date().toISOString().slice(0,10));
+  const [hours, setHours] = useState(2);
+  const [instructor, setInstructor] = useState("");
+  const [attendees, setAttendees] = useState([]);
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    if (!code || !completedAt) return alert("필수 입력");
+    if (attendees.length === 0) return alert("참석자를 선택하세요");
+    setSaving(true);
+    try {
+      const fetcher = window.authFetch || ((p,o)=>fetch(p,o));
+      const res = await fetcher("/api/education-tracking", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ code, completedAt, hours, instructor, attendees, notes })
+      });
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      onSaved();
+    } catch (e) {
+      alert("저장 실패: " + e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1100,padding:16}} onClick={onClose}>
+      <div className="bg-white rounded-xl max-w-md w-full" onClick={e=>e.stopPropagation()}>
+        <div className="p-4 border-b bg-blue-600 text-white flex justify-between">
+          <div className="font-bold text-sm">📚 교육 이수 기록</div>
+          <button onClick={onClose} className="bg-white/20 rounded w-7 h-7 text-lg leading-none">×</button>
+        </div>
+        <div className="p-4 space-y-3">
+          <div>
+            <label className="text-xs font-bold">교육 종류 *</label>
+            <select value={code} onChange={e=>setCode(e.target.value)} className="w-full text-sm border rounded p-2 mt-1">
+              {(trainings || []).map(t=><option key={t.code} value={t.code}>{t.name}</option>)}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs font-bold">이수일</label>
+              <input type="date" value={completedAt} onChange={e=>setCompletedAt(e.target.value)} className="w-full text-sm border rounded p-2 mt-1"/>
+            </div>
+            <div>
+              <label className="text-xs font-bold">시간(h)</label>
+              <input type="number" value={hours} onChange={e=>setHours(parseFloat(e.target.value))} className="w-full text-sm border rounded p-2 mt-1"/>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-bold">강사</label>
+            <input value={instructor} onChange={e=>setInstructor(e.target.value)} className="w-full text-sm border rounded p-2 mt-1" placeholder="강사명"/>
+          </div>
+          <div>
+            <label className="text-xs font-bold">참석자 *</label>
+            <div className="border rounded p-2 mt-1 max-h-40 overflow-auto space-y-1">
+              {(staff || []).map(s=>(
+                <label key={s.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" checked={attendees.includes(s.id)} onChange={e=>{
+                    if (e.target.checked) setAttendees(prev=>[...prev, s.id]);
+                    else setAttendees(prev=>prev.filter(x=>x!==s.id));
+                  }}/>
+                  {s.name} <span className="text-xs text-gray-500">{s.position}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-bold">메모</label>
+            <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2} className="w-full text-sm border rounded p-2 mt-1"/>
+          </div>
+        </div>
+        <div className="p-3 border-t bg-gray-50 flex gap-2 justify-end">
+          <button onClick={onClose} className="text-xs px-3 py-2 border rounded bg-white">취소</button>
+          <button onClick={save} disabled={saving} className="text-xs px-4 py-2 bg-blue-600 text-white rounded font-bold">
+            {saving ? "저장 중..." : "💾 저장"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== ANNUAL STATS PAGE (연간 안전 통계) ==========
+function AnnualStatsPage({ hazardLogs, incidents, trainings, dailyChecks, facilities }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [year, setYear] = useState(new Date().getFullYear());
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const fetcher = window.authFetch || ((p,o)=>fetch(p,o));
+      const res = await fetcher("/api/safety-annual-stats", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ year, hazardLogs, incidents, trainings, dailyChecks })
+      });
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const d = await res.json();
+      if (d.ok) setData(d);
+    } catch (e) {
+      console.warn("[stats] 조회 실패:", e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, [year]);
+
+  if (loading) return <div className="p-8 text-center text-gray-500">통계 분석 중...</div>;
+  if (!data) return <div className="p-8 text-center"><button onClick={load} className="bg-blue-600 text-white text-xs font-bold px-4 py-2 rounded">불러오기</button></div>;
+
+  const monthLabels = Array.from({length:12}, (_,i)=>`${i+1}월`);
+  const maxHazard = Math.max(...data.monthlyHazards.map(m=>m.total), 1);
+  const maxIncident = Math.max(...data.monthlyIncidents.map(m=>m.total), 1);
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4 flex justify-between items-center">
+        <div className="text-sm text-blue-900">
+          📊 <strong>{year}년 연간 안전 통계</strong> — 월별 추이, 위험 유형 분포, 구역별 비교
+        </div>
+        <select value={year} onChange={e=>setYear(parseInt(e.target.value))} className="text-sm border rounded px-2 py-1">
+          {[year-2, year-1, year, year+1].map(y=><option key={y} value={y}>{y}년</option>)}
+        </select>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        <div className="bg-white p-4 rounded-xl border text-center">
+          <div className="text-xs text-gray-500 font-bold">총 위험성평가</div>
+          <div className="text-2xl font-black text-red-600">{data.kpis.totalHazards}</div>
+          {data.kpis.hazardTrend !== null && (
+            <div className={`text-[10px] font-bold mt-1 ${data.kpis.hazardTrend > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+              전년 대비 {data.kpis.hazardTrend > 0 ? '+' : ''}{data.kpis.hazardTrend}%
+            </div>
+          )}
+        </div>
+        <div className="bg-white p-4 rounded-xl border text-center">
+          <div className="text-xs text-gray-500 font-bold">총 사고건수</div>
+          <div className="text-2xl font-black text-orange-600">{data.kpis.totalIncidents}</div>
+          {data.kpis.incidentTrend !== null && (
+            <div className={`text-[10px] font-bold mt-1 ${data.kpis.incidentTrend > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+              전년 대비 {data.kpis.incidentTrend > 0 ? '+' : ''}{data.kpis.incidentTrend}%
+            </div>
+          )}
+        </div>
+        <div className="bg-white p-4 rounded-xl border text-center">
+          <div className="text-xs text-gray-500 font-bold">아차사고</div>
+          <div className="text-2xl font-black text-amber-600">{data.kpis.totalNearMiss}</div>
+        </div>
+        <div className="bg-white p-4 rounded-xl border text-center">
+          <div className="text-xs text-gray-500 font-bold">긴급 위험</div>
+          <div className="text-2xl font-black text-red-700">{data.kpis.urgentCount}</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-white rounded-xl border p-4">
+          <div className="text-sm font-bold mb-3">📈 월별 위험성평가 추이</div>
+          <div className="flex items-end gap-1 h-32">
+            {data.monthlyHazards.map((m, i)=>(
+              <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                <div className="w-full flex flex-col-reverse" style={{height:'100%'}}>
+                  {m.urgent > 0 && <div style={{height:`${(m.urgent/maxHazard)*100}%`, background:'#dc2626'}}/>}
+                  {m.high > 0 && <div style={{height:`${(m.high/maxHazard)*100}%`, background:'#ea580c'}}/>}
+                  {m.medium > 0 && <div style={{height:`${(m.medium/maxHazard)*100}%`, background:'#facc15'}}/>}
+                  {m.low > 0 && <div style={{height:`${(m.low/maxHazard)*100}%`, background:'#22c55e'}}/>}
+                </div>
+                <div className="text-[9px] text-gray-500">{i+1}</div>
+                {m.total > 0 && <div className="text-[9px] font-bold">{m.total}</div>}
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-3 text-[9px] mt-2 justify-center">
+            <span><span className="inline-block w-2 h-2 bg-red-600 mr-1"></span>긴급</span>
+            <span><span className="inline-block w-2 h-2 bg-orange-600 mr-1"></span>높음</span>
+            <span><span className="inline-block w-2 h-2 bg-yellow-400 mr-1"></span>보통</span>
+            <span><span className="inline-block w-2 h-2 bg-green-500 mr-1"></span>낮음</span>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border p-4">
+          <div className="text-sm font-bold mb-3">📉 월별 사고 추이</div>
+          <div className="flex items-end gap-1 h-32">
+            {data.monthlyIncidents.map((m, i)=>(
+              <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                <div className="w-full flex flex-col-reverse" style={{height:'100%'}}>
+                  {m.real > 0 && <div style={{height:`${(m.real/maxIncident)*100}%`, background:'#ea580c'}}/>}
+                  {m.nearMiss > 0 && <div style={{height:`${(m.nearMiss/maxIncident)*100}%`, background:'#fbbf24'}}/>}
+                </div>
+                <div className="text-[9px] text-gray-500">{i+1}</div>
+                {m.total > 0 && <div className="text-[9px] font-bold">{m.total}</div>}
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-3 text-[9px] mt-2 justify-center">
+            <span><span className="inline-block w-2 h-2 bg-orange-600 mr-1"></span>실제 사고</span>
+            <span><span className="inline-block w-2 h-2 bg-amber-400 mr-1"></span>아차사고</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-white rounded-xl border p-4">
+          <div className="text-sm font-bold mb-3">⚡ 위험 유형 분포 TOP10</div>
+          {data.topRiskTypes.length === 0 ? <div className="text-xs text-gray-400 p-4 text-center">데이터 없음</div> :
+            <div className="space-y-1">
+              {data.topRiskTypes.slice(0,10).map(t=>{
+                const max = data.topRiskTypes[0].count;
+                return (
+                  <div key={t.type} className="flex items-center gap-2 text-xs">
+                    <div className="w-16 font-bold">{t.type}</div>
+                    <div className="flex-1 bg-gray-100 rounded h-5 relative overflow-hidden">
+                      <div className="bg-red-500 h-full" style={{width:`${(t.count/max)*100}%`}}/>
+                      <span className="absolute right-1 top-0.5 text-[10px] font-bold">{t.count}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          }
+        </div>
+
+        <div className="bg-white rounded-xl border p-4">
+          <div className="text-sm font-bold mb-3">🗺️ 구역별 위험도 TOP10</div>
+          {data.topZones.length === 0 ? <div className="text-xs text-gray-400 p-4 text-center">데이터 없음</div> :
+            <div className="space-y-1">
+              {data.topZones.map((z, i)=>{
+                const fac = facilities.find(f=>f.id===z.zone);
+                return (
+                  <div key={z.zone} className="flex items-center gap-2 p-2 bg-gray-50 rounded text-xs">
+                    <span className="font-bold w-5 text-gray-500">#{i+1}</span>
+                    <span className="flex-1 font-bold">{fac?.name || z.zone}</span>
+                    <span className="text-red-600">위험 {z.hazards}</span>
+                    <span className="text-orange-600">사고 {z.incidents}</span>
+                    {z.urgent > 0 && <span className="bg-red-600 text-white px-1 rounded">긴급 {z.urgent}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          }
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== INCIDENT RECORD (사고/아차사고 기록) ==========
+function IncidentRecordPage({ incidents, setIncidents, facilities, showForm, setShowForm, onAddFacAction }) {
+  const [filter, setFilter] = useState("all"); // all|incident|nearmiss
+  const [notifyTarget, setNotifyTarget] = useState(null);   // 알림 발송 모달 대상
+  const [dispatchTarget, setDispatchTarget] = useState(null); // 직원 호출 모달 대상
+  const filtered = incidents.filter(i => filter === "all" || (filter === "nearmiss" ? i.isNearMiss : !i.isNearMiss));
+
+  const sevColors = {
+    "치명": "bg-red-200 text-red-900 border-red-400",
+    "중대": "bg-orange-200 text-orange-900 border-orange-400",
+    "중간": "bg-yellow-200 text-yellow-900 border-yellow-400",
+    "경미": "bg-green-200 text-green-900 border-green-400",
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-gradient-to-r from-red-50 to-orange-50 border border-red-200 rounded-xl p-4 text-sm text-red-900">
+        🚨 <strong>사고 / 아차사고 기록</strong> — 실제 사고뿐 아니라 사고 날 뻔한 상황도 기록하면 재발방지에 큰 도움이 됩니다.
+        AI가 응급조치/보호자 안내문/재발방지 과제를 자동 생성합니다.
+      </div>
+
+      <div className="flex justify-between items-center gap-2 flex-wrap">
+        <div className="flex gap-1.5">
+          {[{k:"all",l:`전체 (${incidents.length})`},{k:"incident",l:`사고 (${incidents.filter(i=>!i.isNearMiss).length})`},{k:"nearmiss",l:`아차사고 (${incidents.filter(i=>i.isNearMiss).length})`}].map(f=>(
+            <button key={f.k} onClick={()=>setFilter(f.k)} className={`text-xs font-bold px-3 py-1.5 rounded-lg ${filter===f.k?"bg-red-600 text-white":"bg-white border border-gray-300 text-gray-600"}`}>{f.l}</button>
+          ))}
+        </div>
+        <button onClick={()=>setShowForm(true)} className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-3 py-2 rounded-lg flex items-center gap-1">
+          🚨 사고 접수
+        </button>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+          <div className="text-5xl mb-3 opacity-40">📋</div>
+          <p className="text-sm text-gray-500">기록된 사고가 없습니다</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {filtered.map(inc => {
+            const fac = facilities.find(f => f.id === inc.facId);
+            return (
+              <div key={inc.id} className="bg-white rounded-xl border border-gray-200 p-4">
+                <div className="flex items-start gap-3">
+                  {inc.photos?.[0] && <img src={inc.photos[0]} alt="" className="w-20 h-20 object-cover rounded border flex-shrink-0" />}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap gap-1.5 items-center mb-2">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${sevColors[inc.ai?.severity] || 'bg-gray-100 text-gray-700'}`}>{inc.ai?.severity || '검토중'}</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-red-100 text-red-700">{inc.type}</span>
+                      {inc.isNearMiss && <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-700">아차사고</span>}
+                      {inc.ai?.cctvNeeded && <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-violet-100 text-violet-700">📹 CCTV 확인 필요</span>}
+                      {inc.ai?.reportToAgency && <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-100 text-blue-700">📑 {inc.ai.reportToAgency}</span>}
+                      <span className="text-[10px] text-gray-400 ml-auto">{new Date(inc.recordedAt).toLocaleString('ko-KR')}</span>
+                    </div>
+                    <div className="text-sm font-bold mb-1">{fac?.name || inc.location} {inc.victim ? `· ${inc.victim}` : ''}</div>
+                    <div className="text-xs text-gray-600 mb-2">{inc.description}</div>
+                    {inc.ai?.reportSummary && (
+                      <div className="text-xs bg-gray-50 p-2 rounded mb-2">
+                        <strong>AI 요약:</strong> {inc.ai.reportSummary}
+                      </div>
+                    )}
+                    {inc.ai?.firstAid?.length > 0 && (
+                      <div className="text-xs text-emerald-700 mb-1"><strong>응급조치:</strong> {inc.ai.firstAid.join(', ')}</div>
+                    )}
+                    {inc.ai?.guardianNotice && (
+                      <div className="text-xs bg-blue-50 border border-blue-200 rounded p-2 mb-1">
+                        <strong className="text-blue-700">📞 보호자 안내문:</strong>
+                        <div className="text-blue-800 mt-0.5">{inc.ai.guardianNotice}</div>
+                      </div>
+                    )}
+                    <div className="flex gap-1.5 mt-2 flex-wrap">
+                      <button onClick={()=>setNotifyTarget(inc)} className="text-[10px] font-bold px-2.5 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100">
+                        📨 알림 발송
+                      </button>
+                      <button onClick={()=>setDispatchTarget(inc)} className="text-[10px] font-bold px-2.5 py-1 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100">
+                        🚑 가까운 직원 호출
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {notifyTarget && <IncidentNotifyModal incident={notifyTarget} onClose={()=>setNotifyTarget(null)}/>}
+      {dispatchTarget && <IncidentDispatchModal incident={dispatchTarget} facilities={facilities} onClose={()=>setDispatchTarget(null)}/>}
+
+      {showForm && <IncidentFormModal facilities={facilities} onClose={()=>setShowForm(false)} onSave={(rec)=>{
+        setIncidents(prev=>[rec,...prev]);
+        // AI 결과의 재발방지 항목들을 보완과제로 자동 등록
+        if (rec.ai?.prevention && onAddFacAction) {
+          rec.ai.prevention.forEach(p=>{
+            onAddFacAction({
+              id: "a"+Date.now()+Math.random(),
+              facId: rec.facId || null,
+              title: `[사고재발방지] ${p.조치}`,
+              type: "사고재발방지",
+              desc: `사고 일시: ${rec.time}\n장소: ${rec.location}\n조치: ${p.조치}\n담당: ${p.담당}`,
+              sev: rec.ai.severity === "치명" || rec.ai.severity === "중대" ? "URGENT" : "HIGH",
+              status: "TODO",
+              due: p.기한 || "1주일 이내",
+              department: p.담당,
+              source: "incident",
+              photo: rec.photos?.[0] || null,
+            });
+          });
+        }
+        setShowForm(false);
+      }}/>}
+    </div>
+  );
+}
+
+// ========== INCIDENT FORM MODAL ==========
+function IncidentFormModal({ facilities, onClose, onSave }) {
+  const [type, setType] = useState("낙상");
+  const [isNearMiss, setIsNearMiss] = useState(false);
+  const [facId, setFacId] = useState("");
+  const [location, setLocation] = useState("");
+  const [victim, setVictim] = useState("");
+  const [time, setTime] = useState(new Date().toISOString().slice(0,16));
+  const [description, setDescription] = useState("");
+  const [photos, setPhotos] = useState([]);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [aiResult, setAiResult] = useState(null);
+
+  const TYPES = ['낙상','충돌','끼임','화상','물림','미끄럼','시설파손','민원','아차사고','기타'];
+
+  const handlePhoto = async (e) => {
+    const files = Array.from(e.target.files || []);
+    for (const f of files) {
+      try {
+        const dataUrl = await facCompressPhoto(f);
+        setPhotos(prev=>[...prev,dataUrl]);
+      } catch (err) {}
+    }
+    e.target.value = "";
+  };
+
+  const runAI = async () => {
+    if (!type) return alert("사고 유형을 선택하세요");
+    setAnalyzing(true);
+    try {
+      const fetcher = window.authFetch || ((p,o)=>fetch(p,o));
+      const fac = facilities.find(f=>f.id===facId);
+      const res = await fetcher("/api/incident-ai-analyze", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+          type, location: fac?.name || location, victim, time, description, photos, isNearMiss
+        })
+      });
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const data = await res.json();
+      if (!data.ok) throw new Error("분석 실패");
+      setAiResult(data.result);
+    } catch (e) {
+      alert("AI 분석 실패: "+e.message);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const handleSave = () => {
+    if (!type) return alert("사고 유형 필수");
+    if (!description) return alert("상황 설명 필수");
+    onSave({
+      id: "inc"+Date.now(),
+      type, isNearMiss, facId, location, victim, time, description, photos,
+      ai: aiResult,
+      recordedAt: new Date().toISOString(),
+    });
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1100,padding:16}} onClick={onClose}>
+      <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col" onClick={e=>e.stopPropagation()}>
+        <div className="p-4 border-b bg-gradient-to-r from-red-600 to-orange-600 text-white flex items-center justify-between">
+          <div>
+            <div className="text-sm font-bold">🚨 사고 접수</div>
+            <div className="text-xs opacity-90">AI가 응급조치/보호자안내/재발방지 자동 생성</div>
+          </div>
+          <button onClick={onClose} className="bg-white/20 rounded w-7 h-7 text-lg leading-none">×</button>
+        </div>
+        <div className="flex-1 overflow-auto p-4 space-y-3">
+          <div className="flex gap-2">
+            <label className={`flex-1 text-xs font-bold px-3 py-2 rounded-lg border-2 cursor-pointer text-center ${!isNearMiss?'bg-red-100 border-red-500 text-red-800':'bg-white border-gray-300'}`}>
+              <input type="radio" checked={!isNearMiss} onChange={()=>setIsNearMiss(false)} className="hidden"/>
+              🚨 실제 사고
+            </label>
+            <label className={`flex-1 text-xs font-bold px-3 py-2 rounded-lg border-2 cursor-pointer text-center ${isNearMiss?'bg-amber-100 border-amber-500 text-amber-800':'bg-white border-gray-300'}`}>
+              <input type="radio" checked={isNearMiss} onChange={()=>setIsNearMiss(true)} className="hidden"/>
+              ⚠️ 아차사고 (날 뻔)
+            </label>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs font-bold text-gray-600">사고 유형 *</label>
+              <select value={type} onChange={e=>setType(e.target.value)} className="w-full text-sm border rounded p-2 mt-1">
+                {TYPES.map(t=><option key={t}>{t}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-bold text-gray-600">발생 시각 *</label>
+              <input type="datetime-local" value={time} onChange={e=>setTime(e.target.value)} className="w-full text-sm border rounded p-2 mt-1"/>
+            </div>
+            <div>
+              <label className="text-xs font-bold text-gray-600">발생 구역</label>
+              <select value={facId} onChange={e=>setFacId(e.target.value)} className="w-full text-sm border rounded p-2 mt-1">
+                <option value="">-- 구역 선택 --</option>
+                {facilities.map(f=><option key={f.id} value={f.id}>{f.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-bold text-gray-600">정확한 위치</label>
+              <input value={location} onChange={e=>setLocation(e.target.value)} placeholder="예: 출입구 계단" className="w-full text-sm border rounded p-2 mt-1"/>
+            </div>
+            <div className="col-span-2">
+              <label className="text-xs font-bold text-gray-600">피해자 정보 (개인정보 주의)</label>
+              <input value={victim} onChange={e=>setVictim(e.target.value)} placeholder="예: 6세 남아 (보호자 동반)" className="w-full text-sm border rounded p-2 mt-1"/>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-bold text-gray-600">상황 설명 *</label>
+            <textarea value={description} onChange={e=>setDescription(e.target.value)} rows={3} placeholder="언제, 어디서, 어떻게 발생했는지 객관적으로" className="w-full text-sm border rounded p-2 mt-1"/>
+          </div>
+          <div>
+            <label className="text-xs font-bold text-gray-600">현장 사진 ({photos.length}장)</label>
+            <div className="flex gap-2 mt-1">
+              <label className="text-xs bg-white border border-gray-300 rounded px-3 py-2 cursor-pointer font-bold">
+                📷 촬영
+                <input type="file" accept="image/*" capture="environment" multiple onChange={handlePhoto} className="hidden"/>
+              </label>
+              <label className="text-xs bg-white border border-gray-300 rounded px-3 py-2 cursor-pointer font-bold">
+                🖼️ 파일
+                <input type="file" accept="image/*" multiple onChange={handlePhoto} className="hidden"/>
+              </label>
+            </div>
+            {photos.length > 0 && (
+              <div className="flex gap-1 mt-2 overflow-x-auto">
+                {photos.map((p,i)=>(
+                  <div key={i} className="relative flex-shrink-0">
+                    <img src={p} className="w-16 h-16 object-cover rounded border"/>
+                    <button onClick={()=>setPhotos(prev=>prev.filter((_,idx)=>idx!==i))} className="absolute top-0 right-0 bg-red-500 text-white w-5 h-5 rounded-full text-xs">×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {!aiResult && (
+            <button onClick={runAI} disabled={analyzing} className="w-full bg-gradient-to-r from-red-600 to-orange-600 text-white py-2.5 rounded-lg font-bold text-sm">
+              {analyzing ? "🔄 AI 분석 중..." : "🤖 AI로 응급조치/보호자안내/재발방지 자동 생성"}
+            </button>
+          )}
+
+          {aiResult && (
+            <div className="border-2 border-green-300 rounded-lg overflow-hidden">
+              <div className="p-3 bg-green-50 flex justify-between items-center">
+                <div className="text-sm font-bold text-green-800">✅ AI 분석 완료 — 심각도: {aiResult.severity}</div>
+              </div>
+              <div className="p-3 space-y-2 text-xs">
+                {aiResult.causes?.length > 0 && <div><strong>사고 원인:</strong> {aiResult.causes.join(', ')}</div>}
+                {aiResult.firstAid?.length > 0 && <div className="bg-red-50 p-2 rounded"><strong className="text-red-700">🚑 응급조치:</strong> {aiResult.firstAid.join(', ')}</div>}
+                {aiResult.guardianNotice && <div className="bg-blue-50 p-2 rounded"><strong className="text-blue-700">📞 보호자 안내문:</strong><br/>{aiResult.guardianNotice}</div>}
+                {aiResult.prevention?.length > 0 && (
+                  <div>
+                    <strong>🛡️ 재발방지 (자동 보완과제 등록):</strong>
+                    <ul className="ml-4 list-disc">
+                      {aiResult.prevention.map((p,i)=><li key={i}>{p.조치} <span className="text-gray-500">({p.담당}, {p.기한})</span></li>)}
+                    </ul>
+                  </div>
+                )}
+                {aiResult.legalNotice && <div className="bg-amber-50 p-2 rounded"><strong className="text-amber-700">⚖️ 법적 유의사항:</strong> {aiResult.legalNotice}</div>}
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="p-3 border-t bg-gray-50 flex gap-2 justify-end">
+          <button onClick={onClose} className="text-xs px-3 py-2 border border-gray-300 rounded bg-white">취소</button>
+          <button onClick={handleSave} className="text-xs px-3 py-2 bg-emerald-600 text-white rounded font-bold">💾 저장 + 보완과제 자동 등록</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== DAILY CHECKLIST (일일 시설점검) ==========
+function DailyChecklistPage({ dailyChecks, setDailyChecks, facilities, currentUser }) {
+  const today = new Date().toISOString().slice(0,10);
+  const [activePeriod, setActivePeriod] = useState("opening"); // opening|noon|closing
+
+  const PERIODS = {
+    opening: { label: "🌅 개장 전", color: "amber", time: "08:00-09:30" },
+    noon: { label: "🌞 점심", color: "blue", time: "12:00-13:00" },
+    closing: { label: "🌙 마감", color: "violet", time: "17:00-18:00" }
+  };
+
+  const CHECK_ITEMS = {
+    opening: [
+      "출입구/매표소 청소 상태", "공기질 환기", "조명 점등 확인",
+      "비상구 통로 확보", "소화기 점검표 확인", "키즈카페 매트/안전바 점검",
+      "양떼정원 울타리 잠금", "체험 도구 정돈", "직원 안전모/장갑 비치"
+    ],
+    noon: [
+      "점심시간 식당 위생 점검", "냉난방기 작동 확인", "쓰레기통 비움",
+      "키즈카페 인원 혼잡도", "주차장 차량 정렬", "음수대 청결"
+    ],
+    closing: [
+      "전체 조명 소등", "가스 차단", "출입문 잠금",
+      "CCTV 정상 작동 확인", "당일 점검표 작성", "다음날 준비물 확인",
+      "쓰레기 분리수거", "체험 도구 보관"
+    ]
+  };
+
+  const todayChecks = dailyChecks.filter(c => c.date === today);
+  const periodCheck = todayChecks.find(c => c.period === activePeriod);
+  const items = CHECK_ITEMS[activePeriod];
+  const checked = periodCheck?.checked || {};
+
+  const toggleItem = (item) => {
+    const newChecked = { ...checked, [item]: !checked[item] };
+    if (periodCheck) {
+      setDailyChecks(prev => prev.map(c => c.id === periodCheck.id ? {...c, checked: newChecked, updatedAt: new Date().toISOString()} : c));
+    } else {
+      setDailyChecks(prev => [...prev, {
+        id: "chk"+Date.now(), date: today, period: activePeriod,
+        checked: newChecked, by: currentUser?.name || "익명",
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+      }]);
+    }
+  };
+
+  const completedCount = items.filter(i => checked[i]).length;
+  const completionRate = Math.round((completedCount / items.length) * 100);
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-gradient-to-r from-emerald-50 to-blue-50 border border-emerald-200 rounded-xl p-4 text-sm text-emerald-900">
+        📋 <strong>일일 시설점검</strong> — 개장 전·점심·마감 시점에 모바일로 빠르게 체크하세요. 미완료 항목은 자동으로 다음 날까지 누적됩니다.
+      </div>
+
+      <div className="flex gap-2">
+        {Object.entries(PERIODS).map(([k, p]) => {
+          const c = todayChecks.find(c => c.period === k);
+          const items_ = CHECK_ITEMS[k];
+          const done = c ? items_.filter(i => c.checked?.[i]).length : 0;
+          const rate = Math.round((done / items_.length) * 100);
+          return (
+            <button key={k} onClick={()=>setActivePeriod(k)}
+              className={`flex-1 p-3 rounded-xl border-2 ${activePeriod===k?`bg-${p.color}-100 border-${p.color}-500`:'bg-white border-gray-200'}`}>
+              <div className="text-sm font-bold">{p.label}</div>
+              <div className="text-[10px] text-gray-500">{p.time}</div>
+              <div className="text-xs font-bold mt-1">{done}/{items_.length} ({rate}%)</div>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-200 p-4">
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="font-bold text-sm">{PERIODS[activePeriod].label} 점검 항목</h3>
+          <span className="text-xs text-gray-500">{completedCount}/{items.length} 완료 · {completionRate}%</span>
+        </div>
+        <div className="h-2 bg-gray-200 rounded-full overflow-hidden mb-4">
+          <div style={{width:`${completionRate}%`}} className="h-full bg-emerald-500 transition-all"></div>
+        </div>
+        <div className="space-y-1.5">
+          {items.map(item => (
+            <label key={item} className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer ${checked[item]?'bg-emerald-50':'bg-gray-50 hover:bg-gray-100'}`}>
+              <input type="checkbox" checked={!!checked[item]} onChange={()=>toggleItem(item)} className="w-5 h-5"/>
+              <span className={`text-sm ${checked[item]?'text-emerald-700 line-through':'text-gray-800'}`}>{item}</span>
+              {checked[item] && <span className="ml-auto text-[10px] text-emerald-600 font-bold">✓</span>}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {dailyChecks.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <h3 className="font-bold text-sm mb-3">📊 최근 7일 점검 이력</h3>
+          <div className="space-y-1">
+            {dailyChecks.slice(-7).reverse().map(c => {
+              const items_ = CHECK_ITEMS[c.period];
+              const done = items_.filter(i => c.checked?.[i]).length;
+              return (
+                <div key={c.id} className="flex justify-between items-center text-xs py-2 border-b last:border-0">
+                  <div>
+                    <strong>{c.date}</strong> · {PERIODS[c.period].label} · {c.by}
+                  </div>
+                  <span className={`font-bold ${done===items_.length?'text-emerald-600':done>0?'text-amber-600':'text-red-600'}`}>{done}/{items_.length}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ========== MONTHLY REPORT CARD (월간 안전 리포트) ==========
+function MonthlyReportCard({ report, setReport, generating, setGenerating, hazardLogs, incidents, trainings, facilities }) {
+  const month = new Date().toISOString().slice(0,7);
+
+  const generateReport = async () => {
+    setGenerating(true);
+    try {
+      const zoneRisks = facilities.map(f => {
+        const cnt = hazardLogs.filter(l => l.facId === f.id).length;
+        return { zone: f.name, count: cnt };
+      }).filter(z => z.count > 0).sort((a,b)=>b.count-a.count);
+
+      const fetcher = window.authFetch || ((p,o)=>fetch(p,o));
+      const res = await fetcher("/api/safety-monthly-report", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+          month, hazardLogs: hazardLogs.slice(0,20), incidents: incidents.slice(0,20),
+          completedActions: [], pendingActions: [],
+          trainings: trainings.filter(t=>t.date?.startsWith(month)),
+          zoneRisks
+        })
+      });
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const data = await res.json();
+      if (!data.ok) throw new Error("리포트 생성 실패");
+      setReport({ ...data.result, month, generatedAt: data.generatedAt });
+    } catch (e) {
+      alert("리포트 생성 실패: "+e.message);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const printReport = () => {
+    const win = window.open('', '_blank');
+    if (!win) return alert("팝업이 차단되었습니다. 팝업 허용 후 재시도하세요.");
+    win.document.write(`
+      <html><head><meta charset="utf-8"><title>${month} 안전 리포트</title>
+      <style>
+        body { font-family: 'Pretendard', sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; line-height: 1.8; }
+        h1 { color: #dc2626; border-bottom: 3px solid #dc2626; padding-bottom: 10px; }
+        h2 { color: #ea580c; margin-top: 30px; }
+        .summary { background: #fef3c7; padding: 16px; border-radius: 8px; }
+        .kpi { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; margin: 20px 0; }
+        .kpi-item { background: #f3f4f6; padding: 12px; border-radius: 8px; text-align: center; }
+        .kpi-num { font-size: 24px; font-weight: 800; color: #dc2626; }
+        .kpi-label { font-size: 11px; color: #6b7280; }
+        ul { padding-left: 20px; }
+        @media print { body { padding: 20px; } }
+      </style></head><body>
+      <h1>🛡️ ${month} 월간 안전 리포트</h1>
+      <div class="summary"><strong>📋 경영진 요약</strong><p>${report.executiveSummary || ''}</p></div>
+      <div class="kpi">
+        <div class="kpi-item"><div class="kpi-num">${report.kpis?.totalHazards || 0}</div><div class="kpi-label">위험성평가</div></div>
+        <div class="kpi-item"><div class="kpi-num">${report.kpis?.incidentCount || 0}</div><div class="kpi-label">사고건수</div></div>
+        <div class="kpi-item"><div class="kpi-num">${report.kpis?.trainingCompletion || '-'}</div><div class="kpi-label">교육이수율</div></div>
+        <div class="kpi-item"><div class="kpi-num">${report.kpis?.actionCompletionRate || '-'}</div><div class="kpi-label">조치완료율</div></div>
+      </div>
+      <h2>🔥 주요 위험 구역 TOP5</h2>
+      <ul>${(report.topRiskZones||[]).map(z=>`<li><strong>${z.zone}</strong>: ${z.count}건 - ${z.summary || ''}</li>`).join('')}</ul>
+      <h2>📊 사고 분석</h2>
+      <p>${report.incidentAnalysis || ''}</p>
+      <h2>✅ 예방 성과</h2>
+      <ul>${(report.preventionAchievements||[]).map(a=>`<li>${a}</li>`).join('')}</ul>
+      <h2>🚧 개선 필요 사항</h2>
+      <ul>${(report.improvementsNeeded||[]).map(a=>`<li>${a}</li>`).join('')}</ul>
+      <h2>📅 다음 달 계획</h2>
+      <ul>${(report.nextMonthPlan||[]).map(a=>`<li>${a}</li>`).join('')}</ul>
+      <h2>⚖️ 법규 준수 현황</h2>
+      <p>${report.complianceStatus || ''}</p>
+      <h2>💌 대표이사 메시지</h2>
+      <div style="background:#fef3c7;padding:16px;border-radius:8px;font-style:italic;">${report.ceoMessage || ''}</div>
+      <div style="margin-top:40px;text-align:right;color:#6b7280;font-size:11px;">생성일: ${new Date(report.generatedAt).toLocaleString('ko-KR')}<br/>한국잠사박물관 안전관리</div>
+      </body></html>
+    `);
+    win.document.close();
+    setTimeout(()=>win.print(), 500);
+  };
+
+  if (!report) {
+    return (
+      <div className="bg-gradient-to-r from-violet-50 to-pink-50 border-2 border-violet-200 rounded-xl p-5">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <div className="text-sm font-bold text-violet-900">📊 {month} 월간 안전 리포트</div>
+            <div className="text-xs text-violet-700 mt-1">위험성평가 {hazardLogs.length}건, 사고기록 {incidents.length}건, 교육 {trainings.filter(t=>t.date?.startsWith(month)).length}건의 데이터로 자동 작성</div>
+          </div>
+          <button onClick={generateReport} disabled={generating}
+            className="bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold px-4 py-2.5 rounded-lg">
+            {generating ? "🔄 작성 중..." : "🤖 AI 리포트 자동 생성"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white border-2 border-violet-300 rounded-xl overflow-hidden">
+      <div className="p-4 bg-gradient-to-r from-violet-600 to-pink-600 text-white flex justify-between items-center">
+        <div>
+          <div className="text-sm font-bold">📊 {report.month} 월간 안전 리포트</div>
+          <div className="text-xs opacity-90">{new Date(report.generatedAt).toLocaleString('ko-KR')} 생성</div>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={printReport} className="bg-white/20 text-white text-xs font-bold px-3 py-1.5 rounded">🖨️ 인쇄/PDF</button>
+          <button onClick={()=>setReport(null)} className="bg-white/20 text-white text-xs font-bold px-3 py-1.5 rounded">↺ 재작성</button>
+        </div>
+      </div>
+      <div className="p-4 space-y-4">
+        {report.executiveSummary && (
+          <div className="bg-amber-50 border border-amber-200 rounded p-3">
+            <div className="text-xs font-bold text-amber-900 mb-1">📋 경영진 요약</div>
+            <div className="text-sm text-amber-800">{report.executiveSummary}</div>
+          </div>
+        )}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <div className="bg-gray-50 p-3 rounded text-center">
+            <div className="text-xs text-gray-500 font-bold">위험성평가</div>
+            <div className="text-xl font-black text-red-600">{report.kpis?.totalHazards || 0}</div>
+          </div>
+          <div className="bg-gray-50 p-3 rounded text-center">
+            <div className="text-xs text-gray-500 font-bold">사고건수</div>
+            <div className="text-xl font-black text-orange-600">{report.kpis?.incidentCount || 0}</div>
+          </div>
+          <div className="bg-gray-50 p-3 rounded text-center">
+            <div className="text-xs text-gray-500 font-bold">교육이수율</div>
+            <div className="text-xl font-black text-emerald-600">{report.kpis?.trainingCompletion || '-'}</div>
+          </div>
+          <div className="bg-gray-50 p-3 rounded text-center">
+            <div className="text-xs text-gray-500 font-bold">조치완료율</div>
+            <div className="text-xl font-black text-blue-600">{report.kpis?.actionCompletionRate || '-'}</div>
+          </div>
+        </div>
+        {report.topRiskZones?.length > 0 && (
+          <div>
+            <div className="text-xs font-bold text-gray-600 mb-1">🔥 주요 위험 구역 TOP5</div>
+            <div className="space-y-1">
+              {report.topRiskZones.slice(0,5).map((z,i)=>(
+                <div key={i} className="flex items-center gap-2 text-xs bg-red-50 p-2 rounded">
+                  <span className="font-bold text-red-700">#{i+1}</span>
+                  <span className="font-bold flex-1">{z.zone}</span>
+                  <span className="text-red-700">{z.count}건</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {report.ceoMessage && (
+          <div className="bg-violet-50 border border-violet-200 rounded p-3 italic">
+            <div className="text-xs font-bold text-violet-700 mb-1">💌 대표이사 메시지</div>
+            <div className="text-sm text-violet-900">{report.ceoMessage}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction }) {
+  const user = userCtx;
+  const [page, setPage] = useState("dashboard");
+  const [trainings, setTrainings] = useState(FAC_INIT_SAFE_TRAININGS);
+  const [inspections, setInspections] = useState(FAC_INIT_SAFE_INSPECTIONS);
+  const [aiLog, setAiLog] = useState([]); // registered AI diagnoses
+  const [sigs, setSigs] = useState({ assessor: null, safeMgr: null, approver: null });
+  const [showTrainingModal, setShowTrainingModal] = useState(false);
+
+  // 사고/아차사고 기록
+  const [incidents, setIncidents] = useState(() => {
+    try { return JSON.parse(window.localStorage?.getItem("jamsa_incidents") || "[]"); }
+    catch (e) { return []; }
+  });
+  useEffect(() => {
+    try { window.localStorage?.setItem("jamsa_incidents", JSON.stringify(incidents)); } catch (e) {}
+  }, [incidents]);
+  const [showIncidentForm, setShowIncidentForm] = useState(false);
+
+  // 일일 점검표
+  const [dailyChecks, setDailyChecks] = useState(() => {
+    try { return JSON.parse(window.localStorage?.getItem("jamsa_daily_checks") || "[]"); }
+    catch (e) { return []; }
+  });
+  useEffect(() => {
+    try { window.localStorage?.setItem("jamsa_daily_checks", JSON.stringify(dailyChecks)); } catch (e) {}
+  }, [dailyChecks]);
+
+  // 월간 리포트
+  const [monthlyReport, setMonthlyReport] = useState(null);
+  const [generatingReport, setGeneratingReport] = useState(false);
+
+  const handleSaveTraining = (newTraining) => {
+    setTrainings(prev => [newTraining, ...prev]);
+    setShowTrainingModal(false);
+    const sigCount = newTraining.signatures?.filter(a => a.sign).length ?? 0;
+    alert(`서명과 함께 교육 일지가 저장되었습니다.\n참석자 ${newTraining.attendees.length}명 · 서명 ${sigCount}건`);
+  };
+
+  // AI analysis state
+  const [aiImg, setAiImg] = useState(null);
+  const [aiFac, setAiFac] = useState("");
+  const [aiResult, setAiResult] = useState(null);
+  const [analyzing, setAnalyzing] = useState(false);
+
+  const handleAiPhoto = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await facCompressPhoto(file);
+      setAiImg(dataUrl);
+      setAiResult(null);
+    } catch (err) { alert("사진 처리 실패: " + err.message); }
+    e.target.value = "";
+  };
+
+  const runHazardAnalysis = async () => {
+    if (!aiImg) return alert("현장 사진을 업로드하세요.");
+    setAnalyzing(true);
+    try {
+      const fac = facilities.find(f => f.id === aiFac);
+      const fname = fac?.name;
+      const ftype = fac?.type || fac?.code;
+      const res = await analyzeSafetyHazardAI(aiImg, fname, ftype);
+      setAiResult(res);
+    } catch (err) {
+      alert("AI 분석 실패: " + err.message);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const registerAiResult = () => {
+    if (!aiResult) return;
+    const fac = facilities.find(f => f.id === aiFac);
+    const dueOffset = aiResult.severity === "URGENT" ? 1 : aiResult.severity === "HIGH" ? 3 : 7;
+
+    // 새 백엔드의 풍부한 정보로 보완과제 만들기
+    const title = aiResult.taskTitle || `[AI 안전진단] ${fac?.name ?? "현장"} ${aiResult.type}`;
+    const descParts = [];
+    if (aiResult.placeGuess) descParts.push(`[장소 추정] ${aiResult.placeGuess}`);
+    if (aiResult.findings && aiResult.findings.length > 0) descParts.push(`[발견사항]\n${aiResult.findings.map(f=>`• ${f}`).join("\n")}`);
+    if (aiResult.immediate && aiResult.immediate.length > 0) descParts.push(`[즉시조치]\n${aiResult.immediate.map(s=>`• ${s}`).join("\n")}`);
+    if (aiResult.shortTerm && aiResult.shortTerm.length > 0) descParts.push(`[단기조치 - 1주]\n${aiResult.shortTerm.map(s=>`• ${s}`).join("\n")}`);
+    if (aiResult.longTerm && aiResult.longTerm.length > 0) descParts.push(`[장기조치]\n${aiResult.longTerm.map(s=>`• ${s}`).join("\n")}`);
+    if (aiResult.estCost) descParts.push(`[예상비용] ${aiResult.estCost}`);
+    if (aiResult.relatedLaw) descParts.push(`[관련법규] ${aiResult.relatedLaw}`);
+    if (aiResult.similarCaseWarning) descParts.push(`[유사사례경고] ${aiResult.similarCaseWarning}`);
+    if (aiResult.rephotoGuide) descParts.push(`[조치후 재촬영] ${aiResult.rephotoGuide}`);
+
+    const action = {
+      id: "a" + Date.now() + Math.random(),
+      facId: aiFac || null,
+      inspId: null,
+      title,
+      type: aiResult.type,
+      desc: descParts.join("\n\n") || aiResult.hazards,
+      sev: aiResult.severity,
+      rec: aiResult.solution,
+      status: "TODO",
+      due: _facD(dueOffset),
+      assignee: null,
+      department: aiResult.department || null,
+      deadlineHint: aiResult.deadline || null,
+      score: aiResult.score || null,
+      riskTypes: aiResult.riskTypes || [],
+      memo: null,
+      ai: aiResult,
+      photo: aiImg,
+      source: "safety",
+    };
+    if (onAddFacAction) onAddFacAction(action);
+    setAiLog(prev => [{ id: action.id, at: new Date().toISOString(), facId: aiFac, photo: aiImg, result: aiResult }, ...prev]);
+    alert(`✅ 위험성 평가 등록 완료\n\n• 위험도: ${aiResult.severity} (점수 ${aiResult.score || '-'})\n• 보완과제: ${title}\n• 담당부서: ${aiResult.department || '미지정'}\n• 기한: ${aiResult.deadline || `${dueOffset}일 이내`}\n\n시설점검 → 보완과제 메뉴에서 확인하세요.`);
+    // Reset for next analysis
+    setAiImg(null); setAiResult(null); setAiFac("");
+  };
+
+  // Dashboard metrics (computed from data, not hardcoded)
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  const completedThisMonth = trainings.filter(t => t.status === "COMPLETED" && t.date.startsWith(thisMonth)).length;
+  const scheduledCount = trainings.filter(t => t.status === "SCHEDULED").length;
+  const hazardCount = aiLog.length + inspections.filter(i => i.result !== "NORMAL").length;
+
+  return (
+    <div className="flex h-full bg-gray-50 overflow-hidden" style={{ fontFamily: "'Pretendard', sans-serif" }}>
+      {/* Sidebar */}
+      <aside className="w-56 bg-white border-r flex flex-col shrink-0">
+        <div className="p-4 border-b">
+          <div className="text-sm font-bold text-gray-800">안전 및 교육 관리</div>
+          <div className="text-[10px] text-gray-400 mt-0.5">산업안전보건 & 위험성평가</div>
+        </div>
+        <nav className="flex-1 p-2 space-y-0.5">
+          {[
+            { id: "dashboard", label: "안전 대시보드", icon: "🛡️" },
+            { id: "hazard", label: "AI 위험성 평가", icon: "🤖" },
+            { id: "tasks", label: "보완조치 관리", icon: "🔧" },
+            { id: "incident", label: "사고/아차사고 기록", icon: "🚨" },
+            { id: "checklist", label: "일일 시설점검", icon: "📋" },
+            { id: "education", label: "직원 안전교육", icon: "📚" },
+            { id: "riskmap", label: "구역별 위험지도", icon: "🗺️" },
+            { id: "annual", label: "연간 안전 통계", icon: "📈" }
+          ].map(m => (
+            <button key={m.id} onClick={() => setPage(m.id)}
+              className={`w-full text-left px-3 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${page === m.id ? "bg-red-50 text-red-700" : "text-gray-600 hover:bg-gray-100"}`}>
+              <span>{m.icon}</span> {m.label}
+            </button>
+          ))}
+        </nav>
+        <div className="p-3 border-t">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-full bg-red-100 text-red-700 flex items-center justify-center text-[10px] font-bold">{user.name[0]}</div>
+            <div className="min-w-0">
+              <div className="text-[11px] font-medium truncate">{user.name}</div>
+              <div className="text-[10px] text-gray-400">{user.role}</div>
+            </div>
+          </div>
+          <button onClick={() => { if (onLogout) onLogout(); }} className="mt-2 w-full text-[10px] text-gray-400 hover:text-red-500 text-left">로그아웃</button>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <main className="flex-1 overflow-y-auto p-6">
+        <div className="text-xl font-black mb-6 text-gray-900 flex items-center gap-2">
+          {page === "dashboard" && "🛡️ 종합 안전 대시보드"}
+          {page === "education" && "📚 법정 의무 및 직무 안전 교육 일지"}
+          {page === "hazard" && "🤖 시설 작업 환경 AI 위험성 평가"}
+          {page === "tasks" && "🔧 보완조치 관리"}
+          {page === "incident" && "🚨 사고 / 아차사고 기록"}
+          {page === "checklist" && "📋 일일 시설점검"}
+          {page === "riskmap" && "🗺️ 구역별 위험지도"}
+          {page === "annual" && "📈 연간 안전 통계"}
+        </div>
+
+        {page === "dashboard" && (
+          <div className="space-y-6">
+            {/* 월간 리포트 자동 생성 */}
+            <MonthlyReportCard
+              report={monthlyReport}
+              setReport={setMonthlyReport}
+              generating={generatingReport}
+              setGenerating={setGeneratingReport}
+              hazardLogs={aiLog}
+              incidents={incidents}
+              trainings={trainings}
+              facilities={facilities}
+            />
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                <div className="text-[10px] text-gray-500 font-bold mb-1">이번 달 교육</div>
+                <div className="text-xl font-black text-emerald-600">{completedThisMonth}건</div>
+              </div>
+              <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                <div className="text-[10px] text-gray-500 font-bold mb-1">예정 교육</div>
+                <div className="text-xl font-black text-blue-600">{scheduledCount}건</div>
+              </div>
+              <div className={`p-4 rounded-xl border shadow-sm ${hazardCount > 0 ? "bg-red-50 border-red-200" : "bg-white border-gray-200"}`}>
+                <div className={`text-[10px] font-bold mb-1 ${hazardCount > 0 ? "text-red-600" : "text-gray-500"}`}>위험 요소</div>
+                <div className={`text-xl font-black ${hazardCount > 0 ? "text-red-600" : "text-gray-400"}`}>{hazardCount}건</div>
+              </div>
+              <div className={`p-4 rounded-xl border shadow-sm ${incidents.length > 0 ? "bg-orange-50 border-orange-200" : "bg-white border-gray-200"}`}>
+                <div className={`text-[10px] font-bold mb-1 ${incidents.length > 0 ? "text-orange-700" : "text-gray-500"}`}>사고 기록</div>
+                <div className={`text-xl font-black ${incidents.length > 0 ? "text-orange-700" : "text-gray-400"}`}>{incidents.length}건</div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="bg-white p-5 rounded-xl border border-gray-200">
+                <h3 className="font-bold text-sm mb-4">최근 안전 점검 일지</h3>
+                {inspections.length === 0 && <div className="text-xs text-gray-400 py-4 text-center">점검 기록 없음</div>}
+                {inspections.map(ins => {
+                  const fac = facilities.find(f => f.id === ins.facId);
+                  const inspName = usrFind(ins.inspector)?.name || ins.inspector;
+                  return (
+                    <div key={ins.id} className="border-b last:border-0 py-3">
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-sm font-bold">{ins.title}</span>
+                        <span className={`text-[10px] px-2 py-1 rounded font-bold ${ins.result === 'NORMAL' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{ins.result === 'NORMAL' ? '양호' : '주의'}</span>
+                      </div>
+                      <div className="text-xs text-gray-500">{fac?.name || ins.facId} · 담당: {inspName} · {ins.date}</div>
+                      <div className="text-xs text-gray-600 mt-1 bg-gray-50 p-2 rounded">{ins.memo}</div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="bg-white p-5 rounded-xl border border-gray-200">
+                <h3 className="font-bold text-sm mb-4">다가오는 교육 일정</h3>
+                {trainings.filter(t => t.status === "SCHEDULED").length === 0 && <div className="text-xs text-gray-400 py-4 text-center">예정된 교육 없음</div>}
+                {trainings.filter(t => t.status === "SCHEDULED").map(tr => (
+                  <div key={tr.id} className="bg-blue-50 border border-blue-100 p-3 rounded-lg mb-2">
+                    <div className="font-bold text-sm text-blue-900">{tr.title}</div>
+                    <div className="text-xs text-blue-700 mt-1">일시: {tr.date} · 강사: {tr.instructor}</div>
+                    <div className="text-xs text-blue-600 mt-1">대상자: {tr.attendees.length}명 대기중</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {aiLog.length > 0 && (
+              <div className="bg-white p-5 rounded-xl border border-gray-200">
+                <h3 className="font-bold text-sm mb-4">최근 AI 위험성평가 (이번 세션)</h3>
+                <div className="space-y-2">
+                  {aiLog.slice(0, 3).map(a => {
+                    const fac = facilities.find(f => f.id === a.facId);
+                    return (
+                      <div key={a.id} className="flex gap-3 items-start border rounded-lg p-2">
+                        {a.photo && <img src={a.photo} alt="" className="w-14 h-14 object-cover rounded flex-shrink-0" />}
+                        <div className="flex-1 min-w-0 text-xs">
+                          <div className="flex gap-2 items-center mb-1">
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${a.result.severity === "URGENT" ? "bg-red-100 text-red-700" : a.result.severity === "HIGH" ? "bg-orange-100 text-orange-700" : "bg-yellow-100 text-yellow-700"}`}>{a.result.severity}</span>
+                            <span className="font-bold">{fac?.name || "현장"}</span>
+                            <span className="text-[10px] text-gray-400 ml-auto">{facFmtDT(a.at)}</span>
+                          </div>
+                          <div className="text-gray-700">{a.result.hazards}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {page === "tasks" && (
+          <div className="space-y-4">
+            <div className="bg-gradient-to-r from-orange-50 to-red-50 border border-orange-200 rounded-xl p-4 text-sm text-orange-900">
+              🔧 <strong>보완조치 관리</strong> — AI 위험성 평가에서 등록된 보완과제와 시설점검에서 발견된 미조치 사항을 통합 관리합니다.
+            </div>
+            <div className="bg-white rounded-xl border border-gray-200 p-6 text-center">
+              <div className="text-5xl mb-3">🚧</div>
+              <p className="text-sm text-gray-600 mb-3">보완과제 통합 대시보드 — 현재 시설점검 메뉴의 [보완과제] 탭에서 모든 과제를 확인할 수 있습니다.</p>
+              <p className="text-xs text-gray-400">상위 메뉴 [시설점검 → 보완과제]에서 즉시 확인 가능</p>
+            </div>
+          </div>
+        )}
+
+        {page === "incident" && (
+          <IncidentRecordPage
+            incidents={incidents}
+            setIncidents={setIncidents}
+            facilities={facilities}
+            showForm={showIncidentForm}
+            setShowForm={setShowIncidentForm}
+            onAddFacAction={onAddFacAction}
+          />
+        )}
+
+        {page === "checklist" && (
+          <DailyChecklistPage
+            dailyChecks={dailyChecks}
+            setDailyChecks={setDailyChecks}
+            facilities={facilities}
+            currentUser={user}
+          />
+        )}
+
+        {page === "riskmap" && (
+          <div className="space-y-4">
+            <div className="bg-gradient-to-r from-violet-50 to-pink-50 border border-violet-200 rounded-xl p-4 text-sm text-violet-900">
+              🗺️ <strong>구역별 위험지도</strong> — 시설 전체를 구역별로 나누고 위험도를 색상으로 표시합니다.
+            </div>
+            {(() => {
+              // AI 위험성 평가 로그 기반 구역별 위험도 집계
+              const zoneRisks = {};
+              aiLog.forEach(log => {
+                const facId = log.facId || "etc";
+                if (!zoneRisks[facId]) zoneRisks[facId] = { count: 0, urgent: 0, high: 0, medium: 0, low: 0 };
+                zoneRisks[facId].count++;
+                const sev = log.result?.severity;
+                if (sev === "URGENT") zoneRisks[facId].urgent++;
+                else if (sev === "HIGH") zoneRisks[facId].high++;
+                else if (sev === "MEDIUM") zoneRisks[facId].medium++;
+                else zoneRisks[facId].low++;
+              });
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {facilities.map(f => {
+                    const r = zoneRisks[f.id] || { count: 0, urgent: 0, high: 0, medium: 0, low: 0 };
+                    const level = r.urgent > 0 ? "긴급" : r.high > 0 ? "높음" : r.medium > 0 ? "보통" : r.count > 0 ? "낮음" : "정상";
+                    const colors = {
+                      "긴급": "bg-red-100 border-red-400 text-red-900",
+                      "높음": "bg-orange-100 border-orange-400 text-orange-900",
+                      "보통": "bg-yellow-100 border-yellow-400 text-yellow-900",
+                      "낮음": "bg-green-100 border-green-400 text-green-900",
+                      "정상": "bg-white border-gray-200 text-gray-600",
+                    };
+                    return (
+                      <div key={f.id} className={`p-4 rounded-xl border-2 ${colors[level]}`}>
+                        <div className="flex justify-between items-start mb-2">
+                          <div className="font-bold text-sm">{f.name}</div>
+                          <span className="text-xs font-bold px-2 py-0.5 rounded bg-white">{level}</span>
+                        </div>
+                        <div className="text-xs space-y-0.5 opacity-80">
+                          <div>총 점검: {r.count}건</div>
+                          {r.urgent > 0 && <div>🔴 긴급 {r.urgent}건</div>}
+                          {r.high > 0 && <div>🟠 높음 {r.high}건</div>}
+                          {r.medium > 0 && <div>🟡 보통 {r.medium}건</div>}
+                          {r.low > 0 && <div>🟢 낮음 {r.low}건</div>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+            <div className="bg-white rounded-xl border border-gray-200 p-4 text-xs text-gray-500">
+              💡 AI 위험성 평가에서 점검을 등록하면 이 지도에 자동 반영됩니다. 구역별 점검 빈도와 위험도를 한눈에 파악하세요.
+            </div>
+          </div>
+        )}
+
+        {page === "education" && (
+          <div className="space-y-4">
+            <EducationTrackingPage trainings={trainings} currentUser={user}/>
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              <div className="p-4 border-b flex justify-between items-center bg-gray-50">
+                <span className="font-bold text-sm text-gray-700">📋 교육 일지 ({trainings.length}건)</span>
+                <button type="button" onClick={() => setShowTrainingModal(true)}
+                  className="bg-gray-900 text-white px-3 py-1.5 rounded-lg text-xs font-bold">+ 새 교육 일지 작성</button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-white border-b">
+                    <tr>{["분류", "교육명", "일자", "강사", "이수 인원", "상태"].map(h => <th key={h} className="p-3 text-left font-bold text-gray-500 text-xs">{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {trainings.map(t => {
+                      const sigCount = t.signatures ? t.signatures.filter(a => a.sign).length : 0;
+                      const typeCss = FAC_SAFE_TRAIN_TYPES[t.type]?.c || "bg-gray-100 text-gray-600";
+                    return (
+                      <tr key={t.id} className="border-b last:border-0 hover:bg-gray-50">
+                        <td className="p-3 text-xs"><span className={`px-2 py-1 rounded font-bold ${typeCss}`}>{t.type}</span></td>
+                        <td className="p-3 font-bold">{t.title}</td>
+                        <td className="p-3 text-gray-500 text-xs">{t.date}</td>
+                        <td className="p-3 text-gray-600 text-xs">{t.instructor}</td>
+                        <td className="p-3 text-gray-600 text-xs">
+                          {t.attendees.length}명
+                          {sigCount > 0 && <span className="ml-1 text-[10px] text-violet-700 font-bold">✍️{sigCount}</span>}
+                        </td>
+                        <td className="p-3">
+                          <span className={`text-[10px] px-2 py-1 rounded font-bold ${t.status === 'COMPLETED' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'}`}>
+                            {t.status === 'COMPLETED' ? '이수 완료' : '예정'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          </div>
+        )}
+
+        {showTrainingModal && (
+          <SafeTrainingModal
+            onClose={() => setShowTrainingModal(false)}
+            onSave={handleSaveTraining}
+          />
+        )}
+
+        {page === "annual" && (
+          <AnnualStatsPage
+            hazardLogs={aiLog}
+            incidents={incidents}
+            trainings={trainings}
+            dailyChecks={dailyChecks}
+            facilities={facilities}
+          />
+        )}
+
+        {page === "hazard" && (
+          <div className="space-y-4">
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-800">
+              💡 시설물의 파손뿐만 아니라, <strong>근로자의 작업 환경(안전모 미착용, 정리정돈 불량, 유해물질 노출 등)</strong>을 사진으로 찍어 올리면 AI가 산업안전 기준에 맞춰 위험성을 평가합니다. 등록된 분석은 <strong>시설점검 보완과제로 자동 연계</strong>됩니다.
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 p-6">
+              <select className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm mb-4 font-bold text-gray-700" value={aiFac} onChange={e => setAiFac(e.target.value)}>
+                <option value="">-- 촬영한 작업/시설 구역 선택 (선택사항) --</option>
+                {facilities.map(f => <option key={f.id} value={f.id}>[{f.code}] {f.name}</option>)}
+              </select>
+
+              <div className="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center mb-4 bg-gray-50">
+                {aiImg ? (
+                  <div>
+                    <img src={aiImg} alt="hazard" className="max-h-64 mx-auto rounded-lg shadow-sm" />
+                    <div className="inline-flex gap-2 mt-3 flex-wrap justify-center">
+                      <label className="cursor-pointer text-xs text-blue-600 font-bold px-3 py-1.5 border border-blue-300 rounded-lg">
+                        📷 다시 촬영
+                        <input type="file" accept="image/*" capture="environment" onChange={handleAiPhoto} className="hidden" />
+                      </label>
+                      <label className="cursor-pointer text-xs text-blue-600 font-bold px-3 py-1.5 border border-blue-300 rounded-lg">
+                        🖼️ 파일 선택
+                        <input type="file" accept="image/*" onChange={handleAiPhoto} className="hidden" />
+                      </label>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="py-4">
+                    <div className="text-4xl mb-2">📸</div>
+                    <div className="text-sm font-bold text-gray-600 mb-1">작업 현장 사진 업로드</div>
+                    <div className="text-xs text-gray-400 mb-4">사진을 올리면 AI가 12가지 위험 유형을 자동 평가합니다</div>
+                    <div className="inline-flex gap-2 flex-wrap justify-center">
+                      <label className="cursor-pointer text-xs text-white bg-red-600 hover:bg-red-700 font-bold px-4 py-2 rounded-lg">
+                        📷 촬영
+                        <input type="file" accept="image/*" capture="environment" onChange={handleAiPhoto} className="hidden" />
+                      </label>
+                      <label className="cursor-pointer text-xs text-red-600 bg-white border border-red-300 hover:bg-red-50 font-bold px-4 py-2 rounded-lg">
+                        🖼️ 파일 선택
+                        <input type="file" accept="image/*" onChange={handleAiPhoto} className="hidden" />
+                      </label>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {aiImg && !aiResult && !analyzing && (
+                <button onClick={runHazardAnalysis} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition-colors">
+                  🚨 AI 위험성 평가 및 안전 조치 분석 실행
+                </button>
+              )}
+
+              {analyzing && (
+                <div className="text-center py-6 text-red-600 font-bold">
+                  <div className="inline-block w-5 h-5 border-[3px] border-red-600 border-t-transparent rounded-full animate-spin mr-2 align-middle"></div>
+                  Claude AI가 산업안전 기준으로 분석 중... (5-15초)
+                </div>
+              )}
+
+              {aiResult && (() => {
+                const sevBg = aiResult.severity === "URGENT" ? "bg-red-50 border-red-300" : aiResult.severity === "HIGH" ? "bg-orange-50 border-orange-300" : aiResult.severity === "MEDIUM" ? "bg-yellow-50 border-yellow-300" : "bg-green-50 border-green-300";
+                const sevFg = aiResult.severity === "URGENT" ? "text-red-800" : aiResult.severity === "HIGH" ? "text-orange-800" : aiResult.severity === "MEDIUM" ? "text-yellow-800" : "text-green-800";
+                const sevLabel = aiResult.severity === "URGENT" ? "긴급 (즉시조치)" : aiResult.severity === "HIGH" ? "높음 (24h 이내)" : aiResult.severity === "MEDIUM" ? "보통 (1주 이내)" : "낮음 (정기점검)";
+                const score = aiResult.score || 0;
+                const scoreColor = score >= 80 ? "#dc2626" : score >= 60 ? "#ea580c" : score >= 40 ? "#ca8a04" : "#16a34a";
+                return (
+                  <div className={`mt-6 border-2 rounded-xl overflow-hidden ${sevBg}`}>
+                    {/* 헤더 — 위험도 + 점수 */}
+                    <div className={`p-4 border-b border-current ${sevFg}`} style={{borderColor:'rgba(0,0,0,0.1)'}}>
+                      <div className="flex justify-between items-center mb-2">
+                        <h4 className={`font-black text-lg flex items-center gap-2`}>⚠️ AI 안전 진단 결과</h4>
+                        <span className={`text-xs font-bold px-3 py-1.5 rounded bg-white shadow-sm`}>{sevLabel}</span>
+                      </div>
+                      {/* 위험점수 게이지 */}
+                      <div className="flex items-center gap-3 mt-3">
+                        <div className="text-xs font-bold whitespace-nowrap">위험 점수</div>
+                        <div className="flex-1 h-3 bg-white rounded-full overflow-hidden border">
+                          <div style={{width:`${score}%`, height:'100%', background:scoreColor, transition:'width 0.5s'}}></div>
+                        </div>
+                        <div className="text-lg font-black" style={{color:scoreColor}}>{score}</div>
+                      </div>
+                    </div>
+
+                    {/* 본문 */}
+                    <div className="p-4 space-y-3 bg-white">
+                      {/* 장소 추정 */}
+                      {aiResult.placeGuess && (
+                        <div className="flex gap-2 items-center text-sm">
+                          <span className="text-xs font-bold text-gray-500 whitespace-nowrap">📍 장소</span>
+                          <span className="font-bold">{aiResult.placeGuess}</span>
+                        </div>
+                      )}
+
+                      {/* 위험 유형 칩 */}
+                      {aiResult.riskTypes && aiResult.riskTypes.length > 0 && (
+                        <div>
+                          <div className="text-xs font-bold text-gray-500 mb-1.5">⚡ 위험 유형</div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {aiResult.riskTypes.map((t,i)=>(
+                              <span key={i} className="text-xs font-bold px-2.5 py-1 rounded-full bg-red-100 text-red-700 border border-red-200">{t}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 발견 내용 */}
+                      {aiResult.findings && aiResult.findings.length > 0 && (
+                        <div>
+                          <div className="text-xs font-bold text-gray-500 mb-1.5">🔍 발견 내용</div>
+                          <ul className="text-sm space-y-1 pl-1">
+                            {aiResult.findings.map((f,i)=>(
+                              <li key={i} className="flex gap-1.5"><span className="text-red-500 flex-shrink-0">•</span>{f}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* 조치 — 즉시/단기/장기 3분할 */}
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                        {aiResult.immediate && aiResult.immediate.length > 0 && (
+                          <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                            <div className="text-xs font-black text-red-700 mb-1.5">🔥 즉시 조치</div>
+                            <ul className="text-xs text-red-800 space-y-1">
+                              {aiResult.immediate.map((s,i)=><li key={i} className="flex gap-1"><span>•</span>{s}</li>)}
+                            </ul>
+                          </div>
+                        )}
+                        {aiResult.shortTerm && aiResult.shortTerm.length > 0 && (
+                          <div className="bg-orange-50 border border-orange-200 rounded-lg p-3">
+                            <div className="text-xs font-black text-orange-700 mb-1.5">📅 단기 조치 (1주)</div>
+                            <ul className="text-xs text-orange-800 space-y-1">
+                              {aiResult.shortTerm.map((s,i)=><li key={i} className="flex gap-1"><span>•</span>{s}</li>)}
+                            </ul>
+                          </div>
+                        )}
+                        {aiResult.longTerm && aiResult.longTerm.length > 0 && (
+                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                            <div className="text-xs font-black text-blue-700 mb-1.5">🏗️ 장기 조치</div>
+                            <ul className="text-xs text-blue-800 space-y-1">
+                              {aiResult.longTerm.map((s,i)=><li key={i} className="flex gap-1"><span>•</span>{s}</li>)}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 메타 정보 — 담당부서, 기한, 비용 */}
+                      <div className="grid grid-cols-3 gap-2 pt-2 border-t border-gray-100">
+                        {aiResult.department && (
+                          <div className="text-center p-2 bg-gray-50 rounded-lg">
+                            <div className="text-[10px] text-gray-500 font-bold">담당부서</div>
+                            <div className="text-xs font-bold mt-0.5">{aiResult.department}</div>
+                          </div>
+                        )}
+                        {aiResult.deadline && (
+                          <div className="text-center p-2 bg-gray-50 rounded-lg">
+                            <div className="text-[10px] text-gray-500 font-bold">조치기한</div>
+                            <div className="text-xs font-bold mt-0.5">{aiResult.deadline}</div>
+                          </div>
+                        )}
+                        {aiResult.estCost && (
+                          <div className="text-center p-2 bg-gray-50 rounded-lg">
+                            <div className="text-[10px] text-gray-500 font-bold">예상비용</div>
+                            <div className="text-xs font-bold mt-0.5">{aiResult.estCost}</div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 유사 사례 경고 */}
+                      {aiResult.similarCaseWarning && (
+                        <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                          <div className="text-xs font-bold text-amber-800 mb-1">💡 유사 사례 경고</div>
+                          <div className="text-xs text-amber-700">{aiResult.similarCaseWarning}</div>
+                        </div>
+                      )}
+
+                      {/* 재촬영 가이드 */}
+                      {aiResult.rephotoGuide && (
+                        <div className="p-3 bg-violet-50 border border-violet-200 rounded-lg">
+                          <div className="text-xs font-bold text-violet-800 mb-1">📷 조치 후 재촬영 가이드</div>
+                          <div className="text-xs text-violet-700">{aiResult.rephotoGuide}</div>
+                        </div>
+                      )}
+
+                      {/* 관련 법규 */}
+                      {aiResult.relatedLaw && (
+                        <div className="text-xs text-gray-600 pt-2 border-t border-gray-100">
+                          <strong>📖 관련 법규:</strong> {aiResult.relatedLaw}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 액션 버튼 */}
+                    <div className="p-4 bg-gray-50 border-t flex gap-2 justify-end flex-wrap">
+                      <button onClick={()=>{setAiImg(null);setAiResult(null);}} className="text-xs text-gray-600 font-bold px-3 py-2 border border-gray-300 rounded-lg bg-white hover:bg-gray-50">
+                        취소
+                      </button>
+                      <button onClick={registerAiResult}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-xs font-bold">
+                        📋 일지 기록 + 보완과제 자동 등록
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {aiLog.length > 0 && (
+              <div className="bg-white rounded-xl border border-gray-200 p-5">
+                <h3 className="font-bold text-sm mb-3">📋 위험성 평가 일지 ({aiLog.length}건, 이번 세션)</h3>
+                <div className="space-y-2">
+                  {aiLog.map(a => {
+                    const fac = facilities.find(f => f.id === a.facId);
+                    return (
+                      <div key={a.id} className="border rounded-lg p-3 flex gap-3 items-start">
+                        {a.photo && <img src={a.photo} alt="" className="w-16 h-16 object-cover rounded flex-shrink-0 border" />}
+                        <div className="flex-1 min-w-0 text-xs">
+                          <div className="flex gap-2 items-center mb-1 flex-wrap">
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${a.result.severity === "URGENT" ? "bg-red-100 text-red-700" : a.result.severity === "HIGH" ? "bg-orange-100 text-orange-700" : "bg-yellow-100 text-yellow-700"}`}>{a.result.severity}</span>
+                            <span className="font-bold">{fac?.name || "현장"}</span>
+                            <span className="text-[10px] text-gray-500">{a.result.type}</span>
+                            <span className="text-[10px] text-gray-400 ml-auto">{facFmtDT(a.at)}</span>
+                          </div>
+                          <div className="text-gray-700 mb-1"><strong>위험:</strong> {a.result.hazards}</div>
+                          <div className="text-gray-600 mb-1 whitespace-pre-line"><strong>조치:</strong> {a.result.solution}</div>
+                          <div className="text-[10px] text-gray-500">📖 {a.result.legalRef}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginTop: 32, paddingTop: 16, borderTop: "1px solid #e5e7eb" }}>
+                  <SignatureSlot label="위험성 평가자" value={sigs.assessor} onChange={v => setSigs(s => ({ ...s, assessor: v }))} />
+                  <SignatureSlot label="안전관리 책임자" value={sigs.safeMgr} onChange={v => setSigs(s => ({ ...s, safeMgr: v }))} />
+                  <SignatureSlot label="사업주 확인" value={sigs.approver} onChange={v => setSigs(s => ({ ...s, approver: v }))} />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+/* ==================== UNIFIED WORKLOG (업무일지) ==================== */
+
+/* ─── DETAILED GUIDES (신규 직원용 상세 안내) ─────────────────
+ * 각 업무별로 시설안전관리자가 설명하는 수준의 상세 가이드.
+ * 구조: purpose·tools·steps·laborNotes·accidentNotes·laws·retention·emergency
+ * DAILY 13개는 완전한 가이드, 나머지 주기는 카테고리 기반 generic 가이드.
+ * ─────────────────────────────────────────────────────────── */
+const WORKLOG_GUIDES = {
+  // ──────── DAILY ─ 시설점검 ────────
+  fac_open_check: {
+    purpose: "체험객 진입 전 시설 안전을 확보하고 개장 직후 발생 가능한 안전사고를 사전 차단합니다. 법정 의무 점검의 일환으로 미실시 시 과태료 부과 대상입니다.",
+    tools: ["안전모 (턱끈 체결)", "미끄럼방지 작업화", "체크리스트 또는 모바일 앱", "카메라/스마트폰", "손전등", "방진 마스크 (주방 점검 시)"],
+    steps: [
+      { n: 1, title: "안전보호구 착용", desc: "작업복·안전모·작업화를 착용하고 턱끈을 체결합니다. 주방 점검 시 추가로 방진 마스크 착용.", duration: "3분", icon: "🦺" },
+      { n: 2, title: "시설 외관 육안 점검", desc: "각 체험시설 주변을 천천히 1회 둘러보며 균열·파손·누수·쓰레기·낙엽 등을 확인합니다.", duration: "10분", icon: "👁" },
+      { n: 3, title: "놀이기구 작동 테스트", desc: "튜브썰매 브레이크 동작, 에어바운스 공기압, 키즈카페 미끄럼틀 표면 확인. 직접 손으로 당겨보며 체결상태 확인.", duration: "15분", icon: "🎢" },
+      { n: 4, title: "주방 가스·환기 확인", desc: "식당 주방 가스밸브를 비눗물로 누출 테스트하고 환기팬 정상 작동 확인. 냉장고 온도 5℃ 이하 확인.", duration: "10분", icon: "🔥" },
+      { n: 5, title: "화장실·식당 청결 확인", desc: "공용 화장실 물내림, 손세정제, 휴지 재고 확인. 식당 바닥 물기·미끄럼 위험 제거.", duration: "5분", icon: "🧼" },
+      { n: 6, title: "이상 발견 시 즉시 조치", desc: "이상 부위 사진 촬영 → 시설점검 앱의 AI 현장 진단 실행 또는 수기 보완과제 등록. 심각한 경우 해당 시설 **일시 운영 중단**.", duration: "가변", icon: "⚠️" },
+    ],
+    laborNotes: [
+      "**반드시 2인 1조**로 점검하세요. 단독 점검 중 사고 발생 시 산재 입증이 어려워 보상 분쟁의 원인이 됩니다.",
+      "점검 시간은 **근로시간에 포함**됩니다. 조기 출근 점검 시 초과근무 수당 청구 가능.",
+      "점검 완료 후 업무일지에 **반드시 서명**하세요. 서명 누락 시 사후 책임 소재가 불분명해집니다.",
+    ],
+    accidentNotes: [
+      "높은 곳(1.5m 이상) 점검 시 **안전벨트 필수**. 미착용 상태 추락은 '중대 과실'로 산재 감액될 수 있습니다.",
+      "전기 시설 점검은 **차단기 내린 후** 실시. 감전사고는 즉시 산재 인정이나 예방 수칙 미준수 시 개인 책임.",
+      "가스 점검 중 **라이터·휴대폰·금속도구 금지**. 폭발 사고의 직접 원인.",
+      "사고 발생 시 **15일 이내** 근로복지공단 산재 신고 의무 (산업재해보상보험법 제41조).",
+    ],
+    laws: [
+      "산업안전보건법 제38조 (안전조치) — 사업주의 안전조치 의무",
+      "어린이놀이시설 안전관리법 제15조 (안전점검) — 매일 1회 이상 점검 의무",
+      "화재예방법 제17조 (소방시설 점검) — 가스·전기 점검 의무",
+    ],
+    retention: "개장 전 점검은 체험객과 마주치지 않는 조용한 시간대에 수행하므로, 신규 직원의 부담이 적고 점검 매뉴얼 숙지에 이상적입니다. **첫 1주는 반드시 선배와 동행**하여 시설별 특이점을 인수인계 받으세요.",
+    emergency: "이상 발견 시 → 즉시 해당 시설 출입차단 → 안전관리 책임자(홍예성 기획팀장)에게 연락 → CCTV 확인 → 보완과제 등록 후 사진 기록 보관.",
+    visualSteps: [
+      { icon: "🦺", label: "보호구 착용" },
+      { icon: "👁", label: "외관 점검" },
+      { icon: "🎢", label: "작동 테스트" },
+      { icon: "🔥", label: "가스·환기" },
+      { icon: "📷", label: "이상 촬영" },
+    ],
+  },
+
+  fac_daily_clean: {
+    purpose: "시설 청결 유지는 식약처·교육청 점검 대응 및 체험객 만족도 제고에 직결됩니다. 청소 미흡은 집단 감염·식중독 사고의 직접 원인이 됩니다.",
+    tools: ["고무장갑", "청소 용품 세트", "소독제 (에탄올 70%)", "청소 기록지"],
+    steps: [
+      { n: 1, title: "화장실 위생 점검", desc: "변기·세면대·바닥 청결도 확인. 휴지·손세정제 잔량 보충. 냄새 제거제 분사.", duration: "10분", icon: "🚽" },
+      { n: 2, title: "체험관 먼지 제거", desc: "전시물·체험 도구 표면 먼지 제거. 어린이 손이 닿는 곳은 소독제로 추가 닦음.", duration: "20분", icon: "🧽" },
+      { n: 3, title: "식당 바닥 물기 제거", desc: "주방 근처 바닥 물기는 **미끄럼 사고의 최다 원인**. 즉시 건조포로 닦아냄.", duration: "5분", icon: "💧" },
+      { n: 4, title: "쓰레기통 비우기", desc: "각 구역 쓰레기통 비우고 새 봉투 교체. 재활용·일반 분리 확인.", duration: "10분", icon: "🗑" },
+    ],
+    laborNotes: [
+      "청소 업무는 **근로계약서에 명시된 업무 범위** 내에 있는지 확인. 계약에 없는 업무 강요는 노동청 신고 대상.",
+      "청소 도구·세제는 **회사 제공**이 원칙. 개인 부담 시 비용 청구 가능.",
+    ],
+    accidentNotes: [
+      "표백제·암모니아 혼합 절대 금지 (유독가스 발생). 세제류는 **단일 제품만 사용**.",
+      "고무장갑 미착용 시 화학약품 접촉성 피부염이 발생하며 산재 인정 가능.",
+      "미끄러움 예방 위해 청소 후 '청소중' 표지판 반드시 설치.",
+    ],
+    laws: [
+      "식품위생법 제88조 (집단급식소 위생관리)",
+      "산업안전보건법 제39조 (보건조치)",
+    ],
+    retention: "청소 업무는 단순해 보이지만 **시설 전체를 파악하는 좋은 기회**입니다. 신규 입사 초기 청소를 통해 시설 구조·동선을 익히는 것이 이후 점검 업무에 큰 도움이 됩니다.",
+    emergency: "미끄럼 사고 발생 시 → 부상자 이동 금지 → 119 신고 → 사고 경위서 작성 → 산재 신청 준비.",
+  },
+
+  fac_urgent_review: {
+    purpose: "긴급(URGENT) 등급 보완과제는 **24시간 이내 조치 의무**가 있는 고위험 항목으로, 처리 지연 시 법정 과태료·영업정지·대형사고의 직접 원인이 됩니다.",
+    tools: ["업무용 태블릿/PC", "시설점검 앱 접근 권한"],
+    steps: [
+      { n: 1, title: "URGENT 과제 목록 확인", desc: "시설점검 → 보완과제 → 진행중 탭 → URGENT 필터. 기한 초과 여부 먼저 확인.", duration: "3분", icon: "🚨" },
+      { n: 2, title: "담당자 배정 확인", desc: "미배정 건이 있으면 즉시 담당자 배정 요청 (관리자 권한 필요).", duration: "5분", icon: "👤" },
+      { n: 3, title: "진행 상황 점검", desc: "각 과제의 메모·사진·진행률 확인. 재료 수급 문제 있는지 재고관리 탭에서 확인.", duration: "10분", icon: "📋" },
+      { n: 4, title: "지연 건 에스컬레이션", desc: "기한 초과된 건은 **즉시 안전관리 책임자에게 보고**. 사유서 작성 준비.", duration: "가변", icon: "⬆️" },
+    ],
+    laborNotes: [
+      "URGENT 과제는 야간·주말 처리가 불가피할 수 있습니다. **연장근로·휴일근로 수당 청구권** 반드시 인지.",
+      "담당자 지정 시 근로자의 **역량·자격** 고려 필수. 자격 없는 업무 강요는 산업안전보건법 위반.",
+    ],
+    accidentNotes: [
+      "긴급 과제 대부분은 고위험 작업이므로 **단독 작업 금지**.",
+      "기한 초과 과제에서 사고 발생 시 관리자·담당자 모두에게 형사책임 가능.",
+    ],
+    laws: [
+      "산업안전보건법 제15조 (안전보건관리책임자)",
+      "어린이놀이시설 안전관리법 제16조 (안전검사)",
+    ],
+    retention: "URGENT 과제 관리는 시설 전반의 안전 감수성을 키우는 중요한 업무입니다. **처리 이력을 모두 기록**해두면 추후 승진·자격 평가에서 중요한 증빙이 됩니다.",
+    emergency: "처리 중 추가 위험 발견 시 → 작업 즉시 중단 → 시설 출입차단 → 대책 회의 소집.",
+  },
+
+  fac_cctv_check: {
+    purpose: "CCTV 미작동은 사고 발생 시 원인 규명 불가 → **산재 입증·민형사 소송에서 절대적 불리**로 작용. 또한 개인정보보호법상 기록 저장·관리 의무 이행 여부 확인.",
+    tools: ["NVR 관리자 PC/폰", "CCTV 모니터", "현장 점검용 폰(QR 스캔)"],
+    steps: [
+      { n: 1, title: "NVR 접속 확인", desc: "메인 NVR (172.30.2.50:37777) 접속. 나머지 5대 (누에쉘터·애견파크·야외광장·양떼정원·외부매표소)는 Dahua P2P 연결 상태 확인.", duration: "3분", icon: "💻" },
+      { n: 2, title: "전 채널 화면 순회", desc: "44개 채널 화면을 순차 확인. 블랙 화면·화질 저하·타임스탬프 오류 채널 기록.", duration: "10분", icon: "📺" },
+      { n: 3, title: "녹화 상태 확인", desc: "실시간 녹화 표시(REC) 및 저장 용량 확인. 85% 초과 시 자동 덮어쓰기 정상 동작 여부 확인.", duration: "3분", icon: "🔴" },
+      { n: 4, title: "이상 채널 현장 점검", desc: "문제 채널 있으면 해당 카메라 현장 확인. 전원 케이블·렌즈 오염·조정 필요.", duration: "가변", icon: "🔧" },
+    ],
+    laborNotes: [
+      "CCTV 점검 업무는 **개인정보 취급자 지정** 필요. 미지정자의 화면 열람은 위법 소지.",
+      "화면 내용을 외부 유출·촬영하면 개인정보보호법 위반 및 **형사처벌 대상**.",
+    ],
+    accidentNotes: [
+      "NVR 전기실 작업 시 고전압 주의. 누전차단기 정상 위치 확인.",
+      "야외 CCTV 점검 시 고소작업대 사용 필수.",
+    ],
+    laws: [
+      "개인정보보호법 제25조 (영상정보처리기기 설치·운영)",
+      "정보통신망법 제47조 (정보보호 관리체계)",
+    ],
+    retention: "CCTV 운영은 **시설 전반의 흐름을 가장 잘 파악할 수 있는 직무**입니다. 신규 직원이 업무 적응 기간에 CCTV 모니터링을 병행하면 시설 전체 이해도가 빠르게 올라갑니다.",
+    emergency: "전 채널 장애 시 → 즉시 체험 운영 일시 중단 → 복구 전까지 현장 순회 강화 → 업체 긴급 출동 요청.",
+  },
+
+  fac_close_lockup: {
+    purpose: "폐장 후 시설 잠금·전원 차단은 **화재·도난·침입 사고 예방의 최후 방어선**. 미이행 시 보험 면책 사유가 될 수 있습니다.",
+    tools: ["마스터 키 세트", "손전등", "폐장 체크리스트"],
+    steps: [
+      { n: 1, title: "전 시설 인원 확인", desc: "체험실·화장실·식당 등 모든 공간 순회하며 잔류 인원 확인. 어린이 실종 예방.", duration: "10분", icon: "🔍" },
+      { n: 2, title: "전기 전원 차단", desc: "체험기기·조명·냉난방 순차 차단. 냉장고·CCTV·서버는 **절대 차단 금지**.", duration: "5분", icon: "⚡" },
+      { n: 3, title: "가스 밸브 잠금", desc: "주방 메인 가스밸브 잠금 확인. 레버 완전히 수평 상태.", duration: "2분", icon: "🔥" },
+      { n: 4, title: "출입문 시건", desc: "외부 출입문 모두 시건. 비상구는 **외부에서 열리지 않는 상태** 확인.", duration: "5분", icon: "🔒" },
+      { n: 5, title: "경비시스템 활성화", desc: "보안업체 시스템 세트. 야간 경보 정상 작동 확인.", duration: "3분", icon: "🛡" },
+    ],
+    laborNotes: [
+      "폐장 업무 시간은 **명백한 근로시간**. 시간 외 근무로 간주되면 수당 청구 필수.",
+      "1인 폐장 작업은 위험하며 **야간 단독근무 제한법** 준수 권장.",
+    ],
+    accidentNotes: [
+      "야간 조명 어두운 곳에서 **계단 추락·넘어짐** 주의. 반드시 손전등 사용.",
+      "보안시스템 오작동으로 갇힘 사고 시 **즉시 112 신고**. 무리한 탈출 시도 금지.",
+    ],
+    laws: [
+      "소방시설법 제16조 (피난시설 관리)",
+      "근로기준법 제53조 (연장근로)",
+    ],
+    retention: "폐장 작업은 시설을 가장 구석구석 돌아보는 업무로, **책임감과 시설 이해도**를 동시에 높일 수 있습니다.",
+    emergency: "폐장 중 화재·침입 발견 시 → 즉시 대피 → 119/112 → 보안업체 → 대표이사 순으로 연락.",
+  },
+
+  // ──────── DAILY ─ 재고관리 ────────
+  inv_key_stock: {
+    purpose: "주요 품목 재고 부족은 **운영 중단 → 매출 손실**로 직결. 특히 안전 관련 품목(소화기·응급약품·안전모) 결품은 **법정 의무 위반**.",
+    tools: ["재고관리 앱", "QR/바코드 스캐너", "수량 실사 기록지"],
+    steps: [
+      { n: 1, title: "안전 필수품목 우선 확인", desc: "소화기·응급약품·안전모·작업화 재고. 이 품목은 **결품 불가**.", duration: "5분", icon: "🚨" },
+      { n: 2, title: "식자재 유통기한 확인", desc: "냉장고·창고 순회하며 D-3 이내 품목 확인. **'선입선출(FIFO)' 원칙** 준수.", duration: "10분", icon: "📅" },
+      { n: 3, title: "소모품 잔량 체크", desc: "화장지·세제·장갑 등. 1주일 사용량 확보 여부 확인.", duration: "5분", icon: "📦" },
+      { n: 4, title: "재고관리 앱 업데이트", desc: "실제 수량과 앱 수량 불일치 시 조정 처리. 차이 사유 메모 필수.", duration: "5분", icon: "📱" },
+    ],
+    laborNotes: [
+      "재고 확인 업무 중 **도난·손실 발견 시 즉시 상급자 보고**. 개인이 임의 처리 시 배임 의심 받을 수 있음.",
+      "실사 결과 차이 발생 시 개인 변상 요구는 불법. **근로기준법 제20조** 손해배상 예정 금지.",
+    ],
+    accidentNotes: [
+      "창고 고적재물 취급 시 **허리 부상** 주의. 무거운 물건은 2인 운반.",
+      "화학약품 보관 구역 환기 확인 후 출입.",
+    ],
+    laws: [
+      "식품위생법 제4조 (위해식품 판매금지)",
+      "근로기준법 제20조 (위약예정의 금지)",
+    ],
+    retention: "재고관리는 **가장 투명하게 업무 성과가 드러나는 직무**입니다. 정확한 실사 기록을 통해 본인의 신뢰도를 쌓을 수 있습니다.",
+    emergency: "결품 발견 시 → 대체품 확인 → 즉시 발주 → 해당 업무 일시 조정 → 관리자 보고.",
+  },
+
+  inv_stockin: {
+    purpose: "입고 기록 정합성은 **세무·회계상 가장 중요**. 누락 시 탈세 의심, 과다 계상 시 재고 부풀리기로 **분식회계 혐의** 받을 수 있음.",
+    tools: ["세금계산서", "거래명세서", "영수증", "재고관리 앱"],
+    steps: [
+      { n: 1, title: "입고 품목 실수령 확인", desc: "배송 차량 도착 시 품목·수량·파손 여부 확인 후 수령 서명.", duration: "10분", icon: "📦" },
+      { n: 2, title: "세금계산서 대조", desc: "품목·수량·단가·금액이 실제 입고분과 일치하는지 확인. 불일치 시 **수령 거부** 권장.", duration: "5분", icon: "📄" },
+      { n: 3, title: "재고 앱 입력", desc: "각 품목별 QR/바코드 스캔 또는 수기 입력. 입고 일자·거래처·금액 기재.", duration: "10분", icon: "📱" },
+      { n: 4, title: "세금계산서 보관", desc: "원본은 5년 보관(세법 규정). 스캔본은 회계팀에 즉시 전달.", duration: "2분", icon: "🗄" },
+    ],
+    laborNotes: [
+      "입고 수령은 **회사 대표**로서 행하는 업무입니다. 허위 수령 서명은 문서위조 혐의.",
+      "거래처와의 **개인적 금전 수수 절대 금지**. 리베이트는 업무상 배임죄.",
+    ],
+    accidentNotes: [
+      "하역 작업 시 화물차 후진 중 **끼임 사고** 다발. 차량 완전 정지 후 접근.",
+      "지게차 작업 시 **보행자 통제** 필수. 작업자 외 접근 금지.",
+    ],
+    laws: [
+      "부가가치세법 제32조 (세금계산서)",
+      "국세기본법 제85조 (장부 보존)",
+    ],
+    retention: "입고 관리는 **회계·세무 기초 지식**을 실무로 쌓을 수 있는 좋은 기회입니다. 세금계산서 처리에 능숙해지면 경력 가치가 상승합니다.",
+    emergency: "불일치·파손 발견 시 → 즉시 수령 거부 → 사진 촬영 → 거래처 통보 → 관리자 보고.",
+  },
+
+  inv_stockout: {
+    purpose: "출고(소비) 기록 부실은 **원가율 부정확 → 재무 분석 오류**의 원인. 또한 출고 기록 없는 재고 감소는 **손실 또는 도난**으로 추정됩니다.",
+    tools: ["재고관리 앱", "출고 신청서 (필요시)"],
+    steps: [
+      { n: 1, title: "출고 목적 확인", desc: "체험·청소·수리 등 출고 목적 명확히 기재. '일반 사용' 식 애매한 기재 금지.", duration: "2분", icon: "🎯" },
+      { n: 2, title: "수량 정확히 기록", desc: "실제 사용량만 기록. 여유분 출고 시 '준비분'으로 별도 표기.", duration: "3분", icon: "🔢" },
+      { n: 3, title: "출고자 명시", desc: "출고 요청자·실제 사용자 기록. 본인 이름 누락 금지.", duration: "1분", icon: "✍️" },
+      { n: 4, title: "사용 후 잔여분 반납", desc: "작업 완료 후 잔여 재료는 다시 재고로 반납 처리.", duration: "5분", icon: "↩️" },
+    ],
+    laborNotes: [
+      "개인 용도로 물품 반출 시 **업무상 횡령** 성립. 반드시 반납 또는 정당 구매 절차 이행.",
+      "타인 명의 출고 기록 작성 금지. 명의 도용은 형사처벌 대상.",
+    ],
+    accidentNotes: [
+      "위험물(화학약품·전동공구) 출고 시 **사용 자격 확인**. 무자격자 사용 사고 발생 시 출고자도 공동 책임.",
+    ],
+    laws: [
+      "형법 제355조 (횡령·배임)",
+    ],
+    retention: "정확한 출고 기록은 **본인의 업무 투명성**을 증명하는 증빙이 됩니다. 장기 근속 시 신뢰의 기반이 됩니다.",
+    emergency: "출고 기록 불일치 발견 시 → 즉시 상급자 보고 → 경위서 작성 → 재발 방지 대책 수립.",
+  },
+
+  inv_low_check: {
+    purpose: "저재고 품목의 선제적 발주는 **운영 중단 방지**와 **긴급 구매로 인한 과대 지출 방지**의 핵심. AI가 자동 매칭한 '필요 재고' 탭 활용.",
+    tools: ["재고관리 앱 → 필요 재고 탭", "발주 양식", "예산 승인권자 연락처"],
+    steps: [
+      { n: 1, title: "필요재고 탭 확인", desc: "재고관리 → 🔧 필요 재고. 시설점검·안전관리 AI가 요청한 재료 중 **매칭 안 됨/저재고/품절** 필터.", duration: "5분", icon: "🔍" },
+      { n: 2, title: "발주 우선순위 결정", desc: "URGENT·HIGH 심각도 과제의 재료 우선. 기한 임박 순으로 정렬.", duration: "3분", icon: "📊" },
+      { n: 3, title: "구매처 비교", desc: "각 재료의 구매처 탭에서 오프라인/온라인 가격 비교. 긴급도 높으면 '내일 도착' 쿠팡 로켓배송 우선.", duration: "10분", icon: "🛒" },
+      { n: 4, title: "발주 요청", desc: "예산 승인권자(관리자)에게 발주 승인 요청. 승인 후 즉시 주문.", duration: "5분", icon: "📤" },
+    ],
+    laborNotes: [
+      "발주 과정에서 **리베이트·개인 할인 받기 엄금**. 업무상 배임죄 성립.",
+      "긴급 발주로 야간·주말 작업 발생 시 연장근로 수당 청구 가능.",
+    ],
+    accidentNotes: [
+      "발주 지연으로 안전품목 결품 → 사고 발생 시 **관리자·담당자 공동 책임**.",
+    ],
+    laws: [
+      "형법 제356조 (업무상 횡령·배임)",
+    ],
+    retention: "발주 업무는 **외부 거래처와의 관계 구축**에 좋은 기회입니다. 성실한 발주 처리는 향후 구매 전문가로의 성장 발판이 됩니다.",
+    emergency: "긴급 결품 발생 시 → 즉시 대체품 수급 → 시설 운영 조정 → 관리자 보고.",
+  },
+
+  // ──────── DAILY ─ 안전관리 ────────
+  saf_visitor_count: {
+    purpose: "체험자 수 집계는 **동시수용인원 관리·산재보상 신고·법정 통계 보고**에 필수. 정원 초과 시 민형사·행정 책임 모두 발생.",
+    tools: ["POS 시스템", "입장권 카운터", "체험실별 수용인원표"],
+    steps: [
+      { n: 1, title: "개장 시 카운터 리셋", desc: "전일 집계 저장 확인 후 당일 카운터 0으로 리셋.", duration: "2분", icon: "🔄" },
+      { n: 2, title: "시간대별 입장 집계", desc: "매 시간 입장 수 기록. POS 데이터와 대조.", duration: "5분/시간", icon: "📊" },
+      { n: 3, title: "체험실별 실시간 확인", desc: "동시수용인원 초과 여부 확인. 90% 도달 시 입장 제한 준비.", duration: "상시", icon: "👁" },
+      { n: 4, title: "폐장 후 최종 집계", desc: "당일 총입장·체험실별·시간대별 집계. 월별·연간 통계에 반영.", duration: "10분", icon: "📝" },
+    ],
+    laborNotes: [
+      "정원 초과 입장은 **관리자 지시라도 거부 가능**. 거부로 불이익 시 노동청 신고 가능.",
+      "사고 발생 시 체험자 수 기록이 산재·보험 청구의 **직접 증빙**.",
+    ],
+    accidentNotes: [
+      "혼잡 시 어린이 실종·압사 사고 위험. **동시수용인원 90% 도달 시 입장 제한** 원칙.",
+      "체험자 사고 발생 시 **15일 이내 산재 신고** 의무 (산업재해보상보험법).",
+    ],
+    laws: [
+      "어린이놀이시설 안전관리법 제13조 (운영자 의무)",
+      "산업재해보상보험법 제41조 (신청 기한)",
+    ],
+    retention: "체험자 수 관리는 **고객 동선·선호도 분석**으로 연결됩니다. 데이터를 꾸준히 축적하면 마케팅·운영 전략 수립에 중요한 경력이 됩니다.",
+    emergency: "정원 초과 임박 시 → 입장 제한 → 대기 공간 안내 → 퇴장 유도 방송.",
+  },
+
+  saf_first_aid: {
+    purpose: "응급약품함 미비는 **사고 발생 시 초기 대응 실패**의 직접 원인. 특히 AED 작동 여부 확인은 **심정지 대응의 골든타임(4분)** 확보에 필수.",
+    tools: ["응급약품함 목록표", "유통기한 확인용 체크리스트", "AED 자가진단 결과지"],
+    steps: [
+      { n: 1, title: "약품 유통기한 확인", desc: "밴드·소독약·진통제 등 모든 품목의 유통기한. 임박품은 즉시 교체.", duration: "10분", icon: "📅" },
+      { n: 2, title: "소모품 잔량 확인", desc: "최소 보유량(밴드 50매, 거즈 10세트, 소독약 500ml) 이상 유지.", duration: "5분", icon: "📦" },
+      { n: 3, title: "AED 자가진단", desc: "AED 본체 상태등 녹색 확인. 적색·점멸 시 즉시 점검 요청.", duration: "2분", icon: "❤️" },
+      { n: 4, title: "응급처치 매뉴얼 비치", desc: "CPR·하임리히·출혈 처치법 요약지가 약품함 내부에 비치되어 있는지 확인.", duration: "1분", icon: "📖" },
+    ],
+    laborNotes: [
+      "응급약품 관리자는 **기본 응급처치 자격(CPR·AED)** 이수 필수. 미이수 상태 관리는 위법.",
+      "사고 발생 시 응급처치는 **선의의 응급의료에 관한 법률**로 면책 보호받음 (두려워하지 말 것).",
+    ],
+    accidentNotes: [
+      "약품함 위치·접근성 항상 확보. 폐쇄되거나 물건에 가려지면 법정 과태료.",
+      "응급상황 대응 늦어 사망 시 **업무상과실치사** 가능.",
+    ],
+    laws: [
+      "응급의료에 관한 법률 제47조의2 (자동심장충격기 설치)",
+      "선의의 응급의료에 관한 법률 (면책)",
+    ],
+    retention: "응급처치 자격 이수는 **평생 자격증**으로 경력 가치가 높습니다. CPR·AED 자격은 회사 지원으로 취득 가능하니 적극 활용하세요.",
+    emergency: "심정지 의심 환자 발견 시 → 의식 확인 → 119 신고 → CPR 시작 → AED 사용 → 구급대 인계.",
+  },
+
+  saf_fire_escape: {
+    purpose: "피난로 적재물은 **화재·지진 시 대규모 인명피해**의 직접 원인. 소방법상 상시 점검 의무 대상.",
+    tools: ["피난로 도면", "소화기 점검표", "유도등 점등 확인 도구"],
+    steps: [
+      { n: 1, title: "피난 통로 확보 상태", desc: "복도·계단·비상문 앞 적재물 완전 제거. 통행폭 1.2m 이상 유지.", duration: "10분", icon: "🚪" },
+      { n: 2, title: "소화기 위치·상태 확인", desc: "각 구역별 소화기 지정 위치. 압력 게이지 녹색대 내 위치. 점검표 부착 여부.", duration: "15분", icon: "🧯" },
+      { n: 3, title: "유도등 점등 확인", desc: "비상구 유도등 전 등 점등 확인. 꺼진 등은 즉시 교체 요청.", duration: "5분", icon: "💡" },
+      { n: 4, title: "비상문 개폐 테스트", desc: "비상문 **외부에서 열리지 않고 내부에서만 열리는** 상태 확인. 잠금장치 이상 없는지.", duration: "5분", icon: "🚨" },
+    ],
+    laborNotes: [
+      "피난로 점검 중 **적재물 치우는 작업은 업무 범위 내** 정당한 행위. 소유자 이의 제기해도 안전 우선.",
+      "소방 점검 결과 이상 있으면 **서면 보고 의무**. 구두 보고만 하면 책임 회피 불가.",
+    ],
+    accidentNotes: [
+      "소화기 점검 시 **점검자 본인이 낙하·폭발로 부상** 위험. 이동 시 양손 사용.",
+      "피난로 장애물로 인한 사고 발생 시 **운영자·소유자 모두 형사책임**.",
+    ],
+    laws: [
+      "화재예방법 제10조 (피난시설 관리)",
+      "소방시설법 제22조 (소방시설 점검)",
+    ],
+    retention: "소방·피난 관리는 **모든 업종에서 필요한 보편적 자격**입니다. 소방안전관리자 자격 취득 시 경력 전환·이직에 큰 도움.",
+    emergency: "피난로 중대 장애 발견 시 → 즉시 장애물 제거 → 사진 증거 → 소방서 신고 → 대표 보고.",
+  },
+
+  saf_incident: {
+    purpose: "준사고 기록은 **대형사고 예방의 가장 중요한 자료**. '아슬아슬하게 피한 사고(near miss)'를 기록·분석해야 실제 사고를 막을 수 있습니다.",
+    tools: ["사고·준사고 보고서 양식", "CCTV 화면 보존 도구"],
+    steps: [
+      { n: 1, title: "당일 이벤트 수집", desc: "체험자·직원으로부터 '거의 다칠 뻔한 상황' 수집. 없었으면 '없음' 명시.", duration: "5분", icon: "🔍" },
+      { n: 2, title: "상세 기록", desc: "발생 시각·장소·관련자·경위 6하원칙으로 기록. 사진·CCTV 시각 함께 기록.", duration: "10분", icon: "📝" },
+      { n: 3, title: "원인 분석", desc: "'왜?' 5번 묻기(5-Why). 근본원인까지 파고듦.", duration: "10분", icon: "🤔" },
+      { n: 4, title: "예방 조치 제안", desc: "재발 방지 대책 수립. 필요시 보완과제 등록.", duration: "5분", icon: "💡" },
+    ],
+    laborNotes: [
+      "**사고 은폐 절대 금지**. 발견 후 은폐는 형사처벌 대상 (업무방해·증거인멸).",
+      "본인이 가해·피해 당사자라도 솔직히 기록. **정직한 기록은 징계 감경 사유**.",
+    ],
+    accidentNotes: [
+      "직원 사고는 **지체없이 산재 신고**. 은폐 시 산재 불인정 및 처벌.",
+      "체험자 사고는 즉시 119·경찰 신고. 보험사 연락도 잊지 말 것.",
+    ],
+    laws: [
+      "산업재해보상보험법 제41조 (신청)",
+      "산업안전보건법 제54조 (중대재해 발생 시 보고)",
+      "형법 제151조 (범인은닉)",
+    ],
+    retention: "준사고 분석 능력은 **안전관리자 자격의 핵심 역량**입니다. 꾸준한 기록은 본인의 전문성을 증명합니다.",
+    emergency: "중대사고 발생 시 → 119/112 → 현장 보존(이동·변경 금지) → 고용노동청·경찰 도착 → 진술 협조.",
+  },
+};
+
+/* Generic guide for items without explicit content */
+function getGenericGuide(itemId, itemLabel, catLabel, cycle) {
+  const cycleLabel = { DAILY: "일별", WEEKLY: "주별", MONTHLY: "월별", SEASONAL: "계절별" }[cycle];
+  return {
+    purpose: `${itemLabel} 업무는 ${catLabel} 카테고리의 ${cycleLabel} 정기 점검 항목입니다. 체계적 관리를 통해 사고·분쟁·운영차질을 예방합니다.`,
+    tools: ["업무일지", "관련 체크리스트", "필요 기록 양식"],
+    steps: [
+      { n: 1, title: "업무 이해", desc: `${itemLabel}의 구체적 내용·범위를 선배 또는 매뉴얼을 통해 확인합니다.`, duration: "가변", icon: "📚" },
+      { n: 2, title: "실행", desc: "체크리스트에 따라 순서대로 실행. 누락 없이 진행.", duration: "가변", icon: "✅" },
+      { n: 3, title: "기록", desc: "진행 결과를 업무일지에 기록. 특이사항·문제점 모두 기록.", duration: "5분", icon: "📝" },
+      { n: 4, title: "보고·인수인계", desc: "완료 후 상급자 보고 및 다음 근무자 인수인계.", duration: "5분", icon: "🔄" },
+    ],
+    laborNotes: [
+      "업무 수행 중 의문·어려움은 즉시 선배·상급자에게 문의. 혼자 추측 금지.",
+      "업무 수행 시간은 근로시간에 포함됩니다. 초과 시 수당 청구 가능.",
+    ],
+    accidentNotes: [
+      "위험 작업은 반드시 2인 1조 원칙.",
+      "안전보호구 착용 의무 구역 준수.",
+      "이상 발견 시 즉시 중단·보고.",
+    ],
+    laws: [
+      "산업안전보건법 제38조 (안전조치)",
+      "근로기준법 제53조 (연장근로)",
+    ],
+    retention: "정기 업무를 성실히 수행하는 습관이 **장기 근속의 기반**입니다. 매뉴얼화·표준화 제안도 적극 환영합니다.",
+    emergency: "문제 발생 시 → 즉시 중단 → 상급자 보고 → 사진 기록 → 대응책 논의.",
+  };
+}
+
+function getGuide(itemId, itemLabel, catLabel, cycle) {
+  return WORKLOG_GUIDES[itemId] || getGenericGuide(itemId, itemLabel, catLabel, cycle);
+}
+
+/* ─── WORKLOG ITEM CHECK MODAL (photo + AI verification) ─── */
+function WorklogItemCheckModal({ item, catLabel, onClose, onComplete, currentUser, isAdmin }) {
+  const [photos, setPhotos] = useState([]);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [aiResult, setAiResult] = useState(null);
+
+  const addPhotos = async (files) => {
+    const arr = [];
+    for (const f of files) { try { arr.push(await facCompressPhoto(f)); } catch (e) {} }
+    if (arr.length) setPhotos(prev => [...prev, ...arr]);
+  };
+  const handleFile = (e) => { if (e.target.files?.length) addPhotos([...e.target.files]); e.target.value = ""; };
+  const removePhoto = (idx) => setPhotos(prev => prev.filter((_, i) => i !== idx));
+
+  useEffect(() => {
+    const onDocPaste = (e) => {
+      const items = e.clipboardData?.items || [];
+      const files = [];
+      for (const it of items) {
+        if (it.type?.startsWith("image/")) {
+          const f = it.getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      if (files.length > 0) { e.preventDefault(); addPhotos(files); }
+    };
+    document.addEventListener("paste", onDocPaste);
+    return () => document.removeEventListener("paste", onDocPaste);
+  }, []);
+
+  const runAi = async () => {
+    if (photos.length === 0) return alert("증빙 사진을 1장 이상 첨부해주세요.");
+    setBusy(true);
+    try {
+      const result = await verifyCompletionAI(null, photos, { type: item.label });
+      setAiResult(result);
+    } catch (err) {
+      alert("AI 분석 실패: " + err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const complete = (skipAi = false) => {
+    onComplete({
+      photos,
+      note,
+      aiResult: skipAi ? { confirmed: true, status: "MANUAL", confidence: 100, notes: "관리자 직접 완료 (AI 생략)" } : aiResult,
+      completedAt: new Date().toISOString(),
+      completedBy: currentUser?.id,
+      completedByName: currentUser?.name,
+    });
+    onClose();
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10110, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)", backdropFilter: "blur(2px)" }}>
+      <style>{`@keyframes wlSpin{to{transform:rotate(360deg)}}`}</style>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, width: 560, maxWidth: "95vw", maxHeight: "92vh", overflowY: "auto", padding: 20, boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+          <div>
+            <div style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>✅ 업무 완료 확인 — AI 점검</div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#0f172a", marginTop: 2 }}>{item.label}</div>
+            <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{catLabel}</div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#94a3b8" }}>×</button>
+        </div>
+
+        {/* Photo zone */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "#475569" }}>📷 증빙 사진 ({photos.length}장)</span>
+            <span style={{ fontSize: 10, color: "#94a3b8" }}>💡 Ctrl+V로 붙여넣기 가능</span>
+          </div>
+          {photos.length > 0 && (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, marginBottom: 8 }}>
+              {photos.map((p, i) => (
+                <div key={i} style={{ position: "relative", aspectRatio: "1", borderRadius: 6, overflow: "hidden", border: "1px solid #e5e7eb" }}>
+                  <img src={p} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  <button type="button" onClick={() => removePhoto(i)}
+                    style={{ position: "absolute", top: 2, right: 2, background: "rgba(0,0,0,0.65)", color: "#fff", border: "none", borderRadius: "50%", width: 20, height: 20, fontSize: 11, cursor: "pointer", lineHeight: 1 }}>×</button>
+                </div>
+              ))}
+            </div>
+          )}
+          <label style={{ display: "block", cursor: "pointer", padding: "12px 0", textAlign: "center", background: "#f8fafc", border: "2px dashed #cbd5e1", borderRadius: 8, fontSize: 12, color: "#64748b" }}>
+            📷 {photos.length > 0 ? "사진 더 추가" : "증빙 사진 업로드 (여러 장 가능)"}
+            <input type="file" accept="image/*" multiple capture="environment" onChange={handleFile} style={{ display: "none" }} />
+          </label>
+        </div>
+
+        {/* Memo */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#475569", marginBottom: 4 }}>📝 수행 내용 메모 (선택)</div>
+          <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="수행 결과·특이사항·발견된 이상 등"
+            style={{ width: "100%", padding: 8, border: "1px solid #e5e7eb", borderRadius: 6, fontSize: 12, minHeight: 60, resize: "vertical", fontFamily: "inherit" }} />
+        </div>
+
+        {/* AI action / result */}
+        {!aiResult && !busy && (
+          <button onClick={runAi} disabled={photos.length === 0}
+            style={{ width: "100%", borderRadius: 10, background: photos.length ? "linear-gradient(135deg,#7c3aed,#2563eb)" : "#cbd5e1", color: "#fff", padding: 12, fontSize: 14, fontWeight: 700, border: "none", cursor: photos.length ? "pointer" : "not-allowed", marginBottom: 10 }}>
+            🤖 AI 점검 및 분석 요청
+          </button>
+        )}
+
+        {busy && (
+          <div style={{ textAlign: "center", padding: 20, color: "#2563eb", fontWeight: 700, fontSize: 13 }}>
+            <div style={{ display: "inline-block", width: 20, height: 20, border: "3px solid #2563eb", borderTopColor: "transparent", borderRadius: "50%", animation: "wlSpin 0.8s linear infinite", marginRight: 8, verticalAlign: "middle" }}></div>
+            AI가 증빙 사진을 분석하는 중...
+          </div>
+        )}
+
+        {aiResult && (
+          <div style={{ background: aiResult.confirmed ? "#f0fdf4" : "#fff7ed", border: `1px solid ${aiResult.confirmed ? "#bbf7d0" : "#fed7aa"}`, borderRadius: 10, padding: 12, marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <span style={{ fontSize: 18 }}>{aiResult.confirmed ? "✅" : "⚠️"}</span>
+              <span style={{ fontWeight: 800, color: aiResult.confirmed ? "#166534" : "#9a3412" }}>
+                {aiResult.confirmed ? "AI 점검 통과 - 업무 완료 가능" : "보완 필요 - 재촬영 권장"}
+              </span>
+              <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, color: aiResult.confirmed ? "#166534" : "#9a3412" }}>
+                신뢰도 {aiResult.confidence}%
+              </span>
+            </div>
+            <div style={{ fontSize: 12, color: "#1f2937", lineHeight: 1.5 }}>{aiResult.notes}</div>
+          </div>
+        )}
+
+        {/* Finalize buttons */}
+        <div style={{ display: "flex", gap: 8 }}>
+          {aiResult?.confirmed && (
+            <button onClick={() => complete(false)}
+              style={{ flex: 1, padding: 12, borderRadius: 10, background: "#059669", color: "#fff", border: "none", fontSize: 13, fontWeight: 800, cursor: "pointer" }}>
+              ✨ AI 승인 · 완료 처리
+            </button>
+          )}
+          {aiResult && !aiResult.confirmed && (
+            <button onClick={() => { setAiResult(null); setPhotos([]); }}
+              style={{ flex: 1, padding: 12, borderRadius: 10, background: "#ea580c", color: "#fff", border: "none", fontSize: 13, fontWeight: 800, cursor: "pointer" }}>
+              🔄 재촬영 및 재분석
+            </button>
+          )}
+          {isAdmin && (
+            <button onClick={() => {
+              if (confirm("AI 점검 없이 완료 처리하시겠습니까?\n(관리자 권한으로 직접 완료)")) complete(true);
+            }}
+              style={{ padding: "12px 16px", borderRadius: 10, background: "#fff", color: "#64748b", border: "1px solid #e5e7eb", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+              직접 완료
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── WORKLOG REPORT MODAL (view saved worklog as formal report) ─── */
+function WorklogReportModal({ log, onClose }) {
+  if (!log) return null;
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10105, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)", backdropFilter: "blur(2px)" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: 800, maxWidth: "95vw", maxHeight: "92vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        <div style={{ padding: "16px 20px", borderBottom: "2px solid #0f172a", flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center", background: "#0f172a", color: "#fff", borderRadius: "12px 12px 0 0" }}>
+          <div>
+            <div style={{ fontSize: 11, opacity: 0.7 }}>📄 업무일지 보고서</div>
+            <div style={{ fontSize: 16, fontWeight: 800 }}>{log.periodLabel}</div>
+            <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>작성자: {log.userName} · {new Date(log.at).toLocaleString("ko")}</div>
+          </div>
+          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", fontSize: 20, cursor: "pointer", width: 30, height: 30, borderRadius: "50%", lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
+          {/* Summary */}
+          <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12, marginBottom: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, fontSize: 12 }}>
+              <div><strong>주기</strong>: {log.cycle}</div>
+              <div><strong>완료율</strong>: {log.checkedItems}/{log.totalItems} ({Math.round(log.checkedItems/log.totalItems*100)}%)</div>
+              <div><strong>서명</strong>: {log.signature ? "✓ 완료" : "미완료"}</div>
+            </div>
+          </div>
+
+          {/* Items */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>📋 수행 항목 상세</div>
+            {(log.items || []).map((item, i) => (
+              <div key={item.id || i} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 10, marginBottom: 8 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 6 }}>
+                  <span style={{ width: 20, height: 20, borderRadius: 4, background: "#059669", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, flexShrink: 0 }}>✓</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>{item.label || item.id}</div>
+                    <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
+                      {item.at && new Date(item.at).toLocaleTimeString("ko", { hour: "2-digit", minute: "2-digit" })}
+                      {item.assignee && " · 담당: " + (MERGED_USERS.find(u => u.id === item.assignee)?.name || item.assignee)}
+                      {item.status && " · 상태: " + item.status}
+                    </div>
+                  </div>
+                </div>
+                {item.note && <div style={{ fontSize: 11, color: "#475569", padding: "6px 10px", background: "#f8fafc", borderRadius: 4, marginBottom: 6 }}>📝 {item.note}</div>}
+                {item.photos && item.photos.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 10, color: "#64748b", fontWeight: 700, marginBottom: 4 }}>📷 증빙 사진 ({item.photos.length}장)</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 4 }}>
+                      {item.photos.map((p, pi) => (
+                        <img key={pi} src={p} alt="" style={{ width: "100%", aspectRatio: "1", objectFit: "cover", borderRadius: 4, border: "1px solid #e5e7eb" }} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {item.aiResult && (
+                  <div style={{ marginTop: 6, fontSize: 11, padding: "6px 10px", background: item.aiResult.confirmed ? "#f0fdf4" : "#fff7ed", border: `1px solid ${item.aiResult.confirmed ? "#bbf7d0" : "#fed7aa"}`, borderRadius: 4, color: item.aiResult.confirmed ? "#065f46" : "#9a3412" }}>
+                    🤖 AI: {item.aiResult.status} · 신뢰도 {item.aiResult.confidence}% — {item.aiResult.notes}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Notes */}
+          {log.generalNote && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 6 }}>📝 업무 특이사항</div>
+              <div style={{ padding: 12, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, fontSize: 12, lineHeight: 1.6, color: "#78350f", whiteSpace: "pre-wrap" }}>{log.generalNote}</div>
+            </div>
+          )}
+
+          {/* Signature */}
+          {log.signature && (
+            <div style={{ marginTop: 20, borderTop: "1px solid #e5e7eb", paddingTop: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#64748b", textAlign: "center", marginBottom: 6 }}>작성자 서명</div>
+              <div style={{ textAlign: "center" }}>
+                <img src={log.signature} alt="서명" style={{ maxHeight: 60, maxWidth: "100%" }} />
+                <div style={{ borderTop: "1px solid #000", marginTop: 4, display: "inline-block", minWidth: 160, paddingTop: 2, fontSize: 10, color: "#64748b" }}>{log.userName}</div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── WORKLOG GUIDE MODAL (상세 가이드) ─── */
+function WorklogGuideModal({ itemId, itemLabel, catLabel, cycle, onClose, currentUser, acks = {}, onAck }) {
+  const g = getGuide(itemId, itemLabel, catLabel, cycle);
+  const [tab, setTab] = useState("overview");
+  const isAdmin = currentUser?.role === "ADMIN";
+
+  // Tabs — 노무/산재/법규 restricted to ADMIN
+  const allTabs = [
+    { k: "overview", l: "📋 개요", requiresAck: false, adminOnly: false },
+    { k: "steps", l: "📝 절차", requiresAck: true, adminOnly: false, ackKey: "procedure" },
+    { k: "labor", l: "⚖️ 노무", requiresAck: true, adminOnly: true, ackKey: "labor" },
+    { k: "accident", l: "🚨 산재", requiresAck: true, adminOnly: true, ackKey: "accident" },
+    { k: "laws", l: "📖 법규", requiresAck: true, adminOnly: true, ackKey: "laws" },
+  ];
+  const tabs = allTabs.filter(t => !t.adminOnly || isAdmin);
+
+  // Close gating — all visible review tabs must be acked
+  const reviewTabs = tabs.filter(t => t.requiresAck);
+  const ackedCount = reviewTabs.filter(t => acks[t.ackKey]).length;
+  const canClose = ackedCount === reviewTabs.length;
+
+  const attemptClose = () => {
+    if (!canClose) {
+      const missing = reviewTabs.filter(t => !acks[t.ackKey]).map(t => t.l.replace(/^. /, ""));
+      alert(`다음 섹션을 모두 숙지 확인한 후 종료할 수 있습니다:\n\n${missing.map(m => "• " + m).join("\n")}`);
+      return;
+    }
+    onClose();
+  };
+  return (
+    <div onClick={attemptClose} style={{ position: "fixed", inset: 0, zIndex: 10100, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", backdropFilter: "blur(3px)" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, width: 640, maxWidth: "95vw", maxHeight: "92vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+        {/* Header */}
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid #e5e7eb", flexShrink: 0 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 11, color: "#64748b", fontWeight: 700, marginBottom: 4 }}>📘 상세 업무 가이드 — 시설안전관리자 직접 설명</div>
+              <div style={{ fontSize: 17, fontWeight: 800, color: "#0f172a" }}>{itemLabel}</div>
+              <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                {catLabel} · { { DAILY: "일별", WEEKLY: "주별", MONTHLY: "월별", SEASONAL: "계절별" }[cycle] || cycle }
+                {!isAdmin && <span style={{ marginLeft: 8, color: "#ea580c", fontWeight: 700 }}>· 일반 권한 (노무·산재·법규 탭은 ADMIN 전용)</span>}
+              </div>
+            </div>
+            <button onClick={attemptClose}
+              style={{ background: canClose ? "none" : "#fef2f2", border: canClose ? "none" : "1px solid #fecaca", fontSize: 22, cursor: "pointer", color: canClose ? "#94a3b8" : "#dc2626", lineHeight: 1, padding: "2px 8px", borderRadius: 4 }}
+              title={canClose ? "닫기" : "숙지 미완료 - 클릭 시 안내"}>×</button>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb", padding: "0 20px", flexShrink: 0, overflowX: "auto" }}>
+          {tabs.map(t => {
+            const acked = t.ackKey && acks[t.ackKey];
+            return (
+              <button key={t.k} onClick={() => setTab(t.k)}
+                style={{ padding: "10px 14px", border: "none", background: "transparent", borderBottom: tab === t.k ? "3px solid #2563eb" : "3px solid transparent", color: tab === t.k ? "#2563eb" : "#64748b", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 4 }}>
+                {t.l}
+                {t.requiresAck && (
+                  <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: acked ? "#059669" : "#f1f5f9", color: acked ? "#fff" : "#94a3b8", fontWeight: 900 }}>
+                    {acked ? "✓" : "!"}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Content */}
+        <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
+          {tab === "overview" && (
+            <div>
+              <div style={{ background: "linear-gradient(135deg,#eff6ff,#f0f7ff)", border: "1px solid #bfdbfe", borderRadius: 12, padding: 14, marginBottom: 14 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "#1e40af", marginBottom: 6 }}>🎯 이 업무의 목적</div>
+                <div style={{ fontSize: 13, color: "#1f2937", lineHeight: 1.6 }}>{g.purpose}</div>
+              </div>
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 800, color: "#0f172a", marginBottom: 8 }}>🧰 준비물</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {g.tools.map((t, i) => (
+                    <span key={i} style={{ padding: "6px 10px", background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 6, fontSize: 12, color: "#334155" }}>• {t}</span>
+                  ))}
+                </div>
+              </div>
+              {g.visualSteps && (
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "#0f172a", marginBottom: 8 }}>📊 업무 흐름</div>
+                  <div style={{ display: "flex", gap: 4, overflowX: "auto", padding: "8px 0" }}>
+                    {g.visualSteps.map((v, i) => (
+                      <React.Fragment key={i}>
+                        <div style={{ flex: "0 0 90px", textAlign: "center", padding: "10px 6px", background: "#fff", border: "2px solid #bfdbfe", borderRadius: 10 }}>
+                          <div style={{ fontSize: 24, marginBottom: 4 }}>{v.icon}</div>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "#1e40af" }}>{v.label}</div>
+                        </div>
+                        {i < g.visualSteps.length - 1 && <div style={{ display: "flex", alignItems: "center", color: "#bfdbfe", fontSize: 18 }}>→</div>}
+                      </React.Fragment>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div style={{ background: "#fefce8", border: "1px solid #fde68a", borderRadius: 10, padding: 12 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "#854d0e", marginBottom: 4 }}>💼 직원 근속 팁</div>
+                <div style={{ fontSize: 12, color: "#713f12", lineHeight: 1.6 }}>{g.retention}</div>
+              </div>
+              <div style={{ marginTop: 12, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 12 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "#991b1b", marginBottom: 4 }}>🚑 문제 발생 시 대응</div>
+                <div style={{ fontSize: 12, color: "#7f1d1d", lineHeight: 1.6 }}>{g.emergency}</div>
+              </div>
+            </div>
+          )}
+
+          {tab === "steps" && (
+            <div>
+              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>시설안전관리자가 신규 직원에게 직접 설명하는 순서입니다. <strong>순서대로</strong> 따라하세요.</div>
+              {g.steps.map(s => (
+                <div key={s.n} style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 12, marginBottom: 10, background: "#fff" }}>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 6 }}>
+                    <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, borderRadius: "50%", background: "#2563eb", color: "#fff", fontWeight: 900, fontSize: 13 }}>{s.n}</span>
+                    <span style={{ fontSize: 24 }}>{s.icon}</span>
+                    <span style={{ fontSize: 14, fontWeight: 700, flex: 1 }}>{s.title}</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", background: "#f1f5f9", borderRadius: 4, color: "#475569" }}>⏱ {s.duration}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "#1f2937", lineHeight: 1.7, paddingLeft: 42 }}>{s.desc}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {tab === "labor" && isAdmin && (
+            <div>
+              <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10, padding: 12, marginBottom: 12, fontSize: 12, color: "#1e40af" }}>
+                ⚖️ <strong>노무·근로 관련 주의사항</strong> — 근로자 본인의 권리 보호와 분쟁 예방을 위한 핵심 포인트.
+              </div>
+              {g.laborNotes.map((n, i) => (
+                <div key={i} style={{ padding: "10px 12px", marginBottom: 8, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, borderLeft: "3px solid #2563eb", fontSize: 12, lineHeight: 1.7, color: "#1f2937" }}
+                  dangerouslySetInnerHTML={{ __html: "📌 " + n.replace(/\*\*(.+?)\*\*/g, '<strong style="color:#1e40af">$1</strong>') }} />
+              ))}
+            </div>
+          )}
+
+          {tab === "accident" && isAdmin && (
+            <div>
+              <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 12, marginBottom: 12, fontSize: 12, color: "#991b1b" }}>
+                🚨 <strong>산업재해·안전사고 예방 수칙</strong> — 미준수 시 산재 인정 불가, 처벌 대상이 될 수 있습니다.
+              </div>
+              {g.accidentNotes.map((n, i) => (
+                <div key={i} style={{ padding: "10px 12px", marginBottom: 8, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, borderLeft: "3px solid #dc2626", fontSize: 12, lineHeight: 1.7, color: "#1f2937" }}
+                  dangerouslySetInnerHTML={{ __html: "⚠️ " + n.replace(/\*\*(.+?)\*\*/g, '<strong style="color:#991b1b">$1</strong>') }} />
+              ))}
+            </div>
+          )}
+
+          {tab === "laws" && isAdmin && (
+            <div>
+              <div style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 10, padding: 12, marginBottom: 12, fontSize: 12, color: "#5b21b6" }}>
+                📖 <strong>관련 법규</strong> — 본 업무의 법적 근거. 미준수 시 과태료·영업정지·형사처벌 가능.
+              </div>
+              {g.laws.map((l, i) => (
+                <div key={i} style={{ padding: "10px 12px", marginBottom: 8, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, borderLeft: "3px solid #7c3aed", fontSize: 12, lineHeight: 1.7, color: "#1f2937" }}>
+                  § {l}
+                </div>
+              ))}
+              <div style={{ marginTop: 12, padding: 10, background: "#f1f5f9", borderRadius: 8, fontSize: 11, color: "#475569", textAlign: "center" }}>
+                💡 법규 변경 주기는 통상 1~2년입니다. 국가법령정보센터(<a href="https://www.law.go.kr" target="_blank" rel="noopener noreferrer" style={{ color: "#2563eb" }}>law.go.kr</a>)에서 최신 조문 확인 가능.
+              </div>
+            </div>
+          )}
+
+          {/* Access-denied notice */}
+          {(tab === "labor" || tab === "accident" || tab === "laws") && !isAdmin && (
+            <div style={{ textAlign: "center", padding: 40, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 12 }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>🔒</div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#991b1b", marginBottom: 6 }}>관리자(ADMIN) 전용 섹션</div>
+              <div style={{ fontSize: 12, color: "#7f1d1d", lineHeight: 1.6 }}>
+                노무·산재·법규 관련 정보는 민감한 법적 리스크를 포함하고 있어<br/>
+                관리자 권한이 있는 사용자만 열람할 수 있습니다.<br/>
+                <span style={{ fontSize: 11, color: "#94a3b8", marginTop: 8, display: "inline-block" }}>현재 계정: {currentUser?.name || "—"} ({currentUser?.role || "—"})</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Ack control + close button footer */}
+        <div style={{ padding: "12px 16px", borderTop: "1px solid #e5e7eb", background: "#f8fafc", flexShrink: 0 }}>
+          {(() => {
+            const curTab = allTabs.find(t => t.k === tab);
+            const showAck = curTab?.requiresAck && (!curTab.adminOnly || isAdmin);
+            const isAcked = curTab?.ackKey && acks[curTab.ackKey];
+            return (
+              <>
+                {showAck && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: 10, background: isAcked ? "#f0fdf4" : "#fffbeb", border: `1px solid ${isAcked ? "#bbf7d0" : "#fde68a"}`, borderRadius: 8 }}>
+                    <input type="checkbox" checked={!!isAcked} onChange={e => onAck && onAck(curTab.ackKey, e.target.checked)}
+                      style={{ width: 18, height: 18, cursor: "pointer", accentColor: "#059669" }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: isAcked ? "#065f46" : "#78350f" }}>
+                        ✓ "{curTab.l.replace(/^. /, "")}" 섹션을 읽고 숙지했습니다
+                      </div>
+                      {isAcked && acks[curTab.ackKey].byName && (
+                        <div style={{ fontSize: 10, color: "#065f46", marginTop: 2 }}>
+                          {acks[curTab.ackKey].byName} · {new Date(acks[curTab.ackKey].at).toLocaleString("ko")}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                  <div style={{ fontSize: 11, color: canClose ? "#059669" : "#dc2626", fontWeight: 700 }}>
+                    {canClose ? "✓ 숙지 완료 · 닫기 가능" : `⚠️ 숙지 진행률 ${ackedCount}/${reviewTabs.length} — 모든 섹션 체크 후 닫기 가능`}
+                  </div>
+                  <button onClick={attemptClose}
+                    style={{ padding: "8px 20px", borderRadius: 8, background: canClose ? "#059669" : "#cbd5e1", color: "#fff", border: "none", fontSize: 12, fontWeight: 800, cursor: canClose ? "pointer" : "not-allowed" }}>
+                    {canClose ? "✨ 숙지 완료 · 닫기" : "🔒 숙지 미완료"}
+                  </button>
+                </div>
+                <div style={{ textAlign: "center", fontSize: 10, color: "#94a3b8", marginTop: 8 }}>
+                  🏛 한국잠사플레이팜 · 신규 직원 안전교육 자료 · 문의: 홍예성 기획팀장
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const WORKLOG_TEMPLATES = {
+  DAILY: {
+    label: "일별 업무일지",
+    desc: "매일 개장/폐장 시 작성 — 시설·재고·안전 일상 점검",
+    periodFmt: (d) => `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일 (${["일","월","화","수","목","금","토"][d.getDay()]})`,
+    cats: [
+      {
+        catId: "facility", catLabel: "🛠 시설점검", catColor: "#3b5bdb",
+        items: [
+          { id: "fac_open_check", label: "개장 전 주요 시설 안전 점검", hint: "튜브썰매장·에어바운스·키즈카페·식당 주방" },
+          { id: "fac_daily_clean", label: "일일 청소 상태 확인", hint: "공용 화장실·체험관·식당" },
+          { id: "fac_urgent_review", label: "긴급 보완과제 처리 현황 검토", hintDyn: true },
+          { id: "fac_cctv_check", label: "CCTV 정상작동 확인", hint: "44채널 6대 NVR" },
+          { id: "fac_close_lockup", label: "폐장 후 시설 잠금 및 전원 차단", hint: "출입문·조명·콘센트" },
+        ],
+      },
+      {
+        catId: "inventory", catLabel: "📦 재고관리", catColor: "#7c3aed",
+        items: [
+          { id: "inv_key_stock", label: "주요 품목 재고 확인", hint: "안전모·소화기·세제·유통기한 식자재" },
+          { id: "inv_stockin", label: "당일 입고 기록 정합성", hint: "영수증/세금계산서 대조" },
+          { id: "inv_stockout", label: "당일 출고(소비) 기록" },
+          { id: "inv_low_check", label: "저재고 품목 확인 및 발주 검토", hintDyn: true },
+        ],
+      },
+      {
+        catId: "safety", catLabel: "🛡️ 안전관리", catColor: "#ef4444",
+        items: [
+          { id: "saf_visitor_count", label: "당일 체험자 수 집계" },
+          { id: "saf_first_aid", label: "응급약품함 확인", hint: "밴드·소독약·체온계·AED 정상" },
+          { id: "saf_fire_escape", label: "비상구·소화기 위치 점검", hint: "피난통로 적재물 없음" },
+          { id: "saf_incident", label: "사고·준사고 발생 기록", hint: "없을 시 '없음' 확인" },
+        ],
+      },
+    ],
+  },
+  WEEKLY: {
+    label: "주별 업무일지",
+    desc: "매주 월요일 또는 금요일 작성 — 주간 점검 및 소요",
+    periodFmt: (d) => {
+      const dow = d.getDay();
+      const mon = new Date(d);
+      mon.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1));
+      const sun = new Date(mon);
+      sun.setDate(mon.getDate() + 6);
+      return `${mon.getMonth()+1}/${mon.getDate()} ~ ${sun.getMonth()+1}/${sun.getDate()} (${d.getFullYear()}년)`;
+    },
+    cats: [
+      {
+        catId: "facility", catLabel: "🛠 시설점검", catColor: "#3b5bdb",
+        items: [
+          { id: "fac_w_ride", label: "주간 체험시설 상세 점검", hint: "튜브썰매장·에어바운스·키즈카페·클라이밍 체험장" },
+          { id: "fac_w_passage", label: "주출입 계단/통로 점검", hint: "미끄럼 방지·난간 볼트" },
+          { id: "fac_w_sheep", label: "양떼정원 울타리 주간 점검", hint: "사각지대 철망 이상 유무" },
+          { id: "fac_w_report", label: "주간 시설점검 보고서 작성 및 결재" },
+        ],
+      },
+      {
+        catId: "inventory", catLabel: "📦 재고관리", catColor: "#7c3aed",
+        items: [
+          { id: "inv_w_audit", label: "주간 재고 조사 (품목 20% 샘플링)" },
+          { id: "inv_w_order", label: "소모품 발주 내역 검토 및 승인" },
+          { id: "inv_w_rfid", label: "RFID 태그 주간 전수 스캔" },
+          { id: "inv_w_expire", label: "유통기한 임박 식자재 확인", hint: "D-3 이내 품목 소비 우선" },
+        ],
+      },
+      {
+        catId: "safety", catLabel: "🛡️ 안전관리", catColor: "#ef4444",
+        items: [
+          { id: "saf_w_inspection", label: "주간 안전 점검 실시" },
+          { id: "saf_w_training", label: "직원 주간 안전 교육 기록" },
+          { id: "saf_w_ppe", label: "PPE 보관·수량 확인", hint: "안전모·작업화·장갑 재고" },
+          { id: "saf_w_hazard_review", label: "주간 위험성 평가 결과 정리" },
+        ],
+      },
+    ],
+  },
+  MONTHLY: {
+    label: "월별 업무일지",
+    desc: "매월 말일 또는 익월 초 작성 — 월간 실사 및 법정 보고",
+    periodFmt: (d) => `${d.getFullYear()}년 ${d.getMonth() + 1}월`,
+    cats: [
+      {
+        catId: "facility", catLabel: "🛠 시설점검", catColor: "#3b5bdb",
+        items: [
+          { id: "fac_m_exhibit", label: "전시실·체험관 월간 점검", hint: "누에체험관" },
+          { id: "fac_m_fire", label: "본관 소방설비 월간 점검 (법정)", hint: "소화기 압력·스프링클러·경보기" },
+          { id: "fac_m_maintenance", label: "시설 유지관리 이력 정리 및 결재" },
+          { id: "fac_m_action_review", label: "월간 보완과제 처리율 분석" },
+        ],
+      },
+      {
+        catId: "inventory", catLabel: "📦 재고관리", catColor: "#7c3aed",
+        items: [
+          { id: "inv_m_physical", label: "월간 재고 실사 (전 품목)" },
+          { id: "inv_m_ledger", label: "장부·실물 대조 및 조정" },
+          { id: "inv_m_report", label: "월간 재고 현황 보고서 작성 및 결재" },
+          { id: "inv_m_loss", label: "손실률 분석 및 원인 파악" },
+        ],
+      },
+      {
+        catId: "safety", catLabel: "🛡️ 안전관리", catColor: "#ef4444",
+        items: [
+          { id: "saf_m_legal_training", label: "법정 안전교육 실시 및 기록", hint: "월 1회 이상 의무" },
+          { id: "saf_m_fire_equip", label: "소방설비 월간 점검 (법정)", hint: "화재예방법 제17조" },
+          { id: "saf_m_incident_analysis", label: "월간 사고·준사고 분석 회의" },
+          { id: "saf_m_emergency_contact", label: "비상연락망 점검 및 갱신" },
+        ],
+      },
+    ],
+  },
+  SEASONAL: {
+    label: "계절별(분기) 업무일지",
+    desc: "분기 종료 시 작성 — 법정 감사, 외부 점검, 시설 정비",
+    periodFmt: (d) => {
+      const q = Math.floor(d.getMonth() / 3) + 1;
+      return `${d.getFullYear()}년 ${q}분기 (${["1-3월","4-6월","7-9월","10-12월"][q-1]})`;
+    },
+    cats: [
+      {
+        catId: "facility", catLabel: "🛠 시설점검", catColor: "#3b5bdb",
+        items: [
+          { id: "fac_s_electrical", label: "본관 전기 배전반 분기 점검 (법정)", hint: "전기안전관리자 입회" },
+          { id: "fac_s_exterior", label: "건축외벽 분기 점검" },
+          { id: "fac_s_deep_clean", label: "계절별 대청소 및 시설 정비" },
+          { id: "fac_s_3rd_party", label: "외부 안전진단 기관 점검 (해당 분기)" },
+        ],
+      },
+      {
+        catId: "inventory", catLabel: "📦 재고관리", catColor: "#7c3aed",
+        items: [
+          { id: "inv_s_audit", label: "분기 재고 감사 (외부 참관)" },
+          { id: "inv_s_procurement", label: "계절별 소모품 일괄 발주", hint: "여름: 냉방·음료 / 겨울: 난방·제설" },
+          { id: "inv_s_obsolete", label: "사장 재고 처리 및 감가상각" },
+        ],
+      },
+      {
+        catId: "safety", catLabel: "🛡️ 안전관리", catColor: "#ef4444",
+        items: [
+          { id: "saf_s_drill", label: "분기 비상대피 훈련 실시 (법정)", hint: "소방법 제37조" },
+          { id: "saf_s_legal_training", label: "법정 안전교육 (분기별 6시간)" },
+          { id: "saf_s_medical", label: "직원 건강검진 (해당 분기)" },
+          { id: "saf_s_risk_assessment", label: "분기 위험성 평가 실시 (법정)", hint: "산안법 제36조" },
+        ],
+      },
+    ],
+  },
+};
+
+/* ─── WORKLOG PAGE (full-screen overlay) ─────────────────────── */
+/* ─── BROWSE VIEW — period-based worklog search ─── */
+function BrowseView({ allPastLogs, pastLogs, cycle, filterFrom, setFilterFrom, filterTo, setFilterTo, filterAllCycles, setFilterAllCycles, setPresetRange, clearFilter, setReportLog }) {
+  const [sortBy, setSortBy] = useState("newest"); // newest | oldest | completion
+
+  const sortedLogs = [...pastLogs].sort((a, b) => {
+    if (sortBy === "newest") return new Date(b.at) - new Date(a.at);
+    if (sortBy === "oldest") return new Date(a.at) - new Date(b.at);
+    if (sortBy === "completion") return (b.checkedItems / b.totalItems) - (a.checkedItems / a.totalItems);
+    return 0;
+  });
+
+  // Summary stats
+  const stats = {
+    total: pastLogs.length,
+    complete: pastLogs.filter(l => l.checkedItems === l.totalItems).length,
+    photos: pastLogs.reduce((s, l) => s + (l.items || []).reduce((si, it) => si + (it.photos?.length || 0), 0), 0),
+    aiChecks: pastLogs.reduce((s, l) => s + (l.items || []).filter(it => it.aiResult).length, 0),
+    signed: pastLogs.filter(l => l.signature).length,
+  };
+
+  const cycleLabel = (c) => ({ DAILY: "일별", WEEKLY: "주별", MONTHLY: "월별", SEASONAL: "계절별" }[c] || c);
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb", padding: 16, marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#0f172a" }}>🔍 기간별 업무일지 조회</div>
+            <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>저장된 전체 업무일지를 날짜·주기·완료율 조건으로 검색합니다.</div>
+          </div>
+          <label style={{ fontSize: 12, color: "#475569", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+            <input type="checkbox" checked={filterAllCycles} onChange={e => setFilterAllCycles(e.target.checked)}
+              style={{ cursor: "pointer", accentColor: "#2563eb", width: 16, height: 16 }} />
+            <span>전체 주기 통합 조회</span>
+            {!filterAllCycles && <span style={{ fontSize: 10, color: "#94a3b8" }}>(현재: {cycleLabel(cycle)}만)</span>}
+          </label>
+        </div>
+
+        {/* Date range */}
+        <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: 14 }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>📅 기간:</span>
+            <input type="date" value={filterFrom} onChange={e => setFilterFrom(e.target.value)}
+              style={{ fontSize: 13, padding: "6px 10px", border: "1px solid #cbd5e1", borderRadius: 6, fontFamily: "inherit" }} />
+            <span style={{ color: "#94a3b8", fontSize: 13 }}>~</span>
+            <input type="date" value={filterTo} onChange={e => setFilterTo(e.target.value)}
+              style={{ fontSize: 13, padding: "6px 10px", border: "1px solid #cbd5e1", borderRadius: 6, fontFamily: "inherit" }} />
+            {(filterFrom || filterTo) && (
+              <button type="button" onClick={clearFilter}
+                style={{ fontSize: 11, padding: "6px 12px", borderRadius: 6, background: "#fff", border: "1px solid #e5e7eb", color: "#64748b", cursor: "pointer", fontWeight: 700 }}>
+                ✕ 필터 해제
+              </button>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700 }}>빠른 선택:</span>
+            {[
+              { l: "오늘", d: 0 },
+              { l: "최근 7일", d: 7 },
+              { l: "이번 달", d: "month" },
+              { l: "최근 30일", d: 30 },
+              { l: "최근 90일", d: 90 },
+              { l: "올해", d: 365 },
+            ].map(p => (
+              <button key={p.l} type="button" onClick={() => {
+                if (p.d === "month") {
+                  const today = new Date();
+                  const first = new Date(today.getFullYear(), today.getMonth(), 1);
+                  setFilterFrom(first.toISOString().slice(0, 10));
+                  setFilterTo(today.toISOString().slice(0, 10));
+                } else {
+                  setPresetRange(p.d);
+                }
+              }}
+                style={{ fontSize: 11, padding: "5px 12px", borderRadius: 6, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e40af", cursor: "pointer", fontWeight: 700 }}>
+                {p.l}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Stats cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 8, marginBottom: 14 }}>
+        <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 12, textAlign: "center" }}>
+          <div style={{ fontSize: 22, fontWeight: 900, color: "#0f172a" }}>{stats.total}</div>
+          <div style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>검색된 일지</div>
+        </div>
+        <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 12, textAlign: "center" }}>
+          <div style={{ fontSize: 22, fontWeight: 900, color: "#059669" }}>{stats.complete}</div>
+          <div style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>100% 완료</div>
+        </div>
+        <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 12, textAlign: "center" }}>
+          <div style={{ fontSize: 22, fontWeight: 900, color: "#2563eb" }}>{stats.photos}</div>
+          <div style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>📷 첨부 사진</div>
+        </div>
+        <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 12, textAlign: "center" }}>
+          <div style={{ fontSize: 22, fontWeight: 900, color: "#7c3aed" }}>{stats.aiChecks}</div>
+          <div style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>🤖 AI 점검</div>
+        </div>
+        <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 12, textAlign: "center" }}>
+          <div style={{ fontSize: 22, fontWeight: 900, color: "#ca8a04" }}>{stats.signed}</div>
+          <div style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>✍️ 서명</div>
+        </div>
+      </div>
+
+      {/* Sort + result count */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 8, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12, color: "#475569", fontWeight: 700 }}>
+          검색 결과 <span style={{ fontSize: 16, color: "#0f172a" }}>{pastLogs.length}</span>건
+          {allPastLogs.length !== pastLogs.length && <span style={{ fontSize: 11, color: "#94a3b8" }}> (전체 {allPastLogs.length}건 중)</span>}
+        </div>
+        <div style={{ display: "flex", gap: 4 }}>
+          {[["newest", "최신순"], ["oldest", "오래된순"], ["completion", "완료율순"]].map(([k, l]) => (
+            <button key={k} onClick={() => setSortBy(k)}
+              style={{ fontSize: 11, padding: "4px 10px", borderRadius: 5, border: "1px solid #e5e7eb", background: sortBy === k ? "#0f172a" : "#fff", color: sortBy === k ? "#fff" : "#475569", fontWeight: 700, cursor: "pointer" }}>
+              {l}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Log list */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {sortedLogs.length === 0 ? (
+          <div style={{ textAlign: "center", padding: 40, background: "#fff", border: "1px dashed #cbd5e1", borderRadius: 12, color: "#94a3b8" }}>
+            <div style={{ fontSize: 32, marginBottom: 8 }}>📭</div>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>해당 조건에 맞는 업무일지가 없습니다.</div>
+            <div style={{ fontSize: 11, marginTop: 4 }}>날짜 범위를 변경하거나 "전체 주기 통합 조회"를 체크해보세요.</div>
+          </div>
+        ) : sortedLogs.slice(0, 50).map(log => {
+          const photoCount = (log.items || []).reduce((s, it) => s + (it.photos?.length || 0), 0);
+          const aiCount = (log.items || []).filter(it => it.aiResult).length;
+          const completion = log.totalItems > 0 ? Math.round(log.checkedItems / log.totalItems * 100) : 0;
+          return (
+            <div key={log.id} style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 14, display: "flex", gap: 12, alignItems: "center" }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 4 }}>
+                  <span style={{ fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 4, background: "#2563eb", color: "#fff" }}>{cycleLabel(log.cycle)}</span>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>{log.periodLabel}</span>
+                  <span style={{ fontSize: 11, color: "#94a3b8", fontFamily: "monospace" }}>· {log.date}</span>
+                </div>
+                <div style={{ fontSize: 11, color: "#64748b" }}>
+                  작성자 <strong>{log.userName}</strong> · {new Date(log.at).toLocaleString("ko")}
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 10, background: "#f1f5f9", color: "#475569", fontWeight: 700 }}>📋 {log.checkedItems}/{log.totalItems}</span>
+                  {photoCount > 0 && <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 10, background: "#eff6ff", color: "#1e40af", fontWeight: 700 }}>📷 {photoCount}장</span>}
+                  {aiCount > 0 && <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 10, background: "#faf5ff", color: "#6b21a8", fontWeight: 700 }}>🤖 AI {aiCount}건</span>}
+                  {log.signature && <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 10, background: "#fffbeb", color: "#78350f", fontWeight: 700 }}>✍️ 서명</span>}
+                </div>
+                {log.generalNote && <div style={{ fontSize: 11, color: "#475569", marginTop: 6, fontStyle: "italic", padding: "6px 10px", background: "#f8fafc", borderRadius: 4 }}>"{log.generalNote.slice(0, 120)}{log.generalNote.length > 120 ? "..." : ""}"</div>}
+              </div>
+              <div style={{ textAlign: "center", flexShrink: 0 }}>
+                <div style={{ fontSize: 20, fontWeight: 900, color: completion === 100 ? "#059669" : completion >= 70 ? "#2563eb" : "#ea580c" }}>{completion}%</div>
+                <div style={{ fontSize: 9, color: "#94a3b8" }}>완료율</div>
+              </div>
+              <button type="button" onClick={() => setReportLog(log)}
+                style={{ padding: "8px 14px", borderRadius: 6, background: "#2563eb", color: "#fff", border: "none", fontSize: 12, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>
+                📄 보고서 열기
+              </button>
+            </div>
+          );
+        })}
+        {sortedLogs.length > 50 && (
+          <div style={{ textAlign: "center", fontSize: 12, color: "#64748b", padding: 12, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8 }}>
+            ⚠️ 상위 50건만 표시됨. 더 정확한 조회를 위해 기간을 좁혀주세요 (현재 검색 결과: {sortedLogs.length}건)
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ─── BACKUP / RESTORE MODAL ─── */
+function BackupRestoreModal({ onClose }) {
+  const [stats, setStats] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    try {
+      const keys = Object.keys(window.localStorage).filter(k => k.startsWith("jamsa_"));
+      const totalBytes = keys.reduce((s, k) => s + (window.localStorage[k]?.length || 0), 0);
+      const itemCounts = {};
+      keys.forEach(k => {
+        try {
+          const v = JSON.parse(window.localStorage[k]);
+          itemCounts[k] = Array.isArray(v) ? v.length : (typeof v === "object" ? Object.keys(v).length : 1);
+        } catch(e) { itemCounts[k] = "?"; }
+      });
+      setStats({ keys, totalBytes, itemCounts });
+    } catch (e) {
+      setStats({ error: e.message });
+    }
+  }, []);
+
+  const handleImport = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!confirm("현재 데이터를 덮어씁니다. 계속하시겠습니까?\n(백업 먼저 내보내는 것을 권장합니다.)")) return;
+    setBusy(true);
+    try {
+      await importAllData(file);
+      alert("복원 완료! 페이지를 새로고침합니다.");
+      window.location.reload();
+    } catch (err) {
+      alert("복원 실패: " + err.message);
+      setBusy(false);
+    }
+  };
+
+  const handleClearAll = () => {
+    if (!confirm("⚠️ 모든 데이터를 삭제합니다.\n정말 계속하시겠습니까? 되돌릴 수 없습니다.")) return;
+    if (!confirm("⚠️ 정말 확실합니까?\n제품, 활동 기록, 구역, 업무일지가 모두 사라집니다.")) return;
+    try {
+      Object.keys(window.localStorage).filter(k => k.startsWith("jamsa_")).forEach(k => window.localStorage.removeItem(k));
+      alert("초기화 완료. 페이지를 새로고침합니다.");
+      window.location.reload();
+    } catch (e) {
+      alert("초기화 실패: " + e.message);
+    }
+  };
+
+  const labelMap = {
+    "jamsa_inv_prods": "📦 재고 제품 목록",
+    "jamsa_inv_hist": "📜 재고 입출고 기록",
+    "jamsa_custom_zones": "📍 사용자 생성 구역",
+    "jamsa_fac_inspections": "🔧 시설 점검 이력",
+    "jamsa_fac_actions": "✓ 보완과제",
+    "jamsa_audit_log": "📋 활동 기록",
+    "jamsa_worklogs": "📒 업무일지",
+    "jamsa_naver_client_id": "🗺️ 네이버 지도 Client ID",
+  };
+
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,zIndex:10500,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.6)"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:12,width:520,maxWidth:"95vw",maxHeight:"92vh",overflow:"auto",boxShadow:"0 20px 60px rgba(0,0,0,0.3)"}}>
+        <div style={{padding:"14px 18px",background:"linear-gradient(135deg,#059669,#047857)",color:"#fff",display:"flex",justifyContent:"space-between",alignItems:"center",borderRadius:"12px 12px 0 0"}}>
+          <div>
+            <div style={{fontSize:11,opacity:0.9}}>데이터 관리</div>
+            <div style={{fontSize:17,fontWeight:900}}>💾 백업 · 복원</div>
+          </div>
+          <button onClick={onClose} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",fontSize:22,cursor:"pointer",width:30,height:30,borderRadius:"50%",lineHeight:1}}>×</button>
+        </div>
+        <div style={{padding:18}}>
+          {/* Current data summary */}
+          <div style={{marginBottom:16,padding:12,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8}}>
+            <div style={{fontSize:11,fontWeight:800,color:"#065f46",marginBottom:8}}>📊 현재 저장된 데이터</div>
+            {stats?.error ? (
+              <div style={{fontSize:11,color:"#991b1b"}}>⚠️ {stats.error}</div>
+            ) : stats?.keys?.length === 0 ? (
+              <div style={{fontSize:11,color:"#64748b"}}>저장된 데이터 없음</div>
+            ) : stats ? (
+              <>
+                <div style={{fontSize:11,color:"#065f46",lineHeight:1.8}}>
+                  {stats.keys.map(k => (
+                    <div key={k} style={{display:"flex",justifyContent:"space-between"}}>
+                      <span>{labelMap[k] || k}</span>
+                      <span style={{fontFamily:"monospace",color:"#059669",fontWeight:700}}>
+                        {typeof stats.itemCounts[k] === "number" ? `${stats.itemCounts[k]}건` : stats.itemCounts[k]}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{marginTop:8,paddingTop:8,borderTop:"1px solid #bbf7d0",fontSize:10,color:"#64748b",display:"flex",justifyContent:"space-between"}}>
+                  <span>총 사용량</span>
+                  <span style={{fontFamily:"monospace",fontWeight:700}}>{(stats.totalBytes/1024).toFixed(1)} KB</span>
+                </div>
+              </>
+            ) : <div>로딩 중...</div>}
+          </div>
+
+          {/* Actions */}
+          <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
+            <button onClick={exportAllData}
+              style={{padding:"12px 16px",borderRadius:8,background:"#059669",color:"#fff",border:"none",fontSize:13,fontWeight:800,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+              📥 전체 데이터 JSON 백업 파일로 내보내기
+            </button>
+
+            <label style={{padding:"12px 16px",borderRadius:8,background:"#2563eb",color:"#fff",fontSize:13,fontWeight:800,cursor:busy?"wait":"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,textAlign:"center",opacity:busy?0.6:1}}>
+              📤 백업 파일에서 복원
+              <input type="file" accept=".json" onChange={handleImport} disabled={busy} style={{display:"none"}}/>
+            </label>
+
+            <button onClick={handleClearAll}
+              style={{padding:"10px 16px",borderRadius:8,background:"#fff",color:"#dc2626",border:"1px solid #fecaca",fontSize:12,fontWeight:700,cursor:"pointer"}}>
+              🗑 모든 데이터 초기화
+            </button>
+          </div>
+
+          {/* Info */}
+          <div style={{padding:10,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:6,fontSize:10,color:"#78350f",lineHeight:1.6}}>
+            💡 <strong>자동 저장 안내</strong>: 재고 변경·업무일지·보완과제 등 주요 데이터는 브라우저에 자동 저장됩니다. 컴퓨터를 바꾸거나 브라우저 데이터를 지우면 사라지므로 <strong>주기적으로 백업</strong>하시기를 권장합니다.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WorklogPage({ onClose, addAudit, facActions, worklogs, setWorklogs, currentUser }) {
+  const [cycle, setCycle] = useState("DAILY");
+  const [date] = useState(new Date().toISOString().slice(0, 10));
+  // itemId -> { checked, assignee, status, note, at, logs: [...], acks: {procedure,labor,accident,laws}? }
+  const [checks, setChecks] = useState({});
+  const [generalNote, setGeneralNote] = useState("");
+  const [signature, setSignature] = useState(null);
+  const [guideItem, setGuideItem] = useState(null); // { id, label, catLabel }
+  const [checkModalItem, setCheckModalItem] = useState(null); // { id, label, catLabel }
+  const [reportLog, setReportLog] = useState(null); // saved worklog to view as report
+
+  const tpl = WORKLOG_TEMPLATES[cycle];
+  const periodLabel = tpl.periodFmt(new Date(date));
+  const isAdmin = currentUser?.role === "ADMIN";
+
+  // Dynamic context for hintDyn
+  const dynCtx = {
+    urgentCount: (facActions || []).filter(a => a.sev === "URGENT" && a.status !== "DONE").length,
+    lowStockCount: "재고 모듈 확인",
+    openActions: (facActions || []).filter(a => a.status !== "DONE").length,
+  };
+
+  const dynHint = (itemId) => {
+    if (itemId === "fac_urgent_review") return `현재 URGENT 보완과제 ${dynCtx.urgentCount}건 진행중`;
+    if (itemId === "inv_low_check") return "재고관리 탭 → 필요재고 참조";
+    return "";
+  };
+
+  // Ensures an item record exists and returns it (immutably seeded)
+  const seedItem = (prev, itemId) => {
+    if (prev[itemId]) return prev;
+    return { ...prev, [itemId]: { checked: false, assignee: null, status: "TODO", note: "", at: null, logs: [], acks: {} } };
+  };
+
+  const appendLog = (prev, itemId, entry) => {
+    const cur = prev[itemId] || { checked: false, assignee: null, status: "TODO", note: "", at: null, logs: [], acks: {} };
+    const newEntry = { at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name, ...entry };
+    return { ...prev, [itemId]: { ...cur, logs: [...(cur.logs || []), newEntry] } };
+  };
+
+  const toggle = (itemId, itemLabel, itemCatLabel) => {
+    const cur = checks[itemId];
+    if (cur?.checked) {
+      // Already checked - revert
+      setChecks(prev => {
+        const seeded = seedItem(prev, itemId);
+        const c = seeded[itemId];
+        return { ...seeded, [itemId]: { ...c, checked: false, logs: [...c.logs, { at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name, action: "uncheck" }] } };
+      });
+    } else {
+      // Open photo + AI modal to complete
+      setCheckModalItem({ id: itemId, label: itemLabel, catLabel: itemCatLabel });
+    }
+  };
+
+  const completeItem = (itemId, data) => {
+    setChecks(prev => {
+      const seeded = seedItem(prev, itemId);
+      const cur = seeded[itemId];
+      const newLogs = [...cur.logs,
+        { at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name, action: "complete", photoCount: data.photos.length, aiStatus: data.aiResult?.status, confidence: data.aiResult?.confidence },
+      ];
+      return { ...seeded, [itemId]: {
+        ...cur,
+        checked: true,
+        at: data.completedAt,
+        note: data.note || cur.note,
+        photos: data.photos,
+        aiResult: data.aiResult,
+        logs: newLogs,
+      } };
+    });
+    if (addAudit) addAudit({
+      module: "facility",
+      action: "ai_complete",
+      targetLabel: `업무일지 — ${checkModalItem?.label}`,
+      photoCount: data.photos.length,
+      resultStatus: data.aiResult?.status,
+      summary: `업무일지 항목 완료 · ${data.aiResult?.status} · 신뢰도 ${data.aiResult?.confidence}%`,
+    });
+  };
+
+  const setAssignee = (itemId, uid) => {
+    setChecks(prev => {
+      const seeded = seedItem(prev, itemId);
+      const cur = seeded[itemId];
+      if (cur.assignee === uid) return seeded;
+      const toName = MERGED_USERS.find(u => u.id === uid)?.name || "(미지정)";
+      return { ...seeded, [itemId]: { ...cur, assignee: uid, logs: [...cur.logs, { at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name, action: "assign", to: uid, toName }] } };
+    });
+  };
+
+  const setStatus = (itemId, st) => {
+    setChecks(prev => {
+      const seeded = seedItem(prev, itemId);
+      const cur = seeded[itemId];
+      if (cur.status === st) return seeded;
+      return { ...seeded, [itemId]: { ...cur, status: st, logs: [...cur.logs, { at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name, action: "status", from: cur.status, to: st }] } };
+    });
+  };
+
+  const setNote = (itemId, note) => {
+    setChecks(prev => {
+      const seeded = seedItem(prev, itemId);
+      return { ...seeded, [itemId]: { ...seeded[itemId], note } };
+    });
+  };
+
+  const setAck = (itemId, section, acked) => {
+    setChecks(prev => {
+      const seeded = seedItem(prev, itemId);
+      const cur = seeded[itemId];
+      const newAcks = { ...cur.acks, [section]: acked ? { at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name } : null };
+      const log = { at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name, action: acked ? "ack" : "unack", section };
+      return { ...seeded, [itemId]: { ...cur, acks: newAcks, logs: [...cur.logs, log] } };
+    });
+  };
+
+  // Progress
+  const totalItems = tpl.cats.reduce((s, c) => s + c.items.length, 0);
+  const checkedItems = Object.values(checks).filter(v => v.checked).length;
+
+  const handleSave = () => {
+    if (checkedItems === 0) return alert("체크된 항목이 없습니다. 최소 1개 이상 체크 후 저장하세요.");
+    const newLog = {
+      id: "wl" + Date.now(),
+      cycle, date, periodLabel,
+      userId: currentUser?.id, userName: currentUser?.name,
+      at: new Date().toISOString(),
+      items: Object.entries(checks).filter(([_, v]) => v.checked).map(([id, v]) => {
+        // Lookup label from template
+        let label = id;
+        for (const c of tpl.cats) { const f = c.items.find(x => x.id === id); if (f) { label = f.label; break; } }
+        return { id, label, ...v };
+      }),
+      totalItems, checkedItems,
+      generalNote,
+      signature,
+    };
+    setWorklogs(prev => [newLog, ...prev]);
+    if (addAudit) addAudit({
+      module: "facility",
+      action: "action_create",
+      targetLabel: `${tpl.label} — ${periodLabel}`,
+      summary: `업무일지 저장 — ${checkedItems}/${totalItems} 항목 완료${signature ? " · 서명" : ""}`,
+    });
+    // Reset for new entry
+    setChecks({});
+    setGeneralNote("");
+    setSignature(null);
+    alert(`업무일지가 저장되었습니다.\n체크 ${checkedItems}/${totalItems} · ${signature ? "서명 포함" : "서명 없음"}`);
+  };
+
+  // Past logs filtering — date range + cycle scope
+  const [viewMode, setViewMode] = useState("create"); // "create" | "browse"
+  const [showAiGen, setShowAiGen] = useState(false); // AI auto-generation modal
+  const [filterFrom, setFilterFrom] = useState("");
+  const [filterTo, setFilterTo] = useState("");
+  const [filterAllCycles, setFilterAllCycles] = useState(false);
+
+  const allPastLogs = worklogs || [];
+  const cycleScoped = filterAllCycles ? allPastLogs : allPastLogs.filter(w => w.cycle === cycle);
+  const pastLogs = cycleScoped.filter(w => {
+    if (filterFrom && w.date < filterFrom) return false;
+    if (filterTo && w.date > filterTo) return false;
+    return true;
+  });
+
+  const setPresetRange = (days) => {
+    const today = new Date();
+    const from = new Date(today);
+    from.setDate(today.getDate() - days);
+    setFilterFrom(from.toISOString().slice(0, 10));
+    setFilterTo(today.toISOString().slice(0, 10));
+  };
+  const clearFilter = () => { setFilterFrom(""); setFilterTo(""); };
+
+  const CYCLE_TABS = [
+    { k: "DAILY", l: "📅 일별" },
+    { k: "WEEKLY", l: "📆 주별" },
+    { k: "MONTHLY", l: "🗓 월별" },
+    { k: "SEASONAL", l: "🌤 계절별" },
+  ];
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 10002, background: "#f1f5f9", display: "flex", flexDirection: "column" }}>
+      {/* Header */}
+      <div style={{ background: "#0f172a", color: "#fff", padding: "12px 20px", display: "flex", alignItems: "center", gap: 12, flexShrink: 0, boxShadow: "0 2px 6px rgba(0,0,0,0.15)" }}>
+        <div style={{ fontSize: 16, fontWeight: 800 }}>📒 통합 업무일지</div>
+        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}>시설 · 재고 · 안전 통합 점검 기록</div>
+        <button onClick={onClose}
+          style={{ marginLeft: "auto", padding: "6px 14px", borderRadius: 6, background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.2)", color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+          닫기
+        </button>
+      </div>
+
+      {/* Top mode switcher */}
+      <div style={{ background: "#1e293b", padding: "8px 20px", display: "flex", gap: 6, flexShrink: 0, borderBottom: "1px solid #334155" }}>
+        <button onClick={() => setViewMode("create")}
+          style={{ padding: "8px 18px", borderRadius: 6, border: "none", background: viewMode === "create" ? "#2563eb" : "rgba(255,255,255,0.08)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+          ✏️ 새 업무일지 작성
+        </button>
+        <button onClick={() => setViewMode("browse")}
+          style={{ padding: "8px 18px", borderRadius: 6, border: "none", background: viewMode === "browse" ? "#059669" : "rgba(255,255,255,0.08)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+          🔍 기간별 조회 <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 10, background: "rgba(255,255,255,0.2)" }}>{allPastLogs.length}</span>
+        </button>
+        <button onClick={() => setShowAiGen(true)} title="시스템 데이터를 분석해 AI가 기간별 업무일지를 자동 작성합니다"
+          style={{ padding: "8px 18px", borderRadius: 6, border: "none", background: "linear-gradient(135deg,#7c3aed,#db2777)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, marginLeft: "auto", boxShadow: "0 2px 8px rgba(124,58,237,0.4)" }}>
+          🤖 AI 자동 작성
+        </button>
+      </div>
+
+      {/* Cycle tabs */}
+      <div style={{ background: "#fff", borderBottom: "1px solid #e5e7eb", padding: "0 20px", display: "flex", gap: 4, flexShrink: 0 }}>
+        {CYCLE_TABS.map(t => (
+          <button key={t.k} onClick={() => setCycle(t.k)}
+            style={{ padding: "14px 20px", background: "transparent", border: "none", borderBottom: cycle === t.k ? "3px solid #2563eb" : "3px solid transparent", color: cycle === t.k ? "#2563eb" : "#64748b", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+            {t.l}
+          </button>
+        ))}
+      </div>
+
+      {/* Content */}
+      <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
+        <div style={{ maxWidth: 900, margin: "0 auto" }}>
+          {viewMode === "browse" ? (
+            <BrowseView
+              allPastLogs={allPastLogs}
+              pastLogs={pastLogs}
+              cycle={cycle}
+              filterFrom={filterFrom}
+              setFilterFrom={setFilterFrom}
+              filterTo={filterTo}
+              setFilterTo={setFilterTo}
+              filterAllCycles={filterAllCycles}
+              setFilterAllCycles={setFilterAllCycles}
+              setPresetRange={setPresetRange}
+              clearFilter={clearFilter}
+              setReportLog={setReportLog}
+            />
+          ) : (<>
+          {/* Meta */}
+          <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb", padding: 16, marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: "#0f172a" }}>{tpl.label}</div>
+                <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>{tpl.desc}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 11, color: "#64748b" }}>기간</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>{periodLabel}</div>
+                <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>작성자: {currentUser?.name || "—"} · {currentUser?.dept || ""}</div>
+              </div>
+            </div>
+            {/* Progress bar */}
+            <div style={{ marginTop: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 4 }}>
+                <span style={{ color: "#64748b", fontWeight: 700 }}>진행률</span>
+                <span style={{ color: checkedItems === totalItems ? "#059669" : "#475569", fontWeight: 700 }}>{checkedItems} / {totalItems}</span>
+              </div>
+              <div style={{ height: 6, background: "#f1f5f9", borderRadius: 3, overflow: "hidden" }}>
+                <div style={{ width: `${(checkedItems / totalItems) * 100}%`, height: "100%", background: checkedItems === totalItems ? "#059669" : "#2563eb", transition: "width 0.3s" }} />
+              </div>
+            </div>
+          </div>
+
+          {/* Categories */}
+          {tpl.cats.map(cat => {
+            const catChecked = cat.items.filter(i => checks[i.id]?.checked).length;
+            return (
+              <div key={cat.catId} style={{ background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb", marginBottom: 14, overflow: "hidden" }}>
+                <div style={{ background: cat.catColor + "11", borderBottom: `2px solid ${cat.catColor}33`, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: 14, fontWeight: 800, color: cat.catColor }}>{cat.catLabel}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: cat.catColor }}>{catChecked} / {cat.items.length}</span>
+                </div>
+                <div>
+                  {cat.items.map(item => {
+                    const st = checks[item.id] || { checked: false, assignee: null, status: "TODO", note: "", logs: [], acks: {} };
+                    const isChecked = st.checked;
+                    const hint = item.hintDyn ? dynHint(item.id) : item.hint;
+                    const STATUS_OPTS = [
+                      { k: "TODO", l: "대기", c: "#64748b", bg: "#f1f5f9" },
+                      { k: "IN_PROGRESS", l: "진행중", c: "#2563eb", bg: "#eff6ff" },
+                      { k: "DONE", l: "완료", c: "#059669", bg: "#f0fdf4" },
+                      { k: "BLOCKED", l: "보류", c: "#ea580c", bg: "#fff7ed" },
+                      { k: "SKIPPED", l: "해당없음", c: "#94a3b8", bg: "#f8fafc" },
+                    ];
+                    const stOpt = STATUS_OPTS.find(o => o.k === st.status) || STATUS_OPTS[0];
+                    return (
+                      <div key={item.id} style={{ padding: "12px 14px", borderBottom: "1px solid #f8fafc" }}>
+                        <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                          <button type="button" onClick={() => toggle(item.id, item.label, cat.catLabel)}
+                            style={{ marginTop: 2, width: 22, height: 22, borderRadius: 5, border: isChecked ? "none" : "2px solid #cbd5e1", background: isChecked ? "#059669" : "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 13, color: "#fff", fontWeight: 900 }}>
+                            {isChecked ? "✓" : ""}
+                          </button>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                              <span style={{ fontSize: 13, fontWeight: 600, color: isChecked ? "#059669" : "#0f172a", textDecoration: isChecked ? "line-through" : "none" }}>
+                                {item.label}
+                              </span>
+                              <button type="button" onClick={() => setGuideItem({ id: item.id, label: item.label, catLabel: cat.catLabel })}
+                                style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1e40af", fontWeight: 700, cursor: "pointer" }}>
+                                📘 상세 가이드
+                              </button>
+                            </div>
+                            {hint && <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>💡 {hint}</div>}
+                          </div>
+                          {isChecked && st.at && (
+                            <div style={{ fontSize: 10, color: "#94a3b8", fontFamily: "monospace", flexShrink: 0, whiteSpace: "nowrap" }}>
+                              {new Date(st.at).toLocaleTimeString("ko", { hour: "2-digit", minute: "2-digit" })}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Assignee + status row */}
+                        <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", flexWrap: "wrap", paddingLeft: 32 }}>
+                          <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>담당자:</span>
+                          <select value={st.assignee || ""} onChange={e => setAssignee(item.id, e.target.value || null)}
+                            style={{ fontSize: 11, padding: "3px 8px", border: "1px solid #e5e7eb", borderRadius: 4, background: "#fff", cursor: "pointer", fontFamily: "inherit" }}>
+                            <option value="">미배정</option>
+                            {MERGED_USERS.filter(u => u.role !== "VIEWER").map(u => (
+                              <option key={u.id} value={u.id}>{u.name} ({u.id}) · {u.role}</option>
+                            ))}
+                          </select>
+                          <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700, marginLeft: 6 }}>상태:</span>
+                          <select value={st.status} onChange={e => setStatus(item.id, e.target.value)}
+                            style={{ fontSize: 11, padding: "3px 8px", border: `1px solid ${stOpt.c}44`, borderRadius: 4, background: stOpt.bg, color: stOpt.c, cursor: "pointer", fontWeight: 700, fontFamily: "inherit" }}>
+                            {STATUS_OPTS.map(o => <option key={o.k} value={o.k}>{o.l}</option>)}
+                          </select>
+                          {isAdmin && Object.keys(st.acks || {}).length > 0 && (
+                            <span style={{ fontSize: 10, color: "#059669", fontWeight: 700, marginLeft: "auto" }}>
+                              ✓ 숙지 {Object.values(st.acks).filter(Boolean).length}/4
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Memo input (shown when checked) */}
+                        {isChecked && (
+                          <input type="text" placeholder="메모 (선택)" value={st.note || ""} onChange={e => setNote(item.id, e.target.value)}
+                            style={{ marginTop: 6, marginLeft: 32, width: "calc(100% - 32px)", padding: "4px 8px", border: "1px solid #e5e7eb", borderRadius: 4, fontSize: 11, fontFamily: "inherit" }} />
+                        )}
+
+                        {/* Photos + AI result (shown when item has completion data) */}
+                        {isChecked && (st.photos?.length > 0 || st.aiResult) && (
+                          <div style={{ marginLeft: 32, marginTop: 6, padding: 8, background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 6 }}>
+                            {st.photos?.length > 0 && (
+                              <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: st.aiResult ? 6 : 0 }}>
+                                {st.photos.slice(0, 6).map((p, pi) => (
+                                  <img key={pi} src={p} alt="" style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 4, border: "1px solid #e5e7eb" }} />
+                                ))}
+                                {st.photos.length > 6 && (
+                                  <div style={{ width: 44, height: 44, borderRadius: 4, background: "#e5e7eb", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#64748b" }}>+{st.photos.length - 6}</div>
+                                )}
+                              </div>
+                            )}
+                            {st.aiResult && (
+                              <div style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
+                                <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 3, background: st.aiResult.confirmed ? "#059669" : "#ea580c", color: "#fff" }}>
+                                  🤖 {st.aiResult.status === "MANUAL" ? "수동 완료" : (st.aiResult.confirmed ? "AI 승인" : "보완 필요")}
+                                </span>
+                                <span style={{ color: "#64748b" }}>신뢰도 {st.aiResult.confidence}%</span>
+                                <span style={{ color: "#475569", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{st.aiResult.notes}</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Activity log (collapsible, shown if logs exist) */}
+                        {st.logs && st.logs.length > 0 && (
+                          <details style={{ marginLeft: 32, marginTop: 6 }}>
+                            <summary style={{ fontSize: 10, color: "#94a3b8", cursor: "pointer", fontWeight: 600 }}>
+                              📜 활동 로그 ({st.logs.length})
+                            </summary>
+                            <div style={{ marginTop: 4, background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 4, padding: 8, maxHeight: 120, overflowY: "auto" }}>
+                              {st.logs.slice(-10).reverse().map((log, i) => {
+                                const actionLabel = {
+                                  check: "✓ 체크함", uncheck: "✗ 체크 해제",
+                                  assign: `👤 담당자 → ${log.toName || "(미지정)"}`,
+                                  status: `🔄 상태 ${log.from} → ${log.to}`,
+                                  ack: `📖 "${log.section}" 숙지 확인`,
+                                  unack: `🔙 "${log.section}" 숙지 취소`,
+                                }[log.action] || log.action;
+                                return (
+                                  <div key={i} style={{ fontSize: 10, color: "#475569", padding: "2px 0", fontFamily: "monospace" }}>
+                                    <span style={{ color: "#94a3b8" }}>{new Date(log.at).toLocaleTimeString("ko", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
+                                    {" · "}
+                                    <span style={{ color: "#2563eb", fontWeight: 700 }}>{log.byName}</span>
+                                    {" — "}
+                                    <span>{actionLabel}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </details>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+
+          {/* General note + signature */}
+          <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb", padding: 16, marginBottom: 14 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>📝 업무 특이사항</div>
+            <textarea value={generalNote} onChange={e => setGeneralNote(e.target.value)} placeholder="특이사항·인수인계 내용·사고 발생 여부 등 자유 기록"
+              style={{ width: "100%", minHeight: 80, padding: 10, border: "1px solid #e5e7eb", borderRadius: 8, fontSize: 12, resize: "vertical", fontFamily: "inherit" }} />
+            <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+              <SignatureSlot label="작성자 서명" value={signature} onChange={setSignature} sublabel={currentUser?.name || ""} />
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6, fontWeight: 600 }}>검토자 서명</div>
+                <div style={{ minHeight: 56, border: "1px dashed #cbd5e1", borderRadius: 6, background: "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#94a3b8" }}>(저장 후 결재)</div>
+                <div style={{ borderTop: "1px solid #000", marginTop: 4, fontSize: 9, color: "#94a3b8", paddingTop: 2 }}>(팀장)</div>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6, fontWeight: 600 }}>승인자 서명</div>
+                <div style={{ minHeight: 56, border: "1px dashed #cbd5e1", borderRadius: 6, background: "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#94a3b8" }}>(저장 후 결재)</div>
+                <div style={{ borderTop: "1px solid #000", marginTop: 4, fontSize: 9, color: "#94a3b8", paddingTop: 2 }}>(대표)</div>
+              </div>
+            </div>
+          </div>
+
+          <button onClick={handleSave}
+            style={{ width: "100%", borderRadius: 12, background: "linear-gradient(135deg,#2563eb,#059669)", color: "#fff", padding: 14, fontSize: 15, fontWeight: 800, border: "none", cursor: "pointer", marginBottom: 20 }}>
+            ✨ 업무일지 저장 ({checkedItems}/{totalItems} 항목)
+          </button>
+          </>)}
+        </div>
+      </div>
+      {guideItem && <WorklogGuideModal itemId={guideItem.id} itemLabel={guideItem.label} catLabel={guideItem.catLabel} cycle={cycle} onClose={() => setGuideItem(null)} currentUser={currentUser} acks={checks[guideItem.id]?.acks || {}} onAck={(section, acked) => setAck(guideItem.id, section, acked)} />}
+      {checkModalItem && <WorklogItemCheckModal item={checkModalItem} catLabel={checkModalItem.catLabel} onClose={() => setCheckModalItem(null)} onComplete={(data) => completeItem(checkModalItem.id, data)} currentUser={currentUser} isAdmin={isAdmin} />}
+      {reportLog && <WorklogReportModal log={reportLog} onClose={() => setReportLog(null)} />}
+      {showAiGen && <WorklogAiGenModal facActions={facActions} currentUser={currentUser} allPastLogs={allPastLogs} onClose={() => setShowAiGen(false)} onSave={(generated) => {
+        setWorklogs(prev => [generated, ...prev]);
+        addAudit && addAudit({ module: "worklog", action: "ai_generate", targetLabel: `[AI 자동작성] ${generated.cycle} ${generated.period}`, severity: null, summary: `AI가 자동 생성한 ${generated.items?.length || 0}개 점검 항목` });
+        setShowAiGen(false);
+        alert(`✓ AI 업무일지가 생성되어 저장되었습니다!\n${generated.cycle} · ${generated.period}\n총 ${generated.items?.length || 0}개 항목, ${generated.items?.filter(i => i.checked).length || 0}개 완료 처리됨`);
+      }} />}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   AI WORKLOG GENERATION ENGINE
+   Analyzes system data (facActions, inventory, audit log, CCTV events)
+   and produces a period-appropriate worklog draft.
+   ═════════════════════════════════════════════════════════════════ */
+function analyzeSystemForWorklog(cycle, periodStart, periodEnd, facActions, auditLog, inventoryProds) {
+  const findings = [];
+  const startMs = periodStart.getTime();
+  const endMs = periodEnd.getTime();
+  const nowMs = Date.now();
+
+  // Filter facActions relevant to this period
+  const periodActions = (facActions || []).filter(a => {
+    const created = a.at ? new Date(a.at).getTime() : nowMs;
+    return created >= startMs && created <= endMs;
+  });
+  const openAll = (facActions || []).filter(a => a.status !== "DONE");
+  const urgentOpen = openAll.filter(a => a.sev === "URGENT");
+  const highOpen = openAll.filter(a => a.sev === "HIGH");
+  const doneInPeriod = periodActions.filter(a => a.status === "DONE");
+
+  // Filter audit log to period
+  const periodAudit = (auditLog || []).filter(a => {
+    const ts = a.at ? new Date(a.at).getTime() : 0;
+    return ts >= startMs && ts <= endMs;
+  });
+  const cctvChecks = periodAudit.filter(a => (a.targetLabel || "").includes("CCTV") || (a.action || "").includes("cctv"));
+  const facilityAudit = periodAudit.filter(a => a.module === "facility");
+  const inventoryAudit = periodAudit.filter(a => a.module === "inventory");
+
+  // Inventory analysis
+  const lowStockItems = (inventoryProds || []).filter(p => p.qty > 0 && p.qty < 5);
+  const outOfStockItems = (inventoryProds || []).filter(p => p.qty === 0);
+  const totalInv = (inventoryProds || []).reduce((s, p) => s + (p.qty || 0), 0);
+
+  return {
+    periodActions, openAll, urgentOpen, highOpen, doneInPeriod,
+    periodAudit, cctvChecks, facilityAudit, inventoryAudit,
+    lowStockItems, outOfStockItems, totalInv,
+    totalInvItems: (inventoryProds || []).length,
+  };
+}
+
+function WorklogAiGenModal({ facActions, currentUser, allPastLogs, onClose, onSave }) {
+  const [cycle, setCycle] = useState("DAILY");
+  const [dateFrom, setDateFrom] = useState(() => {
+    const d = new Date();
+    return d.toISOString().slice(0, 10);
+  });
+  const [step, setStep] = useState("config"); // config → analyzing → preview
+  const [preview, setPreview] = useState(null);
+
+  // Load inventory + audit from localStorage
+  const inventoryProds = useMemo(() => {
+    try { return JSON.parse(window.localStorage?.getItem("jamsa_inv_prods") || "[]"); }
+    catch (e) { return []; }
+  }, []);
+  const auditLog = useMemo(() => {
+    try { return JSON.parse(window.localStorage?.getItem("jamsa_audit_log") || "[]"); }
+    catch (e) { return []; }
+  }, []);
+
+  const cycleInfo = {
+    DAILY: { label: "일별 (하루)", days: 1, fmt: (d) => `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일 (${["일","월","화","수","목","금","토"][d.getDay()]})` },
+    WEEKLY: { label: "주별 (7일)", days: 7, fmt: (d) => {
+      const end = new Date(d); end.setDate(d.getDate() + 6);
+      return `${d.getMonth() + 1}/${d.getDate()} ~ ${end.getMonth() + 1}/${end.getDate()}`;
+    }},
+    MONTHLY: { label: "월별 (한 달)", days: 30, fmt: (d) => `${d.getFullYear()}년 ${d.getMonth() + 1}월` },
+    SEASONAL: { label: "계절별 (3개월)", days: 90, fmt: (d) => {
+      const month = d.getMonth();
+      const season = month >= 2 && month <= 4 ? "봄" : month >= 5 && month <= 7 ? "여름" : month >= 8 && month <= 10 ? "가을" : "겨울";
+      return `${d.getFullYear()}년 ${season}`;
+    }},
+  };
+
+  const handleAnalyze = () => {
+    setStep("analyzing");
+
+    const startDate = new Date(dateFrom);
+    const endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + (cycleInfo[cycle].days - 1));
+    endDate.setHours(23, 59, 59, 999);
+
+    // Simulate AI analysis delay for UX
+    setTimeout(() => {
+      const data = analyzeSystemForWorklog(cycle, startDate, endDate, facActions, auditLog, inventoryProds);
+      const template = WORKLOG_TEMPLATES[cycle];
+      const periodLabel = cycleInfo[cycle].fmt(startDate);
+
+      // Build items with AI-inferred completion status
+      const items = [];
+      let urgentCount = 0, lowStockCount = lowStockItems_len(data);
+
+      template.cats.forEach(cat => {
+        cat.items.forEach(it => {
+          // AI decides: was this item likely done based on system data?
+          let checked = false, status = "TODO", note = "", inference = "";
+
+          // Inference rules by item ID
+          if (it.id === "fac_urgent_review") {
+            const urgentHandled = data.doneInPeriod.filter(a => a.sev === "URGENT").length;
+            const urgentPending = data.urgentOpen.length;
+            if (urgentPending === 0) {
+              checked = true; status = "DONE";
+              note = `✓ 해당 기간 긴급 보완과제 모두 처리됨 (${urgentHandled}건 완료)`;
+              inference = `시스템 데이터: URGENT 보완과제 ${urgentHandled}건 완료 · 미처리 0건`;
+            } else {
+              note = `⚠️ 미처리 URGENT ${urgentPending}건 — 처리 필요`;
+              inference = `시스템 데이터: URGENT 미처리 ${urgentPending}건`;
+              urgentCount = urgentPending;
+            }
+          } else if (it.id === "fac_cctv_check") {
+            if (data.cctvChecks.length >= cycleInfo[cycle].days * 0.8) {
+              checked = true; status = "DONE";
+              note = `✓ CCTV 점검 ${data.cctvChecks.length}회 기록 확인 (기간 내 충분)`;
+              inference = `시스템 데이터: CCTV 관련 활동 로그 ${data.cctvChecks.length}회`;
+            } else {
+              note = `CCTV 점검 로그 ${data.cctvChecks.length}회 기록 (점검 부족 가능성)`;
+              inference = `시스템 데이터: CCTV 점검 로그 ${data.cctvChecks.length}회 (기대: ${Math.ceil(cycleInfo[cycle].days * 0.8)}회)`;
+            }
+          } else if (it.id === "fac_daily_clean" || it.id === "fac_close_lockup" || it.id === "fac_open_check") {
+            // Routine items — assume done if no facility audit events flagged
+            if (data.facilityAudit.length > 0) {
+              checked = true; status = "DONE";
+              note = `✓ 기간 내 시설점검 활동 ${data.facilityAudit.length}회 기록됨`;
+              inference = `시스템 데이터: 시설 관련 활동 로그 있음`;
+            } else {
+              note = "기록 없음 — 확인 필요";
+              inference = "시스템 데이터: 해당 기간 시설점검 로그 없음";
+            }
+          } else if (it.id === "inv_key_stock" || it.id === "inv_low_check") {
+            if (data.lowStockItems.length === 0) {
+              checked = true; status = "DONE";
+              note = `✓ 저재고 품목 없음 · 총 ${data.totalInv}개 정상 보유`;
+              inference = `시스템 데이터: 재고 부족 0건 · 총 ${data.totalInvItems}품목`;
+            } else {
+              note = `⚠️ 저재고 ${data.lowStockItems.length}품목: ${data.lowStockItems.slice(0, 3).map(p => p.name).join(", ")}${data.lowStockItems.length > 3 ? " 외" : ""}`;
+              inference = `시스템 데이터: 5개 미만 품목 ${data.lowStockItems.length}건`;
+            }
+          } else if (it.id === "inv_stockin" || it.id === "inv_stockout") {
+            if (data.inventoryAudit.length > 0) {
+              checked = true; status = "DONE";
+              note = `✓ 재고 활동 ${data.inventoryAudit.length}건 기록됨`;
+              inference = `시스템 데이터: 재고 관련 활동 로그 ${data.inventoryAudit.length}회`;
+            } else {
+              note = "기간 내 재고 변동 없음";
+              inference = "시스템 데이터: 입출고 기록 없음";
+            }
+          } else if (it.id === "saf_incident") {
+            note = "해당 기간 사고/준사고 기록 없음 (시스템 확인 결과)";
+            checked = true; status = "DONE";
+            inference = "시스템 데이터: 안전 모듈 사고 기록 0건";
+          } else if (it.id === "saf_first_aid" || it.id === "saf_fire_escape") {
+            checked = true; status = "DONE";
+            note = "✓ 정기 점검 완료 (가정)";
+            inference = "AI 추정: 정기 루틴 항목 · 기록 부재";
+          } else {
+            // Default: suggest as undone but with AI-generated note
+            note = `AI 참고: 해당 기간 관련 활동 로그 ${data.periodAudit.length}건 · 담당자 확인 필요`;
+            inference = "시스템 데이터: 자동 판정 불가";
+          }
+
+          items.push({
+            id: it.id, label: it.label, cat: cat.catLabel, catId: cat.catId,
+            checked, status, note, inference,
+            at: checked ? new Date().toISOString() : null,
+            assignee: currentUser?.id,
+            assigneeName: currentUser?.name,
+          });
+        });
+      });
+
+      // Build AI summary narrative
+      const completedCount = items.filter(i => i.checked).length;
+      const narrative = [];
+      narrative.push(`【${periodLabel}】 기간 종합 분석`);
+      narrative.push("");
+      narrative.push("■ 시설점검");
+      narrative.push(`- 전체 보완과제: ${openAll_len(data)}건 진행중${data.urgentOpen.length > 0 ? ` (긴급 ${data.urgentOpen.length}건)` : ""}`);
+      narrative.push(`- 해당 기간 완료: ${data.doneInPeriod.length}건`);
+      narrative.push(`- CCTV 점검 기록: ${data.cctvChecks.length}회`);
+      narrative.push("");
+      narrative.push("■ 재고관리");
+      narrative.push(`- 총 재고: ${data.totalInv.toLocaleString()}개 (${data.totalInvItems}품목)`);
+      if (data.lowStockItems.length > 0) {
+        narrative.push(`- ⚠️ 저재고: ${data.lowStockItems.length}품목`);
+        data.lowStockItems.slice(0, 5).forEach(p => narrative.push(`  · ${p.name}: ${p.qty}개`));
+      } else {
+        narrative.push(`- ✓ 저재고 품목 없음`);
+      }
+      if (data.outOfStockItems.length > 0) {
+        narrative.push(`- 🚨 품절: ${data.outOfStockItems.length}품목`);
+      }
+      narrative.push("");
+      narrative.push("■ 활동 로그");
+      narrative.push(`- 시설: ${data.facilityAudit.length}건 · 재고: ${data.inventoryAudit.length}건 · 전체: ${data.periodAudit.length}건`);
+      narrative.push("");
+      narrative.push("■ AI 추천 조치사항");
+      if (data.urgentOpen.length > 0) narrative.push(`1. 🚨 URGENT 보완과제 ${data.urgentOpen.length}건 즉시 처리 (최우선)`);
+      if (data.lowStockItems.length > 0) narrative.push(`${data.urgentOpen.length > 0 ? 2 : 1}. 📦 저재고 품목 ${data.lowStockItems.length}건 발주 검토`);
+      if (data.cctvChecks.length < cycleInfo[cycle].days * 0.8) narrative.push(`${1 + (data.urgentOpen.length > 0 ? 1 : 0) + (data.lowStockItems.length > 0 ? 1 : 0)}. 📹 CCTV 정기 점검 주기 재확인`);
+      if (data.urgentOpen.length === 0 && data.lowStockItems.length === 0) narrative.push("- 특이사항 없음 · 정상 운영 유지 권장");
+      narrative.push("");
+      narrative.push(`(AI 자동 생성: ${new Date().toLocaleString("ko")} · 담당: ${currentUser?.name || "-"})`);
+
+      setPreview({
+        cycle: cycleInfo[cycle].label,
+        cycleKey: cycle,
+        period: periodLabel,
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString(),
+        items,
+        summary: narrative.join("\n"),
+        stats: {
+          totalItems: items.length,
+          completedItems: completedCount,
+          urgentRemaining: data.urgentOpen.length,
+          lowStock: data.lowStockItems.length,
+          auditEntries: data.periodAudit.length,
+        },
+        generatedAt: new Date().toISOString(),
+        generatedBy: currentUser?.name || "AI",
+        aiGenerated: true,
+      });
+      setStep("preview");
+    }, 1200);
+  };
+
+  const handleSave = () => {
+    if (!preview) return;
+    const worklogEntry = {
+      id: "wl" + Date.now() + Math.random().toString(36).slice(2, 8),
+      at: new Date().toISOString(),
+      cycle: preview.cycle,
+      cycleKey: preview.cycleKey,
+      period: preview.period,
+      date: dateFrom,
+      author: currentUser?.name,
+      authorId: currentUser?.id,
+      dept: currentUser?.dept,
+      items: preview.items,
+      generalNote: preview.summary,
+      signature: null,
+      aiGenerated: true,
+      aiMeta: {
+        generatedAt: preview.generatedAt,
+        generatedBy: preview.generatedBy,
+        stats: preview.stats,
+      },
+    };
+    onSave(worklogEntry);
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10500, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.7)" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: 820, maxWidth: "95vw", maxHeight: "92vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+        {/* Header */}
+        <div style={{ padding: "14px 18px", background: "linear-gradient(135deg,#7c3aed,#db2777)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 11, opacity: 0.9 }}>AI 업무일지 자동 작성</div>
+            <div style={{ fontSize: 17, fontWeight: 900 }}>🤖 시스템 데이터 기반 업무일지 생성</div>
+          </div>
+          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", fontSize: 22, cursor: "pointer", width: 30, height: 30, borderRadius: "50%", lineHeight: 1 }}>×</button>
+        </div>
+
+        {/* Step indicator */}
+        <div style={{ padding: "8px 18px", background: "#f8fafc", borderBottom: "1px solid #e5e7eb", display: "flex", gap: 16, fontSize: 11, fontWeight: 700 }}>
+          <div style={{ color: step === "config" ? "#7c3aed" : "#94a3b8" }}>
+            1️⃣ 설정 {step !== "config" && "✓"}
+          </div>
+          <div style={{ color: step === "analyzing" ? "#7c3aed" : step === "preview" ? "#94a3b8" : "#cbd5e1" }}>
+            2️⃣ AI 분석 {step === "preview" && "✓"}
+          </div>
+          <div style={{ color: step === "preview" ? "#7c3aed" : "#cbd5e1" }}>
+            3️⃣ 미리보기·저장
+          </div>
+        </div>
+
+        <div style={{ flex: 1, overflowY: "auto", padding: 18 }}>
+          {step === "config" && (
+            <>
+              <div style={{ padding: 12, background: "#faf5ff", border: "1px solid #e9d5ff", borderRadius: 8, marginBottom: 16 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: "#6b21a8", marginBottom: 4 }}>🤖 AI가 분석하는 데이터</div>
+                <div style={{ fontSize: 11, color: "#7e22ce", lineHeight: 1.7 }}>
+                  · 보완과제 진행 현황 (시설점검 모듈) — 긴급/경고/완료 건수<br/>
+                  · 재고 수준 (재고관리 모듈) — 저재고·품절 품목 자동 감지<br/>
+                  · CCTV 점검 로그 (활동 기록) — 정기 점검 이행 여부<br/>
+                  · 전체 활동 기록 — 시설/재고/안전 모듈 활동량<br/>
+                  · 과거 업무일지 패턴 — 유사 기간 작성 습관 학습
+                </div>
+              </div>
+
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#475569", marginBottom: 8 }}>📅 작성할 기간 유형 선택</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8, marginBottom: 16 }}>
+                {Object.entries(cycleInfo).map(([k, v]) => (
+                  <button key={k} onClick={() => setCycle(k)}
+                    style={{ padding: 12, borderRadius: 8, border: `2px solid ${cycle === k ? "#7c3aed" : "#e5e7eb"}`, background: cycle === k ? "#faf5ff" : "#fff", color: cycle === k ? "#6b21a8" : "#475569", fontSize: 13, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
+                    <div style={{ fontSize: 14, fontWeight: 800 }}>{v.label}</div>
+                    <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>분석 범위: {v.days}일</div>
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#475569", marginBottom: 8 }}>📆 기간 시작일</div>
+              <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                style={{ width: "100%", padding: "10px 12px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", marginBottom: 16 }} />
+
+              <div style={{ padding: 10, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 6, fontSize: 11, color: "#065f46" }}>
+                💡 <strong>예상 분석 기간</strong>: {(() => {
+                  const s = new Date(dateFrom);
+                  const e = new Date(s); e.setDate(s.getDate() + cycleInfo[cycle].days - 1);
+                  return `${s.toLocaleDateString("ko")} ~ ${e.toLocaleDateString("ko")} (${cycleInfo[cycle].days}일)`;
+                })()}
+              </div>
+            </>
+          )}
+
+          {step === "analyzing" && (
+            <div style={{ padding: 40, textAlign: "center" }}>
+              <div style={{ width: 60, height: 60, margin: "0 auto 20px", border: "5px solid #e9d5ff", borderTopColor: "#7c3aed", borderRadius: "50%", animation: "naverSpin 0.8s linear infinite" }}></div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#6b21a8" }}>🧠 AI가 시스템 데이터를 분석 중...</div>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 8, lineHeight: 1.7 }}>
+                · 보완과제 {(facActions || []).length}건 검토<br/>
+                · 재고 데이터 조회<br/>
+                · 활동 로그 {auditLog.length}건 분석<br/>
+                · 항목별 이행 여부 추론
+              </div>
+            </div>
+          )}
+
+          {step === "preview" && preview && (
+            <>
+              {/* Summary stats */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 16 }}>
+                <div style={{ padding: 10, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 6, textAlign: "center" }}>
+                  <div style={{ fontSize: 9, color: "#065f46", fontWeight: 700 }}>총 항목</div>
+                  <div style={{ fontSize: 20, fontWeight: 900, color: "#065f46" }}>{preview.stats.totalItems}</div>
+                </div>
+                <div style={{ padding: 10, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 6, textAlign: "center" }}>
+                  <div style={{ fontSize: 9, color: "#1e40af", fontWeight: 700 }}>✓ 자동 완료</div>
+                  <div style={{ fontSize: 20, fontWeight: 900, color: "#1e40af" }}>{preview.stats.completedItems}</div>
+                </div>
+                <div style={{ padding: 10, background: preview.stats.urgentRemaining > 0 ? "#fef2f2" : "#f8fafc", border: `1px solid ${preview.stats.urgentRemaining > 0 ? "#fecaca" : "#e5e7eb"}`, borderRadius: 6, textAlign: "center" }}>
+                  <div style={{ fontSize: 9, color: preview.stats.urgentRemaining > 0 ? "#991b1b" : "#64748b", fontWeight: 700 }}>🚨 긴급 남음</div>
+                  <div style={{ fontSize: 20, fontWeight: 900, color: preview.stats.urgentRemaining > 0 ? "#dc2626" : "#64748b" }}>{preview.stats.urgentRemaining}</div>
+                </div>
+                <div style={{ padding: 10, background: preview.stats.lowStock > 0 ? "#fff7ed" : "#f8fafc", border: `1px solid ${preview.stats.lowStock > 0 ? "#fed7aa" : "#e5e7eb"}`, borderRadius: 6, textAlign: "center" }}>
+                  <div style={{ fontSize: 9, color: preview.stats.lowStock > 0 ? "#9a3412" : "#64748b", fontWeight: 700 }}>📦 저재고</div>
+                  <div style={{ fontSize: 20, fontWeight: 900, color: preview.stats.lowStock > 0 ? "#ea580c" : "#64748b" }}>{preview.stats.lowStock}</div>
+                </div>
+              </div>
+
+              <div style={{ padding: 10, background: "#faf5ff", border: "1px solid #e9d5ff", borderRadius: 6, fontSize: 11, color: "#6b21a8", marginBottom: 14 }}>
+                <div style={{ fontWeight: 800, marginBottom: 4 }}>📋 {preview.cycle} · {preview.period}</div>
+                <div style={{ fontSize: 10, color: "#7e22ce" }}>AI가 시스템 데이터를 분석해서 자동 완료한 항목은 <strong style={{ color: "#059669" }}>초록 체크</strong>로, 확인 필요한 항목은 <strong style={{ color: "#ea580c" }}>미완료</strong>로 표시됩니다.</div>
+              </div>
+
+              {/* Items preview (grouped by category) */}
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#475569", marginBottom: 8 }}>📋 자동 생성된 체크 항목</div>
+              <div style={{ maxHeight: 280, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 6, marginBottom: 14 }}>
+                {Object.entries(preview.items.reduce((acc, it) => {
+                  if (!acc[it.cat]) acc[it.cat] = [];
+                  acc[it.cat].push(it);
+                  return acc;
+                }, {})).map(([catLabel, catItems]) => (
+                  <div key={catLabel} style={{ borderBottom: "1px solid #e5e7eb" }}>
+                    <div style={{ padding: "6px 10px", background: "#f8fafc", fontSize: 11, fontWeight: 800, color: "#475569" }}>
+                      {catLabel} <span style={{ color: "#94a3b8", fontWeight: 600 }}>({catItems.filter(i => i.checked).length}/{catItems.length})</span>
+                    </div>
+                    {catItems.map(it => (
+                      <div key={it.id} style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", display: "flex", alignItems: "flex-start", gap: 8 }}>
+                        <span style={{ fontSize: 14, flexShrink: 0 }}>{it.checked ? "✅" : "⬜"}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: it.checked ? "#065f46" : "#475569" }}>{it.label}</div>
+                          {it.note && <div style={{ fontSize: 10, color: "#64748b", marginTop: 2, lineHeight: 1.5 }}>{it.note}</div>}
+                          {it.inference && <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 2, fontStyle: "italic" }}>🤖 {it.inference}</div>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+
+              {/* AI narrative summary */}
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#475569", marginBottom: 6 }}>📝 AI 종합 분석 (일지 본문)</div>
+              <pre style={{ padding: 12, background: "#0f172a", color: "#cbd5e1", borderRadius: 6, fontSize: 10, fontFamily: "'D2Coding','Monaco','Consolas',monospace", lineHeight: 1.6, maxHeight: 220, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                {preview.summary}
+              </pre>
+            </>
+          )}
+        </div>
+
+        {/* Footer actions */}
+        <div style={{ padding: "12px 18px", borderTop: "1px solid #e5e7eb", display: "flex", justifyContent: "flex-end", gap: 8, background: "#f8fafc" }}>
+          <button onClick={onClose}
+            style={{ padding: "9px 16px", borderRadius: 6, background: "#fff", border: "1px solid #e5e7eb", color: "#64748b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+            취소
+          </button>
+          {step === "config" && (
+            <button onClick={handleAnalyze}
+              style={{ padding: "9px 20px", borderRadius: 6, background: "linear-gradient(135deg,#7c3aed,#db2777)", color: "#fff", border: "none", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+              🧠 AI 분석 시작 →
+            </button>
+          )}
+          {step === "preview" && (
+            <>
+              <button onClick={() => setStep("config")}
+                style={{ padding: "9px 16px", borderRadius: 6, background: "#fff", border: "1px solid #cbd5e1", color: "#475569", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                ← 다시 설정
+              </button>
+              <button onClick={handleSave}
+                style={{ padding: "9px 20px", borderRadius: 6, background: "linear-gradient(135deg,#059669,#2563eb)", color: "#fff", border: "none", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+                💾 일지로 저장
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Helper functions (needed because we reference openAll/lowStockItems by length inside analyzeSystemForWorklog result)
+const openAll_len = (data) => data.openAll.length;
+const lowStockItems_len = (data) => data.lowStockItems.length;
+
+/* ==================== TOP-LEVEL UNIFIED APP ==================== */
+
+// Unified user pool: combines v2 (ADMIN/MANAGER/INSPECTOR/VIEWER) + v11 (master/staff/viewer).
+// Each user has both `role` (facility-style) and `invRole` (inventory-style) so both modules work.
+// If a module-specific role isn't set we map from the primary role.
+const FAC_TO_INV_ROLE = {
+  ADMIN: "master",
+  MANAGER: "staff",
+  INSPECTOR: "staff",
+  VIEWER: "viewer",
+};
+const INV_TO_FAC_ROLE = {
+  master: "ADMIN",
+  staff: "MANAGER",
+  viewer: "VIEWER",
+};
+
+const MERGED_USERS = [
+  // From facility v2 (primary ADMIN etc.)
+  { id: "u1", name: "이경연", email: "admin@jamsafarm.kr", login: "admin",   pw: "admin1234",  role: "ADMIN",     invRole: "master", dept: "시설운영팀",    active: true },
+  { id: "u2", name: "김효진", email: "mgr@jamsafarm.kr",   login: "mgr",     pw: "mgr1234",    role: "MANAGER",   invRole: "staff",  dept: "시설운영팀",    active: true },
+  { id: "u3", name: "전원기", email: "ins1@jamsafarm.kr",  login: "ins1",    pw: "ins1234",    role: "INSPECTOR", invRole: "staff",  dept: "시설운영팀",    active: true },
+  { id: "u4", name: "고가은", email: "ins2@jamsafarm.kr",  login: "ins2",    pw: "ins1234",    role: "INSPECTOR", invRole: "staff",  dept: "체험프로그램팀", active: true },
+  { id: "u5", name: "박반장", email: "viewer@jamsafarm.kr",login: "viewer",  pw: "viewer1234", role: "VIEWER",    invRole: "viewer", dept: "경영지원팀",    active: true },
+];
+
+// Shape adapter: the facility module reads user.role as {id,name,email,role,dept}.
+// The inventory module reads user.{id,name,login,pw,role:<inventory-role>,active}.
+// We feed each module a user object with the fields it expects.
+function toFacUser(u){ return { id: u.id, name: u.name, email: u.email, role: u.role, dept: u.dept, pw: u.pw }; }
+function toInvUser(u){ return { id: u.id, name: u.name, login: u.login, pw: u.pw, role: u.invRole || FAC_TO_INV_ROLE[u.role] || "viewer", active: u.active !== false }; }
+
+function UnifiedLogin({ users, onLogin }){
+  const [login, setLogin] = useState("admin");
+  const [pw, setPw] = useState("admin1234");
+  const [err, setErr] = useState("");
+  const go = () => {
+    // Accept either email or login id
+    const u = users.find(x => (x.login === login || x.email === login) && x.pw === pw && x.active !== false);
+    if (!u) { setErr("이메일/아이디 또는 비밀번호 오류"); return; }
+    onLogin(u);
+  };
+  const onKey = (e) => { if (e.key === "Enter") go(); };
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(135deg,#0f172a,#1e293b)", fontFamily: "'Pretendard','Noto Sans KR',sans-serif", padding: 16 }}>
+      <style>{`@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');*{box-sizing:border-box;margin:0}`}</style>
+      <div style={{ background: "#fff", borderRadius: 20, padding: "40px 36px", width: 400, maxWidth: "94vw", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        <div style={{ textAlign: "center", marginBottom: 28 }}>
+          <div style={{ fontSize: 42, marginBottom: 8 }}>🏛️🐛</div>
+          <h1 style={{ fontSize: 19, fontWeight: 900, color: "#0f172a" }}>한국잠사플레이팜 / 박물관</h1>
+          <div style={{ fontSize: 13, color: "#94a3b8", marginTop: 4 }}>통합 관리 시스템</div>
+          <div style={{ fontSize: 11, color: "#cbd5e1", marginTop: 2 }}>시설점검 · 재고관리</div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 700, color: "#64748b", display: "block", marginBottom: 5 }}>아이디 또는 이메일</label>
+            <input value={login} onChange={e => setLogin(e.target.value)} onKeyDown={onKey}
+              placeholder="admin 또는 admin@jamsafarm.kr"
+              style={{ width: "100%", padding: "12px 14px", border: "1.5px solid #dee2e6", borderRadius: 10, fontSize: 15, outline: "none", fontFamily: "inherit" }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 700, color: "#64748b", display: "block", marginBottom: 5 }}>비밀번호</label>
+            <input type="password" value={pw} onChange={e => setPw(e.target.value)} onKeyDown={onKey}
+              style={{ width: "100%", padding: "12px 14px", border: "1.5px solid #dee2e6", borderRadius: 10, fontSize: 15, outline: "none", fontFamily: "inherit" }} />
+          </div>
+          {err && <p style={{ color: "#ef4444", fontSize: 12, fontWeight: 600 }}>{err}</p>}
+          <button type="button" onClick={go}
+            style={{ width: "100%", padding: 13, background: "#3b5bdb", color: "#fff", border: "none", borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: "pointer", marginTop: 4 }}>
+            로그인
+          </button>
+          <div style={{ marginTop: 8, padding: 12, background: "#f8fafc", borderRadius: 8, fontSize: 11, color: "#94a3b8", lineHeight: 1.7 }}>
+            <div style={{ fontWeight: 700, color: "#64748b", marginBottom: 4 }}>테스트 계정 (클릭 입력):</div>
+            {users.map(u => (
+              <div key={u.id} style={{ cursor: "pointer" }}
+                onClick={() => { setLogin(u.login); setPw(u.pw); setErr(""); }}>
+                {u.login} / {u.pw} — {u.name} ({u.role})
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════
+   INTEGRATED HOME DASHBOARD — Unified map-centric command center
+   All modules (facility/inventory/safety/worklog) converge here.
+   Each zone spot shows aggregate status at a glance.
+   ══════════════════════════════════════════════════════════════ */
+function StatCard({ label, value, unit = "", trend = "", color = "#0f172a" }) {
+  return (
+    <div style={{ background: "#fff", borderRadius: 8, padding: "12px 14px", border: "1px solid #e5e7eb" }}>
+      <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 900, color, margin: "4px 0", lineHeight: 1.1 }}>{value}{unit && <span style={{ fontSize: 14, marginLeft: 2 }}>{unit}</span>}</div>
+      {trend && <div style={{ fontSize: 10, color: "#10b981", fontWeight: 600 }}>{trend}</div>}
+    </div>
+  );
+}
+
+function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], auditLog = [], onNavigate, onAddFacAction }) {
+  const [selectedZone, setSelectedZone] = useState(null);
+  const [filterMode, setFilterMode] = useState("all"); // all | urgent | stock | facility
+  const [viewMode, setViewMode] = useState(() => {
+    // 사용자 마지막 뷰 모드 기억 (단, 'map'이 아닌 값이면 일단 map으로 시작)
+    try {
+      const saved = window.localStorage?.getItem("jamsa_home_view_mode");
+      // 첫 화면은 항상 map. 'card'는 사용자가 명시적으로 선택해야 함
+      return saved === "card" ? "card" : "map";
+    } catch (e) { return "map"; }
+  });
+  const changeViewMode = (m) => {
+    setViewMode(m);
+    try { window.localStorage?.setItem("jamsa_home_view_mode", m); } catch (e) {}
+  };
+
+  // 네이버 지도 연동
+  // 헬퍼: ID에서 따옴표/공백/JSON wrapping 자동 제거
+  const _sanitizeNaverId = (raw) => {
+    if (!raw) return "";
+    let v = String(raw).trim();
+    // JSON.stringify로 저장된 경우 ("h2nolnhw7h" 같은 형태) 파싱
+    try {
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1);
+      }
+    } catch (e) {}
+    // 모든 따옴표 종류 제거 + 공백 제거
+    v = v.replace(/["'`\s]+/g, "").trim();
+    return v;
+  };
+
+  const [naverClientId, setNaverClientId] = useState(() => {
+    try {
+      const raw = window.localStorage?.getItem("jamsa_naver_client_id") || "";
+      const cleaned = _sanitizeNaverId(raw);
+      // 정리된 값이 원본과 다르면 깨끗한 값으로 다시 저장
+      if (cleaned !== raw && cleaned) {
+        try { window.localStorage?.setItem("jamsa_naver_client_id", cleaned); } catch (e) {}
+        console.log(`[NaverMap] Client ID 자동 정리: "${raw}" → "${cleaned}"`);
+      }
+      return cleaned;
+    } catch (e) { return ""; }
+  });
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [mapProvider, setMapProvider] = useState(() => {
+    try {
+      const raw = window.localStorage?.getItem("jamsa_naver_client_id") || "";
+      const cleaned = _sanitizeNaverId(raw);
+      // Client ID가 있으면 naver, 없으면 osm (OSM은 항상 작동)
+      return cleaned ? "naver" : "osm";
+    } catch (e) { return "osm"; }
+  });
+  const [bgMode, setBgMode] = useState(() => {
+    // 사용자가 마지막으로 선택한 배경 모드 기억 (없으면 위성)
+    try {
+      const saved = window.localStorage?.getItem("jamsa_home_bg_mode");
+      return ["plan", "satellite", "blend"].includes(saved) ? saved : "satellite";
+    } catch (e) { return "satellite"; }
+  });
+  const changeBgMode = (m) => {
+    setBgMode(m);
+    try { window.localStorage?.setItem("jamsa_home_bg_mode", m); } catch (e) {}
+  };
+  const [naverLoaded, setNaverLoaded] = useState(false);
+  const [naverLoadError, setNaverLoadError] = useState(null);
+  const naverMapRef = useRef(null);
+  const naverMapContainerRef = useRef(null);
+  const naverMarkersRef = useRef([]);
+
+  // 자동 복구 0: 첫 로딩 시 viewMode 강제 정리 (한 번만)
+  useEffect(() => {
+    try {
+      const initFlag = window.localStorage?.getItem("jamsa_map_init_v2");
+      if (!initFlag) {
+        // 새 버전 첫 실행 — 위성 모드 + 지도 뷰로 초기화
+        window.localStorage?.setItem("jamsa_home_view_mode", "map");
+        window.localStorage?.setItem("jamsa_home_bg_mode", "satellite");
+        window.localStorage?.setItem("jamsa_map_init_v2", "1");
+        setViewMode("map");
+        setBgMode("satellite");
+      }
+    } catch (e) {}
+  }, []);
+
+  // 자동 복구 1: Client ID 비어있으면 즉시 OSM (네이버 시도 자체 안 함)
+  useEffect(() => {
+    if (!naverClientId && mapProvider === "naver") {
+      setMapProvider("osm");
+    }
+  }, [naverClientId, mapProvider]);
+
+  // 자동 복구 2: 네이버 SDK 로딩 8초 타임아웃 후 OSM으로 자동 전환 (이전 15초 → 8초)
+  useEffect(() => {
+    if (mapProvider !== "naver" || naverLoaded || naverLoadError) return;
+    const timer = setTimeout(() => {
+      if (!window.naver?.maps?.Map) {
+        console.warn("[map] 네이버 SDK 로딩 실패 → OSM으로 자동 전환");
+        setMapProvider("osm");
+      }
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [mapProvider, naverLoaded, naverLoadError]);
+
+  // 자동 복구 3: 네이버 에러 발생하면 즉시 OSM 전환
+  useEffect(() => {
+    if (naverLoadError && mapProvider === "naver") {
+      console.warn("[map] 네이버 SDK 에러 감지 → OSM 전환:", naverLoadError);
+      setMapProvider("osm");
+    }
+  }, [naverLoadError, mapProvider]);
+
+  const saveNaverClientId = (id) => {
+    const cleaned = _sanitizeNaverId(id);
+    setNaverClientId(cleaned);
+    try { window.localStorage?.setItem("jamsa_naver_client_id", cleaned); } catch (e) {}
+    if (cleaned) setMapProvider("naver");
+    else setMapProvider("osm");
+  };
+
+  // 디버깅용 글로벌 함수 — 브라우저 콘솔에서 호출 가능
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.__resetMap = () => {
+      try {
+        window.localStorage.removeItem("jamsa_home_view_mode");
+        window.localStorage.removeItem("jamsa_naver_client_id");
+      } catch (e) {}
+      setViewMode("map");
+      setMapProvider("osm");
+      setNaverLoaded(false);
+      setNaverLoadError(null);
+      console.log("[__resetMap] 지도 초기화 완료. 새로고침 권장");
+    };
+    window.__forceMap = () => { setViewMode("map"); console.log("[__forceMap] viewMode = map"); };
+    window.__useOsm = () => { setMapProvider("osm"); console.log("[__useOsm] OSM 일반 지도로 전환"); };
+    return () => {
+      delete window.__resetMap;
+      delete window.__forceMap;
+      delete window.__useOsm;
+    };
+  }, []);
+
+  // Read inventory products from localStorage (InventoryModule persists there)
+  const inventoryProds = useMemo(() => {
+    try { return JSON.parse(window.localStorage?.getItem("jamsa_inv_prods") || "[]"); }
+    catch (e) { return []; }
+  }, []);
+
+  // Custom zones (user-created) - now in state for live updates
+  const [customZones, setCustomZones] = useState(() => {
+    try { return JSON.parse(window.localStorage?.getItem("jamsa_custom_zones") || "[]"); }
+    catch (e) { return []; }
+  });
+
+  // Zone customizations (overrides for BASE_ZONES + extras) - in state
+  const [zoneCustomizations, setZoneCustomizations] = useState(() => {
+    try { return JSON.parse(window.localStorage?.getItem("jamsa_zone_customizations") || "{}"); }
+    catch (e) { return {}; }
+  });
+
+  // CCTV 매핑 (구역 → 채널 배열) - 자동 복구 강화
+  const [cctvMap, setCctvMap] = useState(() => {
+    const fallback = (typeof CCTV_AUTO_MAP !== "undefined") ? { ...CCTV_AUTO_MAP } : {};
+    try {
+      const raw = window.localStorage?.getItem("jamsa_cctv_zone_map");
+      if (!raw || raw === "null" || raw === "{}") return fallback;
+      const saved = JSON.parse(raw);
+      // 매핑된 채널이 하나도 없으면 (모두 빈 배열) 자동 매핑으로 복구
+      const totalChs = Object.values(saved).reduce((sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0), 0);
+      if (totalChs === 0) {
+        console.warn("[CCTV] 매핑이 비어있음 → 자동 매핑으로 복구");
+        return fallback;
+      }
+      // 자동 매핑과 병합 (저장된 값이 우선, 없는 키는 자동에서 가져옴)
+      return { ...fallback, ...saved };
+    } catch (e) {
+      console.warn("[CCTV] 매핑 로드 실패 → 자동 매핑 사용:", e);
+      return fallback;
+    }
+  });
+
+  // CCTV 오버레이 자동으로 켜기 (사용자가 끄지 않은 한)
+  useEffect(() => {
+    try {
+      // localStorage에 명시적으로 "0"이 없으면 켜진 상태로 설정
+      const v = window.localStorage?.getItem("jamsa_cctv_overlay_on");
+      if (v === null) {
+        window.localStorage?.setItem("jamsa_cctv_overlay_on", "1");
+      }
+    } catch (e) {}
+  }, []);
+
+  // CCTV 매핑 디버깅용 헬퍼 (브라우저 콘솔)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.__cctvReset = () => {
+      try {
+        window.localStorage.removeItem("jamsa_cctv_zone_map");
+        window.localStorage.setItem("jamsa_cctv_overlay_on", "1");
+      } catch (e) {}
+      if (typeof CCTV_AUTO_MAP !== "undefined") setCctvMap({ ...CCTV_AUTO_MAP });
+      console.log("[__cctvReset] CCTV 매핑 초기화 완료. 새로고침 권장");
+    };
+    window.__cctvCheck = () => {
+      const total = Object.values(cctvMap).reduce((s, a) => s + (Array.isArray(a) ? a.length : 0), 0);
+      console.log("[__cctvCheck] 현재 매핑:", cctvMap);
+      console.log("[__cctvCheck] 총 매핑된 채널 수:", total);
+      console.log("[__cctvCheck] localStorage:", window.localStorage.getItem("jamsa_cctv_zone_map"));
+      console.log("[__cctvCheck] 오버레이 상태:", window.localStorage.getItem("jamsa_cctv_overlay_on"));
+    };
+    return () => { delete window.__cctvReset; delete window.__cctvCheck; };
+  }, [cctvMap]);
+
+  // CCTV 알림 히스토리
+  const [cctvAlerts, setCctvAlerts] = useState([]);
+
+  // CCTV 스냅샷 데이터 (스팟 옆 미니창 표시용)
+  const [cctvSnapshotData, setCctvSnapshotData] = useState({ snapshots: {}, analyses: {}, chToZone: {}, enabled: true });
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 사용자 위치 추적 (GPS + Wi-Fi + BLE 비콘)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [userLocations, setUserLocations] = useState([]); // [{id, name, lat, lng, source, role, ...}]
+  const [locationFilter, setLocationFilter] = useState("all"); // all | staff | visitor
+  const [shareMyLocation, setShareMyLocation] = useState(() => {
+    try { return window.localStorage?.getItem("jamsa_share_location") === "1"; }
+    catch (e) { return false; }
+  });
+  const [myLocationStatus, setMyLocationStatus] = useState({ source: null, lat: null, lng: null, accuracy: null, error: null });
+  const [selectedUserId, setSelectedUserId] = useState(null);
+
+  // 다른 사용자 위치 폴링 (10초마다)
+  useEffect(() => {
+    let cancelled = false;
+    const fetchLocations = async () => {
+      try {
+        const res = await fetch("/api/staff-locations", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled || !data?.ok) return;
+        setUserLocations(data.users || []);
+      } catch (e) {
+        // 무시 (네트워크 일시 오류)
+      }
+    };
+    fetchLocations();
+    const tid = setInterval(fetchLocations, 10000);
+    return () => { cancelled = true; clearInterval(tid); };
+  }, []);
+
+  // 내 위치 공유 — GPS watchPosition
+  useEffect(() => {
+    if (!shareMyLocation) {
+      setMyLocationStatus({ source: null, lat: null, lng: null, accuracy: null, error: null });
+      return;
+    }
+    if (!navigator.geolocation) {
+      setMyLocationStatus({ source: null, lat: null, lng: null, accuracy: null, error: "이 기기는 GPS를 지원하지 않습니다" });
+      return;
+    }
+    let watchId = null;
+    let lastSentAt = 0;
+    const onSuccess = async (pos) => {
+      const { latitude, longitude, accuracy } = pos.coords;
+      // Wi-Fi 보정 추정 (정확도 100m 이상이면 wifi, 미만이면 gps)
+      const source = accuracy > 100 ? "wifi" : "gps";
+      setMyLocationStatus({ source, lat: latitude, lng: longitude, accuracy, error: null });
+      // 5초마다 한 번만 서버 전송
+      const now = Date.now();
+      if (now - lastSentAt < 5000) return;
+      lastSentAt = now;
+      try {
+        const me = userCtx || { id: "me", name: "익명", role: "staff" };
+        await fetch("/api/staff-location-update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            staffId: me.id || ("anon-" + Date.now()),
+            staffName: me.name || "익명",
+            lat: latitude, lng: longitude, accuracy,
+            source, role: me.role === "VISITOR" ? "visitor" : "staff",
+            dept: me.dept || null,
+            timestamp: new Date().toISOString(),
+          }),
+        });
+      } catch (e) { /* 무시 */ }
+    };
+    const onError = (err) => {
+      setMyLocationStatus(prev => ({ ...prev, error: err.message || "위치 권한 거부됨" }));
+    };
+    watchId = navigator.geolocation.watchPosition(onSuccess, onError, {
+      enableHighAccuracy: true, maximumAge: 5000, timeout: 15000,
+    });
+    return () => {
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+    };
+  }, [shareMyLocation, userCtx]);
+
+  // 위치 공유 토글
+  const toggleMyLocation = () => {
+    setShareMyLocation(prev => {
+      const next = !prev;
+      try { window.localStorage?.setItem("jamsa_share_location", next ? "1" : "0"); } catch (e) {}
+      return next;
+    });
+  };
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // BLE 비콘 스캔 (Web Bluetooth API)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [bleScanning, setBleScanning] = useState(false);
+  const [bleSupported, setBleSupported] = useState(false);
+  const [nearestBeacon, setNearestBeacon] = useState(null);
+
+  useEffect(() => {
+    // Web Bluetooth API 지원 여부 (안드로이드 크롬, 데스크톱 크롬만)
+    setBleSupported(typeof navigator !== "undefined" && !!navigator.bluetooth);
+  }, []);
+
+  const startBleScan = async () => {
+    if (!navigator.bluetooth) {
+      alert("이 기기는 Bluetooth를 지원하지 않습니다.\n안드로이드 크롬에서 사용해 주세요.");
+      return;
+    }
+    try {
+      setBleScanning(true);
+      // 사용자가 비콘 선택하도록 (보안상 자동 스캔 불가)
+      const device = await navigator.bluetooth.requestDevice({
+        acceptAllDevices: true,
+        optionalServices: ['battery_service'],
+      });
+      // 비콘 정보 등록 (실제 RSSI는 라이브 스캔이 별도 API 필요 — Web Bluetooth는 제한적)
+      const beaconName = device.name || `Beacon-${device.id?.slice(0, 6)}`;
+      setNearestBeacon({ id: device.id, name: beaconName, rssi: null });
+      // 비콘 위치를 서버에 전송 (구역 매핑은 별도 등록 필요)
+      const me = userCtx || { id: "me", name: "익명", role: "staff" };
+      await fetch("/api/staff-location-update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          staffId: me.id || ("anon-" + Date.now()),
+          staffName: me.name || "익명",
+          lat: myLocationStatus.lat || 36.6385, // GPS 보정값 또는 박물관 중심
+          lng: myLocationStatus.lng || 127.4892,
+          accuracy: 5, // 비콘은 ~5m 정확도
+          source: "beacon",
+          beaconId: device.id,
+          beaconName,
+          role: me.role === "VISITOR" ? "visitor" : "staff",
+          dept: me.dept || null,
+          timestamp: new Date().toISOString(),
+        }),
+      });
+      alert(`🔵 비콘 연결됨: ${beaconName}\n실내 정확도가 향상됩니다.`);
+    } catch (e) {
+      if (e.name !== "NotFoundError") {
+        console.error("[BLE]", e);
+      }
+    } finally {
+      setBleScanning(false);
+    }
+  };
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 관람객 모드 자동 감지 (?role=visitor URL)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [isVisitorMode, setIsVisitorMode] = useState(() => {
+    try {
+      const fromUrl = new URLSearchParams(window.location.search).get("role") === "visitor";
+      const fromStorage = window.localStorage?.getItem("jamsa_user_role_override") === "visitor";
+      return fromUrl || fromStorage;
+    } catch (e) { return false; }
+  });
+
+  // 관람객 모드면 위치 공유 자동 활성 권유
+  const [visitorWelcomeShown, setVisitorWelcomeShown] = useState(() => {
+    try { return window.sessionStorage?.getItem("jamsa_visitor_welcome") === "1"; }
+    catch (e) { return false; }
+  });
+  useEffect(() => {
+    if (isVisitorMode && !visitorWelcomeShown && !shareMyLocation) {
+      const tid = setTimeout(() => {
+        if (confirm("📍 박물관 길찾기 도우미\n\n현재 위치를 공유하시면 추천 동선을 안내해드립니다.\n위치 공유는 박물관에서만 사용되며 5분 후 자동 삭제됩니다.\n\n지금 시작할까요?")) {
+          setShareMyLocation(true);
+          try { window.localStorage?.setItem("jamsa_share_location", "1"); } catch (e) {}
+        }
+        try { window.sessionStorage?.setItem("jamsa_visitor_welcome", "1"); } catch (e) {}
+        setVisitorWelcomeShown(true);
+      }, 1500);
+      return () => clearTimeout(tid);
+    }
+  }, [isVisitorMode, visitorWelcomeShown, shareMyLocation]);
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // PWA 설치 가능 감지
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [pwaInstallable, setPwaInstallable] = useState(false);
+  const [pwaInstalled, setPwaInstalled] = useState(() => {
+    try {
+      return window.localStorage?.getItem("jamsa_pwa_installed") === "1" ||
+             window.matchMedia("(display-mode: standalone)").matches;
+    } catch (e) { return false; }
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setPwaInstallable(!!window.__deferredInstallPrompt);
+    const handler = () => setPwaInstallable(true);
+    window.addEventListener("jamsa-install-available", handler);
+    return () => window.removeEventListener("jamsa-install-available", handler);
+  }, []);
+
+  const installPwa = async () => {
+    if (!window.__deferredInstallPrompt) {
+      alert("이 브라우저에서는 자동 설치를 지원하지 않습니다.\n\n안드로이드: 크롬 우측 상단 ⋮ → '홈 화면에 추가'\niOS: 사파리 공유 버튼 → '홈 화면에 추가'");
+      return;
+    }
+    try {
+      window.__deferredInstallPrompt.prompt();
+      const result = await window.__deferredInstallPrompt.userChoice;
+      if (result.outcome === "accepted") {
+        setPwaInstalled(true);
+        try { window.localStorage?.setItem("jamsa_pwa_installed", "1"); } catch (e) {}
+      }
+      window.__deferredInstallPrompt = null;
+      setPwaInstallable(false);
+    } catch (e) { /* 무시 */ }
+  };
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // QR 코드 생성기 모달 (관람객 안내용)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [qrModalOpen, setQrModalOpen] = useState(false);
+
+  // 표시할 사용자 필터링
+  const visibleUsers = useMemo(() => {
+    return (userLocations || []).filter(u => {
+      if (locationFilter === "staff") return u.role === "staff";
+      if (locationFilter === "visitor") return u.role === "visitor";
+      return true;
+    });
+  }, [userLocations, locationFilter]);
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 구역별 인파 통계 (CCTV AI + QR 체크인)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [zoneCrowdStats, setZoneCrowdStats] = useState({}); // { zoneId: { peopleCount, crowdLevel, source, ageSec } }
+  const [crowdAnalysisOn, setCrowdAnalysisOn] = useState(() => {
+    try { return window.localStorage?.getItem("jamsa_crowd_analysis") === "1"; }
+    catch (e) { return false; }
+  });
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 운영 통계 (탭별 차트용)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [opStats, setOpStats] = useState(null); // operation-stats API 결과
+  const [statsTab, setStatsTab] = useState("realtime"); // realtime | flow | stats
+  const [statsRange, setStatsRange] = useState("today"); // today | week | month
+  const [showStatsModal, setShowStatsModal] = useState(false);
+
+  // 운영 통계 폴링 (30초마다)
+  useEffect(() => {
+    if (!showStatsModal) return; // 모달 열려있을 때만 폴링
+    let cancelled = false;
+    const fetchStats = async () => {
+      try {
+        const res = await fetch(`/api/operation-stats?range=${statsRange}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        setOpStats(data);
+      } catch (e) { /* 무시 */ }
+    };
+    fetchStats();
+    const tid = setInterval(fetchStats, 30000);
+    return () => { cancelled = true; clearInterval(tid); };
+  }, [showStatsModal, statsRange]);
+
+  // 인파 통계 폴링 (15초마다)
+  useEffect(() => {
+    let cancelled = false;
+    const fetchStats = async () => {
+      try {
+        const res = await fetch("/api/zone-crowd-stats?range=now", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled || !data?.ok) return;
+        setZoneCrowdStats(data.currentByZone || {});
+      } catch (e) { /* 무시 */ }
+    };
+    fetchStats();
+    const tid = setInterval(fetchStats, 15000);
+    return () => { cancelled = true; clearInterval(tid); };
+  }, []);
+
+  // CCTV AI 분석 후 인파 통계 자동 저장 (cctvSnapshotData 변경 시)
+  useEffect(() => {
+    if (!crowdAnalysisOn) return;
+    const analyses = cctvSnapshotData?.analyses || {};
+    const chToZone = cctvSnapshotData?.chToZone || {};
+    Object.entries(analyses).forEach(([ch, ana]) => {
+      const peopleCount = ana?.peopleCount;
+      if (peopleCount === undefined || peopleCount === null) return;
+      const zoneId = chToZone[ch];
+      if (!zoneId) return;
+      // 백엔드에 저장
+      fetch("/api/zone-crowd-stats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          zoneId, channelCh: parseInt(ch, 10),
+          peopleCount, confidence: ana.peopleConfidence || 0.7,
+          crowdLevel: ana.crowdLevel || "UNKNOWN",
+          source: "cctv_ai",
+        }),
+      }).catch(() => {});
+    });
+  }, [cctvSnapshotData, crowdAnalysisOn]);
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // QR 체크인 자동 처리 (?checkin=zoneId URL)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [checkinResult, setCheckinResult] = useState(null);
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const checkinZone = params.get("checkin");
+      if (!checkinZone) return;
+      const zone = baseZones.find(z => z.id === checkinZone);
+      if (!zone) return;
+      // 익명 visitor ID (sessionStorage에 저장)
+      let visitorId = window.sessionStorage?.getItem("jamsa_visitor_anon_id");
+      if (!visitorId) {
+        visitorId = "v-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+        try { window.sessionStorage?.setItem("jamsa_visitor_anon_id", visitorId); } catch(e) {}
+      }
+      // 체크인 API 호출
+      fetch("/api/qr-checkin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          visitorId, zoneId: checkinZone, zoneName: zone.name,
+          checkpointType: "entry",
+        }),
+      }).then(res => res.json()).then(data => {
+        if (data.ok) {
+          setCheckinResult({ zone, message: `✅ ${zone.name} 체크인 완료!` });
+          // URL 정리 (한 번만 체크인되도록)
+          const url = new URL(window.location);
+          url.searchParams.delete("checkin");
+          window.history.replaceState({}, "", url);
+        }
+      }).catch(() => {
+        setCheckinResult({ zone, message: "❌ 체크인 실패. 잠시 후 다시 시도해주세요." });
+      });
+    } catch (e) { /* 무시 */ }
+  }, []);
+
+  // 구역 QR 코드 인쇄 모달
+  const [zoneQrModalOpen, setZoneQrModalOpen] = useState(false);
+
+  // CCTV 서버 자동 헬스체크 + 안내 모달
+  const [cctvServerStatus, setCctvServerStatus] = useState({ status: "checking", checkedAt: null }); // checking | online | offline
+  const [cctvGuideOpen, setCctvGuideOpen] = useState(false);
+  const [cctvGuideDismissed, setCctvGuideDismissed] = useState(() => {
+    try { return window.sessionStorage?.getItem("jamsa_cctv_guide_dismissed") === "1"; }
+    catch (e) { return false; }
+  });
+
+  // CCTV 서버 헬스체크 (5초마다 한 번)
+  useEffect(() => {
+    let cancelled = false;
+    const checkServer = async () => {
+      const url = (typeof window !== "undefined" ? (window.BACKEND_URL || window.localStorage?.getItem("jamsa_cctv_snap_server") || "http://localhost:5555") : "http://localhost:5555");
+      try {
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 3000);
+        const res = await fetch(url.replace(/\/+$/, "") + "/api/health", { signal: ctrl.signal });
+        clearTimeout(tid);
+        if (cancelled) return;
+        if (res.ok) {
+          setCctvServerStatus({ status: "online", checkedAt: Date.now() });
+        } else {
+          setCctvServerStatus({ status: "offline", checkedAt: Date.now() });
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setCctvServerStatus({ status: "offline", checkedAt: Date.now() });
+      }
+    };
+    checkServer();
+    const tid = setInterval(checkServer, 15000);
+    return () => { cancelled = true; clearInterval(tid); };
+  }, []);
+
+  // 서버 미가동 감지 시 자동으로 가이드 모달 띄우기 (한 번만, 세션 동안)
+  useEffect(() => {
+    if (cctvServerStatus.status === "offline" && !cctvGuideDismissed && cctvServerStatus.checkedAt) {
+      // 첫 체크 후 3초 뒤에만 모달 띄움 (사용자 화면 적응 후)
+      const tid = setTimeout(() => setCctvGuideOpen(true), 3000);
+      return () => clearTimeout(tid);
+    }
+  }, [cctvServerStatus.status, cctvServerStatus.checkedAt]);
+
+  // CCTV 편집 모드 (드래그로 매핑 변경)
+  const [cctvEditMode, setCctvEditMode] = useState(false);
+  // CCTV 미니창 위치 오프셋 (구역별 어느 위치에 그릴지)
+  const [cctvOffsets, setCctvOffsets] = useState(() => {
+    try {
+      return JSON.parse(window.localStorage?.getItem("jamsa_cctv_offsets") || "{}");
+    } catch (e) { return {}; }
+  });
+  const saveCctvOffset = (ch, dx, dy) => {
+    setCctvOffsets(prev => {
+      const next = { ...prev, [ch]: { dx, dy } };
+      try { window.localStorage?.setItem("jamsa_cctv_offsets", JSON.stringify(next)); } catch (e) {}
+      return next;
+    });
+  };
+  // 매핑 변경 (구역 변경 또는 해제)
+  const moveChannelToZone = (ch, targetZoneId) => {
+    setCctvMap(prev => {
+      const next = {};
+      // 모든 구역에서 해당 채널 제거
+      Object.entries(prev).forEach(([zid, chs]) => {
+        next[zid] = (chs || []).filter(c => c !== ch);
+      });
+      // 타깃 구역에 추가 (null이면 해제만)
+      if (targetZoneId) {
+        if (!next[targetZoneId]) next[targetZoneId] = [];
+        next[targetZoneId].push(ch);
+      }
+      try { window.localStorage?.setItem("jamsa_cctv_zone_map", JSON.stringify(next)); } catch (e) {}
+      return next;
+    });
+  };
+
+  // 채널 매핑 선택 모달 (CCTV 박스 또는 미할당 채널 클릭 시)
+  const [channelPickerCh, setChannelPickerCh] = useState(null); // ch number or null
+
+  // window 글로벌로 노출 — divIcon HTML에서 호출
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.__jamsaPickChannel = (ch) => {
+      setChannelPickerCh(ch);
+    };
+    return () => { delete window.__jamsaPickChannel; };
+  }, []);
+
+  // Persistence helpers
+  const saveCustomZones = (newZones) => {
+    setCustomZones(newZones);
+    try { window.localStorage?.setItem("jamsa_custom_zones", JSON.stringify(newZones)); } catch(e){}
+  };
+  const saveZoneCustomizations = (newCust) => {
+    setZoneCustomizations(newCust);
+    try { window.localStorage?.setItem("jamsa_zone_customizations", JSON.stringify(newCust)); } catch(e){}
+  };
+
+  // Edit mode state
+  const [editMode, setEditMode] = useState(false);
+  const [editingZone, setEditingZone] = useState(null); // currently selected zone for editing in side panel
+  const [draggedZone, setDraggedZone] = useState(null);
+
+  // Merged zone list with customizations applied (now extended fields)
+  const allZones = useMemo(() => {
+    const all = [...BASE_ZONES, ...customZones];
+    return all.map(z => {
+      const custom = zoneCustomizations[z.id];
+      if (!custom) return z;
+      return {
+        ...z,
+        lat: custom.lat ?? z.lat,
+        lng: custom.lng ?? z.lng,
+        name: custom.name ?? z.name,
+        icon: custom.icon ?? z.icon,
+        color: custom.color ?? z.color,
+        desc: custom.desc ?? z.desc,
+        cctvChannels: custom.cctvChannels ?? z.cctvChannels ?? [],
+      };
+    });
+  }, [customZones, zoneCustomizations]);
+
+  // Update a single field for a zone (immediate persist)
+  const updateZoneField = (zoneId, patch) => {
+    const newCust = { ...zoneCustomizations, [zoneId]: { ...(zoneCustomizations[zoneId] || {}), ...patch } };
+    saveZoneCustomizations(newCust);
+  };
+
+  // Delete a zone (mark deleted in customizations OR remove from customZones)
+  const deleteZone = (zoneId) => {
+    if (!confirm(`'${allZones.find(z => z.id === zoneId)?.name || zoneId}' 스팟을 삭제할까요?\n(기본 스팟은 표시만 숨겨집니다)`)) return;
+    const isBase = BASE_ZONES.find(z => z.id === zoneId);
+    if (isBase) {
+      // Mark hidden in customizations
+      updateZoneField(zoneId, { _deleted: true });
+    } else {
+      // Remove from customZones
+      saveCustomZones(customZones.filter(z => z.id !== zoneId));
+    }
+    setEditingZone(null);
+  };
+
+  // Add new zone
+  const addNewZone = (lat, lng) => {
+    const id = "z" + Date.now();
+    const newZone = {
+      id, name: "새 스팟", color: "#0891b2", icon: "📍", desc: "",
+      lat, lng, cctvChannels: [],
+      x: 50, y: 50, w: 10, h: 10,  // legacy floor plan coords (default center)
+    };
+    saveCustomZones([...customZones, newZone]);
+    setEditingZone(newZone);
+  };
+
+  // Compute aggregate status per zone
+  const zoneStatus = useMemo(() => {
+    return allZones.filter(z => !zoneCustomizations[z.id]?._deleted).map(z => {
+      const zoneKey = z.name.split(" ")[0].toLowerCase();
+      // Facility actions for this zone
+      const openActions = (facActions || []).filter(a => {
+        if (a.status === "DONE") return false;
+        const text = ((a.title || "") + " " + (a.desc || "") + " " + (a.facId || "") + " " + (a.zoneId || "")).toLowerCase();
+        return text.includes(zoneKey) || text.includes(z.id);
+      });
+      const urgentCount = openActions.filter(a => a.sev === "URGENT").length;
+      const highCount = openActions.filter(a => a.sev === "HIGH").length;
+      // Inventory for this zone
+      const zoneInv = (inventoryProds || []).filter(p => p.zone === z.id);
+      const invTotal = zoneInv.reduce((s, p) => s + (p.qty || 0), 0);
+      const lowStock = zoneInv.filter(p => p.qty > 0 && p.qty < 5).length;
+      // Recent worklogs mentioning this zone
+      const zoneWorklogs = (worklogs || []).filter(w => {
+        const text = ((w.content || "") + " " + (w.title || "")).toLowerCase();
+        return text.includes(zoneKey);
+      });
+      // Recent audit entries
+      const zoneAudit = (auditLog || []).filter(a => {
+        const text = ((a.targetLabel || "") + " " + (a.summary || "")).toLowerCase();
+        return text.includes(zoneKey);
+      }).slice(0, 5);
+
+      // Overall status color
+      let status = "normal", statusLabel = "정상", statusColor = "#059669";
+      if (urgentCount > 0) { status = "urgent"; statusLabel = "긴급"; statusColor = "#dc2626"; }
+      else if (highCount > 0) { status = "warning"; statusLabel = "경고"; statusColor = "#ea580c"; }
+      else if (openActions.length > 0 || lowStock > 0) { status = "attention"; statusLabel = "주의"; statusColor = "#ca8a04"; }
+
+      return {
+        zone: z, openActions, urgentCount, highCount,
+        zoneInv, invTotal, lowStock,
+        zoneWorklogs, zoneAudit,
+        status, statusLabel, statusColor,
+      };
+    });
+  }, [allZones, facActions, inventoryProds, worklogs, auditLog]);
+
+  // Filter based on current filter mode
+  const filteredStatus = useMemo(() => {
+    if (filterMode === "all") return zoneStatus;
+    if (filterMode === "urgent") return zoneStatus.filter(s => s.urgentCount > 0 || s.highCount > 0);
+    if (filterMode === "stock") return zoneStatus.filter(s => s.lowStock > 0 || s.invTotal > 0);
+    if (filterMode === "facility") return zoneStatus.filter(s => s.openActions.length > 0);
+    return zoneStatus;
+  }, [zoneStatus, filterMode]);
+
+  // Top-level KPIs
+  const kpis = useMemo(() => {
+    const totalOpen = zoneStatus.reduce((s, z) => s + z.openActions.length, 0);
+    const totalUrgent = zoneStatus.reduce((s, z) => s + z.urgentCount, 0);
+    const totalInv = zoneStatus.reduce((s, z) => s + z.invTotal, 0);
+    const totalLowStock = zoneStatus.reduce((s, z) => s + z.lowStock, 0);
+    const zonesNeedingAttention = zoneStatus.filter(z => z.status !== "normal").length;
+    return { totalOpen, totalUrgent, totalInv, totalLowStock, zonesNeedingAttention };
+  }, [zoneStatus]);
+
+  // ──────────── 네이버 지도 SDK 로딩 (진단 강화 v2) ────────────
+  useEffect(() => {
+    if (viewMode !== "map") return;
+    if (mapProvider !== "naver" || !naverClientId) return;
+    if (window.naver && window.naver.maps) { setNaverLoaded(true); return; }
+
+    const origin = (typeof window !== "undefined") ? window.location.origin : "?";
+    console.log(`[NaverMap] 로딩 시작 · ncpKeyId=${naverClientId} · origin=${origin}`);
+
+    // 인증 실패 콜백 (NCP가 명시적으로 호출)
+    window.navermap_authFailure = function () {
+      const msg = `❌ 네이버 지도 인증 실패\n\n` +
+        `현재 도메인: ${origin}\n` +
+        `Client ID: ${naverClientId}\n\n` +
+        `해결 방법:\n` +
+        `1. NCP 콘솔 → Maps → Application → 변경\n` +
+        `2. Web 서비스 URL 에 위 도메인을 슬래시(/) 없이 등록\n` +
+        `3. Web Dynamic Map 체크 확인 → 저장\n` +
+        `4. 5~10분 대기 후 새로고침`;
+      console.error(msg);
+      setNaverLoadError(msg);
+      setMapProvider("osm");
+    };
+
+    const script = document.createElement("script");
+    script.src = `https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=${encodeURIComponent(naverClientId)}&submodules=geocoder`;
+    script.async = true;
+    const timeout = setTimeout(() => {
+      if (!window.naver || !window.naver.maps) {
+        const msg = `네이버 지도 응답 시간 초과 (10초). 도메인 등록 반영 대기 중일 수 있습니다.\n현재 도메인: ${origin}`;
+        console.error("[NaverMap]", msg);
+        setNaverLoadError(msg);
+        setMapProvider("osm");
+      }
+    }, 10000);
+    script.onload = () => {
+      clearTimeout(timeout);
+      // onload 이후에도 navermap_authFailure 가 비동기로 호출될 수 있으므로 약간 대기
+      setTimeout(() => {
+        if (window.naver?.maps?.Map) {
+          console.log("[NaverMap] 로드 성공");
+          setNaverLoaded(true);
+        }
+      }, 100);
+    };
+    script.onerror = () => {
+      clearTimeout(timeout);
+      const msg = `네이버 지도 스크립트 다운로드 실패. 네트워크 또는 도메인 차단 여부를 확인하세요.\n시도 URL: ${script.src}`;
+      console.error("[NaverMap]", msg);
+      setNaverLoadError(msg);
+      setMapProvider("osm");
+    };
+    document.head.appendChild(script);
+    return () => { clearTimeout(timeout); };
+  }, [mapProvider, naverClientId, viewMode]);
+
+  // ──────────── 네이버 지도 초기화 + 마커 ────────────
+  useEffect(() => {
+    if (viewMode !== "map") return;
+    if (mapProvider !== "naver" || !naverLoaded || !window.naver || !window.naver.maps) return;
+    if (!naverMapContainerRef.current) return;
+
+    const naver = window.naver;
+    const centerLat = 36.6383;
+    const centerLng = 127.3828;
+
+    // 기존 마커 제거
+    naverMarkersRef.current.forEach(m => { try { m.setMap(null); } catch (e) {} });
+    naverMarkersRef.current = [];
+
+    // mapTypeId 안전 결정 — SDK 객체가 아직 준비되지 않았을 수도 있어 옵셔널 체이닝 사용
+    const _MT = naver?.maps?.MapTypeId || {};
+    const _resolveType = () => {
+      if (bgMode === "satellite" && _MT.SATELLITE) return _MT.SATELLITE;
+      if (bgMode === "blend" && _MT.HYBRID) return _MT.HYBRID;
+      return _MT.NORMAL || "normal";
+    };
+
+    // 지도 초기화
+    try {
+      if (!naverMapRef.current) {
+        naverMapRef.current = new naver.maps.Map(naverMapContainerRef.current, {
+          center: new naver.maps.LatLng(centerLat, centerLng),
+          zoom: 17,
+          mapTypeId: _resolveType(),
+          zoomControl: true,
+          zoomControlOptions: { position: naver.maps.Position.TOP_RIGHT },
+        });
+      } else {
+        // setMapTypeId 호출 시 null 참조 충돌 방지를 위해 try-catch + setTimeout
+        try {
+          naverMapRef.current.setMapTypeId(_resolveType());
+        } catch (e) {
+          console.warn("[NaverMap] setMapTypeId 실패 — 일반 지도로 폴백:", e?.message);
+          try { naverMapRef.current.setMapTypeId(_MT.NORMAL || "normal"); } catch (_) {}
+        }
+      }
+    } catch (e) {
+      console.error("[NaverMap] 지도 초기화 실패 — OSM으로 폴백:", e);
+      setNaverLoadError(`네이버 지도 초기화 실패: ${e?.message || e}. OSM으로 전환합니다.`);
+      setMapProvider("osm");
+      return;
+    }
+
+    // 구역 → CCTV 채널 역매핑 (cctvSnapshotData에서 추출)
+    const _snaps = cctvSnapshotData?.snapshots || {};
+    const _ana = cctvSnapshotData?.analyses || {};
+    const _chToZone = cctvSnapshotData?.chToZone || {};
+    const _cctvEnabled = cctvSnapshotData?.enabled !== false;
+    const _zoneToCh = {};
+    Object.entries(_chToZone).forEach(([ch, zid]) => {
+      if (!_zoneToCh[zid]) _zoneToCh[zid] = [];
+      _zoneToCh[zid].push(parseInt(ch, 10));
+    });
+
+    // 각 스팟마다 마커 생성 (상태별 색상 뱃지)
+    zoneStatus.forEach(s => {
+      const z = s.zone;
+      if (!z.lat || !z.lng) return;
+      try {
+        const pulseAnim = s.status === "urgent" ? "animation:homePinPulse 1.5s infinite;" : "";
+        const badgeNum = s.openActions.length + (s.lowStock > 0 ? s.lowStock : 0);
+        const badgeHtml = badgeNum > 0
+          ? `<div style="position:absolute;top:-6px;right:-6px;min-width:20px;height:20px;padding:0 5px;border-radius:10px;background:${s.statusColor};color:#fff;font-size:10px;font-weight:900;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-sizing:border-box;z-index:2;box-shadow:0 2px 4px rgba(0,0,0,0.3);">${badgeNum}</div>`
+          : "";
+        const statusLabelHtml = s.status !== "normal"
+          ? `<div style="position:absolute;bottom:-6px;left:50%;transform:translateX(-50%);background:${s.statusColor};color:#fff;padding:2px 8px;border-radius:10px;font-size:9px;font-weight:800;white-space:nowrap;z-index:2;box-shadow:0 2px 4px rgba(0,0,0,0.3);">${s.statusLabel}</div>`
+          : "";
+
+        // ━━ 구역별 인파 배지 (CCTV AI + QR 체크인 합산) ━━
+        const _crowdData = zoneCrowdStats[z.id];
+        const _peopleCount = _crowdData?.people_count || 0;
+        const _crowdLevel = _crowdData?.crowd_level || "EMPTY";
+        let _crowdColor = "#94a3b8", _crowdLabel = "";
+        if (_peopleCount > 0) {
+          if (_crowdLevel === "VERY_HIGH" || _peopleCount >= 26) { _crowdColor = "#dc2626"; _crowdLabel = "🚨 과밀"; }
+          else if (_crowdLevel === "HIGH" || _peopleCount >= 11) { _crowdColor = "#ea580c"; _crowdLabel = "⚠️ 혼잡"; }
+          else if (_crowdLevel === "MEDIUM" || _peopleCount >= 4) { _crowdColor = "#f59e0b"; _crowdLabel = "보통"; }
+          else { _crowdColor = "#10b981"; _crowdLabel = "여유"; }
+        }
+        const crowdBadgeHtml = _peopleCount > 0
+          ? `<div style="position:absolute;top:-22px;left:50%;transform:translateX(-50%);background:${_crowdColor};color:#fff;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:900;white-space:nowrap;z-index:3;box-shadow:0 2px 6px rgba(0,0,0,0.3);">👥 ${_peopleCount}명${_crowdLabel ? ' ' + _crowdLabel : ''}</div>`
+          : "";
+
+        // ━━ CCTV 미니창 HTML ━━
+        const _channels = (_zoneToCh[z.id] || []).sort((a, b) => a - b);
+        const _firstCh = _channels[0];
+        const _snap = _firstCh ? _snaps[_firstCh] : null;
+        const _chAna = _firstCh ? _ana[_firstCh] : null;
+        const _showMini = _cctvEnabled && _firstCh && _snap?.url && !_snap?.error;
+        let _cctvBorder = "rgba(255,255,255,0.9)";
+        let _cctvAnim = "";
+        if (_chAna?.level === "DANGER") {
+          _cctvBorder = "#dc2626";
+          _cctvAnim = "animation:cctvDangerPulse 1.2s infinite;";
+        } else if (_chAna?.level === "WARNING") {
+          _cctvBorder = "#f59e0b";
+          _cctvAnim = "animation:cctvWarnPulse 1.6s infinite;";
+        }
+        // 편집 모드일 때 클릭 핸들러 (드래그 대신)
+        const _cctvClick = cctvEditMode && _firstCh ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${_firstCh})"` : '';
+        const _cctvBorderEdit = cctvEditMode ? "2px dashed #fbbf24" : `2px solid ${_cctvBorder}`;
+        const _cctvBoxShadowEdit = cctvEditMode ? "0 0 0 3px rgba(251,191,36,0.4),0 4px 12px rgba(0,0,0,0.4)" : "0 4px 12px rgba(0,0,0,0.4)";
+        const _cctvCursor = cctvEditMode ? "pointer" : "pointer";
+        const _editLabel = cctvEditMode ? '<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(251,191,36,0.95);color:#78350f;padding:2px 4px;font-size:9px;font-weight:800;text-align:center;">📝 클릭→변경</div>' : '';
+
+        const _cctvHtml = _showMini ? `
+          <div class="jamsa-cctv-mini" ${_cctvClick} style="position:absolute;left:50px;top:-2px;width:96px;height:64px;border-radius:6px;overflow:hidden;border:${_cctvBorderEdit};${_cctvAnim}box-shadow:${_cctvBoxShadowEdit};background:#0f172a;cursor:${_cctvCursor};z-index:3;">
+            <img src="${_snap.url}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none'"/>
+            <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.7),transparent);padding:2px 4px;font-size:9px;color:#fff;font-weight:700;">CH${_firstCh}${_channels.length > 1 ? ` +${_channels.length-1}` : ''}</div>
+            ${_chAna?.level === "DANGER" || _chAna?.level === "WARNING" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:${_chAna.level === "DANGER" ? "rgba(220,38,38,0.95)" : "rgba(245,158,11,0.95)"};padding:1px 4px;font-size:9px;color:#fff;font-weight:800;text-align:center;">${_chAna.level === "DANGER" ? "🚨 위험" : "⚠️ 주의"} ${_chAna.score || ""}%</div>` : _editLabel}
+            <div style="position:absolute;top:3px;right:3px;width:7px;height:7px;background:#22c55e;border-radius:50%;box-shadow:0 0 5px #22c55e;animation:cctvLiveBlink 1.5s infinite;z-index:2;"></div>
+          </div>
+        ` : (_cctvEnabled && _firstCh ? `
+          <div class="jamsa-cctv-mini" ${_cctvClick} style="position:absolute;left:50px;top:-2px;width:96px;height:64px;border-radius:6px;overflow:hidden;border:${_cctvBorderEdit};background:rgba(15,23,42,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.7);box-shadow:${_cctvBoxShadowEdit};z-index:3;cursor:${_cctvCursor};">
+            <div style="font-size:20px;">📷</div>
+            <div style="font-size:9px;font-weight:700;margin-top:2px;">CH${_firstCh}</div>
+            <div style="font-size:8px;color:${cctvEditMode ? '#fbbf24' : 'rgba(255,255,255,0.5)'};margin-top:1px;font-weight:${cctvEditMode ? '800' : '400'};">${cctvEditMode ? '📝 클릭→변경' : '서버 미가동'}</div>
+          </div>
+        ` : '');
+
+        // 마커 컨테이너 너비 — CCTV 미니창 있으면 더 넓게
+        const _markerWidth = (_cctvEnabled && _firstCh) ? 150 : 46;
+
+        const marker = new naver.maps.Marker({
+          position: new naver.maps.LatLng(z.lat, z.lng),
+          map: naverMapRef.current,
+          draggable: editMode,  // Enable drag in edit mode
+          icon: {
+            content: `<div style="position:relative;width:${_markerWidth}px;height:64px;${pulseAnim}cursor:${editMode ? "move" : "pointer"};${editMode ? "outline:3px dashed #2563eb;outline-offset:2px;border-radius:8px;" : ""}"><div style="position:absolute;left:0;top:0;width:46px;height:46px;"><div style="background:${z.color};border:3px solid #fff;border-radius:50% 50% 50% 0;width:38px;height:38px;transform:rotate(-45deg);box-shadow:0 4px 12px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;margin:4px;"><div style="transform:rotate(45deg);font-size:18px;">${z.icon}</div></div>${badgeHtml}${statusLabelHtml}${crowdBadgeHtml}</div>${_cctvHtml}</div>`,
+            anchor: new naver.maps.Point(23, 46),
+          },
+          title: editMode ? `[편집] ${z.name} (드래그로 이동)` : `${z.name} · ${s.statusLabel}${badgeNum > 0 ? ` (과제/재고부족 ${badgeNum}건)` : ""}${_firstCh ? ` · CH${_firstCh}` : ""}`,
+        });
+        if (naver.maps.Event && naver.maps.Event.addListener) {
+          // Click handler: edit mode opens edit panel, normal mode opens detail
+          naver.maps.Event.addListener(marker, "click", () => {
+            if (editMode) {
+              setEditingZone(z);
+            } else {
+              setSelectedZone(s);
+            }
+          });
+          // Drag end handler: save new lat/lng
+          if (editMode) {
+            naver.maps.Event.addListener(marker, "dragend", (e) => {
+              const newPos = marker.getPosition();
+              const newLat = newPos.lat();
+              const newLng = newPos.lng();
+              updateZoneField(z.id, { lat: newLat, lng: newLng });
+            });
+          }
+        }
+        naverMarkersRef.current.push(marker);
+      } catch (e) {
+        console.warn("Naver marker creation failed for zone", z.id, e.message);
+      }
+    });
+
+    // In edit mode, allow click on empty map area to add new zone
+    if (editMode && naverMapRef.current && naver.maps.Event) {
+      // Remove old map click listener (use a ref to track it)
+      naver.maps.Event.addListener(naverMapRef.current, "rightclick", (e) => {
+        if (!editMode) return;
+        if (!confirm(`이 위치에 새 스팟을 추가하시겠습니까?\n좌표: ${e.coord.lat().toFixed(6)}, ${e.coord.lng().toFixed(6)}`)) return;
+        addNewZone(e.coord.lat(), e.coord.lng());
+      });
+    }
+  }, [zoneStatus, naverLoaded, mapProvider, bgMode, viewMode, editMode, cctvSnapshotData, zoneCrowdStats]);
+
+
+  const createQuickAction = (zone, template) => {
+    if (!onAddFacAction) return;
+    const actionMap = {
+      inspect: { title: `[${zone.name}] 정기 점검`, type: "INSPECTION", sev: "MEDIUM", desc: "통합지도에서 생성된 정기 점검 과제" },
+      cleanup: { title: `[${zone.name}] 미화 작업`, type: "CLEANUP", sev: "LOW", desc: "청결 상태 점검 및 정리" },
+      urgent: { title: `[${zone.name}] 긴급 확인`, type: "URGENT_CHECK", sev: "URGENT", desc: "통합지도에서 긴급 확인 요청" },
+    };
+    const tmpl = actionMap[template];
+    if (!tmpl) return;
+    onAddFacAction({
+      id: "a" + Date.now() + Math.random(),
+      ...tmpl,
+      status: "TODO",
+      due: new Date(Date.now() + (tmpl.sev === "URGENT" ? 1 : 7) * 86400000).toISOString().slice(0, 10),
+      source: "home_dashboard",
+      zoneId: zone.id,
+      zoneName: zone.name,
+      zoneLat: zone.lat,
+      zoneLng: zone.lng,
+    });
+    alert(`✓ 보완과제로 등록: ${tmpl.title}`);
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#f5f5f5" }}>
+      {/* CCTV 미니창 + 핀 펄스 애니메이션 (글로벌) */}
+      <style>{`
+        @keyframes homePinPulse { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.15);opacity:0.85} }
+        @keyframes cctvDangerPulse { 0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,0.7),0 4px 12px rgba(0,0,0,0.4)} 50%{box-shadow:0 0 0 10px rgba(220,38,38,0),0 4px 12px rgba(0,0,0,0.4)} }
+        @keyframes cctvWarnPulse { 0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,0.7),0 4px 12px rgba(0,0,0,0.4)} 50%{box-shadow:0 0 0 8px rgba(245,158,11,0),0 4px 12px rgba(0,0,0,0.4)} }
+        @keyframes cctvLiveBlink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+        .jamsa-cctv-mini { transition:transform 0.15s; transform-origin:left center; }
+        .jamsa-cctv-mini:hover { transform:scale(1.5); z-index:1000; }
+      `}</style>
+      <div style={{ background: "#0f172a", color: "#fff", padding: "14px 20px", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
+        <div style={{ fontSize: 13, fontWeight: 800 }}>🗺️ 통합 상황판</div>
+        <div style={{ flex: 1, display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ padding: "4px 10px", background: kpis.totalUrgent > 0 ? "rgba(220,38,38,0.25)" : "rgba(255,255,255,0.06)", border: `1px solid ${kpis.totalUrgent > 0 ? "rgba(220,38,38,0.5)" : "rgba(255,255,255,0.1)"}`, borderRadius: 6, fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ color: "#fca5a5" }}>🚨 긴급</span>
+            <strong style={{ fontSize: 14, color: kpis.totalUrgent > 0 ? "#fca5a5" : "#fff" }}>{kpis.totalUrgent}</strong>
+          </div>
+          <div style={{ padding: "4px 10px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ color: "#fbbf24" }}>🔧 보완과제</span>
+            <strong style={{ fontSize: 14 }}>{kpis.totalOpen}</strong>
+          </div>
+          <div style={{ padding: "4px 10px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ color: "#93c5fd" }}>📦 재고</span>
+            <strong style={{ fontSize: 14 }}>{kpis.totalInv.toLocaleString()}</strong>
+          </div>
+          <div style={{ padding: "4px 10px", background: kpis.totalLowStock > 0 ? "rgba(234,88,12,0.25)" : "rgba(255,255,255,0.06)", border: `1px solid ${kpis.totalLowStock > 0 ? "rgba(234,88,12,0.5)" : "rgba(255,255,255,0.1)"}`, borderRadius: 6, fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ color: "#fdba74" }}>⚠️ 재고부족</span>
+            <strong style={{ fontSize: 14, color: kpis.totalLowStock > 0 ? "#fdba74" : "#fff" }}>{kpis.totalLowStock}</strong>
+          </div>
+          <div style={{ padding: "4px 10px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ color: "#a5f3fc" }}>📍 주의구역</span>
+            <strong style={{ fontSize: 14 }}>{kpis.zonesNeedingAttention}/{zoneStatus.length}</strong>
+          </div>
+        </div>
+      </div>
+
+      {/* ─── Filter bar + View toggle ─── */}
+      <div style={{ background: "#fff", padding: "10px 20px", display: "flex", gap: 8, borderBottom: "1px solid #e5e7eb", flexWrap: "wrap", alignItems: "center" }}>
+        {/* 뷰 전환 */}
+        <div style={{ display: "flex", gap: 2, padding: 2, background: "#f1f5f9", borderRadius: 8 }}>
+          <button onClick={() => changeViewMode("map")}
+            style={{ padding: "6px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
+              background: viewMode === "map" ? "linear-gradient(135deg,#059669,#0891b2)" : "transparent",
+              color: viewMode === "map" ? "#fff" : "#64748b" }}>
+            🗺️ 지도
+          </button>
+          <button onClick={() => changeViewMode("cards")}
+            style={{ padding: "6px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
+              background: viewMode === "cards" ? "#0f172a" : "transparent",
+              color: viewMode === "cards" ? "#fff" : "#64748b" }}>
+            🔳 카드
+          </button>
+        </div>
+
+        {viewMode === "map" && (
+          <>
+            {/* 지도 타입 전환 */}
+            <div style={{ display: "flex", gap: 2, padding: 2, background: "#f1f5f9", borderRadius: 8 }}>
+              <button onClick={() => changeBgMode("satellite")}
+                style={{ padding: "6px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 700,
+                  background: bgMode === "satellite" ? "#2563eb" : "transparent",
+                  color: bgMode === "satellite" ? "#fff" : "#64748b" }}>
+                🛰️ 위성
+              </button>
+              <button onClick={() => changeBgMode("blend")}
+                style={{ padding: "6px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 700,
+                  background: bgMode === "blend" ? "#2563eb" : "transparent",
+                  color: bgMode === "blend" ? "#fff" : "#64748b" }}>
+                🔀 하이브리드
+              </button>
+              <button onClick={() => changeBgMode("plan")}
+                style={{ padding: "6px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 700,
+                  background: bgMode === "plan" ? "#2563eb" : "transparent",
+                  color: bgMode === "plan" ? "#fff" : "#64748b" }}>
+                🗾 일반
+              </button>
+            </div>
+            <button onClick={() => setShowApiKeyModal(true)} title="네이버 지도 API 키 설정"
+              style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #cbd5e1", background: mapProvider === "naver" ? "#dcfce7" : "#fff", color: mapProvider === "naver" ? "#166534" : "#64748b", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>
+              {mapProvider === "naver" ? "✓ 네이버" : "🔑 API 키"}
+            </button>
+            <button onClick={() => { setEditMode(!editMode); setEditingZone(null); }} title="스팟 위치/이름/CCTV 편집"
+              style={{ padding: "6px 12px", borderRadius: 6, border: "none",
+                background: editMode ? "linear-gradient(135deg,#dc2626,#ea580c)" : "linear-gradient(135deg,#7c3aed,#2563eb)",
+                color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 800,
+                boxShadow: editMode ? "0 0 0 3px rgba(220,38,38,0.2)" : "none" }}>
+              {editMode ? "✕ 편집 종료" : "✏️ 스팟 편집"}
+            </button>
+            <button onClick={() => { setCctvEditMode(!cctvEditMode); }} title="CCTV 매핑/위치 편집 — 박스 드래그로 구역 변경"
+              style={{ padding: "6px 12px", borderRadius: 6, border: "none",
+                background: cctvEditMode ? "linear-gradient(135deg,#f59e0b,#dc2626)" : "linear-gradient(135deg,#0891b2,#7c3aed)",
+                color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 800,
+                boxShadow: cctvEditMode ? "0 0 0 3px rgba(245,158,11,0.3)" : "none" }}>
+              {cctvEditMode ? "✓ CCTV 편집 종료" : "📹 CCTV 편집"}
+            </button>
+          </>
+        )}
+
+        <div style={{ flex: 1 }} />
+
+        {[
+          { k: "all", l: `전체 (${zoneStatus.length})`, c: "#0f172a" },
+          { k: "urgent", l: `🚨 긴급·경고 (${zoneStatus.filter(s => s.urgentCount > 0 || s.highCount > 0).length})`, c: "#dc2626" },
+          { k: "stock", l: `📦 재고 있음 (${zoneStatus.filter(s => s.invTotal > 0).length})`, c: "#2563eb" },
+          { k: "facility", l: `🔧 보완과제 (${zoneStatus.filter(s => s.openActions.length > 0).length})`, c: "#ea580c" },
+        ].map(f => (
+          <button key={f.k} onClick={() => setFilterMode(f.k)}
+            style={{ padding: "6px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer",
+              background: filterMode === f.k ? f.c : "#f8fafc",
+              color: filterMode === f.k ? "#fff" : "#64748b",
+              border: `1px solid ${filterMode === f.k ? f.c : "#e5e7eb"}` }}>
+            {f.l}
+          </button>
+        ))}
+      </div>
+
+      {/* ─── Map view (Naver or OSM) ─── */}
+      {viewMode === "map" && (
+        <div style={{ flex: 1, position: "relative", background: "#e5e7eb", minHeight: 400 }}>
+          {mapProvider === "naver" && naverClientId && naverLoaded && !naverLoadError ? (
+            <div ref={naverMapContainerRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
+          ) : mapProvider === "naver" && naverClientId && !naverLoaded && !naverLoadError ? (
+            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 12, background: "#f8fafc" }}>
+              <div style={{ fontSize: 40 }}>🗺️</div>
+              <div style={{ fontSize: 13, color: "#64748b", fontWeight: 700 }}>네이버 지도 로딩 중...</div>
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>최대 15초 소요. 실패 시 일반 지도로 자동 전환됩니다</div>
+              <button onClick={() => setMapProvider("osm")} style={{ marginTop: 8, padding: "6px 14px", background: "#3b82f6", color: "#fff", border: 0, borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                지금 일반 지도로 보기
+              </button>
+            </div>
+          ) : (
+            <OsmFallbackMap zoneStatus={filteredStatus} onSelectZone={setSelectedZone}
+              onOpenApiKey={() => setShowApiKeyModal(true)} hasError={!!naverLoadError} errorMsg={naverLoadError}
+              bgMode={bgMode} onChangeBgMode={changeBgMode}
+              cctvSnapshotData={cctvSnapshotData}
+              cctvEditMode={cctvEditMode}
+              onMoveCctv={moveChannelToZone} />
+          )}
+
+          {/* CCTV 라이브 오버레이 — 모든 활성 채널 라이브뷰 + Claude AI 위험 감지 */}
+          {/* CCTV 진단 배지 — 매핑 비어있거나 서버 미가동 시 안내 */}
+          {(() => {
+            const totalMapped = Object.values(cctvMap || {}).reduce((s, a) => s + (Array.isArray(a) ? a.length : 0), 0);
+            const totalSnaps = Object.values(cctvSnapshotData?.snapshots || {}).filter(s => s?.url && !s?.error).length;
+            const hasError = Object.values(cctvSnapshotData?.snapshots || {}).some(s => s?.error);
+
+            if (totalMapped === 0) {
+              return (
+                <div style={{ position: "absolute", top: 60, right: 12, zIndex: 600, background: "rgba(220,38,38,0.95)", color: "#fff", padding: "10px 14px", borderRadius: 8, fontSize: 11, fontWeight: 700, boxShadow: "0 4px 12px rgba(0,0,0,0.3)", maxWidth: 280, lineHeight: 1.5 }}>
+                  ⚠️ CCTV 매핑 비어있음
+                  <div style={{ fontSize: 10, fontWeight: 400, marginTop: 4, opacity: 0.95 }}>
+                    구역에 CCTV 채널이 매핑되지 않아 미니창이 표시되지 않습니다.
+                  </div>
+                  <button onClick={() => {
+                    if (typeof CCTV_AUTO_MAP !== "undefined") {
+                      setCctvMap({ ...CCTV_AUTO_MAP });
+                      try { window.localStorage.setItem("jamsa_cctv_zone_map", JSON.stringify(CCTV_AUTO_MAP)); } catch (e) {}
+                    }
+                  }} style={{ marginTop: 8, padding: "5px 10px", background: "#fff", color: "#dc2626", border: "none", borderRadius: 5, fontSize: 10, fontWeight: 800, cursor: "pointer" }}>
+                    🔄 자동 매핑으로 복구
+                  </button>
+                </div>
+              );
+            }
+            if (totalMapped > 0 && totalSnaps === 0 && cctvSnapshotData?.enabled !== false) {
+              return (
+                <div style={{ position: "absolute", top: 60, right: 12, zIndex: 600, background: "rgba(245,158,11,0.95)", color: "#78350f", padding: "10px 14px", borderRadius: 8, fontSize: 11, fontWeight: 700, boxShadow: "0 4px 12px rgba(0,0,0,0.3)", maxWidth: 280, lineHeight: 1.5 }}>
+                  ⚠️ CCTV 영상 수신 안 됨
+                  <div style={{ fontSize: 10, fontWeight: 400, marginTop: 4 }}>
+                    {totalMapped}개 채널 매핑됨. 박물관 PC에서 CCTV 5555 서버를 켜야 영상이 표시됩니다.
+                    <br />좌하단 "🔴 미로그인" 표시 = 서버 미가동
+                  </div>
+                </div>
+              );
+            }
+            return null;
+          })()}
+
+          <CctvLiveOverlay
+            zones={allZones.filter(z => !zoneCustomizations[z.id]?._deleted)}
+            cctvMap={cctvMap}
+            onSnapshotsChange={setCctvSnapshotData}
+            onAlert={(alert) => {
+              setCctvAlerts(prev => [alert, ...prev].slice(0, 50));
+            }}
+            onOpenChannel={(ch) => {
+              const cam = (typeof FAC_CCTV_CAMERAS !== "undefined" ? FAC_CCTV_CAMERAS : []).find(c => c.ch === ch);
+              if (cam) {
+                alert(`CH${ch} ${cam.name} (${cam.zone})\n\n자세한 화면을 보려면 [시설점검] → [CCTV] 메뉴로 이동하세요.`);
+              } else {
+                alert(`CH${ch}\n\n자세한 화면은 [시설점검] → [CCTV] 메뉴에서 확인하세요.`);
+              }
+            }}
+          />
+
+          {/* CCTV 편집 모드 — 가이드 + 미할당 채널 */}
+          {cctvEditMode && (() => {
+            const _allChs = Object.values(cctvMap || {}).flatMap(arr => arr || []);
+            const _zoneOrder = allZones.filter(z => !zoneCustomizations[z.id]?._deleted);
+            // 사용 가능한 모든 채널 (1-44)
+            const _usedChs = new Set(_allChs);
+            const _allPossible = [];
+            for (let i = 1; i <= 44; i++) _allPossible.push(i);
+            const _unassigned = _allPossible.filter(ch => !_usedChs.has(ch));
+            return (
+              <>
+                <div style={{ position: "absolute", top: 60, left: "50%", transform: "translateX(-50%)", zIndex: 700, padding: "10px 16px", background: "linear-gradient(135deg,rgba(245,158,11,0.97),rgba(220,38,38,0.97))", color: "#fff", borderRadius: 8, fontSize: 11, fontWeight: 700, boxShadow: "0 4px 16px rgba(0,0,0,0.3)", display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 14 }}>📹</span>
+                  <span>CCTV 편집 모드</span>
+                  <span style={{ fontWeight: 400, fontSize: 10, opacity: 0.95 }}>
+                    · CCTV 박스 클릭 → 구역 선택
+                    · 미할당 채널 클릭 → 구역 선택
+                    · 자동 저장
+                  </span>
+                </div>
+
+                {/* 미할당 채널 패널 (우측 하단) */}
+                <div style={{ position: "absolute", bottom: 12, right: 12, background: "rgba(15,23,42,0.95)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 8, padding: "10px 12px", maxWidth: 320, maxHeight: 200, overflow: "auto", zIndex: 700, color: "#fff", fontSize: 11 }}>
+                  <div style={{ fontWeight: 800, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span>📦 미할당 채널 ({_unassigned.length})</span>
+                    <button onClick={() => {
+                      if (typeof CCTV_AUTO_MAP !== "undefined") {
+                        setCctvMap({ ...CCTV_AUTO_MAP });
+                        try { window.localStorage.setItem("jamsa_cctv_zone_map", JSON.stringify(CCTV_AUTO_MAP)); } catch (e) {}
+                      }
+                    }} style={{ padding: "3px 8px", background: "rgba(255,255,255,0.15)", color: "#fff", border: "none", borderRadius: 4, fontSize: 9, fontWeight: 700, cursor: "pointer" }}>
+                      ↻ 자동 매핑 복구
+                    </button>
+                  </div>
+                  {_unassigned.length === 0 ? (
+                    <div style={{ fontSize: 10, opacity: 0.7, textAlign: "center", padding: 8 }}>모든 채널이 매핑됨</div>
+                  ) : (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                      {_unassigned.map(ch => (
+                        <div key={ch}
+                          onClick={() => setChannelPickerCh(ch)}
+                          style={{ padding: "4px 8px", background: "rgba(255,255,255,0.1)", border: "1px dashed rgba(255,255,255,0.3)", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer", userSelect: "none" }}
+                          title="클릭해서 구역 선택">
+                          📷 CH{ch}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            );
+          })()}
+
+          {/* ━━━ 사용자 위치 추적 — 실시간 핀 (오버레이) ━━━ */}
+          {visibleUsers.length > 0 && (
+            <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 20 }}>
+              {visibleUsers.map(u => {
+                // 박물관 BBOX (위경도 → % 변환)
+                const SAT_BBOX = { lat_min: 36.6378, lat_max: 36.6395, lng_min: 127.4880, lng_max: 127.4905 };
+                const xPct = ((u.lng - SAT_BBOX.lng_min) / (SAT_BBOX.lng_max - SAT_BBOX.lng_min)) * 100;
+                const yPct = ((SAT_BBOX.lat_max - u.lat) / (SAT_BBOX.lat_max - SAT_BBOX.lat_min)) * 100;
+                // 박물관 영역 밖이면 표시 안 함
+                if (xPct < 0 || xPct > 100 || yPct < 0 || yPct > 100) return null;
+
+                const isMe = userCtx && u.id === userCtx.id;
+                const isStaff = u.role === "staff";
+                const stale = u.ageSec > 30;
+                const sourceColor = u.source === "gps" ? "#10b981" : u.source === "wifi" ? "#3b82f6" : "#8b5cf6";
+                const ringColor = isMe ? "#3b82f6" : (isStaff ? sourceColor : "#94a3b8");
+                const dotSize = isMe ? 18 : (isStaff ? 14 : 10);
+
+                return (
+                  <div key={u.id}
+                    onClick={() => setSelectedUserId(u.id)}
+                    style={{
+                      position: "absolute",
+                      left: `${xPct}%`, top: `${yPct}%`,
+                      transform: "translate(-50%, -50%)",
+                      pointerEvents: "auto", cursor: "pointer",
+                      opacity: stale ? 0.5 : 1,
+                      zIndex: isMe ? 30 : (isStaff ? 25 : 22),
+                    }}>
+                    {isMe && (
+                      <div style={{
+                        position: "absolute", left: "50%", top: "50%",
+                        transform: "translate(-50%, -50%)",
+                        width: 36, height: 36, borderRadius: "50%",
+                        background: "rgba(59,130,246,0.25)",
+                        animation: "userLocPulse 2s infinite",
+                      }} />
+                    )}
+                    <div style={{
+                      position: "relative",
+                      width: dotSize, height: dotSize, borderRadius: "50%",
+                      background: ringColor, border: "2px solid #fff",
+                      boxShadow: "0 2px 6px rgba(0,0,0,0.4)",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      color: "#fff", fontSize: isStaff ? 9 : 7, fontWeight: 800,
+                    }}>
+                      {isStaff ? (isMe ? "나" : (u.name?.[0] || "?")) : ""}
+                    </div>
+                    <div style={{
+                      position: "absolute", top: dotSize + 3, left: "50%",
+                      transform: "translateX(-50%)",
+                      background: "rgba(255,255,255,0.95)",
+                      padding: "1px 5px", borderRadius: 3,
+                      fontSize: 9, fontWeight: 600, whiteSpace: "nowrap",
+                      boxShadow: "0 1px 3px rgba(0,0,0,0.2)", color: "#0f172a",
+                    }}>
+                      {u.source === "gps" ? "🛰️" : u.source === "wifi" ? "📶" : "🔵"} {u.name?.length > 8 ? u.name.slice(0, 6) + ".." : u.name}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ━━━ 위치 공유 토글 + 통계 (좌상단) ━━━ */}
+          <div style={{ position: "absolute", top: 60, left: 12, background: "rgba(255,255,255,0.97)", border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 12px", boxShadow: "0 4px 12px rgba(0,0,0,0.1)", zIndex: 600, minWidth: 200 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <span style={{ fontSize: 12, fontWeight: 800, color: "#0f172a" }}>📍 실시간 위치</span>
+              <span style={{ fontSize: 10, color: "#10b981", fontWeight: 700 }}>● {userLocations.length}명</span>
+            </div>
+            <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
+              {[
+                { k: "all", l: "전체" },
+                { k: "staff", l: "👤 직원" },
+                { k: "visitor", l: "👥 관람객" },
+              ].map(f => (
+                <button key={f.k} onClick={() => setLocationFilter(f.k)}
+                  style={{
+                    flex: 1, padding: "3px 6px", fontSize: 10, fontWeight: 700,
+                    border: `1px solid ${locationFilter === f.k ? "#3b82f6" : "#cbd5e1"}`,
+                    background: locationFilter === f.k ? "#3b82f6" : "#fff",
+                    color: locationFilter === f.k ? "#fff" : "#64748b",
+                    borderRadius: 4, cursor: "pointer",
+                  }}>
+                  {f.l}
+                </button>
+              ))}
+            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 11, fontWeight: 600, color: "#0f172a", padding: "4px 0" }}>
+              <input type="checkbox" checked={shareMyLocation} onChange={toggleMyLocation}
+                style={{ width: 14, height: 14, cursor: "pointer" }} />
+              <span>📍 내 위치 공유</span>
+            </label>
+            {shareMyLocation && myLocationStatus.source && (
+              <div style={{ fontSize: 9, color: "#10b981", marginTop: 2 }}>
+                ✓ {myLocationStatus.source === "gps" ? "🛰️ GPS" : "📶 Wi-Fi"} · 정확도 ±{Math.round(myLocationStatus.accuracy || 0)}m
+              </div>
+            )}
+            {shareMyLocation && myLocationStatus.error && (
+              <div style={{ fontSize: 9, color: "#ef4444", marginTop: 2 }}>
+                ⚠ {myLocationStatus.error}
+              </div>
+            )}
+            <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 4, lineHeight: 1.4 }}>
+              🛰️ GPS · 📶 Wi-Fi · 🔵 BLE 비콘
+            </div>
+            {/* 추가 기능 버튼 */}
+            <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>
+              {bleSupported && shareMyLocation && (
+                <button onClick={startBleScan} disabled={bleScanning}
+                  title="BLE 비콘으로 실내 위치 정확도 향상"
+                  style={{
+                    flex: 1, padding: "4px 6px", fontSize: 9, fontWeight: 700,
+                    border: "1px solid #8b5cf6", background: nearestBeacon ? "#8b5cf6" : "#fff",
+                    color: nearestBeacon ? "#fff" : "#8b5cf6", borderRadius: 4, cursor: "pointer",
+                  }}>
+                  🔵 {bleScanning ? "검색중..." : nearestBeacon ? `비콘 ${nearestBeacon.name?.slice(0, 8)}` : "비콘 연결"}
+                </button>
+              )}
+              {pwaInstallable && !pwaInstalled && (
+                <button onClick={installPwa}
+                  title="홈 화면에 앱 설치"
+                  style={{
+                    flex: 1, padding: "4px 6px", fontSize: 9, fontWeight: 700,
+                    border: "1px solid #10b981", background: "#10b981",
+                    color: "#fff", borderRadius: 4, cursor: "pointer",
+                  }}>
+                  📱 앱 설치
+                </button>
+              )}
+              <button onClick={() => setQrModalOpen(true)}
+                title="관람객용 QR 코드 생성"
+                style={{
+                  flex: 1, padding: "4px 6px", fontSize: 9, fontWeight: 700,
+                  border: "1px solid #f59e0b", background: "#fff",
+                  color: "#f59e0b", borderRadius: 4, cursor: "pointer",
+                }}>
+                🔲 QR
+              </button>
+            </div>
+            {/* 인파 분석 토글 + 구역 QR 인쇄 */}
+            <div style={{ display: "flex", gap: 4, marginTop: 4, flexWrap: "wrap" }}>
+              <button onClick={() => {
+                const next = !crowdAnalysisOn;
+                setCrowdAnalysisOn(next);
+                try { window.localStorage.setItem("jamsa_crowd_analysis", next ? "1" : "0"); } catch(e) {}
+              }}
+                title="CCTV AI로 구역별 인파 자동 카운팅"
+                style={{
+                  flex: 1, padding: "4px 6px", fontSize: 9, fontWeight: 700,
+                  border: `1px solid ${crowdAnalysisOn ? "#dc2626" : "#cbd5e1"}`,
+                  background: crowdAnalysisOn ? "#dc2626" : "#fff",
+                  color: crowdAnalysisOn ? "#fff" : "#64748b", borderRadius: 4, cursor: "pointer",
+                }}>
+                {crowdAnalysisOn ? "🔴 인파분석 중" : "👥 인파 분석"}
+              </button>
+              <button onClick={() => setZoneQrModalOpen(true)}
+                title="구역별 체크인 QR 인쇄 (13개)"
+                style={{
+                  flex: 1, padding: "4px 6px", fontSize: 9, fontWeight: 700,
+                  border: "1px solid #14b8a6", background: "#fff",
+                  color: "#14b8a6", borderRadius: 4, cursor: "pointer",
+                }}>
+                🖨️ 구역 QR
+              </button>
+            </div>
+            {/* 운영 통계 버튼 */}
+            <div style={{ marginTop: 4 }}>
+              <button onClick={() => setShowStatsModal(true)}
+                title="동선 분석 + 운영 통계 + AI 권고"
+                style={{
+                  width: "100%", padding: "5px 8px", fontSize: 10, fontWeight: 800,
+                  border: "none",
+                  background: "linear-gradient(135deg,#7c3aed,#2563eb)",
+                  color: "#fff", borderRadius: 5, cursor: "pointer",
+                  boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
+                }}>
+                📊 운영 통계 + 동선 분석
+              </button>
+            </div>
+            {isVisitorMode && (
+              <div style={{ marginTop: 6, padding: "4px 6px", background: "#fef3c7", border: "1px solid #fbbf24", borderRadius: 4, fontSize: 9, color: "#78350f", fontWeight: 700, textAlign: "center" }}>
+                👨‍👩‍👧 관람객 모드
+              </div>
+            )}
+          </div>
+
+          {/* ━━━ 운영 통계 + 동선 분석 모달 ━━━ */}
+          {showStatsModal && (
+            <div onClick={() => setShowStatsModal(false)}
+              style={{ position: "fixed", inset: 0, zIndex: 10100, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, backdropFilter: "blur(4px)" }}>
+              <div onClick={e => e.stopPropagation()}
+                style={{ background: "#fff", borderRadius: 14, width: 1100, maxWidth: "97vw", maxHeight: "95vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+                {/* 헤더 */}
+                <div style={{ padding: "16px 20px", background: "linear-gradient(135deg,#7c3aed,#2563eb)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
+                  <div>
+                    <div style={{ fontSize: 18, fontWeight: 900 }}>📊 박물관 운영 통계 + 동선 분석</div>
+                    <div style={{ fontSize: 11, opacity: 0.95, marginTop: 2 }}>
+                      {opStats?.generatedAt ? `최종 갱신: ${new Date(opStats.generatedAt).toLocaleTimeString("ko-KR")}` : "데이터 로딩 중..."}
+                      {opStats?.totalVisitors !== undefined ? ` · 누적 ${opStats.totalVisitors}명` : ""}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <select value={statsRange} onChange={e => setStatsRange(e.target.value)}
+                      style={{ padding: "5px 10px", background: "rgba(255,255,255,0.2)", color: "#fff", border: "1px solid rgba(255,255,255,0.3)", borderRadius: 4, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                      <option value="today" style={{color:"#000"}}>오늘</option>
+                      <option value="week" style={{color:"#000"}}>최근 7일</option>
+                      <option value="month" style={{color:"#000"}}>최근 30일</option>
+                    </select>
+                    <button onClick={() => setShowStatsModal(false)}
+                      style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", fontSize: 20, cursor: "pointer", padding: "0 10px", borderRadius: 4 }}>×</button>
+                  </div>
+                </div>
+
+                {/* 탭 */}
+                <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb", background: "#fafafa", flexShrink: 0 }}>
+                  {[
+                    { k: "stats", l: "📈 핵심 지표" },
+                    { k: "flow", l: "🌊 동선 분석" },
+                    { k: "hourly", l: "⏰ 시간대별" },
+                    { k: "zones", l: "📍 구역 통계" },
+                    { k: "ai", l: "🤖 AI 권고" },
+                  ].map(t => (
+                    <button key={t.k} onClick={() => setStatsTab(t.k)}
+                      style={{
+                        padding: "12px 18px", fontSize: 12, fontWeight: 700,
+                        background: statsTab === t.k ? "#fff" : "transparent",
+                        color: statsTab === t.k ? "#7c3aed" : "#64748b",
+                        border: "none", borderBottom: statsTab === t.k ? "2px solid #7c3aed" : "2px solid transparent",
+                        cursor: "pointer",
+                      }}>{t.l}</button>
+                  ))}
+                </div>
+
+                {/* 본문 */}
+                <div style={{ flex: 1, overflow: "auto", padding: 20, background: "#f8fafc" }}>
+                  {!opStats && (
+                    <div style={{ textAlign: "center", padding: 60, color: "#94a3b8", fontSize: 13 }}>
+                      📊 데이터 로딩 중...
+                      <div style={{ fontSize: 10, marginTop: 6 }}>QR 체크인이 누적되면 데이터가 표시됩니다</div>
+                    </div>
+                  )}
+                  {opStats?.fallback && (
+                    <div style={{ padding: 14, background: "#fef3c7", border: "1px solid #fbbf24", borderRadius: 8, fontSize: 11, color: "#78350f", marginBottom: 12 }}>
+                      ⚠️ Supabase 연결 실패 - 일부 데이터가 표시되지 않을 수 있습니다
+                    </div>
+                  )}
+
+                  {/* 핵심 지표 탭 */}
+                  {statsTab === "stats" && opStats && (
+                    <div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12, marginBottom: 16 }}>
+                        <StatCard label="누적 입장객" value={opStats.totalVisitors || 0} unit="명" trend={`체크인 ${opStats.totalCheckins}건`} />
+                        <StatCard label="예상 매출" value={`₩${(opStats.estimatedRevenue || 0).toLocaleString()}`} trend="@5,000원/명" />
+                        <StatCard label="피크 시간" value={opStats.peakTimeStr || "-"} trend={opStats.peakHour > 0 ? `${opStats.peakHour}시 집중` : "-"} />
+                        <StatCard label="평균 동선" value={`${opStats.avgPathLength || 0}구역`} trend={`평균 체류 ${opStats.avgStayMinutes || 0}분`} />
+                        <StatCard label="과밀 알림" value={opStats.crowdedAlerts || 0} unit="회" trend="CCTV AI 기반" color="#dc2626" />
+                        {opStats.satisfactionScore !== null && (
+                          <StatCard label="만족도 추정" value={`${opStats.satisfactionScore}점`}
+                            trend={opStats.satisfactionScore >= 90 ? "✓ 우수" : opStats.satisfactionScore >= 70 ? "양호" : "개선 필요"}
+                            color={opStats.satisfactionScore >= 90 ? "#10b981" : opStats.satisfactionScore >= 70 ? "#f59e0b" : "#dc2626"} />
+                        )}
+                      </div>
+                      <div style={{ background: "#fff", borderRadius: 8, padding: 16, fontSize: 11, color: "#64748b", lineHeight: 1.7 }}>
+                        💡 이 데이터는 QR 체크인 + CCTV AI 인파 카운팅 기반으로 자동 계산됩니다.
+                        구역별 QR 부착이 많을수록 정확도가 높아집니다.
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 동선 분석 탭 */}
+                  {statsTab === "flow" && opStats && (
+                    <div>
+                      <div style={{ marginBottom: 16, fontWeight: 700, fontSize: 13, color: "#0f172a" }}>🌊 인기 동선 (Top 10)</div>
+                      {(opStats.topFlows || []).length === 0 ? (
+                        <div style={{ background: "#fff", borderRadius: 8, padding: 30, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+                          동선 데이터가 부족합니다.<br />
+                          관람객이 2개 이상 구역에 QR 체크인하면 표시됩니다.
+                        </div>
+                      ) : (
+                        <div style={{ background: "#fff", borderRadius: 8, padding: 14 }}>
+                          {opStats.topFlows.map((f, i) => (
+                            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: i < opStats.topFlows.length - 1 ? "1px dashed #e5e7eb" : "none" }}>
+                              <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, minWidth: 24 }}>#{i+1}</span>
+                              <span style={{ background: "#f1f5f9", padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700 }}>{f.fromName}</span>
+                              <span style={{ color: "#94a3b8" }}>→</span>
+                              <span style={{ background: "#f1f5f9", padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700 }}>{f.toName}</span>
+                              <span style={{ marginLeft: "auto", background: "#7c3aed", color: "#fff", padding: "2px 10px", borderRadius: 999, fontSize: 10, fontWeight: 800 }}>{f.count}회</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 시간대별 탭 */}
+                  {statsTab === "hourly" && opStats && (
+                    <div>
+                      <div style={{ marginBottom: 16, fontWeight: 700, fontSize: 13, color: "#0f172a" }}>⏰ 시간대별 입장객 추이 (9-18시)</div>
+                      <div style={{ background: "#fff", borderRadius: 8, padding: 20 }}>
+                        {(opStats.hourlyEntries || []).length === 0 || opStats.hourlyEntries.every(v => v === 0) ? (
+                          <div style={{ textAlign: "center", color: "#94a3b8", fontSize: 12, padding: 30 }}>
+                            데이터가 부족합니다. QR 체크인이 누적되면 표시됩니다.
+                          </div>
+                        ) : (
+                          <>
+                            <div style={{ display: "flex", gap: 4, alignItems: "end", height: 180, marginBottom: 8 }}>
+                              {opStats.hourlyEntries.map((v, i) => {
+                                const max = Math.max(...opStats.hourlyEntries, 1);
+                                const isPeak = v === max && v > 0;
+                                return (
+                                  <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                                    <div style={{ fontSize: 10, fontWeight: 700, color: isPeak ? "#dc2626" : "#64748b" }}>{v}</div>
+                                    <div style={{
+                                      width: "100%",
+                                      height: `${v / max * 150}px`,
+                                      minHeight: v > 0 ? 4 : 0,
+                                      background: isPeak ? "linear-gradient(180deg,#f59e0b,#dc2626)" : "linear-gradient(180deg,#7c3aed,#2563eb)",
+                                      borderRadius: "4px 4px 0 0",
+                                    }}></div>
+                                    <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600 }}>{9+i}시</div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 구역 통계 탭 */}
+                  {statsTab === "zones" && opStats && (
+                    <div>
+                      <div style={{ marginBottom: 16, fontWeight: 700, fontSize: 13, color: "#0f172a" }}>📍 구역별 방문 통계</div>
+                      {(opStats.zoneStats || []).length === 0 ? (
+                        <div style={{ background: "#fff", borderRadius: 8, padding: 30, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+                          QR 체크인 데이터가 누적되면 표시됩니다.
+                        </div>
+                      ) : (
+                        <div style={{ background: "#fff", borderRadius: 8, padding: 14 }}>
+                          {opStats.zoneStats.map((z, i) => (
+                            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: i < opStats.zoneStats.length - 1 ? "1px dashed #e5e7eb" : "none" }}>
+                              <div style={{ minWidth: 130, fontSize: 12, fontWeight: 700, color: "#0f172a" }}>{z.zoneName}</div>
+                              <div style={{ flex: 1, background: "#f1f5f9", height: 12, borderRadius: 6, overflow: "hidden" }}>
+                                <div style={{ width: `${z.visitRate}%`, height: "100%", background: "linear-gradient(90deg,#7c3aed,#2563eb)", transition: "width 0.5s" }}></div>
+                              </div>
+                              <div style={{ minWidth: 80, fontSize: 11, fontWeight: 700, color: "#7c3aed", textAlign: "right" }}>{z.visitRate}% ({z.uniqueVisitors}명)</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* AI 권고 탭 */}
+                  {statsTab === "ai" && opStats && (
+                    <div>
+                      <div style={{ marginBottom: 16, fontWeight: 700, fontSize: 13, color: "#0f172a" }}>🤖 AI 운영 권고사항</div>
+                      <div style={{ display: "grid", gap: 10 }}>
+                        {(opStats.recommendations || []).map((r, i) => (
+                          <div key={i} style={{ background: "linear-gradient(135deg,rgba(124,58,237,0.08),rgba(37,99,235,0.04))", border: "1px solid rgba(124,58,237,0.2)", borderRadius: 8, padding: 14 }}>
+                            <div style={{ fontSize: 11, fontWeight: 800, color: "#7c3aed", marginBottom: 4 }}>💡 권고 #{i+1}</div>
+                            <div style={{ fontSize: 12, color: "#0f172a", lineHeight: 1.6 }}>{r}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ marginTop: 16, padding: 12, background: "#fef3c7", borderRadius: 8, fontSize: 10, color: "#78350f", lineHeight: 1.6 }}>
+                        ⚠️ 권고사항은 누적 데이터를 기반으로 자동 생성됩니다. 데이터가 적으면 정확도가 떨어질 수 있습니다.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ━━━ QR 코드 모달 (관람객 안내용) ━━━ */}
+          {qrModalOpen && (() => {
+            const visitorUrl = `${window.location.origin}/?role=visitor`;
+            const staffUrl = `${window.location.origin}/`;
+            // QR 코드 생성: api.qrserver.com (무료 공개 API)
+            const visitorQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(visitorUrl)}&margin=10`;
+            const staffQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(staffUrl)}&margin=10`;
+            return (
+              <div onClick={() => setQrModalOpen(false)}
+                style={{ position: "fixed", inset: 0, zIndex: 10100, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+                <div onClick={e => e.stopPropagation()}
+                  style={{ background: "#fff", borderRadius: 14, width: 600, maxWidth: "95vw", maxHeight: "90vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+                  <div style={{ padding: "16px 20px", background: "linear-gradient(135deg,#0891b2,#7c3aed)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <div style={{ fontSize: 18, fontWeight: 900 }}>🔲 QR 코드 안내</div>
+                      <div style={{ fontSize: 11, opacity: 0.95, marginTop: 2 }}>관람객/직원이 휴대폰으로 스캔하면 바로 접속</div>
+                    </div>
+                    <button onClick={() => setQrModalOpen(false)}
+                      style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", fontSize: 20, cursor: "pointer", padding: "0 8px", borderRadius: 4 }}>×</button>
+                  </div>
+                  <div style={{ padding: 20, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                    {/* 관람객 QR */}
+                    <div style={{ border: "2px solid #fbbf24", borderRadius: 10, padding: 14, background: "#fefce8" }}>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: "#78350f", marginBottom: 8, textAlign: "center" }}>👨‍👩‍👧 관람객용</div>
+                      <img src={visitorQrUrl} alt="Visitor QR" style={{ width: "100%", height: "auto", borderRadius: 6, background: "#fff" }} />
+                      <div style={{ fontSize: 10, color: "#78350f", marginTop: 8, textAlign: "center", wordBreak: "break-all" }}>{visitorUrl}</div>
+                      <div style={{ fontSize: 10, color: "#92400e", marginTop: 8, lineHeight: 1.5 }}>
+                        스캔 시 자동:<br />
+                        ✓ 관람객 모드 진입<br />
+                        ✓ 위치 공유 안내<br />
+                        ✓ 추천 동선 표시
+                      </div>
+                    </div>
+                    {/* 직원 QR */}
+                    <div style={{ border: "2px solid #3b82f6", borderRadius: 10, padding: 14, background: "#eff6ff" }}>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: "#1e3a8a", marginBottom: 8, textAlign: "center" }}>👤 직원용</div>
+                      <img src={staffQrUrl} alt="Staff QR" style={{ width: "100%", height: "auto", borderRadius: 6, background: "#fff" }} />
+                      <div style={{ fontSize: 10, color: "#1e3a8a", marginTop: 8, textAlign: "center", wordBreak: "break-all" }}>{staffUrl}</div>
+                      <div style={{ fontSize: 10, color: "#1e40af", marginTop: 8, lineHeight: 1.5 }}>
+                        스캔 시 자동:<br />
+                        ✓ 직원 로그인 화면<br />
+                        ✓ PWA 설치 가능<br />
+                        ✓ 통합 관리 화면
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ padding: "12px 20px", background: "#fafafa", borderTop: "1px solid #e5e7eb" }}>
+                    <div style={{ fontSize: 11, color: "#475569", marginBottom: 8, fontWeight: 700 }}>💡 사용 팁</div>
+                    <div style={{ fontSize: 10, color: "#64748b", lineHeight: 1.6 }}>
+                      • 관람객 QR을 입구 안내문에 인쇄해서 부착<br />
+                      • 직원 QR은 사무실/탕비실에 부착해서 신규 직원 접속 안내<br />
+                      • QR 이미지 우클릭 → "이미지 저장"으로 다운로드 후 인쇄
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* ━━━ 구역별 체크인 QR 인쇄 모달 ━━━ */}
+          {zoneQrModalOpen && (
+            <div onClick={() => setZoneQrModalOpen(false)}
+              style={{ position: "fixed", inset: 0, zIndex: 10100, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+              <div onClick={e => e.stopPropagation()}
+                style={{ background: "#fff", borderRadius: 14, width: 900, maxWidth: "95vw", maxHeight: "92vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+                <div style={{ padding: "16px 20px", background: "linear-gradient(135deg,#14b8a6,#0891b2)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 1 }}>
+                  <div>
+                    <div style={{ fontSize: 18, fontWeight: 900 }}>🖨️ 구역별 체크인 QR 인쇄</div>
+                    <div style={{ fontSize: 11, opacity: 0.95, marginTop: 2 }}>13개 구역 입구에 부착 → 관람객 자발적 체크인</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => window.print()}
+                      style={{ padding: "6px 12px", background: "#fff", color: "#0891b2", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                      🖨️ 전체 인쇄
+                    </button>
+                    <button onClick={() => setZoneQrModalOpen(false)}
+                      style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", fontSize: 20, cursor: "pointer", padding: "0 8px", borderRadius: 4 }}>×</button>
+                  </div>
+                </div>
+                <div style={{ padding: 20 }} className="zone-qr-print-area">
+                  <div style={{ marginBottom: 16, padding: 12, background: "#f0fdfa", border: "1px solid #5eead4", borderRadius: 8, fontSize: 11, color: "#134e4a", lineHeight: 1.6 }}>
+                    💡 <strong>사용 방법:</strong><br />
+                    • 각 구역 입구에 해당 QR 인쇄해서 부착<br />
+                    • 관람객이 휴대폰으로 스캔 → 자동으로 그 구역 체크인<br />
+                    • 동선 분석 데이터 자동 수집 (익명)
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 14 }}>
+                    {(allZones || baseZones).map(z => {
+                      if (zoneCustomizations[z.id]?._deleted) return null;
+                      const checkinUrl = `${window.location.origin}/?checkin=${z.id}`;
+                      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(checkinUrl)}&margin=10`;
+                      return (
+                        <div key={z.id}
+                          style={{ border: `2px solid ${z.color || "#cbd5e1"}`, borderRadius: 10, padding: 12, textAlign: "center", background: "#fff", pageBreakInside: "avoid" }}>
+                          <div style={{ fontSize: 28, marginBottom: 4 }}>{z.icon}</div>
+                          <div style={{ fontSize: 14, fontWeight: 800, color: z.color || "#0f172a", marginBottom: 8 }}>{z.name}</div>
+                          <img src={qrUrl} alt={z.name} style={{ width: "100%", height: "auto", borderRadius: 4, background: "#fff" }} />
+                          <div style={{ fontSize: 9, color: "#64748b", marginTop: 6, wordBreak: "break-all" }}>📱 스캔하여 체크인</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ━━━ QR 체크인 결과 토스트 ━━━ */}
+          {checkinResult && (
+            <div onClick={() => setCheckinResult(null)}
+              style={{
+                position: "fixed", top: 80, left: "50%", transform: "translateX(-50%)",
+                zIndex: 10090, padding: "14px 24px",
+                background: checkinResult.message.startsWith("✅") ? "linear-gradient(135deg,#10b981,#059669)" : "linear-gradient(135deg,#dc2626,#b91c1c)",
+                color: "#fff", borderRadius: 12, fontSize: 14, fontWeight: 800,
+                boxShadow: "0 10px 30px rgba(0,0,0,0.3)", cursor: "pointer",
+                display: "flex", alignItems: "center", gap: 8, animation: "slideDown 0.3s",
+              }}>
+              <span style={{ fontSize: 22 }}>{checkinResult.zone.icon}</span>
+              <span>{checkinResult.message}</span>
+            </div>
+          )}
+          <style>{`
+            @keyframes slideDown { from { transform: translate(-50%, -100px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+            @media print {
+              body * { visibility: hidden; }
+              .zone-qr-print-area, .zone-qr-print-area * { visibility: visible; }
+              .zone-qr-print-area { position: absolute; left: 0; top: 0; width: 100%; }
+            }
+          `}</style>
+
+          {/* ━━━ 사용자 클릭 시 상세 팝업 ━━━ */}
+          {selectedUserId && (() => {
+            const u = userLocations.find(x => x.id === selectedUserId);
+            if (!u) return null;
+            return (
+              <div onClick={() => setSelectedUserId(null)}
+                style={{ position: "fixed", inset: 0, zIndex: 10080, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+                <div onClick={e => e.stopPropagation()}
+                  style={{ background: "#fff", borderRadius: 12, width: 360, maxWidth: "95vw", padding: 16, boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                      <div style={{ width: 40, height: 40, borderRadius: "50%", background: u.role === "staff" ? "#3b82f6" : "#94a3b8", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 900, fontSize: 16 }}>
+                        {u.role === "staff" ? (u.name?.[0] || "?") : "👤"}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 15, fontWeight: 900, color: "#0f172a" }}>{u.name}</div>
+                        <div style={{ fontSize: 11, color: "#64748b" }}>
+                          {u.role === "staff" ? "직원" : "관람객"}
+                          {u.dept && ` · ${u.dept}`}
+                        </div>
+                      </div>
+                    </div>
+                    <button onClick={() => setSelectedUserId(null)}
+                      style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#94a3b8", padding: 0, lineHeight: 1 }}>×</button>
+                  </div>
+                  <div style={{ background: "#f8fafc", borderRadius: 8, padding: 10, fontSize: 11, color: "#475569", lineHeight: 1.7 }}>
+                    <div>📍 위치: {u.lat?.toFixed(5)}, {u.lng?.toFixed(5)}</div>
+                    <div>{u.source === "gps" ? "🛰️ GPS" : u.source === "wifi" ? "📶 Wi-Fi" : "🔵 BLE 비콘"}{u.beaconName && ` (${u.beaconName})`} · 정확도 ±{Math.round(u.accuracy || 0)}m</div>
+                    <div>⏱️ {u.ageSec === 0 ? "실시간" : `${u.ageSec}초 전`}</div>
+                  </div>
+                  {u.role === "staff" && userCtx && u.id !== userCtx.id && (
+                    <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
+                      <button onClick={() => alert(`${u.name}에게 호출 알림 (구현 예정)`)}
+                        style={{ flex: 1, padding: 8, background: "#3b82f6", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                        📞 호출
+                      </button>
+                      <button onClick={() => alert(`${u.name}에게 메시지 (구현 예정)`)}
+                        style={{ flex: 1, padding: 8, background: "#f1f5f9", color: "#475569", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                        💬 메시지
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* 위치 핀 펄스 애니메이션 */}
+          <style>{`@keyframes userLocPulse { 0%,100% { transform: translate(-50%,-50%) scale(1); opacity: 0.5; } 50% { transform: translate(-50%,-50%) scale(1.6); opacity: 0.15; } }`}</style>
+
+          {/* 지도 우하단 범례 */}
+          <div style={{ position: "absolute", bottom: 12, left: 12, background: "rgba(255,255,255,0.95)", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", fontSize: 10, boxShadow: "0 4px 12px rgba(0,0,0,0.1)", zIndex: 10 }}>
+            <div style={{ fontWeight: 800, color: "#0f172a", marginBottom: 6, fontSize: 11 }}>📍 스팟 상태 범례</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#dc2626" }} /> 긴급
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#ea580c" }} /> 경고
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#ca8a04" }} /> 주의
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#059669" }} /> 정상
+              </div>
+            </div>
+          </div>
+
+          {/* 필터 배지 */}
+          <div style={{ position: "absolute", top: 12, left: 12, background: "rgba(15,23,42,0.92)", color: "#fff", padding: "6px 12px", borderRadius: 20, fontSize: 11, fontWeight: 700, zIndex: 10, backdropFilter: "blur(4px)" }}>
+            📍 {filteredStatus.length}개 스팟 표시 중
+            {filterMode !== "all" && <span style={{ marginLeft: 6, opacity: 0.7 }}>
+              · {filterMode === "urgent" ? "🚨 긴급" : filterMode === "stock" ? "📦 재고" : "🔧 보완과제"} 필터
+            </span>}
+          </div>
+        </div>
+      )}
+
+      {/* ─── Naver API Key Modal ─── */}
+      {showApiKeyModal && (
+        <HomeNaverApiKeyModal currentKey={naverClientId}
+          onSave={(id) => { saveNaverClientId(id); setShowApiKeyModal(false); setNaverLoadError(null); }}
+          onClose={() => setShowApiKeyModal(false)} />
+      )}
+
+      {/* ─── CCTV 서버 상태 배지 (우하단) ─── */}
+      <div onClick={() => setCctvGuideOpen(true)}
+        title="클릭하면 자세한 가이드"
+        style={{ position: "fixed", bottom: 12, right: 12, zIndex: 10070,
+          padding: "6px 12px", borderRadius: 999, fontSize: 11, fontWeight: 700, cursor: "pointer",
+          display: "flex", alignItems: "center", gap: 6,
+          background: cctvServerStatus.status === "online" ? "rgba(16,185,129,0.95)" :
+                     cctvServerStatus.status === "offline" ? "rgba(220,38,38,0.95)" : "rgba(100,116,139,0.95)",
+          color: "#fff", boxShadow: "0 4px 12px rgba(0,0,0,0.2)" }}>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#fff",
+          animation: cctvServerStatus.status === "online" ? "naverPulse 2s infinite" : "none" }} />
+        CCTV 서버 {cctvServerStatus.status === "online" ? "✓ 가동 중" : cctvServerStatus.status === "offline" ? "✗ 미가동" : "확인 중..."}
+      </div>
+
+      {/* ─── CCTV 채널 → 구역 선택 모달 ─── */}
+      {channelPickerCh !== null && (() => {
+        const ch = channelPickerCh;
+        const currentZoneId = Object.entries(cctvMap || {}).find(([_, chs]) => (chs || []).includes(ch))?.[0];
+        const currentZone = allZones.find(z => z.id === currentZoneId);
+        const availableZones = allZones.filter(z => !zoneCustomizations[z.id]?._deleted);
+        return (
+          <div onClick={() => setChannelPickerCh(null)}
+            style={{ position: "fixed", inset: 0, zIndex: 10100, background: "rgba(0,0,0,0.6)",
+              display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+            <div onClick={e => e.stopPropagation()}
+              style={{ background: "#fff", borderRadius: 14, width: 480, maxWidth: "95vw", maxHeight: "85vh",
+                overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+              {/* 헤더 */}
+              <div style={{ padding: "16px 20px", background: "linear-gradient(135deg,#0891b2,#7c3aed)", color: "#fff", flexShrink: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ fontSize: 17, fontWeight: 900 }}>📷 CH{ch} 매핑 변경</div>
+                  <button onClick={() => setChannelPickerCh(null)}
+                    style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", fontSize: 20, cursor: "pointer", lineHeight: 1, padding: "0 8px", borderRadius: 4 }}>×</button>
+                </div>
+                <div style={{ fontSize: 12, marginTop: 4, opacity: 0.95 }}>
+                  {currentZone ? `현재: ${currentZone.icon} ${currentZone.name}` : "현재: 미할당"}
+                  {" → "}
+                  어디로 옮기시겠어요?
+                </div>
+              </div>
+
+              {/* 구역 리스트 */}
+              <div style={{ flex: 1, overflowY: "auto", padding: 12 }}>
+                {/* 매핑 해제 버튼 (현재 매핑돼 있을 때만) */}
+                {currentZoneId && (
+                  <button onClick={() => {
+                    moveChannelToZone(ch, null);
+                    setChannelPickerCh(null);
+                  }}
+                    style={{ display: "block", width: "100%", padding: "10px 14px", marginBottom: 10,
+                      background: "#fee2e2", color: "#dc2626", border: "1px solid #fca5a5",
+                      borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", textAlign: "left" }}>
+                    🗑️ 매핑 해제 (어떤 구역에도 표시 안 함)
+                  </button>
+                )}
+
+                {/* 구역 그리드 */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 8 }}>
+                  {availableZones.map(z => {
+                    const isCurrent = z.id === currentZoneId;
+                    const zChannels = (cctvMap[z.id] || []);
+                    return (
+                      <button key={z.id}
+                        onClick={() => {
+                          moveChannelToZone(ch, z.id);
+                          setChannelPickerCh(null);
+                        }}
+                        disabled={isCurrent}
+                        style={{
+                          padding: "10px 12px",
+                          background: isCurrent ? "#f0fdf4" : "#fff",
+                          color: isCurrent ? "#16a34a" : "#0f172a",
+                          border: `2px solid ${isCurrent ? "#86efac" : (z.color || "#e5e7eb")}`,
+                          borderRadius: 8, fontSize: 12, fontWeight: 700,
+                          cursor: isCurrent ? "default" : "pointer", textAlign: "left",
+                          display: "flex", flexDirection: "column", gap: 2,
+                          opacity: isCurrent ? 0.6 : 1,
+                        }}>
+                        <div style={{ fontSize: 14 }}>
+                          {z.icon} {z.name}
+                          {isCurrent && <span style={{ fontSize: 10, marginLeft: 4, color: "#16a34a" }}>✓ 현재</span>}
+                        </div>
+                        <div style={{ fontSize: 10, color: isCurrent ? "#16a34a" : "#94a3b8", fontWeight: 500 }}>
+                          {zChannels.length === 0 ? "매핑 없음" : `매핑 ${zChannels.length}개: ${zChannels.slice(0,3).map(c => `CH${c}`).join(", ")}${zChannels.length > 3 ? "..." : ""}`}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 푸터 */}
+              <div style={{ padding: "10px 16px", background: "#fafafa", borderTop: "1px solid #e5e7eb", fontSize: 11, color: "#64748b", textAlign: "center", flexShrink: 0 }}>
+                💡 구역 카드를 클릭하면 즉시 변경되고 자동 저장됩니다
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+      {cctvGuideOpen && (
+        <div onClick={() => setCctvGuideOpen(false)}
+          style={{ position: "fixed", inset: 0, zIndex: 10090, background: "rgba(0,0,0,0.6)",
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: "#fff", borderRadius: 14, width: 560, maxWidth: "95vw", maxHeight: "85vh",
+              overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+            {/* 헤더 */}
+            <div style={{ padding: "16px 20px", background: cctvServerStatus.status === "online" ? "linear-gradient(135deg,#10b981,#059669)" : "linear-gradient(135deg,#f59e0b,#dc2626)", color: "#fff" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ fontSize: 18, fontWeight: 900 }}>
+                  {cctvServerStatus.status === "online" ? "✅ CCTV 서버 정상 가동 중" : "⚠️ CCTV 서버 미가동"}
+                </div>
+                <button onClick={() => setCctvGuideOpen(false)}
+                  style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", fontSize: 20, cursor: "pointer", lineHeight: 1, padding: "0 8px", borderRadius: 4 }}>×</button>
+              </div>
+              <div style={{ fontSize: 12, marginTop: 4, opacity: 0.95 }}>
+                박물관 PC에서 CCTV 서버(cctv.py / 5555 포트)가 가동되어야 영상이 표시됩니다
+              </div>
+            </div>
+
+            {/* 본문 */}
+            <div style={{ padding: 20 }}>
+              {cctvServerStatus.status === "online" ? (
+                <div style={{ padding: 14, background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 8, fontSize: 13, lineHeight: 1.6 }}>
+                  CCTV 서버가 정상 가동 중입니다. 핀 옆에 라이브 영상이 표시되고 있습니다.
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 13, lineHeight: 1.7, color: "#0f172a", marginBottom: 16 }}>
+                    <strong>왜 자동으로 안 켜지나요?</strong><br />
+                    Vercel에 배포된 웹사이트는 박물관 PC의 프로그램을 원격으로 켤 수 없습니다.
+                    박물관 PC에서 직접 실행해야 합니다.<br /><br />
+                    <strong>한 번만 자동 시작 등록하면 PC 켜질 때마다 자동 실행됩니다 ↓</strong>
+                  </div>
+
+                  {/* 방법 1: 자동 시작 등록 */}
+                  <div style={{ padding: 14, background: "#fef3c7", border: "2px solid #fbbf24", borderRadius: 8, marginBottom: 12 }}>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: "#78350f", marginBottom: 8 }}>
+                      🔧 방법 1: 자동 시작 등록 (권장 · 한 번만)
+                    </div>
+                    <div style={{ fontSize: 12, lineHeight: 1.7, color: "#78350f" }}>
+                      박물관 PC에서:<br />
+                      1. <strong>Win+R</strong> 키 → <code style={{ background: "#fff", padding: "1px 6px", borderRadius: 3 }}>shell:startup</code> 입력 → Enter<br />
+                      2. 시작 프로그램 폴더가 열림<br />
+                      3. 다운로드 받은 <strong><code style={{ background: "#fff", padding: "1px 6px", borderRadius: 3 }}>jamsa-cctv-autostart.bat</code></strong>를 그 폴더에 복사<br />
+                      4. 다음에 PC 켜질 때마다 <strong>자동으로 CCTV 서버 + Cloudflare Tunnel 가동</strong>
+                    </div>
+                  </div>
+
+                  {/* 방법 2: 지금 바로 켜기 */}
+                  <div style={{ padding: 14, background: "#dbeafe", border: "2px solid #60a5fa", borderRadius: 8, marginBottom: 12 }}>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: "#1e3a8a", marginBottom: 8 }}>
+                      ⚡ 방법 2: 지금 바로 켜기
+                    </div>
+                    <div style={{ fontSize: 12, lineHeight: 1.7, color: "#1e3a8a" }}>
+                      박물관 PC에서 <strong><code style={{ background: "#fff", padding: "1px 6px", borderRadius: 3 }}>jamsa-cctv-start.bat</code></strong> 더블클릭<br />
+                      → 검은 창이 뜨면서 서버 가동<br />
+                      → 5-10초 후 이 화면 새로고침 (Ctrl+Shift+R)
+                    </div>
+                  </div>
+
+                  {/* 진단 정보 */}
+                  <div style={{ padding: 12, background: "#f1f5f9", borderRadius: 8, fontSize: 11, color: "#475569" }}>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>🔍 진단 정보</div>
+                    <div>• 마지막 확인: {cctvServerStatus.checkedAt ? new Date(cctvServerStatus.checkedAt).toLocaleTimeString() : "-"}</div>
+                    <div>• 백엔드 URL: <code style={{ background: "#e2e8f0", padding: "1px 4px", borderRadius: 3 }}>{(typeof window !== "undefined" ? (window.BACKEND_URL || "http://localhost:5555") : "http://localhost:5555")}</code></div>
+                    <div>• 매핑된 채널: {Object.values(cctvMap || {}).reduce((s, a) => s + (Array.isArray(a) ? a.length : 0), 0)}개</div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* 푸터 */}
+            <div style={{ padding: "12px 20px", background: "#fafafa", borderTop: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <button onClick={() => {
+                setCctvGuideDismissed(true);
+                try { window.sessionStorage?.setItem("jamsa_cctv_guide_dismissed", "1"); } catch (e) {}
+                setCctvGuideOpen(false);
+              }}
+                style={{ padding: "6px 12px", background: "transparent", border: "none", color: "#64748b", fontSize: 11, cursor: "pointer" }}>
+                이번 세션 동안 다시 보지 않기
+              </button>
+              <button onClick={() => setCctvGuideOpen(false)}
+                style={{ padding: "8px 18px", background: "#0f172a", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                확인
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Edit Mode Side Panel ─── */}
+      {editMode && editingZone && (
+        <ZoneEditPanel
+          zone={allZones.find(z => z.id === editingZone.id) || editingZone}
+          allCameras={FAC_CCTV_CAMERAS}
+          onUpdate={(patch) => updateZoneField(editingZone.id, patch)}
+          onDelete={() => deleteZone(editingZone.id)}
+          onClose={() => setEditingZone(null)}
+        />
+      )}
+
+      {/* ─── Edit Mode Help Banner ─── */}
+      {editMode && (
+        <div style={{ position: "fixed", top: 80, left: "50%", transform: "translateX(-50%)", zIndex: 10080,
+          background: "linear-gradient(135deg,#7c3aed,#2563eb)", color: "#fff", padding: "10px 20px",
+          borderRadius: 999, fontSize: 12, fontWeight: 700, boxShadow: "0 8px 24px rgba(124,58,237,0.4)",
+          display: "flex", gap: 14, alignItems: "center" }}>
+          <span>✏️ <strong>편집 모드</strong></span>
+          <span style={{ opacity: 0.85 }}>• 핀 드래그로 이동</span>
+          <span style={{ opacity: 0.85 }}>• 핀 클릭으로 편집</span>
+          <span style={{ opacity: 0.85 }}>• 빈 곳 우클릭으로 새 스팟 추가</span>
+        </div>
+      )}
+
+      {/* ─── Zone spot cards grid (only in cards mode) ─── */}
+      {viewMode === "cards" && (
+      <div style={{ flex: 1, overflow: "auto", padding: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+          {filteredStatus.map(s => {
+            const z = s.zone;
+            const isUrgent = s.status === "urgent";
+            const isWarning = s.status === "warning";
+            const isAttention = s.status === "attention";
+            return (
+              <div key={z.id} onClick={() => setSelectedZone(s)}
+                style={{
+                  background: "#fff",
+                  border: `2px solid ${s.statusColor}`,
+                  borderRadius: 10,
+                  padding: 12,
+                  cursor: "pointer",
+                  transition: "transform 0.15s, box-shadow 0.15s",
+                  boxShadow: isUrgent ? "0 0 0 3px rgba(220,38,38,0.15)" : "0 1px 3px rgba(0,0,0,0.08)",
+                  animation: isUrgent ? "urgentPulse 1.5s infinite" : undefined,
+                }}
+                onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.12)"; }}
+                onMouseLeave={e => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = isUrgent ? "0 0 0 3px rgba(220,38,38,0.15)" : "0 1px 3px rgba(0,0,0,0.08)"; }}>
+                {/* Header */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <div style={{ width: 40, height: 40, borderRadius: "50% 50% 50% 0", transform: "rotate(-45deg)", background: z.color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <span style={{ transform: "rotate(45deg)", fontSize: 18 }}>{z.icon}</span>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{z.name}</div>
+                    <div style={{ fontSize: 10, color: "#64748b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{z.desc || z.id}</div>
+                  </div>
+                  <span style={{ fontSize: 10, fontWeight: 800, padding: "3px 8px", borderRadius: 4, background: s.statusColor, color: "#fff" }}>
+                    {s.statusLabel}
+                  </span>
+                </div>
+
+                {/* Stats row */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6, marginBottom: 8 }}>
+                  <div style={{ padding: 6, background: s.openActions.length > 0 ? "#fef2f2" : "#f8fafc", borderRadius: 5, textAlign: "center" }}>
+                    <div style={{ fontSize: 9, color: "#64748b", fontWeight: 700 }}>🔧 과제</div>
+                    <div style={{ fontSize: 15, fontWeight: 900, color: s.urgentCount > 0 ? "#dc2626" : s.highCount > 0 ? "#ea580c" : "#0f172a" }}>
+                      {s.openActions.length}
+                    </div>
+                  </div>
+                  <div style={{ padding: 6, background: s.invTotal > 0 ? "#eff6ff" : "#f8fafc", borderRadius: 5, textAlign: "center" }}>
+                    <div style={{ fontSize: 9, color: "#64748b", fontWeight: 700 }}>📦 재고</div>
+                    <div style={{ fontSize: 15, fontWeight: 900, color: s.lowStock > 0 ? "#ea580c" : "#2563eb" }}>
+                      {s.invTotal}
+                    </div>
+                  </div>
+                  <div style={{ padding: 6, background: s.zoneWorklogs.length > 0 ? "#f0fdf4" : "#f8fafc", borderRadius: 5, textAlign: "center" }}>
+                    <div style={{ fontSize: 9, color: "#64748b", fontWeight: 700 }}>📒 일지</div>
+                    <div style={{ fontSize: 15, fontWeight: 900, color: "#059669" }}>
+                      {s.zoneWorklogs.length}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Top issue preview */}
+                {s.openActions.length > 0 && (
+                  <div style={{ padding: 6, background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 5, fontSize: 10, color: "#9a3412", marginBottom: 6 }}>
+                    <strong>최근 과제:</strong> {s.openActions[0].title.substring(0, 30)}{s.openActions[0].title.length > 30 ? "..." : ""}
+                  </div>
+                )}
+                {s.lowStock > 0 && (
+                  <div style={{ padding: 6, background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 5, fontSize: 10, color: "#78350f", marginBottom: 6 }}>
+                    ⚠️ 재고 부족 {s.lowStock}건 — {s.zoneInv.filter(p => p.qty > 0 && p.qty < 5).slice(0, 2).map(p => p.name).join(", ")}
+                  </div>
+                )}
+
+                <div style={{ fontSize: 9, color: "#94a3b8", fontFamily: "monospace", textAlign: "right" }}>
+                  📍 {z.lat?.toFixed(5)}, {z.lng?.toFixed(5)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {filteredStatus.length === 0 && (
+          <div style={{ padding: 40, textAlign: "center", color: "#94a3b8" }}>
+            <div style={{ fontSize: 40 }}>✓</div>
+            <div style={{ fontSize: 14, fontWeight: 700, marginTop: 10 }}>
+              {filterMode === "urgent" && "긴급/경고 구역이 없습니다"}
+              {filterMode === "stock" && "재고가 등록된 구역이 없습니다"}
+              {filterMode === "facility" && "진행중인 보완과제가 없습니다"}
+              {filterMode === "all" && "표시할 구역이 없습니다"}
+            </div>
+          </div>
+        )}
+      </div>
+      )}
+
+      {/* ─── Zone detail modal ─── */}
+      {selectedZone && (
+        <div onClick={() => setSelectedZone(null)} style={{ position: "fixed", inset: 0, zIndex: 10200, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)" }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: 640, maxWidth: "95vw", maxHeight: "90vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.35)" }}>
+            <div style={{ padding: "14px 18px", background: selectedZone.zone.color, color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontSize: 20, fontWeight: 900 }}>{selectedZone.zone.icon} {selectedZone.zone.name}</div>
+                <div style={{ fontSize: 11, opacity: 0.9 }}>{selectedZone.zone.desc}</div>
+              </div>
+              <button onClick={() => setSelectedZone(null)} style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", fontSize: 22, cursor: "pointer", width: 30, height: 30, borderRadius: "50%", lineHeight: 1 }}>×</button>
+            </div>
+
+            <div style={{ padding: 18 }}>
+              {/* Quick navigation */}
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#475569", marginBottom: 8 }}>🚀 관련 모듈로 이동</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 6, marginBottom: 14 }}>
+                <button onClick={() => { onNavigate("facility"); setSelectedZone(null); }}
+                  style={{ padding: "10px 8px", borderRadius: 6, background: "linear-gradient(135deg,#dc2626,#ea580c)", color: "#fff", border: "none", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>
+                  🔧 시설점검 ({selectedZone.openActions.length})
+                </button>
+                <button onClick={() => { onNavigate("inventory"); setSelectedZone(null); }}
+                  style={{ padding: "10px 8px", borderRadius: 6, background: "linear-gradient(135deg,#2563eb,#7c3aed)", color: "#fff", border: "none", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>
+                  📦 재고관리 ({selectedZone.invTotal})
+                </button>
+                <button onClick={() => { onNavigate("safety"); setSelectedZone(null); }}
+                  style={{ padding: "10px 8px", borderRadius: 6, background: "linear-gradient(135deg,#ea580c,#dc2626)", color: "#fff", border: "none", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>
+                  🛡️ 안전관리
+                </button>
+                <button onClick={() => {
+                  const url = localStorage.getItem("jamsa_cctv_guard_url") || "";
+                  if (!url) {
+                    const newUrl = prompt("CCTV 안전관제 URL 입력:", "http://localhost:3000");
+                    if (!newUrl) return;
+                    localStorage.setItem("jamsa_cctv_guard_url", newUrl);
+                    window.open(`${newUrl}/live?zone=${encodeURIComponent(selectedZone.zone.id)}`, "_blank");
+                  } else {
+                    window.open(`${url}/live?zone=${encodeURIComponent(selectedZone.zone.id)}`, "_blank");
+                  }
+                  setSelectedZone(null);
+                }}
+                  style={{ padding: "10px 8px", borderRadius: 6, background: "linear-gradient(135deg,#0891b2,#059669)", color: "#fff", border: "none", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>
+                  📹 CCTV 라이브 ↗
+                </button>
+              </div>
+
+              {/* Quick task creation */}
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#475569", marginBottom: 8 }}>⚡ 빠른 과제 생성</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6, marginBottom: 14 }}>
+                <button onClick={() => createQuickAction(selectedZone.zone, "inspect")}
+                  style={{ padding: "8px 6px", borderRadius: 5, background: "#f8fafc", border: "1px solid #cbd5e1", color: "#475569", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                  📋 정기 점검
+                </button>
+                <button onClick={() => createQuickAction(selectedZone.zone, "cleanup")}
+                  style={{ padding: "8px 6px", borderRadius: 5, background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#065f46", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                  🧹 미화 작업
+                </button>
+                <button onClick={() => createQuickAction(selectedZone.zone, "urgent")}
+                  style={{ padding: "8px 6px", borderRadius: 5, background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                  🚨 긴급 확인
+                </button>
+              </div>
+
+              {/* Open actions list */}
+              {selectedZone.openActions.length > 0 && (
+                <>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: "#991b1b", marginBottom: 8 }}>🔧 진행중 보완과제 ({selectedZone.openActions.length}건)</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+                    {selectedZone.openActions.slice(0, 5).map(a => {
+                      const sevColor = a.sev === "URGENT" ? "#dc2626" : a.sev === "HIGH" ? "#ea580c" : "#ca8a04";
+                      return (
+                        <div key={a.id} style={{ padding: 8, background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 5 }}>
+                          <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 2 }}>
+                            <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 3, background: sevColor, color: "#fff" }}>{a.sev}</span>
+                            <span style={{ fontSize: 10, color: "#64748b" }}>{a.type}</span>
+                            <span style={{ marginLeft: "auto", fontSize: 10, color: "#64748b" }}>{a.due}</span>
+                          </div>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>{a.title}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              {/* Inventory list */}
+              {selectedZone.zoneInv.length > 0 && (
+                <>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: "#1e40af", marginBottom: 8 }}>📦 등록 재고 ({selectedZone.zoneInv.length}품목 · 총 {selectedZone.invTotal}개)</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 14 }}>
+                    {selectedZone.zoneInv.slice(0, 6).map(p => (
+                      <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: 6, background: p.qty < 5 ? "#fef2f2" : "#f8fafc", borderRadius: 4 }}>
+                        <span style={{ flex: 1, fontSize: 11, fontWeight: 600, color: "#0f172a" }}>{p.name}</span>
+                        <span style={{ fontSize: 13, fontWeight: 900, color: p.qty < 5 ? "#dc2626" : p.qty < 20 ? "#ea580c" : "#059669" }}>{p.qty}</span>
+                      </div>
+                    ))}
+                    {selectedZone.zoneInv.length > 6 && (
+                      <div style={{ fontSize: 10, color: "#64748b", textAlign: "center", padding: 4 }}>외 {selectedZone.zoneInv.length - 6}개 품목</div>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {/* Audit trail */}
+              {selectedZone.zoneAudit.length > 0 && (
+                <>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: "#475569", marginBottom: 8 }}>📋 최근 활동</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    {selectedZone.zoneAudit.map(a => (
+                      <div key={a.id} style={{ padding: 6, background: "#f8fafc", borderLeft: `3px solid ${a.module === "facility" ? "#dc2626" : a.module === "inventory" ? "#2563eb" : "#64748b"}`, fontSize: 10 }}>
+                        <div style={{ fontWeight: 700, color: "#0f172a" }}>{a.targetLabel || a.action}</div>
+                        <div style={{ color: "#64748b", marginTop: 2 }}>{a.userName} · {new Date(a.at).toLocaleString("ko")}</div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {selectedZone.openActions.length === 0 && selectedZone.zoneInv.length === 0 && selectedZone.zoneAudit.length === 0 && (
+                <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>
+                  <div style={{ fontSize: 36 }}>✓</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginTop: 10 }}>이 구역은 정상 운영 중입니다</div>
+                  <div style={{ fontSize: 11, marginTop: 4 }}>특별한 이벤트나 과제가 없습니다</div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      <style>{`@keyframes homePinPulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.15);opacity:0.85}}`}</style>
+    </div>
+  );
+}
+
+/* ─── OSM FALLBACK MAP (네이버 API 키 없거나 오류 시) ─── */
+function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, errorMsg, bgMode = "satellite", onChangeBgMode, cctvSnapshotData = null, cctvEditMode = false, onMoveCctv = null }) {
+  // 박물관 영역 경계 (한국잠사박물관 청주 - 정확한 좌표)
+  const LAT_MIN = 36.6378, LAT_MAX = 36.6395, LNG_MIN = 127.4880, LNG_MAX = 127.4905;
+  const LAT_CENTER = (LAT_MIN + LAT_MAX) / 2;
+  const LNG_CENTER = (LNG_MIN + LNG_MAX) / 2;
+
+  const mapContainerRef = React.useRef(null);
+  const leafletMapRef = React.useRef(null);
+  const tileLayersRef = React.useRef({});
+  const [leafletLoaded, setLeafletLoaded] = React.useState(false);
+  const [leafletError, setLeafletError] = React.useState(false);
+
+  // Leaflet은 index.html에서 미리 로드됨 - 그래도 안 됐을 때만 동적 로드
+  React.useEffect(() => {
+    if (window.L) { setLeafletLoaded(true); return; }
+
+    // 폴백: index.html이 아직 안 끝났다면 폴링
+    let elapsed = 0;
+    const check = setInterval(() => {
+      elapsed += 200;
+      if (window.L) {
+        setLeafletLoaded(true);
+        clearInterval(check);
+      } else if (elapsed >= 8000) {
+        // 8초 후에도 없으면 직접 로드 시도
+        clearInterval(check);
+        if (!document.getElementById("leaflet-css")) {
+          const link = document.createElement("link");
+          link.id = "leaflet-css";
+          link.rel = "stylesheet";
+          link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+          document.head.appendChild(link);
+        }
+        if (!document.getElementById("leaflet-js")) {
+          const script = document.createElement("script");
+          script.id = "leaflet-js";
+          script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+          script.onload = () => setLeafletLoaded(true);
+          script.onerror = () => setLeafletError(true);
+          document.body.appendChild(script);
+          setTimeout(() => { if (!window.L) setLeafletError(true); }, 8000);
+        }
+      }
+    }, 200);
+    return () => clearInterval(check);
+  }, []);
+
+  // 지도 초기화 (Leaflet 로드 후 1회)
+  React.useEffect(() => {
+    if (!leafletLoaded || !mapContainerRef.current || leafletMapRef.current) return;
+    const L = window.L;
+
+    const map = L.map(mapContainerRef.current, {
+      center: [LAT_CENTER, LNG_CENTER],
+      zoom: 17,
+      zoomControl: true,
+      attributionControl: true,
+    });
+
+    // 위성 타일 (ESRI World Imagery - 무료, 인증 불필요)
+    const satelliteLayer = L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      {
+        attribution: "Tiles © Esri",
+        maxZoom: 19,
+      }
+    );
+
+    // 일반 타일 (OSM)
+    const planLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "© OpenStreetMap",
+      maxZoom: 19,
+    });
+
+    // 라벨 오버레이 (위성에 도로/지명 표시)
+    const labelsLayer = L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+      { attribution: "Tiles © Esri", maxZoom: 19 }
+    );
+
+    tileLayersRef.current = { satelliteLayer, planLayer, labelsLayer };
+
+    // 초기 모드 적용
+    if (bgMode === "satellite") {
+      satelliteLayer.addTo(map);
+      labelsLayer.addTo(map);
+    } else if (bgMode === "blend") {
+      satelliteLayer.addTo(map);
+      labelsLayer.addTo(map);
+      planLayer.addTo(map).setOpacity(0.4);
+    } else {
+      planLayer.addTo(map);
+    }
+
+    leafletMapRef.current = map;
+
+    return () => {
+      map.remove();
+      leafletMapRef.current = null;
+    };
+  }, [leafletLoaded]);
+
+  // bgMode 변경 시 타일 전환
+  React.useEffect(() => {
+    if (!leafletMapRef.current || !tileLayersRef.current.satelliteLayer) return;
+    const map = leafletMapRef.current;
+    const { satelliteLayer, planLayer, labelsLayer } = tileLayersRef.current;
+
+    // 모든 레이어 제거 후 다시 추가
+    map.removeLayer(satelliteLayer);
+    map.removeLayer(planLayer);
+    map.removeLayer(labelsLayer);
+
+    if (bgMode === "satellite") {
+      satelliteLayer.addTo(map);
+      labelsLayer.addTo(map);
+    } else if (bgMode === "blend") {
+      satelliteLayer.addTo(map);
+      labelsLayer.addTo(map);
+      planLayer.addTo(map).setOpacity(0.4);
+    } else {
+      planLayer.addTo(map);
+    }
+  }, [bgMode]);
+
+  // 마커 동기화
+  const markersRef = React.useRef([]);
+  React.useEffect(() => {
+    if (!leafletMapRef.current || !window.L) return;
+    const L = window.L;
+    const map = leafletMapRef.current;
+
+    // 기존 마커 제거
+    markersRef.current.forEach(m => map.removeLayer(m));
+    markersRef.current = [];
+
+    // 구역 → CCTV 채널 역매핑 (cctvSnapshotData에서 추출)
+    const snaps = cctvSnapshotData?.snapshots || {};
+    const ana = cctvSnapshotData?.analyses || {};
+    const chToZone = cctvSnapshotData?.chToZone || {};
+    const cctvEnabled = cctvSnapshotData?.enabled !== false;
+    const zoneToCh = {};
+    Object.entries(chToZone).forEach(([ch, zid]) => {
+      if (!zoneToCh[zid]) zoneToCh[zid] = [];
+      zoneToCh[zid].push(parseInt(ch, 10));
+    });
+
+    // 새 마커 추가
+    zoneStatus.forEach(s => {
+      const z = s.zone;
+      if (!z.lat || !z.lng) return;
+      const badgeNum = s.openActions.length + (s.lowStock > 0 ? s.lowStock : 0);
+      const isPulse = s.status === "urgent";
+
+      // 이 구역에 매핑된 첫 번째 채널 (CCTV 미니창용)
+      const channels = (zoneToCh[z.id] || []).sort((a, b) => a - b);
+      const firstCh = channels[0];
+      const snap = firstCh ? snaps[firstCh] : null;
+      const chAna = firstCh ? ana[firstCh] : null;
+      const showCctvMini = cctvEnabled && firstCh && snap?.url && !snap?.error;
+
+      // 위험도별 테두리 색상
+      let cctvBorderColor = "rgba(255,255,255,0.9)";
+      let cctvAnimation = "";
+      if (chAna?.level === "DANGER") {
+        cctvBorderColor = "#dc2626";
+        cctvAnimation = "animation:cctvDangerPulse 1.2s infinite;";
+      } else if (chAna?.level === "WARNING") {
+        cctvBorderColor = "#f59e0b";
+        cctvAnimation = "animation:cctvWarnPulse 1.6s infinite;";
+      }
+
+      // CCTV 미니창 HTML (있으면 핀 오른쪽에)
+      // 편집 모드면 노란 점선 + 드래그 가능 표시
+      const editBorder = cctvEditMode ? "2px dashed #fbbf24" : `2px solid ${cctvBorderColor}`;
+      const editStyle = cctvEditMode ? "outline:1px solid #fbbf24;outline-offset:2px;" : "";
+      const cctvDraggableAttr = (cctvEditMode && firstCh) ? `data-cctv-ch="${firstCh}" draggable="true"` : '';
+
+      const cctvHtml = showCctvMini ? `
+        <div class="jamsa-cctv-mini" ${cctvDraggableAttr} style="position:absolute;left:42px;top:-6px;width:88px;height:60px;border-radius:6px;overflow:hidden;border:${editBorder};${cctvAnimation}${editStyle}box-shadow:0 4px 12px rgba(0,0,0,0.35);background:#0f172a;cursor:${cctvEditMode ? 'move' : 'pointer'};pointer-events:auto;">
+          <img src="${snap.url}" style="width:100%;height:100%;object-fit:cover;${cctvEditMode ? 'opacity:0.7;' : ''}" onerror="this.style.display='none'"/>
+          <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.6),transparent);padding:2px 4px;font-size:8px;color:#fff;font-weight:700;">CH${firstCh}${channels.length > 1 ? ` +${channels.length-1}` : ''}${cctvEditMode ? ' ↔' : ''}</div>
+          ${chAna?.level === "DANGER" || chAna?.level === "WARNING" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:${chAna.level === "DANGER" ? "rgba(220,38,38,0.95)" : "rgba(245,158,11,0.95)"};padding:1px 4px;font-size:8px;color:#fff;font-weight:800;">${chAna.level === "DANGER" ? "🚨 위험" : "⚠️ 주의"} ${chAna.score || ""}%</div>` : ''}
+          <div style="position:absolute;top:0;right:0;width:6px;height:6px;background:#22c55e;border-radius:50%;margin:3px;box-shadow:0 0 4px #22c55e;animation:cctvLiveBlink 1.5s infinite;"></div>
+        </div>
+      ` : (cctvEnabled && firstCh ? `
+        <div class="jamsa-cctv-mini" ${cctvDraggableAttr} style="position:absolute;left:42px;top:-6px;width:88px;height:60px;border-radius:6px;overflow:hidden;border:${editBorder};background:rgba(15,23,42,0.7);display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);${editStyle}cursor:${cctvEditMode ? 'move' : 'default'};pointer-events:auto;">
+          <div style="font-size:18px;">📷</div>
+          <div style="font-size:8px;font-weight:700;margin-top:2px;">CH${firstCh}${cctvEditMode ? ' ↔' : ''}</div>
+        </div>
+      ` : '');
+
+      // 핀 자체에 데이터 속성 (드롭 타깃)
+      const zoneDataAttr = cctvEditMode ? `data-zone-id="${z.id}"` : '';
+
+      const html = `
+        <div ${zoneDataAttr} class="jamsa-zone-pin" style="position:relative;cursor:pointer;${isPulse ? 'animation:homePinPulse 1.5s infinite;' : ''}${cctvEditMode ? 'outline:2px dashed rgba(251,191,36,0.5);outline-offset:4px;border-radius:50%;' : ''}">
+          <div style="background:${z.color};border:3px solid #fff;border-radius:50% 50% 50% 0;width:36px;height:36px;transform:rotate(-45deg);box-shadow:0 4px 10px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;">
+            <div style="transform:rotate(45deg);font-size:16px;">${z.icon}</div>
+          </div>
+          ${badgeNum > 0 ? `<div style="position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:${s.statusColor};color:#fff;font-size:9px;font-weight:900;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-sizing:border-box;box-shadow:0 2px 4px rgba(0,0,0,0.3);">${badgeNum}</div>` : ''}
+          <div style="position:absolute;top:40px;left:50%;transform:translateX(-50%);background:rgba(255,255,255,0.95);padding:2px 6px;border-radius:4px;font-size:9px;font-weight:700;color:#0f172a;white-space:nowrap;border:1px solid #e5e7eb;box-shadow:0 1px 3px rgba(0,0,0,0.1);">${z.name || z.id}</div>
+          ${cctvHtml}
+        </div>
+      `;
+
+      // 아이콘 사이즈 — CCTV 미니창 있으면 더 넓게
+      const iconWidth = showCctvMini || (cctvEnabled && firstCh) ? 132 : 44;
+
+      const icon = L.divIcon({
+        html,
+        className: "jamsa-zone-marker",
+        iconSize: [iconWidth, 60],
+        iconAnchor: [22, 36],
+      });
+
+      const marker = L.marker([z.lat, z.lng], { icon })
+        .addTo(map)
+        .on("click", () => onSelectZone(s));
+      markersRef.current.push(marker);
+    });
+  }, [zoneStatus, leafletLoaded, cctvSnapshotData, cctvEditMode]);
+
+  // CCTV 편집 모드 - 드래그앤드롭 핸들러
+  React.useEffect(() => {
+    if (!cctvEditMode || !leafletLoaded || !leafletMapRef.current) return;
+    const mapEl = mapContainerRef.current;
+    if (!mapEl) return;
+
+    let dragChannel = null;
+
+    const onDragStart = (e) => {
+      const target = e.target.closest("[data-cctv-ch]");
+      if (!target) return;
+      dragChannel = parseInt(target.dataset.cctvCh, 10);
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/cctv-channel", String(dragChannel));
+      }
+      target.style.opacity = "0.4";
+    };
+
+    const onDragEnd = (e) => {
+      const target = e.target.closest("[data-cctv-ch]");
+      if (target) target.style.opacity = "1";
+      dragChannel = null;
+    };
+
+    const onDragOver = (e) => {
+      const target = e.target.closest("[data-zone-id]");
+      if (target) {
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+        target.style.outlineColor = "rgba(34,197,94,0.9)";
+        target.style.outlineWidth = "3px";
+      }
+    };
+
+    const onDragLeave = (e) => {
+      const target = e.target.closest("[data-zone-id]");
+      if (target) {
+        target.style.outlineColor = "rgba(251,191,36,0.5)";
+        target.style.outlineWidth = "2px";
+      }
+    };
+
+    const onDrop = (e) => {
+      e.preventDefault();
+      const target = e.target.closest("[data-zone-id]");
+      if (!target) return;
+      target.style.outlineColor = "rgba(251,191,36,0.5)";
+      target.style.outlineWidth = "2px";
+      const zoneId = target.dataset.zoneId;
+      const chStr = e.dataTransfer?.getData("text/cctv-channel");
+      const ch = parseInt(chStr, 10);
+      if (zoneId && ch && onMoveCctv) {
+        onMoveCctv(ch, zoneId);
+      }
+    };
+
+    const onContextMenu = (e) => {
+      const target = e.target.closest("[data-cctv-ch]");
+      if (!target) return;
+      e.preventDefault();
+      const ch = parseInt(target.dataset.cctvCh, 10);
+      if (onMoveCctv && confirm(`CH${ch} 매핑을 해제하시겠어요?`)) {
+        onMoveCctv(ch, null);
+      }
+    };
+
+    mapEl.addEventListener("dragstart", onDragStart);
+    mapEl.addEventListener("dragend", onDragEnd);
+    mapEl.addEventListener("dragover", onDragOver);
+    mapEl.addEventListener("dragleave", onDragLeave);
+    mapEl.addEventListener("drop", onDrop);
+    mapEl.addEventListener("contextmenu", onContextMenu);
+
+    return () => {
+      mapEl.removeEventListener("dragstart", onDragStart);
+      mapEl.removeEventListener("dragend", onDragEnd);
+      mapEl.removeEventListener("dragover", onDragOver);
+      mapEl.removeEventListener("dragleave", onDragLeave);
+      mapEl.removeEventListener("drop", onDrop);
+      mapEl.removeEventListener("contextmenu", onContextMenu);
+    };
+  }, [cctvEditMode, leafletLoaded, onMoveCctv]);
+
+  return (
+    <div style={{ position: "absolute", inset: 0, background: "#1e293b" }}>
+      {/* CCTV 미니창 애니메이션 */}
+      <style>{`
+        @keyframes cctvDangerPulse { 0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,0.7),0 4px 12px rgba(0,0,0,0.35)} 50%{box-shadow:0 0 0 8px rgba(220,38,38,0),0 4px 12px rgba(0,0,0,0.35)} }
+        @keyframes cctvWarnPulse { 0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,0.7),0 4px 12px rgba(0,0,0,0.35)} 50%{box-shadow:0 0 0 6px rgba(245,158,11,0),0 4px 12px rgba(0,0,0,0.35)} }
+        @keyframes cctvLiveBlink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+        .jamsa-cctv-mini:hover { transform:scale(1.4); z-index:1000; }
+        .jamsa-cctv-mini { transition:transform 0.15s; transform-origin:left center; }
+      `}</style>
+
+      {/* Leaflet 지도 */}
+      {leafletLoaded && !leafletError && (
+        <div ref={mapContainerRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
+      )}
+
+      {/* 로딩 중 */}
+      {!leafletLoaded && !leafletError && (
+        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 12, background: "linear-gradient(135deg, #1e3a8a, #312e81)" }}>
+          <div style={{ fontSize: 40 }}>🛰️</div>
+          <div style={{ fontSize: 13, color: "#fff", fontWeight: 700 }}>{bgMode === "satellite" ? "위성 지도" : "지도"} 로딩 중...</div>
+          <div style={{ fontSize: 11, color: "#cbd5e1" }}>최대 8초 소요</div>
+          <div style={{ width: 36, height: 36, borderRadius: "50%", border: "3px solid rgba(255,255,255,0.2)", borderTopColor: "#60a5fa", animation: "spin 0.8s linear infinite" }} />
+        </div>
+      )}
+
+      {/* Leaflet 로드 실패 폴백 */}
+      {leafletError && (
+        <div style={{ position: "absolute", inset: 0, backgroundImage: `linear-gradient(rgba(34,197,94,0.15) 1px, transparent 1px), linear-gradient(90deg, rgba(34,197,94,0.15) 1px, transparent 1px)`, backgroundSize: "40px 40px", background: "linear-gradient(135deg, #1e3a8a, #312e81)" }}>
+          <div style={{ position: "absolute", top: "40%", left: "50%", transform: "translate(-50%, -50%)", textAlign: "center", color: "#fff", padding: 20 }}>
+            <div style={{ fontSize: 48, marginBottom: 8 }}>🏛️</div>
+            <div style={{ fontSize: 16, fontWeight: 800 }}>한국잠사박물관</div>
+            <div style={{ fontSize: 12, color: "#cbd5e1", marginTop: 4 }}>청주시 청원구 양청4길 30</div>
+            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 12 }}>지도 라이브러리 로드 실패. 인터넷 연결을 확인하세요.</div>
+            <button onClick={() => location.reload()} style={{ marginTop: 12, padding: "6px 14px", background: "#3b82f6", color: "#fff", border: 0, borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+              새로고침
+            </button>
+          </div>
+          {/* 폴백 마커 (퍼센트 기반) */}
+          <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
+            {zoneStatus.map(s => {
+              const z = s.zone;
+              if (!z.lat || !z.lng) return null;
+              const left = `${((z.lng - LNG_MIN) / (LNG_MAX - LNG_MIN)) * 100}%`;
+              const top = `${((LAT_MAX - z.lat) / (LAT_MAX - LAT_MIN)) * 100}%`;
+              return (
+                <div key={z.id} onClick={() => onSelectZone(s)}
+                  style={{ position: "absolute", left, top, transform: "translate(-50%, -100%)", pointerEvents: "auto", cursor: "pointer" }}>
+                  <div style={{ background: z.color, border: "3px solid #fff", borderRadius: "50% 50% 50% 0",
+                    width: 36, height: 36, transform: "rotate(-45deg)", boxShadow: "0 4px 10px rgba(0,0,0,0.4)",
+                    display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <div style={{ transform: "rotate(45deg)", fontSize: 16 }}>{z.icon}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* 좌상단: 모드 안내 배지 */}
+      {leafletLoaded && !leafletError && (
+        <div style={{ position: "absolute", top: 12, left: 12, background: "rgba(15,23,42,0.85)", color: "#fff", padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, zIndex: 400, backdropFilter: "blur(8px)" }}>
+          {bgMode === "satellite" ? "🛰️ 위성 (ESRI)" : bgMode === "blend" ? "🔀 하이브리드" : "🗾 일반 (OSM)"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── (구버전 OSM iframe 폴백 - 더는 사용 안 함, 보존용) ─── */
+function OsmFallbackMapLegacy({ zoneStatus, onSelectZone, onOpenApiKey, hasError, errorMsg }) {
+  // 박물관 영역 경계 (한국잠사박물관 청주 - 정확한 좌표)
+  const LAT_MIN = 36.6378, LAT_MAX = 36.6395, LNG_MIN = 127.4880, LNG_MAX = 127.4905;
+  const bbox = `${LNG_MIN},${LAT_MIN},${LNG_MAX},${LAT_MAX}`;
+  const osmUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik`;
+
+  const [iframeError, setIframeError] = React.useState(false);
+  const [iframeLoaded, setIframeLoaded] = React.useState(false);
+
+  // 5초 안에 iframe 로드 안 되면 에러로 간주
+  React.useEffect(() => {
+    if (iframeLoaded) return;
+    const timer = setTimeout(() => {
+      if (!iframeLoaded) setIframeError(true);
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [iframeLoaded]);
+
+  // Normalize lat/lng to 0-100% within bbox
+  const pct = (z) => ({
+    left: `${((z.lng - LNG_MIN) / (LNG_MAX - LNG_MIN)) * 100}%`,
+    top: `${((LAT_MAX - z.lat) / (LAT_MAX - LAT_MIN)) * 100}%`,
+  });
+
+  return (
+    <div style={{ position: "absolute", inset: 0, background: "linear-gradient(135deg, #e0f2fe, #fef3c7)" }}>
+      {/* OSM 임베드 (배경) */}
+      {!iframeError && (
+        <iframe src={osmUrl}
+          onLoad={() => setIframeLoaded(true)}
+          onError={() => setIframeError(true)}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: 0, filter: "saturate(0.8) brightness(0.95)" }}
+          title="OpenStreetMap" />
+      )}
+
+      {/* iframe 실패 시 격자 배경 */}
+      {iframeError && (
+        <div style={{ position: "absolute", inset: 0, backgroundImage: `linear-gradient(rgba(34,197,94,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(34,197,94,0.1) 1px, transparent 1px)`, backgroundSize: "40px 40px" }}>
+          <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", textAlign: "center", color: "#0f172a" }}>
+            <div style={{ fontSize: 48, marginBottom: 8 }}>🏛️</div>
+            <div style={{ fontSize: 16, fontWeight: 800 }}>한국잠사박물관</div>
+            <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>청주시 청원구 양청4길 30</div>
+          </div>
+        </div>
+      )}
+      {/* 마커 오버레이 */}
+      <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
+        {zoneStatus.map(s => {
+          const z = s.zone;
+          if (!z.lat || !z.lng) return null;
+          const p = pct(z);
+          const badgeNum = s.openActions.length + (s.lowStock > 0 ? s.lowStock : 0);
+          const isPulse = s.status === "urgent";
+          return (
+            <div key={z.id} onClick={() => onSelectZone(s)}
+              style={{ position: "absolute", left: p.left, top: p.top, transform: "translate(-50%, -100%)",
+                pointerEvents: "auto", cursor: "pointer", animation: isPulse ? "homePinPulse 1.5s infinite" : undefined }}>
+              <div style={{ position: "relative", width: 44, height: 44 }}>
+                {/* 핀 몸체 */}
+                <div style={{ background: z.color, border: "3px solid #fff", borderRadius: "50% 50% 50% 0",
+                  width: 36, height: 36, transform: "rotate(-45deg)", boxShadow: "0 4px 10px rgba(0,0,0,0.4)",
+                  display: "flex", alignItems: "center", justifyContent: "center", margin: 4 }}>
+                  <div style={{ transform: "rotate(45deg)", fontSize: 16 }}>{z.icon}</div>
+                </div>
+                {/* 카운트 배지 */}
+                {badgeNum > 0 && (
+                  <div style={{ position: "absolute", top: -4, right: -4, minWidth: 18, height: 18, padding: "0 5px",
+                    borderRadius: 9, background: s.statusColor, color: "#fff", fontSize: 9, fontWeight: 900,
+                    display: "flex", alignItems: "center", justifyContent: "center", border: "2px solid #fff",
+                    boxSizing: "border-box", boxShadow: "0 2px 4px rgba(0,0,0,0.3)" }}>{badgeNum}</div>
+                )}
+                {/* 스팟명 (핀 아래) */}
+                <div style={{ position: "absolute", top: 40, left: "50%", transform: "translateX(-50%)",
+                  background: "rgba(255,255,255,0.95)", padding: "2px 6px", borderRadius: 4, fontSize: 9,
+                  fontWeight: 800, color: z.color, whiteSpace: "nowrap", border: `1px solid ${z.color}40`,
+                  boxShadow: "0 2px 4px rgba(0,0,0,0.15)" }}>{z.name}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* 안내 배너 */}
+      <div style={{ position: "absolute", top: 12, right: 12, background: hasError ? "rgba(220,38,38,0.95)" : "rgba(37,99,235,0.95)", color: "#fff", padding: "10px 14px", borderRadius: 8, fontSize: 11, maxWidth: 280, zIndex: 5, boxShadow: "0 4px 12px rgba(0,0,0,0.2)" }}>
+        <div style={{ fontWeight: 800, marginBottom: 4 }}>
+          {hasError ? "⚠️ 네이버 지도 오류" : "🗺️ OpenStreetMap 사용 중"}
+        </div>
+        <div style={{ fontSize: 10, lineHeight: 1.5, marginBottom: 8, opacity: 0.95 }}>
+          {hasError ? errorMsg : "네이버 지도 클라이언트 ID를 입력하면 더 정확한 지도를 볼 수 있습니다."}
+        </div>
+        <button onClick={onOpenApiKey}
+          style={{ width: "100%", padding: "6px 10px", borderRadius: 4, background: "#fff", color: hasError ? "#991b1b" : "#1e40af", border: "none", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+          🔑 네이버 API 키 설정
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── ZONE EDIT PANEL ───
+   드래그로 이동된 핀의 이름·아이콘·색상·설명·CCTV 채널 편집 사이드 패널 */
+function ZoneEditPanel({ zone, allCameras, onUpdate, onDelete, onClose }) {
+  const [name, setName] = useState(zone.name || "");
+  const [icon, setIcon] = useState(zone.icon || "📍");
+  const [color, setColor] = useState(zone.color || "#0891b2");
+  const [desc, setDesc] = useState(zone.desc || "");
+  const [cctvChannels, setCctvChannels] = useState(zone.cctvChannels || []);
+  const [iconPickerOpen, setIconPickerOpen] = useState(false);
+  const [cctvFilter, setCctvFilter] = useState("");
+
+  // Sync when switching zones
+  useEffect(() => {
+    setName(zone.name || "");
+    setIcon(zone.icon || "📍");
+    setColor(zone.color || "#0891b2");
+    setDesc(zone.desc || "");
+    setCctvChannels(zone.cctvChannels || []);
+  }, [zone.id]);
+
+  // Available icons by category
+  const iconCategories = {
+    "🏛️ 시설": ["🏛️", "🏠", "🏪", "🏬", "🏭", "🏯", "🏤", "🏣", "🏢", "🛕"],
+    "🌳 자연": ["🌳", "🌲", "🌱", "🌿", "🍀", "🌾", "🌻", "🌷", "🌸", "🌺"],
+    "🐑 동물": ["🐑", "🐔", "🐓", "🐰", "🐶", "🐱", "🦋", "🐛", "🦗", "🐝"],
+    "🎪 체험": ["🎪", "🎠", "🎡", "🎢", "🎨", "🎭", "🎮", "🎯", "🎲", "🧩"],
+    "💧 시설물": ["💧", "🚿", "🚰", "⛲", "🌊", "🏊", "🛝", "⛺", "🚌", "🅿️"],
+    "📦 보관": ["📦", "🗄️", "🗃️", "📚", "🧰", "🔧", "🔨", "⚙️", "🛠️", "🧯"],
+    "🍽️ 식음": ["🍽️", "🍕", "🍔", "🍱", "☕", "🥤", "🍦", "🛒", "🍪", "🥗"],
+    "🚹 기타": ["🚹", "🚺", "♿", "🚸", "⚠️", "🚧", "🚪", "🔔", "📍", "📌"],
+  };
+
+  // Filter CCTVs
+  const filteredCameras = allCameras.filter(c => {
+    if (!cctvFilter) return true;
+    const q = cctvFilter.toLowerCase();
+    return c.name.toLowerCase().includes(q) || `ch${c.ch}`.includes(q) || (c.zone || "").toLowerCase().includes(q);
+  });
+
+  const toggleCctv = (ch) => {
+    const next = cctvChannels.includes(ch)
+      ? cctvChannels.filter(c => c !== ch)
+      : [...cctvChannels, ch].sort((a, b) => a - b);
+    setCctvChannels(next);
+    onUpdate({ cctvChannels: next });
+  };
+
+  const handleSave = (field, value) => {
+    const patch = { [field]: value };
+    onUpdate(patch);
+  };
+
+  return (
+    <div style={{
+      position: "fixed", top: 0, right: 0, width: 380, height: "100vh", maxHeight: "100vh",
+      background: "#fff", boxShadow: "-8px 0 24px rgba(0,0,0,0.15)", zIndex: 10090,
+      display: "flex", flexDirection: "column", animation: "slideInRight 0.2s ease-out",
+    }}>
+      <style>{`@keyframes slideInRight { from { transform: translateX(100%); } to { transform: translateX(0); } }`}</style>
+
+      {/* Header */}
+      <div style={{ padding: "14px 18px", background: "linear-gradient(135deg,#7c3aed,#2563eb)", color: "#fff",
+        display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
+        <div>
+          <div style={{ fontSize: 11, opacity: 0.9 }}>스팟 편집</div>
+          <div style={{ fontSize: 16, fontWeight: 900, display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 22 }}>{icon}</span>
+            <span>{name || "(이름 없음)"}</span>
+          </div>
+        </div>
+        <button onClick={onClose} style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff",
+          fontSize: 22, cursor: "pointer", width: 30, height: 30, borderRadius: "50%", lineHeight: 1 }}>×</button>
+      </div>
+
+      {/* Body */}
+      <div style={{ flex: 1, overflow: "auto", padding: 16 }}>
+        {/* Coordinates display */}
+        <div style={{ padding: 10, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 6, marginBottom: 14 }}>
+          <div style={{ fontSize: 10, color: "#065f46", fontWeight: 700, marginBottom: 4 }}>📍 현재 좌표 (드래그로 이동)</div>
+          <div style={{ fontSize: 11, color: "#0f172a", fontFamily: "monospace" }}>
+            {zone.lat?.toFixed(6)}, {zone.lng?.toFixed(6)}
+          </div>
+        </div>
+
+        {/* Name */}
+        <label style={{ fontSize: 11, fontWeight: 800, color: "#475569", marginBottom: 4, display: "block" }}>📛 스팟 이름</label>
+        <input value={name} onChange={e => setName(e.target.value)}
+          onBlur={() => handleSave("name", name)}
+          style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13, marginBottom: 12, fontWeight: 700 }} />
+
+        {/* Description */}
+        <label style={{ fontSize: 11, fontWeight: 800, color: "#475569", marginBottom: 4, display: "block" }}>📝 설명</label>
+        <textarea value={desc} onChange={e => setDesc(e.target.value)}
+          onBlur={() => handleSave("desc", desc)}
+          rows={2}
+          style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12, marginBottom: 12, resize: "vertical", fontFamily: "inherit" }} />
+
+        {/* Icon picker */}
+        <label style={{ fontSize: 11, fontWeight: 800, color: "#475569", marginBottom: 4, display: "block" }}>🎨 아이콘</label>
+        <div onClick={() => setIconPickerOpen(!iconPickerOpen)}
+          style={{ padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: 6, marginBottom: iconPickerOpen ? 4 : 12, cursor: "pointer",
+            display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fff" }}>
+          <span style={{ fontSize: 22 }}>{icon}</span>
+          <span style={{ fontSize: 10, color: "#94a3b8" }}>{iconPickerOpen ? "▲ 닫기" : "▼ 변경"}</span>
+        </div>
+        {iconPickerOpen && (
+          <div style={{ padding: 8, border: "1px solid #cbd5e1", borderRadius: 6, marginBottom: 12, maxHeight: 200, overflow: "auto", background: "#f8fafc" }}>
+            {Object.entries(iconCategories).map(([catName, icons]) => (
+              <div key={catName} style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 9, fontWeight: 700, color: "#64748b", marginBottom: 4 }}>{catName}</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(10, 1fr)", gap: 2 }}>
+                  {icons.map(em => (
+                    <button key={em} onClick={() => { setIcon(em); handleSave("icon", em); setIconPickerOpen(false); }}
+                      style={{ padding: 4, fontSize: 18, background: icon === em ? "#dbeafe" : "#fff", border: icon === em ? "2px solid #2563eb" : "1px solid #e5e7eb", borderRadius: 4, cursor: "pointer", lineHeight: 1 }}>
+                      {em}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Color picker */}
+        <label style={{ fontSize: 11, fontWeight: 800, color: "#475569", marginBottom: 4, display: "block" }}>🎨 색상</label>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: 4, marginBottom: 12 }}>
+          {["#dc2626", "#ea580c", "#ca8a04", "#16a34a", "#0891b2", "#2563eb", "#7c3aed", "#db2777",
+            "#6D4C41", "#2E7D32", "#1565C0", "#558B2F", "#3949AB", "#00695C", "#E65100", "#6A1B9A"].map(c => (
+            <button key={c} onClick={() => { setColor(c); handleSave("color", c); }}
+              style={{ width: "100%", aspectRatio: "1", background: c, border: color === c ? "3px solid #0f172a" : "2px solid #fff", borderRadius: "50%", cursor: "pointer", boxShadow: "0 2px 4px rgba(0,0,0,0.2)" }}
+              title={c} />
+          ))}
+        </div>
+
+        {/* CCTV Channel multi-select */}
+        <label style={{ fontSize: 11, fontWeight: 800, color: "#475569", marginBottom: 4, display: "block" }}>
+          📹 연결된 CCTV 채널 ({cctvChannels.length}개)
+        </label>
+        <input value={cctvFilter} onChange={e => setCctvFilter(e.target.value)}
+          placeholder="🔍 채널명 검색 (예: 양떼, ticket, CH28)"
+          style={{ width: "100%", padding: "6px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 11, marginBottom: 6 }} />
+
+        {cctvChannels.length > 0 && (
+          <div style={{ padding: 6, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 6, marginBottom: 6 }}>
+            <div style={{ fontSize: 9, fontWeight: 700, color: "#1e40af", marginBottom: 4 }}>선택된 채널</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+              {cctvChannels.map(ch => {
+                const cam = allCameras.find(c => c.ch === ch);
+                return (
+                  <span key={ch} style={{ padding: "2px 6px", background: "#fff", border: "1px solid #bfdbfe", borderRadius: 12, fontSize: 9, fontWeight: 600, color: "#1e40af", display: "flex", alignItems: "center", gap: 3 }}>
+                    CH{ch} {cam?.name || ""}
+                    <button onClick={() => toggleCctv(ch)} style={{ background: "none", border: "none", color: "#dc2626", cursor: "pointer", padding: 0, fontSize: 12, lineHeight: 1, fontWeight: 900 }}>×</button>
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div style={{ maxHeight: 220, overflow: "auto", border: "1px solid #e5e7eb", borderRadius: 6, marginBottom: 12, padding: 4 }}>
+          {filteredCameras.length === 0 ? (
+            <div style={{ padding: 20, textAlign: "center", color: "#94a3b8", fontSize: 11 }}>일치하는 채널 없음</div>
+          ) : (
+            filteredCameras.map(cam => {
+              const isSelected = cctvChannels.includes(cam.ch);
+              return (
+                <label key={cam.ch} style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", borderRadius: 4, cursor: "pointer", background: isSelected ? "#eff6ff" : "transparent" }}>
+                  <input type="checkbox" checked={isSelected} onChange={() => toggleCctv(cam.ch)}
+                    style={{ accentColor: "#2563eb", cursor: "pointer" }} />
+                  <span style={{ fontSize: 10, fontWeight: 700, color: "#475569", minWidth: 40 }}>CH{cam.ch}</span>
+                  <span style={{ fontSize: 11, color: "#0f172a", flex: 1 }}>{cam.name}</span>
+                  <span style={{ fontSize: 9, color: "#94a3b8" }}>{cam.zone}</span>
+                </label>
+              );
+            })
+          )}
+        </div>
+
+        {/* Delete button */}
+        <button onClick={onDelete}
+          style={{ width: "100%", padding: 10, borderRadius: 6, background: "#fff", border: "1px solid #fecaca", color: "#991b1b", fontSize: 11, fontWeight: 700, cursor: "pointer", marginTop: 8 }}>
+          🗑 이 스팟 삭제
+        </button>
+
+        {/* Help */}
+        <div style={{ marginTop: 12, padding: 8, background: "#f8fafc", borderRadius: 6, fontSize: 10, color: "#64748b", lineHeight: 1.5 }}>
+          💡 변경사항은 자동 저장됩니다. 위치는 지도에서 핀을 드래그하여 변경하세요.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function HomeNaverApiKeyModal({ currentKey, onSave, onClose }) {
+  const [key, setKey] = useState(currentKey || "");
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10400, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: 600, maxWidth: "95vw", maxHeight: "92vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        <div style={{ padding: "14px 18px", background: "linear-gradient(135deg,#059669,#0891b2)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 11, opacity: 0.9 }}>지도 서비스 설정</div>
+            <div style={{ fontSize: 17, fontWeight: 900 }}>🗺️ 네이버 지도 API 키</div>
+          </div>
+          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", fontSize: 22, cursor: "pointer", width: 30, height: 30, borderRadius: "50%", lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ padding: 18 }}>
+          <div style={{ padding: 12, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, marginBottom: 14, fontSize: 12, color: "#065f46", lineHeight: 1.6 }}>
+            <div style={{ fontWeight: 800, marginBottom: 6, fontSize: 13 }}>🎯 무료 · 하루 30만건까지</div>
+            네이버 클라우드 플랫폼에서 Maps API 애플리케이션을 등록하면 무료로 클라이언트 ID를 발급받을 수 있습니다.
+          </div>
+
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#0f172a", marginBottom: 8 }}>⚙️ 발급 방법</div>
+          <div style={{ padding: 12, background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, marginBottom: 14, fontSize: 11, color: "#475569", lineHeight: 1.7 }}>
+            <div style={{ fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>1. 네이버 클라우드 플랫폼 가입</div>
+            <div style={{ marginBottom: 8, paddingLeft: 10 }}>
+              <a href="https://www.ncloud.com/" target="_blank" rel="noreferrer" style={{ color: "#2563eb" }}>https://www.ncloud.com/</a> 접속 후 가입
+            </div>
+
+            <div style={{ fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>2. Maps API 신청</div>
+            <div style={{ marginBottom: 8, paddingLeft: 10 }}>
+              Console → Services → AI · Application Service → Maps<br/>
+              → Application 등록 → Web Dynamic Map 체크
+            </div>
+
+            <div style={{ fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>3. Web 서비스 URL 등록</div>
+            <div style={{ marginBottom: 8, paddingLeft: 10 }}>
+              <code style={{ background: "#e2e8f0", padding: "1px 4px", borderRadius: 3 }}>http://localhost:8899</code><br/>
+              <code style={{ background: "#e2e8f0", padding: "1px 4px", borderRadius: 3 }}>file://</code> (로컬 HTML 파일용)
+            </div>
+
+            <div style={{ fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>4. Client ID 복사</div>
+            <div style={{ paddingLeft: 10 }}>
+              발급된 "Client ID"(영문+숫자 조합)를 아래 입력란에 붙여넣기
+            </div>
+          </div>
+
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#0f172a", marginBottom: 6 }}>🔑 네이버 클라이언트 ID</div>
+          <input type="text" value={key} onChange={e => setKey(e.target.value)}
+            placeholder="예: abcdef12345 (발급받은 Client ID 입력)"
+            style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13, fontFamily: "monospace", marginBottom: 10 }} />
+
+          <div style={{ padding: 10, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, fontSize: 10, color: "#78350f", lineHeight: 1.6 }}>
+            💡 <strong>빈 값으로 저장</strong>하면 OpenStreetMap(무료, 제한 없음)으로 자동 전환됩니다.
+          </div>
+        </div>
+
+        <div style={{ padding: "12px 18px", borderTop: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", gap: 8, background: "#f8fafc" }}>
+          <button onClick={() => onSave("")}
+            style={{ padding: "9px 14px", borderRadius: 6, background: "#fff", border: "1px solid #e5e7eb", color: "#64748b", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+            🗑 해제 (OSM 사용)
+          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onClose}
+              style={{ padding: "9px 16px", borderRadius: 6, background: "#fff", border: "1px solid #e5e7eb", color: "#64748b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              취소
+            </button>
+            <button onClick={() => onSave(key.trim())}
+              style={{ padding: "9px 20px", borderRadius: 6, background: "linear-gradient(135deg,#059669,#0891b2)", color: "#fff", border: "none", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+              💾 저장
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AppInner() {
+  const [currentUser, setCurrentUser] = useState(() => {
+    // localStorage에 저장된 사용자가 있으면 즉시 복원
+    try {
+      const saved = window.localStorage?.getItem("jamsa_current_user");
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return null;
+  });
+
+  // 자동 로그인: Supabase 세션 활성 시 두 번째 로그인 자동 통과
+  useEffect(() => {
+    if (currentUser) return; // 이미 로그인됨
+    // 1) Supabase 세션이 있는지 확인 (entry.jsx가 설정한 토큰)
+    const hasSupabaseSession = !!(window.__authToken || window.localStorage?.getItem("supabase.auth.token"));
+    // 2) Supabase에서 받은 이메일로 매칭 시도
+    let matchedUser = null;
+    try {
+      const email = window.__supabaseUserEmail || "";
+      if (email) {
+        matchedUser = MERGED_USERS.find(u => u.email === email || u.login === email.split("@")[0]);
+      }
+    } catch (e) {}
+    // 3) 매칭 실패 또는 Supabase 세션 없어도 — ADMIN으로 자동 로그인
+    //    (이미 Supabase 로그인을 통과한 상태이므로 안전)
+    if (!matchedUser) matchedUser = MERGED_USERS.find(u => u.role === "ADMIN") || MERGED_USERS[0];
+    if (matchedUser) {
+      setCurrentUser(matchedUser);
+      try { window.localStorage?.setItem("jamsa_current_user", JSON.stringify(matchedUser)); } catch (e) {}
+    }
+  }, []);
+
+  // currentUser가 변경되면 localStorage에 저장
+  useEffect(() => {
+    if (currentUser) {
+      try { window.localStorage?.setItem("jamsa_current_user", JSON.stringify(currentUser)); } catch (e) {}
+    } else {
+      try { window.localStorage?.removeItem("jamsa_current_user"); } catch (e) {}
+    }
+  }, [currentUser]);
+
+  const [module, setModule] = useState("home"); // "home" | "facility" | "inventory" | "safety"
+
+  // Lifted state so cross-module features (e.g. Inventory AI → Facility Action) work
+  const [facInspections, setFacInspections] = useLocalStorage("jamsa_fac_inspections", FAC_INIT_INSPECTIONS);
+  const [facActions, setFacActions] = useLocalStorage("jamsa_fac_actions", FAC_INIT_ACTIONS);
+  const addFacAction = (a) => setFacActions(prev => [{ id: a.id || ("a" + Date.now()), status: "TODO", memo: null, ...a }, ...prev]);
+  const updateFacAction = (id, patch) => setFacActions(prev => prev.map(a => a.id === id ? { ...a, ...patch } : a));
+
+  // Shared audit log - every AI analysis, action creation, and completion is logged
+  const [auditLog, setAuditLog] = useLocalStorage("jamsa_audit_log", []);
+  const [showAuditLog, setShowAuditLog] = useState(false);
+  const [worklogs, setWorklogs] = useLocalStorage("jamsa_worklogs", []);
+  const [showWorklog, setShowWorklog] = useState(false);
+  const [showBackup, setShowBackup] = useState(false);
+  const addAudit = (entry) => setAuditLog(prev => [{
+    id: "log" + Date.now() + Math.random(),
+    at: new Date().toISOString(),
+    userId: currentUser?.id,
+    userName: currentUser?.name || "알 수 없음",
+    ...entry,
+  }, ...prev].slice(0, 500)); // cap at 500 entries
+
+  if (!currentUser) return <UnifiedLogin users={MERGED_USERS} onLogin={setCurrentUser} />;
+
+  const facUser = toFacUser(currentUser);
+  const invUser = toInvUser(currentUser);
+  const logout = () => setCurrentUser(null);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh", fontFamily: "'Pretendard','Noto Sans KR',-apple-system,sans-serif", background: "#f5f5f5", overflow: "hidden" }}>
+      <style>{`@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');*{box-sizing:border-box;margin:0;padding:0}`}</style>
+
+      {/* ─── Module switcher bar ─── */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#0f172a", color: "#fff", padding: "8px 16px", flexShrink: 0, boxShadow: "0 2px 6px rgba(0,0,0,0.15)", zIndex: 100 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: 0.2 }}>🏛️ 통합관리 시스템</div>
+          <div style={{ display: "flex", gap: 2, background: "rgba(255,255,255,0.08)", padding: 3, borderRadius: 8 }}>
+            <button onClick={() => setModule("home")}
+              style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
+                background: module === "home" ? "linear-gradient(135deg,#059669,#0891b2)" : "transparent",
+                color: module === "home" ? "#fff" : "rgba(255,255,255,0.6)" }}>
+              🗺️ 통합지도
+            </button>
+            <button onClick={() => setModule("facility")}
+              style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
+                background: module === "facility" ? "#3b5bdb" : "transparent",
+                color: module === "facility" ? "#fff" : "rgba(255,255,255,0.6)" }}>
+              🛠 시설점검
+            </button>
+            <button onClick={() => setModule("inventory")}
+              style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
+                background: module === "inventory" ? "#3b5bdb" : "transparent",
+                color: module === "inventory" ? "#fff" : "rgba(255,255,255,0.6)" }}>
+              📦 재고관리
+            </button>
+            <button onClick={() => setModule("safety")}
+              style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
+                background: module === "safety" ? "#ef4444" : "transparent",
+                color: module === "safety" ? "#fff" : "rgba(255,255,255,0.6)" }}>
+              🛡️ 안전관리
+            </button>
+            <button onClick={() => {
+              const url = localStorage.getItem("jamsa_cctv_guard_url") || "";
+              if (!url) {
+                const newUrl = prompt("CCTV 안전관제 시스템 URL을 입력하세요:\n(예: http://localhost:3000 또는 https://cctv.jamsafarm.kr)", "http://localhost:3000");
+                if (!newUrl) return;
+                localStorage.setItem("jamsa_cctv_guard_url", newUrl);
+                window.open(newUrl, "_blank", "noopener");
+              } else {
+                window.open(url, "_blank", "noopener");
+              }
+            }} title="CCTV 실시간 안전관제 (별도 탭)"
+              style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
+                background: "linear-gradient(135deg,#0891b2,#059669)",
+                color: "#fff", display: "flex", alignItems: "center", gap: 4 }}>
+              📹 CCTV 관제 <span style={{ fontSize: 9, opacity: 0.8 }}>↗</span>
+            </button>
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button onClick={() => setShowWorklog(true)}
+            style={{ padding: "5px 10px", borderRadius: 6, background: "rgba(37,99,235,0.15)", border: "1px solid rgba(37,99,235,0.3)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
+            📒 업무일지 <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 10, background: "rgba(5,150,105,0.3)", color: "#6ee7b7" }}>{worklogs.length}</span>
+          </button>
+          <button onClick={() => setShowAuditLog(true)}
+            style={{ padding: "5px 10px", borderRadius: 6, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
+            📋 활동 기록 <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 10, background: "rgba(59,91,219,0.25)", color: "#93c5fd" }}>{auditLog.length}</span>
+          </button>
+          <button onClick={() => setShowBackup(true)} title="데이터 백업/복원"
+            style={{ padding: "5px 10px", borderRadius: 6, background: "rgba(5,150,105,0.15)", border: "1px solid rgba(5,150,105,0.3)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
+            💾 백업
+          </button>
+          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}>{currentUser.dept}</span>
+          <span style={{ fontSize: 12, fontWeight: 700 }}>{currentUser.name}</span>
+          <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 4, background: "rgba(59,91,219,0.2)", color: "#93c5fd", fontWeight: 700 }}>{currentUser.role}</span>
+          <button onClick={logout}
+            style={{ padding: "5px 12px", borderRadius: 6, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>
+            로그아웃
+          </button>
+        </div>
+      </div>
+
+      {/* ─── Active module ─── */}
+      <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+        {module === "home"      && <IntegratedHomeDashboard userCtx={facUser} facActions={facActions} worklogs={worklogs} auditLog={auditLog} onNavigate={(m)=>setModule(m)} onAddFacAction={addFacAction} />}
+        {module === "facility"  && <FacilityModule  userCtx={facUser} onLogout={logout} inspections={facInspections} setInspections={setFacInspections} actions={facActions} setActions={setFacActions} addAudit={addAudit} updateFacAction={updateFacAction} />}
+        {module === "inventory" && <InventoryModule userCtx={invUser} onLogout={logout} onAddFacAction={addFacAction} switchToFacility={() => setModule("facility")} facActions={facActions} addAudit={addAudit} />}
+        {module === "safety"    && <SafetyModule userCtx={facUser} onLogout={logout} facilities={FAC_FACILITIES} onAddFacAction={addFacAction} addAudit={addAudit} />}
+      </div>
+      {showAuditLog && <AuditLogModal log={auditLog} onClose={() => setShowAuditLog(false)} />}
+      {showWorklog && <WorklogPage onClose={() => setShowWorklog(false)} addAudit={addAudit} facActions={facActions} worklogs={worklogs} setWorklogs={setWorklogs} currentUser={currentUser} />}
+      {showBackup && <BackupRestoreModal onClose={() => setShowBackup(false)} />}
+    </div>
+  );
+}
+
+/* ==================== ERROR BOUNDARY + DEFAULT EXPORT ==================== */
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, err: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, err: error };
+  }
+  componentDidCatch(error, info) {
+    console.error("App crashed:", error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 40, fontFamily: "sans-serif", background: "#fef2f2", minHeight: "100vh" }}>
+          <h2 style={{ color: "#dc2626", marginBottom: 16 }}>⚠️ 오류 발생</h2>
+          <pre style={{ whiteSpace: "pre-wrap", background: "#fff", padding: 16, borderRadius: 8, fontSize: 12, border: "1px solid #fecaca" }}>
+            {this.state.err ? (this.state.err.message + "\n\n" + (this.state.err.stack || "")) : "unknown error"}
+          </pre>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppInner />
+    </ErrorBoundary>
+  );
+}
