@@ -1,5 +1,14 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
-
+// 자동 초기화: cctv.thejamsa.com을 기본 백엔드로 설정
+try {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    const _saved = window.localStorage.getItem("jamsa_cctv_snap_server");
+    const _isStale = !_saved || _saved.includes("localhost") || _saved.includes("trycloudflare.com") || _saved.includes("bufing-istanbul");
+    if (_isStale) {
+      window.localStorage.setItem("jamsa_cctv_snap_server", "https://cctv.thejamsa.com");
+    }
+  }
+} catch(e) {}
 /* ─── LOCAL STORAGE PERSISTENCE HOOK ───
    Drop-in replacement for useState that syncs to localStorage.
    Falls back to plain useState if localStorage is unavailable. */
