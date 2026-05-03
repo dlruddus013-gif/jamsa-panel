@@ -14659,6 +14659,14 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
     catch (e) { return false; }
   });
   const [myLocationStatus, setMyLocationStatus] = useState({ source: null, lat: null, lng: null, accuracy: null, error: null });
+  // 수동 위치 모드 - PC 사용자가 지도 클릭으로 본인 위치 직접 지정
+  const [manualLocationMode, setManualLocationMode] = useState(false);
+  const [manualLocation, setManualLocation] = useState(() => {
+    try {
+      const saved = window.localStorage?.getItem("jamsa_manual_location");
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) { return null; }
+  });
   const [selectedUserId, setSelectedUserId] = useState(null);
 
   // 다른 사용자 위치 폴링 (10초마다)
@@ -14692,11 +14700,23 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
     }
     let watchId = null;
     let lastSentAt = 0;
+    let positionHistory = []; // 위치 히스토리 (평균 처리용)
     const onSuccess = async (pos) => {
       const { latitude, longitude, accuracy } = pos.coords;
+      // 위치 평균 처리 (정확도 약간 개선) - 최근 5개
+      positionHistory.push({ lat: latitude, lng: longitude, accuracy, time: Date.now() });
+      if (positionHistory.length > 5) positionHistory.shift();
+      // 정확도가 좋은 위치들로만 평균
+      const reliablePositions = positionHistory.filter(p => p.accuracy < 5000);
+      const avgLat = reliablePositions.length > 1
+        ? reliablePositions.reduce((s, p) => s + p.lat, 0) / reliablePositions.length
+        : latitude;
+      const avgLng = reliablePositions.length > 1
+        ? reliablePositions.reduce((s, p) => s + p.lng, 0) / reliablePositions.length
+        : longitude;
       // Wi-Fi 보정 추정 (정확도 100m 이상이면 wifi, 미만이면 gps)
       const source = accuracy > 100 ? "wifi" : "gps";
-      setMyLocationStatus({ source, lat: latitude, lng: longitude, accuracy, error: null });
+      setMyLocationStatus({ source, lat: avgLat, lng: avgLng, accuracy, error: null });
       // 5초마다 한 번만 서버 전송
       const now = Date.now();
       if (now - lastSentAt < 5000) return;
@@ -15944,14 +15964,51 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
             );
           })()}
 
+          {/* ━━━ 수동 위치 클릭 모드 - 지도 클릭으로 본인 위치 직접 설정 ━━━ */}
+          {manualLocationMode && (
+            <div onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              const xPct = ((e.clientX - rect.left) / rect.width) * 100;
+              const yPct = ((e.clientY - rect.top) / rect.height) * 100;
+              const SAT_BBOX = { lat_min: 36.6378, lat_max: 36.6395, lng_min: 127.4880, lng_max: 127.4905 };
+              const lng = SAT_BBOX.lng_min + (xPct / 100) * (SAT_BBOX.lng_max - SAT_BBOX.lng_min);
+              const lat = SAT_BBOX.lat_max - (yPct / 100) * (SAT_BBOX.lat_max - SAT_BBOX.lat_min);
+              const newLoc = { lat, lng, setAt: new Date().toISOString() };
+              setManualLocation(newLoc);
+              setManualLocationMode(false);
+              try { window.localStorage.setItem("jamsa_manual_location", JSON.stringify(newLoc)); } catch (err) {}
+            }}
+              style={{
+                position: "absolute", inset: 0, zIndex: 100,
+                cursor: "crosshair",
+                background: "rgba(220,38,38,0.05)",
+                border: "3px dashed #dc2626",
+                pointerEvents: "auto",
+              }}>
+              <div style={{
+                position: "absolute", top: 14, left: "50%", transform: "translateX(-50%)",
+                background: "rgba(220,38,38,0.95)", color: "#fff",
+                padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 800,
+                boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
+                animation: "jamsaUserPulse 1.5s infinite",
+              }}>
+                🖱️ 본인 위치를 클릭하세요 (취소: 위치 공유 OFF)
+              </div>
+            </div>
+          )}
+
           {/* ━━━ 본인 위치 — 즉시 표시 (DB 폴링 대기 안 함, BBOX 밖이어도 가장자리에) ━━━ */}
-          {shareMyLocation && myLocationStatus.lat && myLocationStatus.lng && (
+          {shareMyLocation && (myLocationStatus.lat || manualLocation) && (
             <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 35 }}>
               {(() => {
                 const SAT_BBOX = { lat_min: 36.6378, lat_max: 36.6395, lng_min: 127.4880, lng_max: 127.4905 };
-                let xPct = ((myLocationStatus.lng - SAT_BBOX.lng_min) / (SAT_BBOX.lng_max - SAT_BBOX.lng_min)) * 100;
-                let yPct = ((SAT_BBOX.lat_max - myLocationStatus.lat) / (SAT_BBOX.lat_max - SAT_BBOX.lat_min)) * 100;
-                const outsideBBOX = xPct < 0 || xPct > 100 || yPct < 0 || yPct > 100;
+                // 수동 위치 우선, 그 다음 GPS, 그 다음 박물관 중심
+                const useLat = manualLocation?.lat || myLocationStatus.lat;
+                const useLng = manualLocation?.lng || myLocationStatus.lng;
+                const isManual = !!manualLocation;
+                let xPct = ((useLng - SAT_BBOX.lng_min) / (SAT_BBOX.lng_max - SAT_BBOX.lng_min)) * 100;
+                let yPct = ((SAT_BBOX.lat_max - useLat) / (SAT_BBOX.lat_max - SAT_BBOX.lat_min)) * 100;
+                const outsideBBOX = !isManual && (xPct < 0 || xPct > 100 || yPct < 0 || yPct > 100);
                 // 영역 밖이면 가장자리로 클램프
                 xPct = Math.max(2, Math.min(98, xPct));
                 yPct = Math.max(2, Math.min(98, yPct));
@@ -15969,32 +16026,33 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                       position: "absolute", left: "50%", top: "50%",
                       transform: "translate(-50%, -50%)",
                       width: 44, height: 44, borderRadius: "50%",
-                      background: "rgba(37,99,235,0.25)",
+                      background: isManual ? "rgba(124,58,237,0.25)" : "rgba(37,99,235,0.25)",
                       animation: "jamsaUserPulse 2s infinite",
                     }} />
                     {/* 본인 마커 */}
                     <div style={{
                       position: "relative",
                       width: 22, height: 22, borderRadius: "50%",
-                      background: "#2563eb",
+                      background: isManual ? "#7c3aed" : "#2563eb",
                       border: "3px solid #fff",
-                      boxShadow: "0 0 0 6px rgba(37,99,235,0.25), 0 4px 12px rgba(0,0,0,0.5)",
+                      boxShadow: `0 0 0 6px ${isManual ? "rgba(124,58,237,0.25)" : "rgba(37,99,235,0.25)"}, 0 4px 12px rgba(0,0,0,0.5)`,
                       display: "flex", alignItems: "center", justifyContent: "center",
                       color: "#fff", fontSize: 11, fontWeight: 800,
-                    }}>📍</div>
+                    }}>{isManual ? "📌" : "📍"}</div>
                     {/* 라벨 */}
                     <div style={{
                       position: "absolute", top: 28, left: "50%",
                       transform: "translateX(-50%)",
-                      background: outsideBBOX ? "rgba(245,158,11,0.95)" : "rgba(37,99,235,0.95)",
+                      background: isManual ? "rgba(124,58,237,0.95)" : (outsideBBOX ? "rgba(245,158,11,0.95)" : "rgba(37,99,235,0.95)"),
                       color: "#fff", padding: "3px 8px",
                       borderRadius: 4, fontSize: 10, fontWeight: 700, whiteSpace: "nowrap",
                       boxShadow: "0 2px 6px rgba(0,0,0,0.3)",
                     }}>
-                      📍 {userCtx?.name || (typeof window !== "undefined" && window.localStorage?.getItem("jamsa_anon_user_name")) || "내 위치"}
-                      {outsideBBOX && " (박물관 외부)"}
+                      {isManual ? "📌 " : "📍 "}{userCtx?.name || (typeof window !== "undefined" && window.localStorage?.getItem("jamsa_anon_user_name")) || "내 위치"}
+                      {isManual && " (수동)"}
+                      {outsideBBOX && !isManual && " (박물관 외부)"}
                       <div style={{ fontSize: 8, opacity: 0.9, marginTop: 1 }}>
-                        {myLocationStatus.source === "gps" ? "🛰️ GPS" : "📶 Wi-Fi"} · ±{accuracyM}m
+                        {isManual ? "🖱️ 수동 설정" : (myLocationStatus.source === "gps" ? "🛰️ GPS" : "📶 Wi-Fi")} {!isManual && `· ±${accuracyM}m`}
                       </div>
                     </div>
                   </div>
@@ -16130,6 +16188,36 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
             {shareMyLocation && myLocationStatus.error && (
               <div style={{ fontSize: 9, color: "#ef4444", marginTop: 2 }}>
                 ⚠ {myLocationStatus.error}
+              </div>
+            )}
+            {/* 수동 위치 설정 - GPS 정확도 부족 시 */}
+            {shareMyLocation && (myLocationStatus.accuracy > 100 || manualLocation) && (
+              <div style={{ marginTop: 4 }}>
+                <button onClick={() => {
+                  if (manualLocation) {
+                    if (confirm("수동 위치 설정을 해제하고 GPS로 돌아가시겠습니까?")) {
+                      setManualLocation(null);
+                      setManualLocationMode(false);
+                      try { window.localStorage.removeItem("jamsa_manual_location"); } catch (e) {}
+                    }
+                  } else {
+                    setManualLocationMode(prev => !prev);
+                  }
+                }}
+                  style={{
+                    width: "100%", padding: "5px 8px", fontSize: 10, fontWeight: 700,
+                    border: `1px solid ${manualLocation ? "#7c3aed" : (manualLocationMode ? "#dc2626" : "#cbd5e1")}`,
+                    background: manualLocation ? "#7c3aed" : (manualLocationMode ? "#dc2626" : "#fff"),
+                    color: (manualLocation || manualLocationMode) ? "#fff" : "#64748b",
+                    borderRadius: 4, cursor: "pointer",
+                  }}>
+                  {manualLocation ? "📌 수동 위치 사용 중 (해제)" : (manualLocationMode ? "🖱️ 지도 클릭하여 설정" : "📌 지도 클릭으로 위치 설정")}
+                </button>
+                {manualLocationMode && !manualLocation && (
+                  <div style={{ fontSize: 8, color: "#dc2626", marginTop: 2, fontWeight: 700 }}>
+                    ⚠️ 지도 위에서 본인 위치를 클릭하세요
+                  </div>
+                )}
               </div>
             )}
             <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 4, lineHeight: 1.4 }}>
