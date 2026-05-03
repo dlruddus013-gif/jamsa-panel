@@ -16744,6 +16744,198 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                       )}
                     </div>
                   )}
+                  {/* ───── Phase 6: 로보락 (Roborock) 로봇청소기 컨트롤 ───── */}
+                  {selectedTapoDevice.category === "robot_vacuum" && (
+                    <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12, marginBottom: 14 }}>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: "#0f172a", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+                        🤖 로보락 청소기 컨트롤
+                      </div>
+                      {/* 상태 + 큰 액션 */}
+                      <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 12, marginBottom: 10 }}>
+                        {/* 좌측: 상태 카드 */}
+                        <div style={{ background: "#fff", borderRadius: 12, padding: 12, border: "1px solid #e2e8f0", textAlign: "center" }}>
+                          <div style={{ fontSize: 36, marginBottom: 4 }}>
+                            {selectedTapoDevice.currentState?.state === "cleaning" ? "🧹" :
+                             selectedTapoDevice.currentState?.state === "returning" ? "🏠" :
+                             selectedTapoDevice.currentState?.state === "charging" ? "🔌" :
+                             selectedTapoDevice.currentState?.state === "error" ? "⚠️" : "🤖"}
+                          </div>
+                          <div style={{ fontSize: 13, fontWeight: 800, color: "#0f172a", marginBottom: 4 }}>
+                            {selectedTapoDevice.currentState?.state === "cleaning" ? "청소 중" :
+                             selectedTapoDevice.currentState?.state === "returning" ? "복귀 중" :
+                             selectedTapoDevice.currentState?.state === "charging" ? "충전 중" :
+                             selectedTapoDevice.currentState?.state === "docked" ? "도크 대기" :
+                             selectedTapoDevice.currentState?.state === "paused" ? "일시정지" :
+                             selectedTapoDevice.currentState?.state === "error" ? "오류" : "대기"}
+                          </div>
+                          {selectedTapoDevice.currentState?.battery_level != null && (
+                            <>
+                              <div style={{ height: 8, background: "#e2e8f0", borderRadius: 4, overflow: "hidden", marginTop: 8, marginBottom: 4 }}>
+                                <div style={{
+                                  height: "100%",
+                                  width: `${selectedTapoDevice.currentState.battery_level}%`,
+                                  background: selectedTapoDevice.currentState.battery_level < 20 ? "#dc2626" :
+                                             selectedTapoDevice.currentState.battery_level < 50 ? "#f59e0b" : "#10b981",
+                                  transition: "width 0.5s"
+                                }}></div>
+                              </div>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b" }}>
+                                🔋 {selectedTapoDevice.currentState.battery_level}%
+                              </div>
+                            </>
+                          )}
+                        </div>
+                        {/* 우측: 메인 액션 그리드 */}
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                          <button onClick={async () => {
+                            try {
+                              await fetch(`/api/roborock?id=${selectedTapoDevice.id}&action=start`, { method: "POST" });
+                              alert("🧹 청소 시작!");
+                            } catch(e) { alert("실패"); }
+                          }} style={{ padding: "12px", background: "linear-gradient(135deg, #10b981, #059669)", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 800, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                            <span style={{ fontSize: 20 }}>▶️</span>
+                            <span>청소 시작</span>
+                          </button>
+                          <button onClick={async () => {
+                            try {
+                              await fetch(`/api/roborock?id=${selectedTapoDevice.id}&action=pause`, { method: "POST" });
+                              alert("⏸️ 일시정지");
+                            } catch(e) {}
+                          }} style={{ padding: "12px", background: "#f59e0b", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 800, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                            <span style={{ fontSize: 20 }}>⏸️</span>
+                            <span>일시정지</span>
+                          </button>
+                          <button onClick={async () => {
+                            try {
+                              await fetch(`/api/roborock?id=${selectedTapoDevice.id}&action=stop`, { method: "POST" });
+                              alert("⏹️ 청소 중지");
+                            } catch(e) {}
+                          }} style={{ padding: "12px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 800, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                            <span style={{ fontSize: 20 }}>⏹️</span>
+                            <span>중지</span>
+                          </button>
+                          <button onClick={async () => {
+                            try {
+                              await fetch(`/api/roborock?id=${selectedTapoDevice.id}&action=return_home`, { method: "POST" });
+                              alert("🏠 충전소 복귀!");
+                            } catch(e) {}
+                          }} style={{ padding: "12px", background: "linear-gradient(135deg, #0ea5e9, #0284c7)", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 800, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                            <span style={{ fontSize: 20 }}>🏠</span>
+                            <span>충전소 복귀</span>
+                          </button>
+                        </div>
+                      </div>
+                      {/* 청소 모드 선택 */}
+                      <div style={{ padding: 10, background: "#fff", borderRadius: 6, border: "1px solid #e2e8f0", marginBottom: 8 }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", marginBottom: 6 }}>💪 흡입력 모드</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 4 }}>
+                          {[
+                            { v: "quiet", l: "🔇 조용", desc: "야간/이른아침" },
+                            { v: "balanced", l: "⚖️ 표준", desc: "일반 청소" },
+                            { v: "turbo", l: "💨 터보", desc: "강력 흡입" },
+                            { v: "max", l: "🔥 맥스", desc: "최대 출력" }
+                          ].map(mode => (
+                            <button key={mode.v} onClick={async () => {
+                              try {
+                                await fetch(`/api/roborock?id=${selectedTapoDevice.id}&action=set_fan_speed&speed=${mode.v}`, { method: "POST" });
+                              } catch(e) {}
+                            }} title={mode.desc}
+                              style={{
+                                padding: "8px 4px",
+                                background: selectedTapoDevice.currentState?.fan_speed === mode.v ? "#7c3aed" : "#f1f5f9",
+                                color: selectedTapoDevice.currentState?.fan_speed === mode.v ? "#fff" : "#0f172a",
+                                border: "none", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer"
+                              }}>
+                              {mode.l}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      {/* 박물관 구역별 청소 (S7/S8 등 지도 모델) */}
+                      {(selectedTapoDevice.hasMap || selectedTapoDevice.model?.match(/S[78]|Q/i)) && (
+                        <div style={{ padding: 10, background: "#fff", borderRadius: 6, border: "1px solid #e2e8f0", marginBottom: 8 }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", marginBottom: 6 }}>🗺️ 박물관 구역별 청소 (지도 모델)</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 4 }}>
+                            {["본관", "체험장", "키즈카페", "식당", "매점", "사무실"].map(zone => (
+                              <button key={zone} onClick={async () => {
+                                try {
+                                  await fetch(`/api/roborock?id=${selectedTapoDevice.id}&action=clean_zone&zone=${encodeURIComponent(zone)}`, { method: "POST" });
+                                  alert(`${zone} 청소 시작!`);
+                                } catch(e) {}
+                              }} style={{ padding: "6px 4px", background: "#f1f5f9", border: "1px solid #cbd5e1", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer", color: "#0f172a" }}>
+                                📍 {zone}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {/* 일정 + 통계 */}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                        {/* 일정 */}
+                        <div style={{ padding: 10, background: "#fff", borderRadius: 6, border: "1px solid #e2e8f0" }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", marginBottom: 6 }}>📅 박물관 운영 일정</div>
+                          <div style={{ fontSize: 11, color: "#475569", lineHeight: 1.6 }}>
+                            매일 자동 청소 시간:
+                            <input type="time" defaultValue={selectedTapoDevice.scheduleClean || "07:30"}
+                              onChange={async (e) => {
+                                try { await fetch(`/api/roborock?id=${selectedTapoDevice.id}&action=set_schedule&time=${e.target.value}`, { method: "POST" }); } catch(err) {}
+                              }}
+                              style={{ width: "100%", padding: 4, fontSize: 11, border: "1px solid #cbd5e1", borderRadius: 3, marginTop: 4 }} />
+                          </div>
+                          <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 6 }}>
+                            💡 권장: 개장 1.5시간 전 (07:30) 청소 시작
+                          </div>
+                        </div>
+                        {/* 통계 */}
+                        <div style={{ padding: 10, background: "#fff", borderRadius: 6, border: "1px solid #e2e8f0" }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", marginBottom: 6 }}>📊 청소 통계</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 11 }}>
+                            <div>
+                              <div style={{ fontSize: 9, color: "#94a3b8" }}>오늘</div>
+                              <div style={{ fontSize: 13, fontWeight: 800, color: "#0ea5e9" }}>{selectedTapoDevice.todayCleanArea || 0}㎡</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 9, color: "#94a3b8" }}>오늘 시간</div>
+                              <div style={{ fontSize: 13, fontWeight: 800, color: "#10b981" }}>{selectedTapoDevice.todayCleanMin || 0}분</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 9, color: "#94a3b8" }}>총 청소</div>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: "#64748b" }}>{selectedTapoDevice.totalCleanCount || 0}회</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 9, color: "#94a3b8" }}>총 면적</div>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: "#64748b" }}>{((selectedTapoDevice.totalCleanArea || 0) / 1000).toFixed(1)}k㎡</div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      {/* 소모품 알림 */}
+                      <div style={{ marginTop: 8, padding: 10, background: "#fef3c7", borderRadius: 6, border: "1px solid #fde68a" }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: "#78350f", marginBottom: 6 }}>🔧 소모품 상태 (교체 필요 시 알림)</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, fontSize: 10 }}>
+                          {[
+                            { k: "main_brush", l: "메인 브러시", max: 300 },
+                            { k: "side_brush", l: "사이드 브러시", max: 200 },
+                            { k: "filter", l: "필터", max: 150 },
+                            { k: "sensor", l: "센서", max: 30 }
+                          ].map(part => {
+                            const used = selectedTapoDevice.consumables?.[part.k] || 0;
+                            const pct = Math.min(100, Math.round((used / part.max) * 100));
+                            const color = pct > 80 ? "#dc2626" : pct > 60 ? "#f59e0b" : "#10b981";
+                            return (
+                              <div key={part.k} style={{ background: "#fff", padding: 6, borderRadius: 4, border: "1px solid #fde68a" }}>
+                                <div style={{ fontSize: 9, color: "#78350f", marginBottom: 3 }}>{part.l}</div>
+                                <div style={{ height: 4, background: "#fee2e2", borderRadius: 2, overflow: "hidden" }}>
+                                  <div style={{ height: "100%", width: `${pct}%`, background: color }}></div>
+                                </div>
+                                <div style={{ fontSize: 9, fontWeight: 700, color, marginTop: 2 }}>{pct}%</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   {/* ───── Phase 4-C: 센서 (온습도/모션/도어/CO2) 대시보드 ───── */}
                   {(["sensor_temp", "sensor_motion", "sensor_door", "sensor_water", "sensor_smoke", "sensor"].includes(selectedTapoDevice.category)) && (
                     <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12, marginBottom: 14 }}>
