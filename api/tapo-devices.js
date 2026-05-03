@@ -122,6 +122,72 @@ export default async function handler(req, res) {
       const pathParts = url.pathname.split('/').filter(Boolean);
       // 예: /api/tapo-devices?id=xxx&action=status
 
+      // ─── Phase 4-B/C: 플러그/조명/센서 통합 액션 ───
+      const { id: queryId, action: queryAction } = req.query;
+      
+      if (queryId && queryAction) {
+        // 기기 조회
+        const { data: dev } = await supabaseSvc.from('tapo_devices').select('*').eq('id', queryId).single();
+        if (!dev) return res.status(404).json({ error: 'device_not_found' });
+
+        // 전원 토글 (플러그/조명)
+        if (queryAction === 'power_toggle') {
+          const cur = dev.current_state?.power === 'ON';
+          const newState = { ...(dev.current_state || {}), power: cur ? 'OFF' : 'ON' };
+          await supabaseSvc.from('tapo_devices').update({ current_state: newState, updated_at: new Date().toISOString() }).eq('id', queryId);
+          await supabaseSvc.from('tapo_device_events').insert({
+            device_id: queryId, zone: dev.zone_id,
+            event_type: 'power_toggle', severity: 'normal',
+            title: cur ? '🔴 전원 OFF' : '🟢 전원 ON',
+            description: `${dev.name} 전원 ${cur ? '꺼짐' : '켜짐'}`,
+            raw_payload: { from: cur ? 'ON' : 'OFF', to: cur ? 'OFF' : 'ON' },
+            created_at: new Date().toISOString(),
+          });
+          return res.status(200).json({ ok: true, power: cur ? 'OFF' : 'ON' });
+        }
+
+        // 일정 ON/OFF 시간 설정
+        if (queryAction === 'schedule_on' || queryAction === 'schedule_off') {
+          const field = queryAction === 'schedule_on' ? 'schedule_on' : 'schedule_off';
+          await supabaseSvc.from('tapo_devices').update({ [field]: req.query.time, updated_at: new Date().toISOString() }).eq('id', queryId);
+          return res.status(200).json({ ok: true, [field]: req.query.time });
+        }
+
+        // 타이머 설정 (X분 후 OFF)
+        if (queryAction === 'timer') {
+          const minutes = parseInt(req.query.minutes) || 0;
+          const offAt = new Date(Date.now() + minutes * 60 * 1000).toISOString();
+          await supabaseSvc.from('tapo_devices').update({ timer_off_at: offAt, updated_at: new Date().toISOString() }).eq('id', queryId);
+          await supabaseSvc.from('tapo_device_events').insert({
+            device_id: queryId, zone: dev.zone_id,
+            event_type: 'timer_set', severity: 'normal',
+            title: `⏲️ ${minutes}분 타이머 설정`,
+            description: `${minutes}분 후 자동 OFF`,
+            raw_payload: { minutes, off_at: offAt },
+            created_at: new Date().toISOString(),
+          });
+          return res.status(200).json({ ok: true, off_at: offAt });
+        }
+
+        // 밝기 / 색온도 (조명)
+        if (queryAction === 'brightness' || queryAction === 'color_temp') {
+          const val = parseInt(req.query.value) || 0;
+          const field = queryAction === 'brightness' ? 'brightness' : 'color_temp';
+          await supabaseSvc.from('tapo_devices').update({ [field]: val, updated_at: new Date().toISOString() }).eq('id', queryId);
+          return res.status(200).json({ ok: true, [field]: val });
+        }
+
+        // 센서 임계값 설정
+        if (queryAction === 'threshold') {
+          const type = req.query.type;
+          const val = parseFloat(req.query.value);
+          const thresholds = dev.thresholds || {};
+          thresholds[type] = val;
+          await supabaseSvc.from('tapo_devices').update({ thresholds, updated_at: new Date().toISOString() }).eq('id', queryId);
+          return res.status(200).json({ ok: true, thresholds });
+        }
+      }
+
       if (req.query.action === 'status') {
         const deviceId = req.query.id;
         if (!deviceId) return res.status(400).json({ error: 'missing_device_id' });
