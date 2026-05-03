@@ -14264,6 +14264,161 @@ function UnifiedLogin({ users, onLogin }){
    All modules (facility/inventory/safety/worklog) converge here.
    Each zone spot shows aggregate status at a glance.
    ══════════════════════════════════════════════════════════════ */
+
+// Tapo 기기 등록/수정 폼
+function TapoDeviceForm({ form, zones = [], onCancel, onSave }) {
+  const [data, setData] = useState({
+    id: form?.id,
+    name: form?.name || "",
+    category: form?.category || "camera",
+    zoneId: form?.zone_id || form?.zoneId || "",
+    model: form?.model || "",
+    ip: form?.ip || "",
+    port: form?.port || "",
+    rtspUrl: form?.rtsp_url || form?.rtspUrl || "",
+    username: form?.username || "",
+    password: form?.password || "",
+    haEntityId: form?.ha_entity_id || form?.haEntityId || "",
+    x: form?.x || 50,
+    y: form?.y || 50,
+    notes: form?.notes || "",
+  });
+  const upd = (k, v) => setData(prev => ({ ...prev, [k]: v }));
+
+  const categories = [
+    { v: "camera", l: "📹 카메라" },
+    { v: "doorbell", l: "🔔 도어벨" },
+    { v: "plug", l: "🔌 스마트 플러그" },
+    { v: "power_strip", l: "🔌 멀티탭" },
+    { v: "light", l: "💡 조명" },
+    { v: "switch", l: "🎚️ 스위치" },
+    { v: "motion_sensor", l: "🚶 모션 센서" },
+    { v: "contact_sensor", l: "🚪 출입 센서" },
+    { v: "temperature_sensor", l: "🌡️ 온도 센서" },
+    { v: "humidity_sensor", l: "💧 습도 센서" },
+    { v: "water_leak_sensor", l: "💦 누수 센서" },
+    { v: "button", l: "🔘 비상 버튼" },
+    { v: "hub", l: "📡 허브" },
+    { v: "ir_remote", l: "📡 IR 리모컨" },
+    { v: "robot_vacuum", l: "🤖 로봇청소기" },
+  ];
+
+  const labelStyle = { fontSize: 11, fontWeight: 700, color: "#475569", display: "block", marginBottom: 4 };
+  const inputStyle = { width: "100%", padding: "7px 10px", border: "1px solid #cbd5e1", borderRadius: 5, fontSize: 12, fontFamily: "inherit" };
+
+  return (
+    <div style={{ background: "#fff", borderRadius: 10, padding: 18 }}>
+      <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 14, color: "#7c3aed" }}>
+        {form?.id ? "✏️ 기기 수정" : "➕ 새 기기 등록"}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+        <div>
+          <label style={labelStyle}>기기 이름 *</label>
+          <input value={data.name} onChange={e => upd("name", e.target.value)} placeholder="예: 본관 입구 카메라" style={inputStyle} />
+        </div>
+        <div>
+          <label style={labelStyle}>카테고리 *</label>
+          <select value={data.category} onChange={e => upd("category", e.target.value)} style={inputStyle}>
+            {categories.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+        <div>
+          <label style={labelStyle}>구역</label>
+          <select value={data.zoneId} onChange={e => upd("zoneId", e.target.value)} style={inputStyle}>
+            <option value="">구역 선택...</option>
+            {(zones || []).map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>모델명</label>
+          <input value={data.model} onChange={e => upd("model", e.target.value)} placeholder="예: C310, P100" style={inputStyle} />
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12, marginBottom: 12 }}>
+        <div>
+          <label style={labelStyle}>IP 주소</label>
+          <input value={data.ip} onChange={e => upd("ip", e.target.value)} placeholder="192.168.0.100" style={inputStyle} />
+        </div>
+        <div>
+          <label style={labelStyle}>포트</label>
+          <input value={data.port} onChange={e => upd("port", e.target.value)} placeholder="554" style={inputStyle} />
+        </div>
+      </div>
+
+      {(data.category === "camera" || data.category === "doorbell") && (
+        <>
+          <div style={{ marginBottom: 12 }}>
+            <label style={labelStyle}>RTSP URL (카메라)</label>
+            <input value={data.rtspUrl} onChange={e => upd("rtspUrl", e.target.value)}
+              placeholder="rtsp://username:password@192.168.0.100:554/stream1" style={inputStyle} />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <div>
+              <label style={labelStyle}>카메라 계정</label>
+              <input value={data.username} onChange={e => upd("username", e.target.value)} placeholder="admin" style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>카메라 비밀번호</label>
+              <input type="password" value={data.password} onChange={e => upd("password", e.target.value)} style={inputStyle} />
+            </div>
+          </div>
+        </>
+      )}
+
+      <div style={{ marginBottom: 12 }}>
+        <label style={labelStyle}>Home Assistant Entity ID (선택)</label>
+        <input value={data.haEntityId} onChange={e => upd("haEntityId", e.target.value)}
+          placeholder="switch.tapo_plug_01 (HA 연동 시)" style={inputStyle} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+        <div>
+          <label style={labelStyle}>지도 X 위치 (%) - 0~100</label>
+          <input type="number" value={data.x} onChange={e => upd("x", parseFloat(e.target.value))}
+            min="0" max="100" step="0.1" style={inputStyle} />
+        </div>
+        <div>
+          <label style={labelStyle}>지도 Y 위치 (%) - 0~100</label>
+          <input type="number" value={data.y} onChange={e => upd("y", parseFloat(e.target.value))}
+            min="0" max="100" step="0.1" style={inputStyle} />
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 14 }}>
+        <label style={labelStyle}>메모</label>
+        <textarea value={data.notes} onChange={e => upd("notes", e.target.value)}
+          placeholder="설치 위치, 특이사항 등" rows={2}
+          style={{ ...inputStyle, fontFamily: "inherit", resize: "vertical" }} />
+      </div>
+
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button onClick={onCancel}
+          style={{ padding: "8px 16px", background: "#f1f5f9", color: "#475569", border: "1px solid #cbd5e1", borderRadius: 6, fontWeight: 700, cursor: "pointer", fontSize: 12 }}>
+          취소
+        </button>
+        <button onClick={() => {
+          if (!data.name || !data.category) { alert("이름과 카테고리는 필수입니다"); return; }
+          onSave(data);
+        }}
+          style={{ padding: "8px 18px", background: "linear-gradient(135deg,#7c3aed,#5b21b6)", color: "#fff", border: "none", borderRadius: 6, fontWeight: 700, cursor: "pointer", fontSize: 12 }}>
+          💾 저장
+        </button>
+      </div>
+
+      <div style={{ marginTop: 14, padding: 10, background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 6, fontSize: 10, color: "#075985", lineHeight: 1.6 }}>
+        💡 <strong>지도 위치 지정 팁:</strong> 박물관 통합지도에서 기기가 표시될 위치를 0-100% 좌표로 지정합니다.<br />
+        예: 본관 = X 30, Y 40 / 누에과학관 = X 65, Y 50<br />
+        Phase 2에서 지도 클릭으로 자동 좌표 설정 기능 추가 예정.
+      </div>
+    </div>
+  );
+}
+
 function StatCard({ label, value, unit = "", trend = "", color = "#0f172a" }) {
   return (
     <div style={{ background: "#fff", borderRadius: 8, padding: "12px 14px", border: "1px solid #e5e7eb" }}>
@@ -14547,13 +14702,30 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
       if (now - lastSentAt < 5000) return;
       lastSentAt = now;
       try {
-        const me = userCtx || { id: "me", name: "익명", role: "staff" };
+        // 익명 ID 영구 저장 (localStorage) - 로그인 안 해도 같은 사용자 식별
+        let anonId, anonName;
+        try {
+          anonId = window.localStorage.getItem("jamsa_anon_user_id");
+          if (!anonId) {
+            anonId = "anon-" + Math.random().toString(36).slice(2, 10) + "-" + Date.now().toString(36);
+            window.localStorage.setItem("jamsa_anon_user_id", anonId);
+          }
+          anonName = window.localStorage.getItem("jamsa_anon_user_name") || "";
+        } catch (e) {
+          anonId = "anon-" + Date.now();
+          anonName = "";
+        }
+        const me = userCtx || {
+          id: anonId,
+          name: anonName || `익명-${anonId.slice(-4)}`,
+          role: "staff",
+        };
         await fetch("/api/staff-location-update", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            staffId: me.id || ("anon-" + Date.now()),
-            staffName: me.name || "익명",
+            staffId: me.id,
+            staffName: me.name,
             lat: latitude, lng: longitude, accuracy,
             source, role: me.role === "VISITOR" ? "visitor" : "staff",
             dept: me.dept || null,
@@ -14722,6 +14894,105 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   // 구역별 인파 통계 (CCTV AI + QR 체크인)
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   const [zoneCrowdStats, setZoneCrowdStats] = useState({}); // { zoneId: { peopleCount, crowdLevel, source, ageSec } }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // Tapo 스마트홈 기기 (Phase 1: 지도 표시 + 기본 관리)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [tapoDevices, setTapoDevices] = useState([]); // [{id, name, category, x, y, ...}]
+  const [tapoStats, setTapoStats] = useState(null);
+  const [tapoVisible, setTapoVisible] = useState(() => {
+    try { return window.localStorage?.getItem("jamsa_tapo_visible") !== "0"; } catch (e) { return true; }
+  });
+  const [showTapoModal, setShowTapoModal] = useState(false); // 기기 관리 모달
+  const [selectedTapoDevice, setSelectedTapoDevice] = useState(null); // 클릭된 기기
+  const [tapoForm, setTapoForm] = useState(null); // 등록/수정 폼
+
+  // Tapo 기기 폴링 (1분마다)
+  useEffect(() => {
+    let cancelled = false;
+    const fetchDevices = async () => {
+      try {
+        const res = await fetch("/api/tapo-devices", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled || !data?.ok) return;
+        setTapoDevices(data.devices || []);
+        setTapoStats(data.stats || null);
+      } catch (e) { /* 무시 */ }
+    };
+    fetchDevices();
+    const tid = setInterval(fetchDevices, 60000);
+    return () => { cancelled = true; clearInterval(tid); };
+  }, [showTapoModal]); // 모달 열고 닫을 때마다 갱신
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // Phase 2: Tapo 이벤트 폴링 + 위험 자동 알림
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [tapoEvents, setTapoEvents] = useState([]);
+  const lastTapoEventIdRef = useRef(null);
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // Phase 3: 자동화 시스템
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const [tapoAutomations, setTapoAutomations] = useState([]);
+  const [tapoAutomationLogs, setTapoAutomationLogs] = useState([]);
+  const [tapoAutomationStats, setTapoAutomationStats] = useState(null);
+  const [tapoTemplates, setTapoTemplates] = useState([]);
+  const [tapoModalTab, setTapoModalTab] = useState("devices"); // devices | automations | events | templates
+
+  // 자동화 폴링 (모달 열렸을 때만, 30초)
+  useEffect(() => {
+    if (!showTapoModal) return;
+    let cancelled = false;
+    const fetchAutomations = async () => {
+      try {
+        const res = await fetch("/api/tapo-automations", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled || !data?.ok) return;
+        setTapoAutomations(data.automations || []);
+        setTapoAutomationLogs(data.logs || []);
+        setTapoAutomationStats(data.stats || null);
+        setTapoTemplates(data.templates || []);
+      } catch (e) { /* 무시 */ }
+    };
+    fetchAutomations();
+    const tid = setInterval(fetchAutomations, 30000);
+    return () => { cancelled = true; clearInterval(tid); };
+  }, [showTapoModal]);
+
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchEvents = async () => {
+      try {
+        const res = await fetch("/api/tapo-events?range=today&limit=20", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled || !data?.ok) return;
+        const newEvents = data.events || [];
+        // 새 위험 이벤트 감지 → 자동 토스트
+        if (newEvents.length > 0 && lastTapoEventIdRef.current != null) {
+          const newest = newEvents[0];
+          if (newest.id !== lastTapoEventIdRef.current && newest.severity === "danger") {
+            setAlertToast({
+              type: "tapo_danger",
+              zoneName: newest.zone || newest.tapo_devices?.zone_id || "Tapo",
+              message: `🚨 ${newest.title || "위험 감지"}: ${newest.description || ""}`,
+              severity: "DANGER",
+            });
+            setTimeout(() => setAlertToast(null), 10000);
+          }
+        }
+        if (newEvents.length > 0) lastTapoEventIdRef.current = newEvents[0].id;
+        setTapoEvents(newEvents);
+      } catch (e) { /* 무시 */ }
+    };
+    fetchEvents();
+    const tid = setInterval(fetchEvents, 30000); // 30초마다
+    return () => { cancelled = true; clearInterval(tid); };
+  }, []);
+
   const [crowdAnalysisOn, setCrowdAnalysisOn] = useState(() => {
     try { return window.localStorage?.getItem("jamsa_crowd_analysis") === "1"; }
     catch (e) { return false; }
@@ -15673,6 +15944,65 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
             );
           })()}
 
+          {/* ━━━ 본인 위치 — 즉시 표시 (DB 폴링 대기 안 함, BBOX 밖이어도 가장자리에) ━━━ */}
+          {shareMyLocation && myLocationStatus.lat && myLocationStatus.lng && (
+            <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 35 }}>
+              {(() => {
+                const SAT_BBOX = { lat_min: 36.6378, lat_max: 36.6395, lng_min: 127.4880, lng_max: 127.4905 };
+                let xPct = ((myLocationStatus.lng - SAT_BBOX.lng_min) / (SAT_BBOX.lng_max - SAT_BBOX.lng_min)) * 100;
+                let yPct = ((SAT_BBOX.lat_max - myLocationStatus.lat) / (SAT_BBOX.lat_max - SAT_BBOX.lat_min)) * 100;
+                const outsideBBOX = xPct < 0 || xPct > 100 || yPct < 0 || yPct > 100;
+                // 영역 밖이면 가장자리로 클램프
+                xPct = Math.max(2, Math.min(98, xPct));
+                yPct = Math.max(2, Math.min(98, yPct));
+                const accuracyM = Math.round(myLocationStatus.accuracy || 0);
+                return (
+                  <div style={{
+                    position: "absolute",
+                    left: `${xPct}%`, top: `${yPct}%`,
+                    transform: "translate(-50%, -50%)",
+                    pointerEvents: "auto",
+                    zIndex: 36,
+                  }}>
+                    {/* 펄스 링 */}
+                    <div style={{
+                      position: "absolute", left: "50%", top: "50%",
+                      transform: "translate(-50%, -50%)",
+                      width: 44, height: 44, borderRadius: "50%",
+                      background: "rgba(37,99,235,0.25)",
+                      animation: "jamsaUserPulse 2s infinite",
+                    }} />
+                    {/* 본인 마커 */}
+                    <div style={{
+                      position: "relative",
+                      width: 22, height: 22, borderRadius: "50%",
+                      background: "#2563eb",
+                      border: "3px solid #fff",
+                      boxShadow: "0 0 0 6px rgba(37,99,235,0.25), 0 4px 12px rgba(0,0,0,0.5)",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      color: "#fff", fontSize: 11, fontWeight: 800,
+                    }}>📍</div>
+                    {/* 라벨 */}
+                    <div style={{
+                      position: "absolute", top: 28, left: "50%",
+                      transform: "translateX(-50%)",
+                      background: outsideBBOX ? "rgba(245,158,11,0.95)" : "rgba(37,99,235,0.95)",
+                      color: "#fff", padding: "3px 8px",
+                      borderRadius: 4, fontSize: 10, fontWeight: 700, whiteSpace: "nowrap",
+                      boxShadow: "0 2px 6px rgba(0,0,0,0.3)",
+                    }}>
+                      📍 {userCtx?.name || (typeof window !== "undefined" && window.localStorage?.getItem("jamsa_anon_user_name")) || "내 위치"}
+                      {outsideBBOX && " (박물관 외부)"}
+                      <div style={{ fontSize: 8, opacity: 0.9, marginTop: 1 }}>
+                        {myLocationStatus.source === "gps" ? "🛰️ GPS" : "📶 Wi-Fi"} · ±{accuracyM}m
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
           {/* ━━━ 사용자 위치 추적 — 실시간 핀 (오버레이) ━━━ */}
           {visibleUsers.length > 0 && (
             <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 20 }}>
@@ -15766,6 +16096,32 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                 style={{ width: 14, height: 14, cursor: "pointer" }} />
               <span>📍 내 위치 공유</span>
             </label>
+            {/* 익명 이름 입력 (로그인 안 한 사용자용) */}
+            {shareMyLocation && !userCtx && (
+              <div style={{ marginTop: 4, padding: 6, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 4 }}>
+                <div style={{ fontSize: 9, color: "#1e3a8a", fontWeight: 700, marginBottom: 3 }}>👤 표시 이름 (선택)</div>
+                <input
+                  type="text"
+                  placeholder="예: 이경연 / 홍길동 / 비워두면 익명"
+                  defaultValue={(typeof window !== "undefined" && window.localStorage?.getItem("jamsa_anon_user_name")) || ""}
+                  onBlur={(e) => {
+                    try {
+                      const name = e.target.value.trim();
+                      if (name) {
+                        window.localStorage.setItem("jamsa_anon_user_name", name);
+                      } else {
+                        window.localStorage.removeItem("jamsa_anon_user_name");
+                      }
+                    } catch (err) {}
+                  }}
+                  onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+                  style={{ width: "100%", padding: "3px 6px", fontSize: 10, border: "1px solid #93c5fd", borderRadius: 3, fontFamily: "inherit" }}
+                />
+                <div style={{ fontSize: 8, color: "#64748b", marginTop: 2 }}>
+                  ✏️ 입력 후 다른 곳 클릭 → 자동 저장 · 다음에 같은 PC/폰에서 자동 사용
+                </div>
+              </div>
+            )}
             {shareMyLocation && myLocationStatus.source && (
               <div style={{ fontSize: 9, color: "#10b981", marginTop: 2 }}>
                 ✓ {myLocationStatus.source === "gps" ? "🛰️ GPS" : "📶 Wi-Fi"} · 정확도 ±{Math.round(myLocationStatus.accuracy || 0)}m
@@ -15872,12 +16228,554 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                 {autoAlertOn && recentAlerts.length > 0 ? ` (${recentAlerts.length})` : ""}
               </button>
             </div>
+            {/* Tapo 기기 토글 + 관리 */}
+            <div style={{ marginTop: 4, display: "flex", gap: 4 }}>
+              <button onClick={() => {
+                const next = !tapoVisible;
+                setTapoVisible(next);
+                try { window.localStorage.setItem("jamsa_tapo_visible", next ? "1" : "0"); } catch(e) {}
+              }}
+                title="지도에 Tapo 기기 표시 ON/OFF"
+                style={{
+                  flex: 2, padding: "5px 8px", fontSize: 10, fontWeight: 800,
+                  border: `1px solid ${tapoVisible ? "#7c3aed" : "#cbd5e1"}`,
+                  background: tapoVisible ? "linear-gradient(135deg,#7c3aed,#5b21b6)" : "#fff",
+                  color: tapoVisible ? "#fff" : "#64748b",
+                  borderRadius: 5, cursor: "pointer",
+                }}>
+                📡 Tapo {tapoVisible ? `(${tapoDevices.length})` : "OFF"}
+              </button>
+              <button onClick={() => setShowTapoModal(true)}
+                title="Tapo 기기 등록/관리"
+                style={{
+                  flex: 1, padding: "5px 4px", fontSize: 10, fontWeight: 800,
+                  border: "1px solid #cbd5e1", background: "#fff",
+                  color: "#7c3aed", borderRadius: 5, cursor: "pointer",
+                }}>
+                ⚙️
+              </button>
+            </div>
             {isVisitorMode && (
               <div style={{ marginTop: 6, padding: "4px 6px", background: "#fef3c7", border: "1px solid #fbbf24", borderRadius: 4, fontSize: 9, color: "#78350f", fontWeight: 700, textAlign: "center" }}>
                 👨‍👩‍👧 관람객 모드
               </div>
             )}
           </div>
+
+          {/* ━━━ Tapo 기기 핀 (지도 오버레이) ━━━ */}
+          {tapoVisible && tapoDevices.length > 0 && (
+            <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 50 }}>
+              {tapoDevices.filter(d => d.x != null && d.y != null).map(d => (
+                <div key={d.id}
+                  onClick={() => setSelectedTapoDevice(d)}
+                  title={`${d.icon || "📡"} ${d.name}${d.isOnline ? " (온라인)" : " (오프라인)"}`}
+                  style={{
+                    position: "absolute",
+                    left: `${d.x}%`, top: `${d.y}%`,
+                    transform: "translate(-50%, -50%)",
+                    pointerEvents: "auto", cursor: "pointer",
+                    zIndex: 51,
+                  }}>
+                  <div style={{
+                    width: 26, height: 26, borderRadius: "50%",
+                    background: d.color || "#64748b",
+                    border: `2px solid ${d.isOnline ? "#fff" : "#94a3b8"}`,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 14, color: "#fff",
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+                    opacity: d.isOnline ? 1 : 0.5,
+                  }}>
+                    {d.icon || "📡"}
+                  </div>
+                  {/* 온라인 인디케이터 */}
+                  {d.isOnline && (
+                    <div style={{
+                      position: "absolute", top: -2, right: -2,
+                      width: 8, height: 8, borderRadius: "50%",
+                      background: "#10b981", border: "1.5px solid #fff",
+                      boxShadow: "0 0 4px #10b981",
+                    }}></div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ━━━ Tapo 기기 상세 모달 (핀 클릭 시) ━━━ */}
+          {selectedTapoDevice && (
+            <div onClick={() => setSelectedTapoDevice(null)}
+              style={{ position: "fixed", inset: 0, zIndex: 10100, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+              <div onClick={e => e.stopPropagation()}
+                style={{ background: "#fff", borderRadius: 12, width: 480, maxWidth: "95vw", maxHeight: "90vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+                <div style={{ padding: "16px 20px", background: `linear-gradient(135deg,${selectedTapoDevice.color || "#7c3aed"},#5b21b6)`, color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <div style={{ fontSize: 18, fontWeight: 900 }}>{selectedTapoDevice.icon || "📡"} {selectedTapoDevice.name}</div>
+                    <div style={{ fontSize: 11, opacity: 0.9, marginTop: 2 }}>
+                      {selectedTapoDevice.category} {selectedTapoDevice.model ? `· ${selectedTapoDevice.model}` : ""} {selectedTapoDevice.isOnline ? "🟢 온라인" : "⚫ 오프라인"}
+                    </div>
+                  </div>
+                  <button onClick={() => setSelectedTapoDevice(null)}
+                    style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", fontSize: 22, cursor: "pointer", padding: "0 10px", borderRadius: 4 }}>×</button>
+                </div>
+                <div style={{ padding: 18 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "8px 14px", fontSize: 12, marginBottom: 14 }}>
+                    {selectedTapoDevice.zone_id && <><span style={{color:"#64748b"}}>구역</span><span style={{fontWeight:700}}>{selectedTapoDevice.zone_id}</span></>}
+                    {selectedTapoDevice.ip && <><span style={{color:"#64748b"}}>IP</span><span style={{fontWeight:700, fontFamily: "monospace"}}>{selectedTapoDevice.ip}{selectedTapoDevice.port ? `:${selectedTapoDevice.port}` : ""}</span></>}
+                    {selectedTapoDevice.rtsp_url && <><span style={{color:"#64748b"}}>RTSP</span><span style={{fontFamily:"monospace", fontSize:10, color:"#7c3aed"}}>설정됨</span></>}
+                    {selectedTapoDevice.ha_entity_id && <><span style={{color:"#64748b"}}>HA Entity</span><span style={{fontFamily:"monospace", fontSize:11}}>{selectedTapoDevice.ha_entity_id}</span></>}
+                    {selectedTapoDevice.notes && <><span style={{color:"#64748b"}}>메모</span><span>{selectedTapoDevice.notes}</span></>}
+                  </div>
+                  {selectedTapoDevice.currentState && (
+                    <div style={{ background: "#f8fafc", borderRadius: 8, padding: 12, marginBottom: 14 }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: "#475569", marginBottom: 6 }}>📊 현재 상태</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px,1fr))", gap: 8, fontSize: 11 }}>
+                        {selectedTapoDevice.currentState.power && <div><span style={{color:"#64748b"}}>전원: </span><strong>{selectedTapoDevice.currentState.power}</strong></div>}
+                        {selectedTapoDevice.currentState.battery_level != null && <div><span style={{color:"#64748b"}}>배터리: </span><strong>{selectedTapoDevice.currentState.battery_level}%</strong></div>}
+                        {selectedTapoDevice.currentState.temperature != null && <div><span style={{color:"#64748b"}}>온도: </span><strong>{selectedTapoDevice.currentState.temperature}°C</strong></div>}
+                        {selectedTapoDevice.currentState.humidity != null && <div><span style={{color:"#64748b"}}>습도: </span><strong>{selectedTapoDevice.currentState.humidity}%</strong></div>}
+                        {selectedTapoDevice.currentState.energy_watt != null && <div><span style={{color:"#64748b"}}>전력: </span><strong>{selectedTapoDevice.currentState.energy_watt}W</strong></div>}
+                        {selectedTapoDevice.currentState.motion != null && <div><span style={{color:"#64748b"}}>모션: </span><strong>{selectedTapoDevice.currentState.motion ? "감지됨" : "없음"}</strong></div>}
+                      </div>
+                    </div>
+                  )}
+                  {/* Phase 2: 카메라 영상 영역 */}
+                  {(selectedTapoDevice.category === "camera" || selectedTapoDevice.category === "doorbell") && (
+                    <div style={{ background: "#0f172a", borderRadius: 8, padding: 0, marginBottom: 14, overflow: "hidden", aspectRatio: "16/9", position: "relative" }}>
+                      {selectedTapoDevice.rtsp_url ? (
+                        <>
+                          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#fff", padding: 20, textAlign: "center" }}>
+                            <div style={{ fontSize: 32, marginBottom: 8 }}>📹</div>
+                            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>RTSP 영상 스트리밍</div>
+                            <div style={{ fontSize: 10, color: "#94a3b8", lineHeight: 1.5, maxWidth: 320 }}>
+                              영상은 박물관 PC의 cctv-server (포트 5555)에서 스트리밍합니다.<br />
+                              <span style={{ color: "#7c3aed" }}>로컬 접속 시 자동 재생됨</span>
+                            </div>
+                            <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
+                              <button onClick={async () => {
+                                // localhost 5555로 영상 보기 시도
+                                if (selectedTapoDevice.ip) {
+                                  window.open(`http://localhost:5555/?ip=${selectedTapoDevice.ip}`, '_blank');
+                                }
+                              }}
+                                style={{ padding: "5px 12px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                                🎥 로컬 영상 열기
+                              </button>
+                              <button onClick={async () => {
+                                try {
+                                  const res = await fetch(`/api/tapo-camera?id=${selectedTapoDevice.id}&action=test`, { method: "POST" });
+                                  const data = await res.json();
+                                  alert(data.message || "테스트 완료");
+                                } catch (e) { alert("테스트 실패: " + e.message); }
+                              }}
+                                style={{ padding: "5px 12px", background: "#fff", color: "#7c3aed", border: "1px solid #7c3aed", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                                🔍 연결 테스트
+                              </button>
+                            </div>
+                          </div>
+                          {/* 라이브 인디케이터 */}
+                          {selectedTapoDevice.isOnline && (
+                            <div style={{ position: "absolute", top: 8, left: 8, padding: "2px 8px", background: "rgba(220,38,38,0.9)", color: "#fff", borderRadius: 4, fontSize: 9, fontWeight: 800, display: "flex", alignItems: "center", gap: 4 }}>
+                              <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#fff", animation: "blink 1.5s infinite" }}></div>
+                              LIVE
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#94a3b8", fontSize: 12, padding: 20, textAlign: "center" }}>
+                          📹 RTSP URL 미설정<br />
+                          <span style={{ fontSize: 10, marginTop: 4 }}>기기 편집에서 RTSP URL을 입력해주세요</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {/* Phase 2: 빠른 액션 (이벤트 트리거) */}
+                  <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+                    <button onClick={async () => {
+                      // 현재 상태 갱신 요청 (Phase 2: 박물관 PC가 polling으로 갱신)
+                      try {
+                        const res = await fetch(`/api/tapo-devices?id=${selectedTapoDevice.id}`);
+                        if (res.ok) {
+                          const data = await res.json();
+                          if (data.device) {
+                            setSelectedTapoDevice({ ...data.device, currentState: data.state });
+                          }
+                        }
+                      } catch (e) { /* ignore */ }
+                    }}
+                      style={{ flex: 1, padding: "6px 10px", background: "#f1f5f9", color: "#475569", border: "1px solid #cbd5e1", borderRadius: 4, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                      🔄 상태 갱신
+                    </button>
+                    <button onClick={async () => {
+                      const reason = prompt("이벤트 사유를 입력하세요 (예: 점검, 테스트, 의심상황 등):");
+                      if (!reason) return;
+                      try {
+                        const res = await fetch("/api/tapo-events", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            deviceId: selectedTapoDevice.id,
+                            type: "manual",
+                            severity: "caution",
+                            title: `${selectedTapoDevice.name} 수동 이벤트`,
+                            description: reason,
+                          }),
+                        });
+                        if (res.ok) alert("이벤트 기록됨");
+                      } catch (e) { alert("실패: " + e.message); }
+                    }}
+                      style={{ flex: 1, padding: "6px 10px", background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a", borderRadius: 4, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                      📝 이벤트 기록
+                    </button>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => { setTapoForm(selectedTapoDevice); setSelectedTapoDevice(null); setShowTapoModal(true); }}
+                      style={{ flex: 1, padding: "8px 12px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 6, fontWeight: 700, cursor: "pointer", fontSize: 12 }}>
+                      ✏️ 편집
+                    </button>
+                    <button onClick={() => setSelectedTapoDevice(null)}
+                      style={{ padding: "8px 12px", background: "#f1f5f9", color: "#475569", border: "1px solid #cbd5e1", borderRadius: 6, fontWeight: 700, cursor: "pointer", fontSize: 12 }}>
+                      닫기
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ━━━ Tapo 기기 관리 모달 (등록/목록/제어) ━━━ */}
+          {showTapoModal && (
+            <div onClick={() => { setShowTapoModal(false); setTapoForm(null); }}
+              style={{ position: "fixed", inset: 0, zIndex: 10090, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, backdropFilter: "blur(4px)" }}>
+              <div onClick={e => e.stopPropagation()}
+                style={{ background: "#fff", borderRadius: 14, width: 880, maxWidth: "97vw", maxHeight: "92vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+                <div style={{ padding: "16px 20px", background: "linear-gradient(135deg,#7c3aed,#5b21b6)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
+                  <div>
+                    <div style={{ fontSize: 18, fontWeight: 900 }}>📡 Tapo 스마트홈 통합 관리</div>
+                    <div style={{ fontSize: 11, opacity: 0.95, marginTop: 2 }}>
+                      등록 {tapoStats?.total || 0}대 · 온라인 {tapoStats?.online || 0}대 · 자동화 {tapoAutomationStats?.enabled || 0}개 활성 · Phase 3 (16개 자동화 + 이벤트)
+                    </div>
+                  </div>
+                  <button onClick={() => { setShowTapoModal(false); setTapoForm(null); }}
+                    style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", fontSize: 20, cursor: "pointer", padding: "0 10px", borderRadius: 4 }}>×</button>
+                </div>
+
+                {/* 4탭 네비 */}
+                <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb", background: "#fafafa", flexShrink: 0 }}>
+                  {[
+                    { k: "devices", l: "📡 기기", c: tapoDevices.length },
+                    { k: "automations", l: "🔄 자동화", c: tapoAutomations.length },
+                    { k: "events", l: "🚨 이벤트", c: tapoEvents.length },
+                    { k: "templates", l: "📋 템플릿", c: tapoTemplates.length },
+                  ].map(t => (
+                    <button key={t.k} onClick={() => setTapoModalTab(t.k)}
+                      style={{
+                        padding: "12px 18px", fontSize: 12, fontWeight: 700,
+                        background: tapoModalTab === t.k ? "#fff" : "transparent",
+                        color: tapoModalTab === t.k ? "#7c3aed" : "#64748b",
+                        border: "none", borderBottom: tapoModalTab === t.k ? "2px solid #7c3aed" : "2px solid transparent",
+                        cursor: "pointer",
+                      }}>{t.l} ({t.c})</button>
+                  ))}
+                </div>
+
+                <div style={{ flex: 1, overflow: "auto", padding: 18, background: "#f8fafc" }}>
+                  {/* 기기 탭 (기존) */}
+                  {tapoModalTab === "devices" && !tapoForm ? (
+                    <>
+                      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                        <button onClick={() => setTapoForm({ category: "camera" })}
+                          style={{ padding: "10px 16px", background: "linear-gradient(135deg,#7c3aed,#5b21b6)", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, cursor: "pointer", fontSize: 13 }}>
+                          ➕ 새 기기 등록
+                        </button>
+                      </div>
+                      {tapoDevices.length === 0 ? (
+                        <div style={{ background: "#fff", borderRadius: 10, padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
+                          등록된 기기가 없습니다<br />
+                          <span style={{ fontSize: 11, marginTop: 8, display: "inline-block" }}>"➕ 새 기기 등록" 버튼으로 시작하세요</span>
+                        </div>
+                      ) : (
+                        <div style={{ background: "#fff", borderRadius: 10, overflow: "hidden", border: "1px solid #e5e7eb" }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "auto 2fr 1fr 1fr 1fr auto", gap: 8, padding: "10px 14px", borderBottom: "1px solid #e5e7eb", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", background: "#fafafa" }}>
+                            <div></div><div>이름</div><div>카테고리</div><div>구역</div><div>상태</div><div></div>
+                          </div>
+                          {tapoDevices.map(d => (
+                            <div key={d.id} style={{ display: "grid", gridTemplateColumns: "auto 2fr 1fr 1fr 1fr auto", gap: 8, padding: "10px 14px", borderBottom: "1px solid #f1f5f9", fontSize: 12, alignItems: "center" }}>
+                              <div style={{ fontSize: 18 }}>{d.icon || "📡"}</div>
+                              <div style={{ fontWeight: 700 }}>{d.name}<div style={{fontSize:10,color:"#94a3b8",fontWeight:500}}>{d.model || "-"}</div></div>
+                              <div>{d.category}</div>
+                              <div>{d.zone_id || "-"}</div>
+                              <div>{d.isOnline ? <span style={{color:"#10b981",fontWeight:700}}>🟢 온라인</span> : <span style={{color:"#94a3b8"}}>⚫ 오프라인</span>}</div>
+                              <div style={{ display: "flex", gap: 4 }}>
+                                <button onClick={() => setTapoForm(d)}
+                                  style={{ padding: "4px 8px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>✏️</button>
+                                <button onClick={async () => {
+                                  if (!confirm(`'${d.name}' 삭제하시겠습니까?`)) return;
+                                  try {
+                                    const res = await fetch(`/api/tapo-devices?id=${d.id}`, { method: "DELETE" });
+                                    if (res.ok) {
+                                      setTapoDevices(prev => prev.filter(x => x.id !== d.id));
+                                    }
+                                  } catch (e) { alert("삭제 실패: " + e.message); }
+                                }}
+                                  style={{ padding: "4px 8px", background: "#fee2e2", color: "#991b1b", border: "1px solid #fca5a5", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>🗑️</button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div style={{ marginTop: 14, padding: 12, background: "#dbeafe", border: "1px solid #93c5fd", borderRadius: 8, fontSize: 11, color: "#1e3a8a", lineHeight: 1.6 }}>
+                        ✨ <strong>Phase 2 신규 기능:</strong>
+                        <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+                          <li>📹 카메라 영상 미리보기 + 로컬 영상 열기 (RTSP)</li>
+                          <li>🔄 상태 자동 갱신 (60초마다 폴링)</li>
+                          <li>📝 수동 이벤트 기록</li>
+                          <li>🚨 위험(DANGER) 이벤트 → 안전관리 자동 전환</li>
+                          <li>📊 이벤트 이력 추적</li>
+                        </ul>
+                        Phase 3에서 자동화 시나리오, Home Assistant 등이 추가됩니다.
+                      </div>
+                    </>
+                  ) : tapoModalTab === "devices" && tapoForm ? (
+                    <TapoDeviceForm
+                      form={tapoForm}
+                      zones={allZones || []}
+                      onCancel={() => setTapoForm(null)}
+                      onSave={async (data) => {
+                        try {
+                          const isEdit = !!data.id;
+                          const url = isEdit ? `/api/tapo-devices?id=${data.id}` : "/api/tapo-devices";
+                          const res = await fetch(url, {
+                            method: isEdit ? "PATCH" : "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(data),
+                          });
+                          if (res.ok) {
+                            const result = await res.json();
+                            setTapoForm(null);
+                            const listRes = await fetch("/api/tapo-devices", { cache: "no-store" });
+                            if (listRes.ok) {
+                              const listData = await listRes.json();
+                              setTapoDevices(listData.devices || []);
+                              setTapoStats(listData.stats || null);
+                            }
+                          } else {
+                            const err = await res.json();
+                            alert("저장 실패: " + (err.message || err.error || "알 수 없는 오류"));
+                          }
+                        } catch (e) { alert("저장 실패: " + e.message); }
+                      }}
+                    />
+                  ) : null}
+
+                  {/* 자동화 탭 */}
+                  {tapoModalTab === "automations" && (
+                    <div>
+                      <div style={{ display: "flex", gap: 8, marginBottom: 14, alignItems: "center" }}>
+                        <button onClick={() => setTapoModalTab("templates")}
+                          style={{ padding: "10px 16px", background: "linear-gradient(135deg,#7c3aed,#5b21b6)", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, cursor: "pointer", fontSize: 13 }}>
+                          ➕ 템플릿에서 추가
+                        </button>
+                        <div style={{ marginLeft: "auto", display: "flex", gap: 12, fontSize: 11, color: "#64748b" }}>
+                          <span>총 {tapoAutomationStats?.total || 0}개</span>
+                          <span style={{ color: "#10b981", fontWeight: 700 }}>활성 {tapoAutomationStats?.enabled || 0}개</span>
+                          <span>최근 실행 {tapoAutomationStats?.recentRuns || 0}회</span>
+                          <span>성공률 {tapoAutomationStats?.successRate || 0}%</span>
+                        </div>
+                      </div>
+
+                      {tapoAutomations.length === 0 ? (
+                        <div style={{ background: "#fff", borderRadius: 10, padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
+                          등록된 자동화가 없습니다<br />
+                          <span style={{ fontSize: 11, marginTop: 8, display: "inline-block" }}>"➕ 템플릿에서 추가" 버튼으로 시작하세요</span>
+                        </div>
+                      ) : (
+                        <div style={{ display: "grid", gap: 8 }}>
+                          {tapoAutomations.map(a => {
+                            const sevColor = a.severity === "danger" ? "#dc2626" : a.severity === "caution" ? "#f59e0b" : "#10b981";
+                            return (
+                              <div key={a.id} style={{ background: "#fff", borderRadius: 8, padding: 14, border: `1px solid ${a.enabled ? sevColor : "#e5e7eb"}`, display: "flex", gap: 12, alignItems: "center" }}>
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontWeight: 700, fontSize: 13 }}>{a.name}</div>
+                                  <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{a.description}</div>
+                                  <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 4 }}>
+                                    {a.template_id ? `템플릿: ${a.template_id}` : "사용자 정의"} · 트리거 {a.triggers?.length || 0}개 · 액션 {a.actions?.length || 0}개
+                                  </div>
+                                </div>
+                                <span style={{ padding: "2px 8px", background: sevColor, color: "#fff", borderRadius: 4, fontSize: 9, fontWeight: 800 }}>
+                                  {a.severity?.toUpperCase()}
+                                </span>
+                                <button onClick={async () => {
+                                  try {
+                                    const res = await fetch(`/api/tapo-automations?id=${a.id}`, {
+                                      method: "PATCH",
+                                      headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({ id: a.id, enabled: !a.enabled }),
+                                    });
+                                    if (res.ok) {
+                                      setTapoAutomations(prev => prev.map(x => x.id === a.id ? { ...x, enabled: !a.enabled } : x));
+                                    }
+                                  } catch (e) { alert("실패: " + e.message); }
+                                }}
+                                  style={{ padding: "6px 12px", background: a.enabled ? "#10b981" : "#cbd5e1", color: "#fff", border: "none", borderRadius: 4, fontSize: 11, fontWeight: 700, cursor: "pointer", minWidth: 70 }}>
+                                  {a.enabled ? "🟢 활성" : "⚫ 비활성"}
+                                </button>
+                                <button onClick={async () => {
+                                  if (!confirm("지금 즉시 실행하시겠습니까?")) return;
+                                  try {
+                                    const res = await fetch(`/api/tapo-automations?action=run&id=${a.id}`, { method: "POST" });
+                                    if (res.ok) alert("실행 트리거됨 (실제 액션은 박물관 PC가 처리)");
+                                  } catch (e) { alert("실패: " + e.message); }
+                                }}
+                                  style={{ padding: "6px 10px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                                  ▶ 실행
+                                </button>
+                                <button onClick={async () => {
+                                  if (!confirm(`'${a.name}' 삭제?`)) return;
+                                  try {
+                                    const res = await fetch(`/api/tapo-automations?id=${a.id}`, { method: "DELETE" });
+                                    if (res.ok) setTapoAutomations(prev => prev.filter(x => x.id !== a.id));
+                                  } catch (e) { alert("실패: " + e.message); }
+                                }}
+                                  style={{ padding: "6px 10px", background: "#fee2e2", color: "#991b1b", border: "1px solid #fca5a5", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                                  🗑️
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* 최근 실행 로그 */}
+                      {tapoAutomationLogs.length > 0 && (
+                        <div style={{ marginTop: 18 }}>
+                          <div style={{ fontSize: 12, fontWeight: 800, color: "#475569", marginBottom: 8 }}>📊 최근 실행 로그 (Top 10)</div>
+                          <div style={{ background: "#fff", borderRadius: 8, padding: 8 }}>
+                            {tapoAutomationLogs.slice(0, 10).map((log, i) => (
+                              <div key={i} style={{ display: "flex", gap: 10, padding: "6px 8px", borderBottom: i < 9 ? "1px dashed #f1f5f9" : "none", fontSize: 11, alignItems: "center" }}>
+                                <span style={{ color: log.success ? "#10b981" : "#dc2626" }}>{log.success ? "✓" : "✗"}</span>
+                                <span style={{ flex: 1, fontWeight: 600 }}>자동화 #{log.automation_id}</span>
+                                <span style={{ fontSize: 9, color: "#94a3b8" }}>{new Date(log.executed_at).toLocaleString("ko-KR")}</span>
+                                <span style={{ fontSize: 9, color: "#7c3aed" }}>{log.triggered_by}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div style={{ marginTop: 14, padding: 12, background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 8, fontSize: 11, color: "#78350f", lineHeight: 1.6 }}>
+                        ⚠️ <strong>중요:</strong> 자동화 등록 + 활성화는 가능하지만, 실제 액션 실행은 박물관 PC에서 받아 처리해야 합니다.<br />
+                        Vercel 서버는 자동화 정의/로그 저장만 담당합니다. 박물관 PC 자동화 스크립트는 별도로 작성 필요합니다 (Phase 3 영역).
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 이벤트 탭 */}
+                  {tapoModalTab === "events" && (
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 12 }}>🚨 Tapo 이벤트 이력 (오늘)</div>
+                      {tapoEvents.length === 0 ? (
+                        <div style={{ background: "#fff", borderRadius: 10, padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
+                          오늘 발생한 이벤트가 없습니다
+                        </div>
+                      ) : (
+                        <div style={{ background: "#fff", borderRadius: 8, padding: 12 }}>
+                          {tapoEvents.map((e, i) => {
+                            const sevColor = e.severity === "danger" ? "#dc2626" : e.severity === "caution" ? "#f59e0b" : "#3b82f6";
+                            return (
+                              <div key={i} style={{ display: "flex", gap: 10, padding: "10px 0", borderBottom: i < tapoEvents.length - 1 ? "1px dashed #e5e7eb" : "none", alignItems: "flex-start" }}>
+                                <div style={{ fontSize: 18 }}>
+                                  {e.event_type === "manual" ? "📝" : e.event_type === "snapshot" ? "📷" : e.event_type === "water_leak" ? "💦" : "🚨"}
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontWeight: 700, fontSize: 12 }}>
+                                    {e.title}
+                                    <span style={{ marginLeft: 8, padding: "1px 6px", background: sevColor, color: "#fff", borderRadius: 4, fontSize: 9, fontWeight: 800 }}>
+                                      {e.severity?.toUpperCase()}
+                                    </span>
+                                    {e.confirmed && <span style={{ marginLeft: 4, padding: "1px 6px", background: "#10b981", color: "#fff", borderRadius: 4, fontSize: 9, fontWeight: 800 }}>✓ 확인됨</span>}
+                                  </div>
+                                  {e.description && <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{e.description}</div>}
+                                  <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 4 }}>
+                                    {new Date(e.created_at).toLocaleString("ko-KR")}
+                                    {e.zone && ` · 구역: ${e.zone}`}
+                                    {e.tapo_devices?.name && ` · 기기: ${e.tapo_devices.name}`}
+                                  </div>
+                                </div>
+                                {!e.confirmed && (
+                                  <button onClick={async () => {
+                                    try {
+                                      const res = await fetch("/api/tapo-events", {
+                                        method: "PATCH",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ id: e.id, confirmed: true }),
+                                      });
+                                      if (res.ok) {
+                                        setTapoEvents(prev => prev.map(x => x.id === e.id ? { ...x, confirmed: true } : x));
+                                      }
+                                    } catch (err) { alert("실패: " + err.message); }
+                                  }}
+                                    style={{ padding: "4px 10px", background: "#10b981", color: "#fff", border: "none", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                                    ✓ 확인
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 템플릿 탭 */}
+                  {tapoModalTab === "templates" && (
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>📋 자동화 템플릿 (16개)</div>
+                      <div style={{ fontSize: 11, color: "#64748b", marginBottom: 12 }}>박물관 운영에 맞는 자동화 시나리오를 선택해서 추가하세요. 추가 후 자동화 탭에서 활성화할 수 있습니다.</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
+                        {tapoTemplates.map(t => {
+                          const sevColor = t.severity === "danger" ? "#dc2626" : t.severity === "caution" ? "#f59e0b" : "#10b981";
+                          const isAdded = tapoAutomations.some(a => a.template_id === t.id);
+                          return (
+                            <div key={t.id} style={{ background: "#fff", borderRadius: 8, padding: 12, border: `1px solid ${isAdded ? "#10b981" : "#e5e7eb"}` }}>
+                              <div style={{ fontWeight: 700, fontSize: 12 }}>{t.name}</div>
+                              <div style={{ fontSize: 10, color: "#64748b", marginTop: 4, lineHeight: 1.5, minHeight: 28 }}>{t.description}</div>
+                              <div style={{ display: "flex", gap: 6, marginTop: 8, alignItems: "center" }}>
+                                <span style={{ padding: "1px 6px", background: sevColor, color: "#fff", borderRadius: 4, fontSize: 9, fontWeight: 800 }}>
+                                  {t.severity?.toUpperCase()}
+                                </span>
+                                <span style={{ fontSize: 9, color: "#94a3b8", flex: 1 }}>액션 {t.actions?.length || 0}개</span>
+                                {isAdded ? (
+                                  <span style={{ color: "#10b981", fontWeight: 700, fontSize: 10 }}>✓ 추가됨</span>
+                                ) : (
+                                  <button onClick={async () => {
+                                    try {
+                                      const res = await fetch("/api/tapo-automations", {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ templateId: t.id, enabled: false }),
+                                      });
+                                      if (res.ok) {
+                                        const data = await res.json();
+                                        setTapoAutomations(prev => [data.automation, ...prev]);
+                                        alert(`'${t.name}' 추가됨!`);
+                                      }
+                                    } catch (e) { alert("실패: " + e.message); }
+                                  }}
+                                    style={{ padding: "4px 10px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                                    ➕ 추가
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ━━━ 자동 알림 토스트 (우상단) ━━━ */}
           {alertToast && (
