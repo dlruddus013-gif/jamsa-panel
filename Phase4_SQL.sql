@@ -1,0 +1,25 @@
+-- Tapo Phase 4: 세부기능을 위한 컬럼 추가
+-- 기존 tapo_devices 테이블 확장
+
+-- 카메라 컬럼
+ALTER TABLE tapo_devices ADD COLUMN IF NOT EXISTS presets JSONB DEFAULT '{}';
+ALTER TABLE tapo_devices ADD COLUMN IF NOT EXISTS is_recording BOOLEAN DEFAULT FALSE;
+ALTER TABLE tapo_devices ADD COLUMN IF NOT EXISTS privacy_mode BOOLEAN DEFAULT FALSE;
+ALTER TABLE tapo_devices ADD COLUMN IF NOT EXISTS motion_detection BOOLEAN DEFAULT TRUE;
+ALTER TABLE tapo_devices ADD COLUMN IF NOT EXISTS motion_sensitivity INTEGER DEFAULT 5;
+ALTER TABLE tapo_devices ADD COLUMN IF NOT EXISTS kakao_alert BOOLEAN DEFAULT TRUE;
+ALTER TABLE tapo_devices ADD COLUMN IF NOT EXISTS night_mode BOOLEAN DEFAULT TRUE;
+
+-- 플러그/조명 컬럼
+ALTER TABLE tapo_devices ADD COLUMN IF NOT EXISTS schedule_on TEXT;
+ALTER TABLE tapo_devices ADD COLUMN IF NOT EXISTS schedule_off TEXT;
+ALTER TABLE tapo_devices ADD COLUMN IF NOT EXISTS timer_off_at TIMESTAMPTZ;
+ALTER TABLE tapo_devices ADD COLUMN IF NOT EXISTS brightness INTEGER DEFAULT 80;
+ALTER TABLE tapo_devices ADD COLUMN IF NOT EXISTS color_temp INTEGER DEFAULT 4000;
+ALTER TABLE tapo_devices ADD COLUMN IF NOT EXISTS today_kwh REAL DEFAULT 0;
+ALTER TABLE tapo_devices ADD COLUMN IF NOT EXISTS hourly_w JSONB DEFAULT '[]';
+
+-- 센서 컬럼
+ALTER TABLE tapo_devices ADD COLUMN IF NOT EXISTS thresholds JSONB DEFAULT '{}';
+ALTER TABLE tapo_devices ADD COLUMN IF NOT EXISTS hourly_temp JSONB DEFAULT '[]';
+ALTER TABLE tapo_devices ADD COLUMN IF NOT EXISTS today_motion_count INTEGER DEFAULT 0;
