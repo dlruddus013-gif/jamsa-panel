@@ -1981,6 +1981,7 @@ function FacNewActionForm({ onSubmit, onCancel }) {
    4) Simulated feed (fallback)
 */
 function CctvLiveFeed({ ch, camName, severity, streamUrl, snapServerUrl, size = "small", showControls = false }) {
+  snapServerUrl = snapServerUrl || "https://cctv.thejamsa.com"; // 자동 폴백 - cctv.thejamsa.com (Cloudflare Named Tunnel)
   const [tick, setTick] = useState(0);
   const [streamErr, setStreamErr] = useState(false);
   const [imgTick, setImgTick] = useState(Date.now());
