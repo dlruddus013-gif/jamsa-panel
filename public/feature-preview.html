@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>재고 상세 펼침 + 자동 AI · 기능 미리보기</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Pretendard','Noto Sans KR',-apple-system,sans-serif; background: linear-gradient(135deg,#f8fafc,#e2e8f0); min-height: 100vh; padding: 20px; color: #0f172a; }
+  .wrap { max-width: 1200px; margin: 0 auto; }
+  header { text-align: center; margin-bottom: 24px; }
+  header h1 { font-size: 22px; font-weight: 900; }
+  header p { color: #64748b; font-size: 13px; margin-top: 4px; }
+  .pill { display: inline-block; padding: 3px 12px; background: #dcfce7; color: #166534; border-radius: 12px; font-size: 11px; font-weight: 700; margin-top: 6px; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+  .card { background: #fff; border-radius: 14px; padding: 18px; box-shadow: 0 4px 14px rgba(0,0,0,0.06); }
+  .card h2 { font-size: 15px; font-weight: 800; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #f1f5f9; display: flex; align-items: center; gap: 8px; }
+  .num { width: 24px; height: 24px; border-radius: 50%; background: #3b5bdb; color: #fff; font-size: 12px; display: inline-flex; align-items: center; justify-content: center; }
+
+  /* ===== 제품 행 (모형) ===== */
+  .row { border-bottom: 1px solid #eee; background: #fff; transition: background 0.2s; }
+  .row.expanded { background: #f8fafc; }
+  .row.highlight { background: #eff6ff; }
+  .row-main { display: flex; align-items: center; padding: 8px 14px; gap: 8px; }
+  .qr-btn { background: none; border: 1px solid #e5e7eb; border-radius: 5px; padding: 2px; cursor: pointer; line-height: 0; flex-shrink: 0; }
+  .row-info { flex: 1; min-width: 0; cursor: pointer; }
+  .row-name { font-size: 13px; font-weight: 700; color: #1e293b; display: flex; align-items: center; gap: 6px; }
+  .arrow { color: #94a3b8; font-size: 11px; flex-shrink: 0; transition: transform 0.15s; display: inline-block; }
+  .arrow.open { transform: rotate(90deg); }
+  .row.expanded .row-name { color: #0f172a; }
+  .badge-log { font-size: 9px; padding: 1px 6px; border-radius: 8px; background: #e0e7ff; color: #4338ca; font-weight: 700; flex-shrink: 0; }
+  .row-sub { font-size: 10px; color: #94a3b8; margin-top: 2px; }
+  .row-qty { font-size: 18px; font-weight: 900; flex-shrink: 0; min-width: 36px; text-align: right; }
+  .row-qty.zero { color: #ef4444; }
+  .row-qty.low { color: #f59e0b; }
+  .row-qty.ok { color: #3b5bdb; }
+
+  .row-photos { padding: 0 14px 8px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .photo-thumb { width: 48px; height: 48px; border-radius: 6px; background: linear-gradient(135deg,#fbbf24,#f59e0b); display: flex; align-items: center; justify-content: center; font-size: 22px; }
+  .photo-add { width: 48px; height: 48px; border-radius: 6px; border: 2px dashed #d1d5db; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 18px; cursor: pointer; }
+  .row-photos-spacer { flex: 1; }
+  .act-btn { padding: 5px 12px; border-radius: 6px; border: none; font-size: 12px; font-weight: 700; cursor: pointer; }
+  .act-in { background: #f0fdf4; color: #22c55e; }
+  .act-out { background: #fef2f2; color: #ef4444; }
+  .act-adj { background: #f5f3ff; color: #8b5cf6; }
+
+  /* ===== 펼쳐진 상세 ===== */
+  .detail { padding: 12px 14px 14px; background: #f8fafc; border-top: 1px dashed #e5e7eb; animation: fadeUp 0.15s ease; }
+  @keyframes fadeUp { from { opacity:0; transform: translateY(-4px); } to { opacity:1; transform: translateY(0); } }
+  .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-bottom: 10px; }
+  .meta-item { padding: 6px 10px; background: #fff; border-radius: 6px; border: 1px solid #e5e7eb; }
+  .meta-item.wide { grid-column: 1 / -1; }
+  .meta-label { font-size: 9px; font-weight: 700; color: #94a3b8; margin-bottom: 2px; }
+  .meta-value { font-size: 12px; font-weight: 700; color: #0f172a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta-value.alert { color: #f59e0b; }
+  .meta-value.ok { color: #3b5bdb; }
+
+  .loc-card { padding: 8px; background: #fff; border-radius: 6px; border: 1px solid #e5e7eb; margin-bottom: 10px; }
+  .loc-title { font-size: 10px; font-weight: 700; color: #64748b; margin-bottom: 4px; }
+  .loc-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .loc-chip { font-size: 11px; padding: 3px 8px; background: #eff6ff; color: #1e40af; border-radius: 6px; font-weight: 600; }
+  .loc-chip strong { font-weight: 800; }
+
+  .info-blocks { display: grid; grid-template-columns: 1fr; gap: 6px; margin-bottom: 10px; }
+  .info-block { padding: 8px 10px; background: #fff; border-radius: 6px; border: 1px solid #e5e7eb; }
+  .info-block .ttl { font-size: 10px; font-weight: 700; color: #64748b; margin-bottom: 3px; }
+  .info-block .txt { font-size: 11px; color: #334155; line-height: 1.5; }
+
+  .ai-banner { padding: 8px; margin-bottom: 10px; background: linear-gradient(90deg,#FAEEDA,#FAC775); border-radius: 6px; font-size: 11px; color: #412402; }
+  .ai-banner div + div { margin-top: 4px; }
+
+  /* ===== 활동 로그 ===== */
+  .log-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden; }
+  .log-head { padding: 6px 10px; background: #f1f5f9; font-size: 10px; font-weight: 700; color: #475569; display: flex; justify-content: space-between; }
+  .log-body { max-height: 280px; overflow-y: auto; }
+  .log-item { padding: 6px 10px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: flex-start; gap: 6px; }
+  .log-item:last-child { border-bottom: none; }
+  .log-badge { font-size: 9px; padding: 2px 6px; border-radius: 8px; min-width: 46px; text-align: center; flex-shrink: 0; font-weight: 700; }
+  .b-add { background: #e0e7ff22; color: #6366f1; background-color: #e0e7ff; }
+  .b-in { background: #dcfce7; color: #16a34a; }
+  .b-out { background: #fee2e2; color: #dc2626; }
+  .b-adj { background: #ede9fe; color: #7c3aed; }
+  .b-edit { background: #fef3c7; color: #b45309; }
+  .b-del { background: #fecaca; color: #991b1b; }
+  .log-det { font-size: 11px; color: #334155; line-height: 1.4; }
+  .log-meta { font-size: 9px; color: #94a3b8; margin-top: 2px; }
+
+  .row-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 10px; }
+  .btn-sm { padding: 6px 10px; font-size: 11px; border-radius: 6px; border: 1px solid #dee2e6; background: #f1f3f5; color: #495057; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+  .btn-del { background: #ff6b6b; color: #fff; border-color: #ff6b6b; }
+
+  /* ===== AI 자동 폼 (오른쪽) ===== */
+  .form-section { background: #f8fafc; border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+  .form-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 6px; }
+  .form-head .label { font-size: 11px; font-weight: 700; color: #475569; }
+  .form-head .btns { display: flex; gap: 6px; align-items: center; }
+  .toggle-auto { font-size: 10px; font-weight: 600; color: #475569; display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: #f1f5f9; border-radius: 8px; cursor: pointer; }
+  .ai-btn { font-size: 11px; padding: 6px 12px; border-radius: 8px; border: none; color: #fff; font-weight: 700; background: linear-gradient(135deg,#7c3aed,#2563eb); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+  .ai-btn.busy { background: #94a3b8; }
+  .ai-btn .spin { display: inline-block; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .file-btn { font-size: 11px; padding: 6px 10px; border-radius: 8px; border: 1px solid #d1d5db; background: #fff; font-weight: 600; }
+
+  .photo-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .photo-card { width: 80px; height: 80px; border-radius: 6px; background: linear-gradient(135deg,#fbbf24,#f59e0b); display: flex; align-items: center; justify-content: center; font-size: 32px; position: relative; overflow: hidden; border: 2px solid #e5e7eb; }
+  .photo-card::after { content: "✕"; position: absolute; top: 2px; right: 4px; width: 18px; height: 18px; background: rgba(220,38,38,0.9); color: #fff; border-radius: 50%; font-size: 10px; display: flex; align-items: center; justify-content: center; font-weight: 900; }
+
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+  .form-grid label { font-size: 10px; font-weight: 700; color: #64748b; display: block; margin-bottom: 2px; }
+  .form-grid input, .form-grid select { width: 100%; padding: 6px 9px; border: 1.5px solid #dee2e6; border-radius: 7px; font-size: 12px; outline: none; background: #fff; font-family: inherit; }
+  .form-grid input.filled, .form-grid select.filled { background: linear-gradient(90deg,#fef3c7 0%,#fff 60%); border-color: #fcd34d; }
+  .form-grid input.filled::after { content: " ✨"; }
+  .auto-tag { font-size: 9px; padding: 1px 5px; background: #fef3c7; color: #92400e; border-radius: 3px; font-weight: 700; margin-left: 4px; }
+
+  .ai-result { margin-top: 10px; border: 1px solid #c4b5fd; border-radius: 10px; overflow: hidden; }
+  .ai-result-head { padding: 10px 14px; background: linear-gradient(90deg,#ede9fe,#dbeafe); color: #26215C; font-size: 13px; font-weight: 700; display: flex; justify-content: space-between; }
+  .ai-result-body { padding: 12px 14px; }
+  .price-bar { position: relative; height: 60px; margin: 8px 12px; }
+  .price-track { position: absolute; top: 24px; left: 0; right: 0; height: 6px; background: linear-gradient(90deg,#97C459,#378ADD,#E24B4A); border-radius: 3px; }
+  .price-dot { position: absolute; top: 18px; width: 18px; height: 18px; border-radius: 50%; border: 2px solid #fff; transform: translateX(-50%); }
+  .price-dot.min { background: #639922; left: 0; }
+  .price-dot.avg { top: 16px; width: 22px; height: 22px; border-width: 3px; background: #185FA5; left: 50%; }
+  .price-dot.max { background: #A32D2D; left: 100%; }
+  .price-label { position: absolute; top: 38px; transform: translateX(-50%); text-align: center; font-size: 10px; }
+  .price-label .v { font-weight: 800; font-size: 11px; }
+
+  .shop-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 12px; }
+  .shop-card { padding: 8px 10px; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; font-size: 11px; }
+  .shop-name { font-weight: 700; color: #0f172a; }
+  .shop-price { font-size: 13px; font-weight: 800; color: #0f172a; margin: 2px 0; }
+  .shop-tag { display: inline-block; font-size: 8px; padding: 2px 5px; border-radius: 4px; font-weight: 700; }
+  .shop-tag.green { background: #dcfce7; color: #166534; }
+  .shop-tag.blue { background: #dbeafe; color: #1e40af; }
+  .shop-tag.amber { background: #fef3c7; color: #78350f; }
+  .shop-tag.purple { background: #ede9fe; color: #5b21b6; }
+
+  .recommend { margin-top: 12px; padding: 10px 12px; background: linear-gradient(90deg,#FAEEDA,#FAC775); border-radius: 8px; display: flex; gap: 8px; align-items: flex-start; }
+  .recommend .icon { font-size: 18px; }
+  .recommend .text { font-size: 11px; color: #412402; line-height: 1.5; }
+
+  /* 흐름 화살표 */
+  .flow { text-align: center; padding: 14px 0; color: #64748b; font-size: 12px; font-weight: 600; }
+  .flow .arr { font-size: 22px; }
+
+  .timeline-step { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+  .step-num { width: 22px; height: 22px; border-radius: 50%; background: #3b5bdb; color: #fff; font-size: 11px; font-weight: 800; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .step-text { font-size: 12px; color: #334155; }
+  .step-text strong { color: #0f172a; font-weight: 800; }
+
+  .timer { display: inline-block; background: #fef3c7; color: #92400e; font-size: 10px; padding: 2px 8px; border-radius: 4px; font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>📦 재고 항목 클릭 시 상세 펼침 + 자동 AI 분석</h1>
+    <p>최신 배포 PR #4 — 실제 운영 화면과 동일한 모형</p>
+    <span class="pill">✓ jamsa-panel.vercel.app · 즉시 사용 가능</span>
+  </header>
+
+  <div class="grid">
+    <!-- ===== Left: 항목 클릭 시 상세 펼침 ===== -->
+    <div class="card">
+      <h2><span class="num">1</span>제품 행 → 클릭 → 상세 + 활동 로그 펼침</h2>
+
+      <!-- 일반 행 (펼치지 않음) -->
+      <div class="row">
+        <div class="row-main">
+          <button class="qr-btn" id="qr1"></button>
+          <div class="row-info">
+            <div class="row-name"><span class="arrow">▶</span>가압펌프 <span class="badge-log">📜 4</span></div>
+            <div class="row-sub">JB-0002 · 물놀이 · 온실창고 B-3</div>
+          </div>
+          <div class="row-qty ok">1</div>
+        </div>
+      </div>
+
+      <!-- 펼쳐진 행 (8mm 디폼 블럭) -->
+      <div class="row expanded">
+        <div class="row-main">
+          <button class="qr-btn" id="qr2"></button>
+          <div class="row-info">
+            <div class="row-name"><span class="arrow open">▶</span>8mm 디폼 블럭 <span class="badge-log">📜 12</span></div>
+            <div class="row-sub">JB-0001 · 체험 · 수장고 A-6</div>
+          </div>
+          <div class="row-qty zero">0</div>
+        </div>
+
+        <div class="row-photos">
+          <div class="photo-thumb">📷</div>
+          <div class="photo-thumb">📷</div>
+          <div class="photo-add">+</div>
+          <div class="row-photos-spacer"></div>
+          <button class="act-btn act-in">입고</button>
+          <button class="act-btn act-out">출고</button>
+          <button class="act-btn act-adj">조정</button>
+        </div>
+
+        <!-- ====== 펼쳐진 상세 본문 ====== -->
+        <div class="detail">
+          <div class="meta-grid">
+            <div class="meta-item"><div class="meta-label">QR 코드</div><div class="meta-value">JB-0001</div></div>
+            <div class="meta-item"><div class="meta-label">카테고리</div><div class="meta-value">체험</div></div>
+            <div class="meta-item"><div class="meta-label">기본 위치</div><div class="meta-value">수장고 A-6</div></div>
+            <div class="meta-item"><div class="meta-label">단위</div><div class="meta-value">박스</div></div>
+            <div class="meta-item"><div class="meta-label">총 재고</div><div class="meta-value alert" style="color:#ef4444">0</div></div>
+            <div class="meta-item"><div class="meta-label">적정재고</div><div class="meta-value">10</div></div>
+            <div class="meta-item wide"><div class="meta-label">발주처</div><div class="meta-value">청주문구 / 02-1234-5678</div></div>
+            <div class="meta-item"><div class="meta-label">등록자</div><div class="meta-value">이경연</div></div>
+            <div class="meta-item"><div class="meta-label">등록일</div><div class="meta-value">2026. 4. 12.</div></div>
+          </div>
+
+          <div class="loc-card">
+            <div class="loc-title">📍 위치별 재고</div>
+            <div class="loc-chips">
+              <span class="loc-chip">수장고 A-6: <strong>0</strong></span>
+              <span class="loc-chip">온실창고 B-1: <strong>0</strong></span>
+            </div>
+          </div>
+
+          <div class="info-blocks">
+            <div class="info-block">
+              <div class="ttl">📖 사용법</div>
+              <div class="txt">건축 모형 체험 시 베이스 보드용. 8mm 두께로 안전성 확보, 칼로 잘라 사용 가능. 10세 이상 권장.</div>
+            </div>
+            <div class="info-block">
+              <div class="ttl">🧹 관리/보관</div>
+              <div class="txt">습기 차단 PE 봉투에 보관. 직사광선 노출 시 변색 우려. 분기별 잔량 점검 권장.</div>
+            </div>
+            <div class="info-block">
+              <div class="ttl">📅 입출고 시기</div>
+              <div class="txt">3월(개학 단체관람), 7~8월(여름캠프) 대량 출고. 2월·6월 도매가 인하 시점에 입고 권장.</div>
+            </div>
+          </div>
+
+          <div class="ai-banner">
+            <div>💰 평균 시세: <strong>9,500원</strong> (박스당)</div>
+            <div>💡 2월 말 도매꾹에서 100박스 일괄 구매 시 단가 5,950원으로 41% 절감</div>
+          </div>
+
+          <div class="log-card">
+            <div class="log-head">
+              <span>📜 활동 로그 (12건)</span>
+              <span style="font-weight:500;color:#94a3b8">최신 12건 표시</span>
+            </div>
+            <div class="log-body">
+              <div class="log-item">
+                <span class="log-badge b-out">출고</span>
+                <div style="flex:1">
+                  <div class="log-det">수장고 A-6에서 12개 출고 - 어린이 단체체험 사용</div>
+                  <div class="log-meta">이경연 · 5월 8일 14:32 · 수량 12</div>
+                </div>
+              </div>
+              <div class="log-item">
+                <span class="log-badge b-out">출고</span>
+                <div style="flex:1">
+                  <div class="log-det">수장고 A-6에서 8개 출고 - 청주서원초 방문</div>
+                  <div class="log-meta">박매니저 · 5월 7일 10:14 · 수량 8</div>
+                </div>
+              </div>
+              <div class="log-item">
+                <span class="log-badge b-adj">조정</span>
+                <div style="flex:1">
+                  <div class="log-det">수장고 A-6 → 20개 - 분기 재고실사 보정</div>
+                  <div class="log-meta">이경연 · 5월 6일 09:00 · 수량 20</div>
+                </div>
+              </div>
+              <div class="log-item">
+                <span class="log-badge b-edit">수정</span>
+                <div style="flex:1">
+                  <div class="log-det">적정재고 5 → 10 변경 (단체관람 증가 반영)</div>
+                  <div class="log-meta">이경연 · 5월 1일 16:48</div>
+                </div>
+              </div>
+              <div class="log-item">
+                <span class="log-badge b-in">입고</span>
+                <div style="flex:1">
+                  <div class="log-det">수장고 A-6에 30개 입고 - 도매꾹 신규 발주</div>
+                  <div class="log-meta">관리자 · 4월 22일 11:20 · 수량 30</div>
+                </div>
+              </div>
+              <div class="log-item">
+                <span class="log-badge b-add">추가</span>
+                <div style="flex:1">
+                  <div class="log-det">수장고 A-6에 10박스 등록 [JB-0001]</div>
+                  <div class="log-meta">이경연 · 4월 12일 09:30 · 수량 10</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="row-actions">
+            <button class="btn-sm">🏷️ QR 라벨</button>
+            <button class="btn-sm btn-del">🗑️ 삭제</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 일반 행 -->
+      <div class="row">
+        <div class="row-main">
+          <button class="qr-btn" id="qr3"></button>
+          <div class="row-info">
+            <div class="row-name"><span class="arrow">▶</span>게폐기 <span class="badge-log">📜 2</span></div>
+            <div class="row-sub">JB-0005 · 하우스용 · 온실창고 B-3</div>
+          </div>
+          <div class="row-qty ok">1</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Right: 자동 AI 분석 ===== -->
+    <div class="card">
+      <h2><span class="num">2</span>사진/제품명 입력 → 자동 AI 분석 (1.5초 후)</h2>
+
+      <!-- 등록 폼 (자동 AI 토글 + 사진) -->
+      <div class="form-section">
+        <div class="form-head">
+          <span class="label">📸 제품 사진 (1장)</span>
+          <div class="btns">
+            <label class="toggle-auto">
+              <input type="checkbox" checked> 자동 AI
+            </label>
+            <button class="ai-btn busy"><span class="spin">🔄</span> 분석 중...</button>
+            <button class="file-btn">📷 촬영</button>
+            <button class="file-btn">🖼️ 파일</button>
+          </div>
+        </div>
+        <div class="photo-row">
+          <div class="photo-card">📸</div>
+        </div>
+        <div style="font-size:11px;color:#64748b;background:#fef3c7;padding:6px 10px;border-radius:6px;border-left:3px solid #f59e0b">
+          <span class="timer">⏱️ 1.5초 디바운스</span> &nbsp; 사진을 넣고 잠시만 기다리면 AI가 자동으로 분석합니다.
+        </div>
+      </div>
+
+      <!-- 자동 채워진 폼 -->
+      <div class="form-grid">
+        <div>
+          <label>제품명 *</label>
+          <input class="filled" value="8mm 디폼 블럭" />
+        </div>
+        <div>
+          <label>카테고리<span class="auto-tag">AI ✨</span></label>
+          <select class="filled"><option>체험</option></select>
+        </div>
+        <div>
+          <label>위치</label>
+          <select><option>수장고 A-6</option></select>
+        </div>
+        <div>
+          <label>수량</label>
+          <input value="0" />
+        </div>
+        <div>
+          <label>단위<span class="auto-tag">AI ✨</span></label>
+          <input class="filled" value="박스" />
+        </div>
+        <div>
+          <label>적정재고<span class="auto-tag">AI ✨</span></label>
+          <input class="filled" value="10" />
+        </div>
+        <div style="grid-column:1 / -1">
+          <label>발주처/공급사<span class="auto-tag">AI ✨</span></label>
+          <input class="filled" value="청주문구 / 도매꾹·교구상사·11번가 비교 가능" />
+        </div>
+      </div>
+
+      <div class="info-block" style="margin-bottom:8px;background:linear-gradient(90deg,#fef3c7 0%,#fff 60%);border-color:#fcd34d">
+        <div class="ttl">📖 사용법<span class="auto-tag">AI ✨</span></div>
+        <div class="txt">건축 모형 체험 시 베이스 보드용. 8mm 두께로 안전성 확보, 칼로 잘라 사용 가능. 10세 이상 권장.</div>
+      </div>
+      <div class="info-block" style="margin-bottom:8px;background:linear-gradient(90deg,#fef3c7 0%,#fff 60%);border-color:#fcd34d">
+        <div class="ttl">🧹 관리/보관 요령<span class="auto-tag">AI ✨</span></div>
+        <div class="txt">습기 차단 PE 봉투에 보관. 직사광선 노출 시 변색 우려. 분기별 잔량 점검 권장.</div>
+      </div>
+
+      <!-- AI 결과 카드 -->
+      <div class="ai-result">
+        <div class="ai-result-head">
+          <span>✨ AI 분석 결과</span>
+          <span style="font-size:11px;font-weight:500;color:#534AB7">8mm 디폼 블럭 · 방금 분석</span>
+        </div>
+        <div class="ai-result-body">
+          <div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:6px">💰 시세 분포 (박스당)</div>
+          <div class="price-bar">
+            <div class="price-track"></div>
+            <div class="price-dot min"></div>
+            <div class="price-label" style="left:0%"><div style="font-size:9px;color:#173404;font-weight:700">최저</div><div class="v" style="color:#173404">5,950원</div></div>
+            <div class="price-dot avg"></div>
+            <div class="price-label" style="left:50%"><div style="font-size:9px;color:#042C53;font-weight:700">평균</div><div class="v" style="color:#042C53">9,500원</div></div>
+            <div class="price-dot max"></div>
+            <div class="price-label" style="left:100%"><div style="font-size:9px;color:#501313;font-weight:700">최고</div><div class="v" style="color:#501313">14,000원</div></div>
+          </div>
+
+          <div class="shop-grid">
+            <div class="shop-card">
+              <div style="display:flex;justify-content:space-between"><span class="shop-name">🔗 도매꾹</span><span class="shop-tag green">최저가</span></div>
+              <div class="shop-price">5,950원</div>
+              <span style="font-size:9px;color:#475569">🚚 무료배송 · 📦 100+ 할인</span>
+            </div>
+            <div class="shop-card">
+              <div style="display:flex;justify-content:space-between"><span class="shop-name">🔗 쿠팡</span><span class="shop-tag blue">로켓배송</span></div>
+              <div class="shop-price">11,800원</div>
+              <span style="font-size:9px;color:#475569">⭐ 4.5 · 🚀 다음날</span>
+            </div>
+            <div class="shop-card">
+              <div style="display:flex;justify-content:space-between"><span class="shop-name">🔗 네이버쇼핑</span><span class="shop-tag amber">가격비교</span></div>
+              <div class="shop-price">9,500~14,000원</div>
+              <span style="font-size:9px;color:#475569">🏪 다수매장 · 💳 카드할인</span>
+            </div>
+            <div class="shop-card">
+              <div style="display:flex;justify-content:space-between"><span class="shop-name">🔗 학원사</span><span class="shop-tag purple">교육특화</span></div>
+              <div class="shop-price">13,000원</div>
+              <span style="font-size:9px;color:#475569">📜 세금계산서 · 🏛️ 기관납품</span>
+            </div>
+          </div>
+
+          <div class="recommend">
+            <span class="icon">💡</span>
+            <div class="text">
+              <strong>추천:</strong> 2월 말 도매꾹에서 100박스 일괄 구매 시 단가 5,950원으로 41% 절감 — 봄 시즌 단체관람 대비
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 사용 흐름 ===== -->
+  <div class="card" style="margin-top:20px">
+    <h2><span class="num">3</span>실제 사용 흐름</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div>
+        <div style="font-size:13px;font-weight:700;color:#3b5bdb;margin-bottom:8px">📝 등록 흐름</div>
+        <div class="timeline-step"><div class="step-num">1</div><div class="step-text">제품 추가 → <strong>📷 촬영</strong> 또는 <strong>🖼️ 파일</strong></div></div>
+        <div class="timeline-step"><div class="step-num">2</div><div class="step-text">사진 업로드 직후 → <span class="timer">1.5초 대기</span></div></div>
+        <div class="timeline-step"><div class="step-num">3</div><div class="step-text">자동으로 <strong>🔄 분석 중...</strong> 표시</div></div>
+        <div class="timeline-step"><div class="step-num">4</div><div class="step-text">카테고리 / 단위 / 적정재고 / 발주처 / 사용법 / 관리법 / 시세 / 구매처 <strong>자동 채움</strong></div></div>
+        <div class="timeline-step"><div class="step-num">5</div><div class="step-text">필요 시 수정 후 <strong>💾 등록</strong></div></div>
+      </div>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:#10b981;margin-bottom:8px">🔍 조회 흐름</div>
+        <div class="timeline-step"><div class="step-num">1</div><div class="step-text">시설맵 → 구역 클릭</div></div>
+        <div class="timeline-step"><div class="step-num">2</div><div class="step-text">제품 행의 <strong>이름/코드 영역</strong> 클릭</div></div>
+        <div class="timeline-step"><div class="step-num">3</div><div class="step-text">▶ 화살표 펼침 → 메타정보 + <strong>📜 활동 로그</strong></div></div>
+        <div class="timeline-step"><div class="step-num">4</div><div class="step-text">로그에서 <strong>입고/출고/조정/수정/삭제</strong> 시간순 확인</div></div>
+        <div class="timeline-step"><div class="step-num">5</div><div class="step-text">하단의 <strong>🏷️ QR 라벨</strong>로 즉시 인쇄</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function makeQR(elId, text) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  const qr = window.qrcode(0, "M");
+  qr.addData(text);
+  qr.make();
+  const n = qr.getModuleCount();
+  const size = 28;
+  const cs = size / n;
+  let rects = "";
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
+    if (qr.isDark(r, c)) rects += `<rect x="${(c*cs).toFixed(2)}" y="${(r*cs).toFixed(2)}" width="${(cs+0.4).toFixed(2)}" height="${(cs+0.4).toFixed(2)}" fill="#333"/>`;
+  }
+  el.innerHTML = `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><rect width="${size}" height="${size}" fill="#fff"/>${rects}</svg>`;
+}
+function init() {
+  if (typeof window.qrcode !== "function") { setTimeout(init, 100); return; }
+  makeQR("qr1", "JB-0002");
+  makeQR("qr2", "JB-0001");
+  makeQR("qr3", "JB-0005");
+}
+init();
+</script>
+</body>
+</html>
