@@ -9005,6 +9005,25 @@ function SendLowStockNotifModal({ items, onClose }) {
 }
 
 // ========== ZONE BOTTOM ==========
+// 펼쳐진 상세 영역에서 사용하는 작은 라벨/값 표시 컴포넌트
+function DetailItem({label, value, highlight, wide}) {
+  return (
+    <div style={{padding:"6px 10px",background:"#fff",borderRadius:6,border:"1px solid #e5e7eb",gridColumn:wide?"1 / -1":"auto"}}>
+      <div style={{fontSize:9,fontWeight:700,color:"#94a3b8",marginBottom:2}}>{label}</div>
+      <div style={{fontSize:12,fontWeight:700,color:highlight||"#0f172a",overflow:"hidden",textOverflow:"ellipsis"}}>{value}</div>
+    </div>
+  );
+}
+
+function DetailBlock({icon, title, text}) {
+  return (
+    <div style={{padding:"8px 10px",background:"#fff",borderRadius:6,border:"1px solid #e5e7eb"}}>
+      <div style={{fontSize:10,fontWeight:700,color:"#64748b",marginBottom:3}}>{icon} {title}</div>
+      <div style={{fontSize:11,color:"#334155",lineHeight:1.5,whiteSpace:"pre-wrap"}}>{text}</div>
+    </div>
+  );
+}
+
 function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDel,onShowQR,highlightPid,doAddPhoto,doDelPhoto,zonePhotos,doAddZonePhoto,doDelZonePhoto,allProds,allZonePhotos,onAddFacAction,can}){
   const [qPid,setQPid]=useState(null);
   const [qAct,setQAct]=useState(null);
@@ -9013,6 +9032,8 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
   const [qMemo,setQMemo]=useState("");
   const [showAdd,setShowAdd]=useState(false);
   const [showInvAi,setShowInvAi]=useState(false);
+  // 클릭 시 펼쳐지는 상세 영역
+  const [expandedPid,setExpandedPid]=useState(null);
   // 등록 폼 필드 (확장된 풀 폼)
   const [nN,setNN]=useState("");
   const [nC,setNC]=useState(CATS[0]);
@@ -9028,6 +9049,14 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
   const [nPhotos,setNPhotos]=useState([]); // 사진 여러 장
   const [aiAnalyzing,setAiAnalyzing]=useState(false);
   const [aiResult,setAiResult]=useState(null);
+  // 자동 AI 분석 토글 (사진/제품명 입력 후 1.5초 무입력 시 자동 호출)
+  const [autoAi,setAutoAi]=useState(()=>{
+    try { return window.localStorage?.getItem("jamsa_inv_auto_ai") !== "0"; }
+    catch (e) { return true; }
+  });
+  useEffect(()=>{
+    try { window.localStorage?.setItem("jamsa_inv_auto_ai", autoAi?"1":"0"); } catch (e) {}
+  },[autoAi]);
 
   const tq=prods.reduce((s,p)=>s+p.qty,0);
   const ac={"입고":"#22c55e","출고":"#ef4444","조정":"#8b5cf6","추가":"#6366f1","삭제":"#f87171","수정":"#f59e0b"};
@@ -9123,6 +9152,26 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
     }
   };
 
+  // ── 자동 AI 분석: 등록 폼이 열려있고, 사진/제품명이 입력되면 1.5초 디바운스 후 자동 호출 ──
+  // 한 번 분석된 입력 조합은 재호출하지 않음 (사진 추가/이름 변경 시만).
+  const lastAiSigRef = useRef("");
+  useEffect(() => {
+    if (!showAdd || !autoAi || aiAnalyzing) return;
+    const name = nN.trim();
+    const photoCount = nPhotos.length;
+    if (!name && photoCount === 0) return;
+    // 시그니처: 이름 + 사진 개수 + 마지막 사진 ID. 동일 시그니처면 스킵.
+    const sig = `${name}|${photoCount}|${nPhotos[nPhotos.length-1]?.id || ""}`;
+    if (sig === lastAiSigRef.current) return;
+    const timer = setTimeout(() => {
+      // 디바운스 시점에 다시 검사 (조건 안 맞으면 스킵)
+      if (aiAnalyzing) return;
+      lastAiSigRef.current = sig;
+      runAiAnalysis();
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [nN, nPhotos, showAdd, autoAi, aiAnalyzing]);
+
   const submitAdd=()=>{
     if(!nN.trim())return alert("제품명을 입력해 주세요.");
     doAdd({
@@ -9202,9 +9251,13 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
               <label style={{fontSize:11,fontWeight:700,color:"#475569"}}>📸 제품 사진 ({nPhotos.length}장)</label>
               <div style={{display:"flex",gap:6}}>
+                <label style={{fontSize:10,fontWeight:600,color:"#475569",display:"inline-flex",alignItems:"center",gap:4,padding:"4px 8px",background:"#f1f5f9",borderRadius:8,cursor:"pointer"}} title="사진/제품명 입력 후 1.5초 후 자동으로 AI 분석을 실행합니다">
+                  <input type="checkbox" checked={autoAi} onChange={e=>setAutoAi(e.target.checked)} style={{margin:0}}/>
+                  자동 AI
+                </label>
                 <button onClick={runAiAnalysis} disabled={aiAnalyzing}
                   style={{fontSize:11,padding:"6px 12px",borderRadius:8,border:"none",cursor:aiAnalyzing?"wait":"pointer",color:"#fff",fontWeight:700,background:aiAnalyzing?"#94a3b8":"linear-gradient(135deg,#7c3aed,#2563eb)",display:"inline-flex",alignItems:"center",gap:4}}>
-                  {aiAnalyzing ? "🔄 분석 중..." : "🤖 AI 자동 입력"}
+                  {aiAnalyzing ? "🔄 분석 중..." : "🤖 AI 분석"}
                 </button>
                 <label style={{fontSize:11,padding:"6px 10px",borderRadius:8,border:"1px solid #d1d5db",cursor:"pointer",background:"#fff",fontWeight:600,display:"inline-flex",alignItems:"center",gap:3}}
                   title="카메라로 직접 촬영">
@@ -9437,16 +9490,25 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
           {prods.map(p=>{
             const isOpen=qPid===p.id;
             const isHL=highlightPid===p.id;
+            const isExpanded=expandedPid===p.id;
             const photos=p.photos||[];
+            // 이 제품과 관련된 활동 로그 (이름 매칭)
+            const itemHist = (hist||[]).filter(h=>h.pn===p.name);
             return(
-              <div key={p.id} style={{borderBottom:"1px solid #eee",background:isHL?"#eff6ff":isOpen?"#fafbff":"#fff",transition:"background 0.2s"}}>
+              <div key={p.id} style={{borderBottom:"1px solid #eee",background:isHL?"#eff6ff":isExpanded?"#f8fafc":isOpen?"#fafbff":"#fff",transition:"background 0.2s"}}>
                 {/* Row 1: product info + qty + actions */}
                 <div style={{display:"flex",alignItems:"center",padding:"8px 14px",gap:8}}>
                   <button onClick={()=>onShowQR(p)} title="QR" style={{background:"none",border:"1px solid #e5e7eb",borderRadius:5,padding:2,cursor:"pointer",lineHeight:0,flexShrink:0}}>
                     <QRCodeSVG text={p.code} size={28} color="#333"/>
                   </button>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:13,fontWeight:700,color:"#1e293b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</div>
+                  <div style={{flex:1,minWidth:0,cursor:"pointer"}}
+                    onClick={()=>setExpandedPid(isExpanded?null:p.id)}
+                    title="클릭하면 상세 정보와 이력이 펼쳐집니다">
+                    <div style={{fontSize:13,fontWeight:700,color:"#1e293b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:6}}>
+                      <span style={{transform:isExpanded?"rotate(90deg)":"rotate(0deg)",transition:"transform 0.15s",color:"#94a3b8",fontSize:11,flexShrink:0}}>▶</span>
+                      {p.name}
+                      {itemHist.length>0&&<span style={{fontSize:9,padding:"1px 6px",borderRadius:8,background:"#e0e7ff",color:"#4338ca",fontWeight:700,flexShrink:0}}>📜 {itemHist.length}</span>}
+                    </div>
                     <div style={{fontSize:10,color:"#94a3b8"}}>{p.code} · {p.cat} · {p.loc}</div>
                   </div>
                   <div style={{fontSize:18,fontWeight:900,color:p.qty===0?"#ef4444":p.qty<5?"#f59e0b":"#3b5bdb",flexShrink:0,minWidth:36,textAlign:"right"}}>{p.qty}</div>
@@ -9485,6 +9547,87 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
                     <button onClick={submitQ} style={{padding:"7px 16px",borderRadius:8,border:"none",cursor:"pointer",fontWeight:700,fontSize:12,
                       background:qAct==="in"?"#22c55e":qAct==="out"?"#ef4444":"#8b5cf6",color:"#fff"}}>확인</button>
                     <button onClick={()=>{setQPid(null);setQAct(null);}} style={{padding:"7px 10px",borderRadius:8,border:"1px solid #e5e7eb",background:"#fff",cursor:"pointer",fontSize:12,color:"#94a3b8"}}>취소</button>
+                  </div>
+                )}
+
+                {/* 상세 정보 + 활동 로그 (클릭 시 펼침) */}
+                {isExpanded && (
+                  <div style={{padding:"12px 14px 14px",background:"#f8fafc",borderTop:"1px dashed #e5e7eb",animation:"fadeUp 0.15s ease"}}>
+                    {/* 상세 정보 그리드 */}
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:10}}>
+                      <DetailItem label="QR 코드" value={p.code}/>
+                      <DetailItem label="카테고리" value={p.cat||"-"}/>
+                      <DetailItem label="기본 위치" value={p.loc||"-"}/>
+                      <DetailItem label="단위" value={p.unit||"개"}/>
+                      <DetailItem label="총 재고" value={String(p.qty)} highlight={p.qty===0?"#ef4444":p.qty<(p.minQty||0)?"#f59e0b":"#3b5bdb"}/>
+                      <DetailItem label="적정재고" value={p.minQty?String(p.minQty):"-"}/>
+                      {p.supplier && <DetailItem label="발주처" value={p.supplier} wide/>}
+                      {p.createdBy && <DetailItem label="등록자" value={p.createdBy}/>}
+                      {p.createdAt && <DetailItem label="등록일" value={new Date(p.createdAt).toLocaleDateString("ko-KR")}/>}
+                    </div>
+
+                    {/* 위치별 재고 */}
+                    {p.locs && Object.keys(p.locs).length>0 && (
+                      <div style={{marginBottom:10,padding:8,background:"#fff",borderRadius:6,border:"1px solid #e5e7eb"}}>
+                        <div style={{fontSize:10,fontWeight:700,color:"#64748b",marginBottom:4}}>📍 위치별 재고</div>
+                        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                          {Object.entries(p.locs).filter(([,v])=>v>0).map(([l,q])=>(
+                            <span key={l} style={{fontSize:11,padding:"3px 8px",background:"#eff6ff",color:"#1e40af",borderRadius:6,fontWeight:600}}>
+                              {l}: <strong>{q}</strong>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 사용법 / 관리/보관 / 입출고시기 / 메모 */}
+                    {(p.usage || p.careGuide || p.stockSchedule || p.memo) && (
+                      <div style={{display:"grid",gridTemplateColumns:"1fr",gap:6,marginBottom:10}}>
+                        {p.usage && <DetailBlock icon="📖" title="사용법" text={p.usage}/>}
+                        {p.careGuide && <DetailBlock icon="🧹" title="관리/보관" text={p.careGuide}/>}
+                        {p.stockSchedule && <DetailBlock icon="📅" title="입출고 시기" text={p.stockSchedule}/>}
+                        {p.memo && <DetailBlock icon="📝" title="메모" text={p.memo}/>}
+                      </div>
+                    )}
+
+                    {/* AI 시세 / 추천 */}
+                    {(p.marketPrice?.avg || p.smartRecommendation) && (
+                      <div style={{padding:8,marginBottom:10,background:"linear-gradient(90deg,#FAEEDA,#FAC775)",borderRadius:6,fontSize:11,color:"#412402"}}>
+                        {p.marketPrice?.avg && <div>💰 평균 시세: <strong>{p.marketPrice.avg.toLocaleString()}원</strong> ({p.marketPrice.unit||"단위"})</div>}
+                        {p.smartRecommendation && <div style={{marginTop:p.marketPrice?.avg?4:0}}>💡 {p.smartRecommendation}</div>}
+                      </div>
+                    )}
+
+                    {/* 활동 로그 (이 제품 한정) */}
+                    <div style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:6,overflow:"hidden"}}>
+                      <div style={{padding:"6px 10px",background:"#f1f5f9",fontSize:10,fontWeight:700,color:"#475569",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                        <span>📜 활동 로그 ({itemHist.length}건)</span>
+                        {itemHist.length>0 && <span style={{fontWeight:500,color:"#94a3b8"}}>최신 {Math.min(itemHist.length,30)}건 표시</span>}
+                      </div>
+                      {itemHist.length===0 ? (
+                        <div style={{padding:"12px",textAlign:"center",color:"#94a3b8",fontSize:11}}>아직 활동 이력이 없습니다</div>
+                      ) : (
+                        <div style={{maxHeight:240,overflowY:"auto"}}>
+                          {itemHist.slice(0,30).map(h=>(
+                            <div key={h.id} style={{padding:"6px 10px",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"flex-start",gap:6}}>
+                              <span className="badge" style={{background:(ac[h.act]||"#94a3b8")+"22",color:ac[h.act]||"#64748b",fontSize:9,padding:"2px 6px",flexShrink:0,minWidth:46,textAlign:"center"}}>{h.act}</span>
+                              <div style={{flex:1,minWidth:0}}>
+                                <div style={{fontSize:11,color:"#334155",lineHeight:1.4,wordBreak:"break-all"}}>{h.det || "-"}</div>
+                                <div style={{fontSize:9,color:"#94a3b8",marginTop:2}}>
+                                  {h.user || "시스템"} · {fDate(h.date)}{h.q ? ` · 수량 ${h.q}` : ""}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 액션: 수정/삭제 */}
+                    <div style={{display:"flex",gap:6,justifyContent:"flex-end",marginTop:10}}>
+                      <button onClick={()=>onShowQR(p)} className="btn bs" style={{fontSize:11,padding:"6px 10px"}}>🏷️ QR 라벨</button>
+                      {can&&can("delete")&&<button onClick={()=>doDel(p.id)} className="btn bd" style={{fontSize:11,padding:"6px 10px"}}>🗑️ 삭제</button>}
+                    </div>
                   </div>
                 )}
               </div>
