@@ -6014,22 +6014,150 @@ function printBatchQR(prods) {
   openPrintWindow(`QR 라벨 일괄 인쇄 (${prods.length}건)`, sheet);
 }
 
+// ── QR을 PNG Blob으로 변환 (모바일 라벨프린터 앱 공유용) ──
+// 라벨 전체(상호 + QR + 코드 + 제품명 + 위치)를 한 장의 PNG 이미지로 합성.
+// AbleMark / NIIMBOT / Phomemo 등 라벨프린터 앱은 PNG/JPG 이미지를
+// "공유 → 앱 선택" 또는 "이미지 열기"로 받아 인쇄합니다.
+async function buildLabelPNG(p, opts = {}) {
+  const { width = 480, height = 640 } = opts;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+
+  // 배경 흰색
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, width, height);
+
+  // QR을 가운데 위쪽에 그림
+  const qrSize = Math.min(width - 60, 380);
+  const svgStr = qrSVGString(p.code || "", qrSize);
+  const svgBlob = new Blob([svgStr], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(svgBlob);
+  await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      ctx.drawImage(img, (width - qrSize) / 2, 50, qrSize, qrSize);
+      URL.revokeObjectURL(url);
+      resolve();
+    };
+    img.onerror = (e) => { URL.revokeObjectURL(url); reject(e); };
+    img.src = url;
+  });
+
+  // 텍스트 영역
+  ctx.fillStyle = "#0f172a";
+  ctx.textAlign = "center";
+
+  ctx.font = "600 18px 'Pretendard','Noto Sans KR',sans-serif";
+  ctx.fillStyle = "#64748b";
+  ctx.fillText("🐛 한국잠사박물관", width / 2, 30);
+
+  let textY = qrSize + 90;
+  ctx.font = "900 36px 'Pretendard','Noto Sans KR',sans-serif";
+  ctx.fillStyle = "#0f172a";
+  ctx.fillText(String(p.code || ""), width / 2, textY);
+
+  textY += 38;
+  ctx.font = "700 22px 'Pretendard','Noto Sans KR',sans-serif";
+  ctx.fillStyle = "#334155";
+  const name = String(p.name || "");
+  // 자동 줄바꿈
+  const maxWidth = width - 40;
+  const words = name.split("");
+  let line = "";
+  const lines = [];
+  for (const w of words) {
+    const test = line + w;
+    if (ctx.measureText(test).width > maxWidth && line.length > 0) {
+      lines.push(line);
+      line = w;
+    } else {
+      line = test;
+    }
+  }
+  if (line) lines.push(line);
+  for (const ln of lines.slice(0, 2)) {
+    ctx.fillText(ln, width / 2, textY);
+    textY += 28;
+  }
+
+  ctx.font = "400 16px 'Pretendard','Noto Sans KR',sans-serif";
+  ctx.fillStyle = "#94a3b8";
+  const meta = [p.cat, p.loc].filter(Boolean).join(" · ");
+  if (meta) ctx.fillText(meta, width / 2, textY);
+
+  return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), "image/png", 1.0));
+}
+
+// 모바일 라벨프린터 앱(에이블마크/Niimbot/Phomemo 등)으로 공유.
+// Web Share API 지원 시 → iOS/Android 공유 시트가 열려 사용자가 라벨프린터 앱 선택.
+// 미지원 시 → PNG 파일로 다운로드 (사용자가 직접 앱에서 열어 인쇄).
+async function shareQRtoLabelApp(p) {
+  try {
+    const blob = await buildLabelPNG(p);
+    if (!blob) throw new Error("이미지 생성 실패");
+    const file = new File([blob], `QR_${p.code || "label"}.png`, { type: "image/png" });
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({
+        files: [file],
+        title: `QR 라벨 — ${p.name || p.code}`,
+        text: `${p.code}\n${p.name || ""}\n공유 시트에서 'AbleMark' 또는 라벨프린터 앱을 선택하세요.`,
+      });
+      return;
+    }
+
+    // Fallback: 다운로드
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `QR_${p.code || "label"}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    alert("PNG 라벨 이미지가 다운로드되었습니다.\n\nAbleMark 등 라벨프린터 앱에서 이 이미지를 열어 인쇄하세요.\n(휴대폰 갤러리 → 이미지 길게 누름 → 공유 → 라벨 앱 선택)");
+  } catch (e) {
+    if (e?.name !== "AbortError") alert("공유 실패: " + (e?.message || e));
+  }
+}
+
 // ========== QR MODAL ==========
 function QRModal({p,onClose}){
+  const isMobile = typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+  const canShare = typeof navigator !== "undefined" && typeof navigator.canShare === "function";
   return(
-    <Modal title={`QR 코드 — ${p.name}`} onClose={onClose} w={380}>
+    <Modal title={`QR 코드 — ${p.name}`} onClose={onClose} w={400}>
       <div style={{textAlign:"center"}}>
         <div style={{display:"inline-block",padding:16,background:"#fff",border:"2px solid #e5e7eb",borderRadius:12,marginBottom:12}}>
-          <QRCodeSVG text={p.code} size={160}/>
+          <QRCodeSVG text={p.code} size={180}/>
         </div>
         <div style={{fontSize:24,fontWeight:900,letterSpacing:3,color:"#0f172a",marginBottom:4}}>{p.code}</div>
         <div style={{fontSize:14,fontWeight:700,color:"#475569",marginBottom:2}}>{p.name}</div>
-        <div style={{fontSize:12,color:"#94a3b8",marginBottom:12}}>{p.cat} · {p.loc} · 재고: <strong style={{color:p.qty===0?"#ef4444":"#3b5bdb"}}>{p.qty}</strong></div>
+        <div style={{fontSize:12,color:"#94a3b8",marginBottom:14}}>{p.cat} · {p.loc} · 재고: <strong style={{color:p.qty===0?"#ef4444":"#3b5bdb"}}>{p.qty}</strong></div>
 
-        <div style={{display:"flex",gap:8,justifyContent:"center"}}>
-          <button className="btn bp" onClick={()=>printSingleQR(p)} style={{fontSize:13}}><IC.Print/>인쇄</button>
+        <div style={{display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap"}}>
+          <button className="btn bp" onClick={()=>printSingleQR(p)} style={{fontSize:13}} title="브라우저 인쇄">
+            <IC.Print/>인쇄 (PC/A4)
+          </button>
+          <button className="btn" onClick={()=>shareQRtoLabelApp(p)}
+            style={{fontSize:13,background:"#10b981",color:"#fff"}}
+            title="AbleMark 등 라벨프린터 앱으로 보내기">
+            📱 라벨프린터(에이블마크)
+          </button>
           <button className="btn bs" onClick={onClose}>닫기</button>
         </div>
+        {isMobile && !canShare && (
+          <div style={{marginTop:10,padding:8,background:"#fef3c7",borderRadius:6,fontSize:11,color:"#78350f"}}>
+            ⚠️ 이 브라우저는 직접 공유를 지원하지 않습니다. PNG가 다운로드되면 갤러리에서 열어 라벨프린터 앱으로 공유하세요.
+          </div>
+        )}
+        {!isMobile && (
+          <div style={{marginTop:10,padding:8,background:"#eff6ff",borderRadius:6,fontSize:11,color:"#1e40af"}}>
+            💡 휴대폰으로 이 페이지를 열고 [📱 라벨프린터] 버튼을 누르면 AbleMark 등 라벨프린터 앱으로 바로 전송됩니다.
+          </div>
+        )}
       </div>
     </Modal>
   );
@@ -6045,6 +6173,33 @@ function QRBatchPrintModal({prods, onClose}){
   const doPrint = () => {
     if (chosen.length === 0) { alert("최소 1개 이상 선택해주세요."); return; }
     printBatchQR(chosen);
+  };
+  const doShareToApp = async () => {
+    if (chosen.length === 0) { alert("최소 1개 이상 선택해주세요."); return; }
+    if (chosen.length > 10 && !confirm(`${chosen.length}장의 PNG 라벨을 공유합니다. 시간이 걸릴 수 있습니다. 계속할까요?`)) return;
+    try {
+      const files = [];
+      for (const p of chosen) {
+        const blob = await buildLabelPNG(p);
+        if (blob) files.push(new File([blob], `QR_${p.code || p.id}.png`, { type: "image/png" }));
+      }
+      if (files.length === 0) { alert("이미지 생성 실패"); return; }
+      if (navigator.canShare && navigator.canShare({ files })) {
+        await navigator.share({ files, title: `QR 라벨 ${files.length}장`, text: "공유 시트에서 라벨프린터 앱(AbleMark 등) 선택" });
+      } else {
+        // Fallback: 모두 다운로드
+        for (const f of files) {
+          const url = URL.createObjectURL(f);
+          const a = document.createElement("a"); a.href = url; a.download = f.name;
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          await new Promise(r => setTimeout(r, 200));
+        }
+        alert(`${files.length}장의 PNG 라벨을 다운로드했습니다.\n라벨프린터 앱(AbleMark 등)에서 차례로 열어 인쇄하세요.`);
+      }
+    } catch (e) {
+      if (e?.name !== "AbortError") alert("공유 실패: " + (e?.message || e));
+    }
   };
   return(
     <Modal title={`QR 라벨 일괄 인쇄 (${prods?.length || 0}건 중 ${sel.size}건 선택)`} onClose={onClose} w={620}>
@@ -6071,9 +6226,14 @@ function QRBatchPrintModal({prods, onClose}){
           </label>
         ))}
       </div>
-      <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
+      <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14,flexWrap:"wrap"}}>
         <button className="btn bs" onClick={onClose}>취소</button>
-        <button className="btn bp" onClick={doPrint} style={{fontSize:13}}><IC.Print/>{sel.size}건 인쇄</button>
+        <button className="btn" onClick={doShareToApp}
+          style={{fontSize:13,background:"#10b981",color:"#fff"}}
+          title="AbleMark 등 라벨프린터 앱으로 PNG 공유">
+          📱 라벨프린터로 보내기
+        </button>
+        <button className="btn bp" onClick={doPrint} style={{fontSize:13}}><IC.Print/>{sel.size}건 A4 인쇄</button>
       </div>
     </Modal>
   );
