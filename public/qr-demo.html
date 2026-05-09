@@ -87,9 +87,14 @@
       <h2><span class="num">3</span>샘플 제품 (5종)</h2>
       <div class="toolbar">
         <label><input type="checkbox" id="selectAll" checked> 전체선택</label>
-        <button class="btn primary" onclick="batchPrint()">🖨️ 선택 일괄 인쇄</button>
-        <button class="btn success" onclick="batchPrint(true)">📄 PDF 미리보기</button>
+        <button class="btn primary" onclick="batchPrint()">🖨️ A4 일괄 인쇄</button>
+        <button class="btn success" onclick="batchShareToApp()">📱 라벨프린터(에이블마크)로 보내기</button>
+        <button class="btn secondary" onclick="batchPrint(true)">📄 PDF 미리보기</button>
         <span class="info" id="counter">5 / 5 선택됨</span>
+      </div>
+      <div style="font-size:12px;color:#475569;background:#eff6ff;border-radius:8px;padding:10px 14px;margin-bottom:10px;">
+        💡 <b>모바일에서 사용 시</b>: [라벨프린터로 보내기] 버튼을 누르면 공유 시트가 열려 <b>AbleMark</b> 등 라벨프린터 앱을 선택할 수 있습니다.
+        앱이 PNG 라벨 이미지를 받아 블루투스 라벨프린터로 바로 인쇄합니다.
       </div>
 
       <div class="grid" id="cards"></div>
@@ -141,7 +146,8 @@ function renderCards() {
       <div class="name">${p.name}</div>
       <div class="meta">${p.cat} · ${p.loc} · 재고 ${p.qty}</div>
       <div class="actions">
-        <button class="btn secondary" onclick="event.stopPropagation();singlePrint(${p.id})">🖨️ 개별 인쇄</button>
+        <button class="btn secondary" onclick="event.stopPropagation();singlePrint(${p.id})">🖨️ 인쇄</button>
+        <button class="btn success" onclick="event.stopPropagation();singleShareToApp(${p.id})">📱 라벨앱</button>
       </div>
     </div>
   `).join("");
@@ -230,6 +236,85 @@ function batchPrint(noAuto) {
   if (chosen.length === 0) { alert("최소 1개 이상 선택해주세요."); return; }
   const sheet = `<div class="sheet">${chosen.map(p => buildLabel(p, false)).join("")}</div>`;
   openPrintWindow(`QR 라벨 일괄 인쇄 (${chosen.length}건)`, sheet, !noAuto);
+}
+
+// ── 라벨을 PNG으로 합성 (라벨프린터 앱 공유용) ──
+async function buildLabelPNG(p) {
+  const W = 480, H = 640;
+  const canvas = document.createElement("canvas");
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H);
+
+  const qrSize = 380;
+  const svgStr = qrSVGString(p.code, qrSize);
+  const svgBlob = new Blob([svgStr], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(svgBlob);
+  await new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => { ctx.drawImage(img, (W - qrSize)/2, 50, qrSize, qrSize); URL.revokeObjectURL(url); res(); };
+    img.onerror = (e) => { URL.revokeObjectURL(url); rej(e); };
+    img.src = url;
+  });
+
+  ctx.textAlign = "center";
+  ctx.font = "600 18px 'Pretendard',sans-serif"; ctx.fillStyle = "#64748b";
+  ctx.fillText("🐛 한국잠사박물관", W/2, 30);
+
+  let y = qrSize + 90;
+  ctx.font = "900 36px 'Pretendard',sans-serif"; ctx.fillStyle = "#0f172a";
+  ctx.fillText(p.code, W/2, y);
+
+  y += 38;
+  ctx.font = "700 22px 'Pretendard',sans-serif"; ctx.fillStyle = "#334155";
+  ctx.fillText(p.name, W/2, y);
+
+  y += 28;
+  ctx.font = "400 16px 'Pretendard',sans-serif"; ctx.fillStyle = "#94a3b8";
+  ctx.fillText(`${p.cat} · ${p.loc}`, W/2, y);
+
+  return new Promise(r => canvas.toBlob(b => r(b), "image/png", 1.0));
+}
+
+async function shareOrDownload(files, title) {
+  if (navigator.canShare && navigator.canShare({ files })) {
+    try {
+      await navigator.share({ files, title, text: "공유 시트에서 'AbleMark' 또는 라벨프린터 앱을 선택하세요." });
+      return true;
+    } catch (e) { if (e?.name === "AbortError") return true; throw e; }
+  }
+  // Fallback: 다운로드
+  for (const f of files) {
+    const url = URL.createObjectURL(f);
+    const a = document.createElement("a"); a.href = url; a.download = f.name;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    await new Promise(r => setTimeout(r, 200));
+  }
+  alert(`${files.length}장의 PNG 라벨이 다운로드됐습니다.\n\n• 모바일: 갤러리에서 이미지 → 공유 → AbleMark/라벨프린터 앱 선택\n• PC: AbleMark 데스크톱 앱에 드래그해서 인쇄`);
+  return false;
+}
+
+async function singleShareToApp(id) {
+  try {
+    const p = SAMPLE_PRODUCTS.find(x => x.id === id);
+    const blob = await buildLabelPNG(p);
+    const file = new File([blob], `QR_${p.code}.png`, { type: "image/png" });
+    await shareOrDownload([file], `QR 라벨 — ${p.name}`);
+  } catch (e) { alert("실패: " + e.message); }
+}
+
+async function batchShareToApp() {
+  const chosen = SAMPLE_PRODUCTS.filter(p => selected.has(p.id));
+  if (chosen.length === 0) { alert("최소 1개 이상 선택해주세요."); return; }
+  try {
+    const files = [];
+    for (const p of chosen) {
+      const blob = await buildLabelPNG(p);
+      files.push(new File([blob], `QR_${p.code}.png`, { type: "image/png" }));
+    }
+    await shareOrDownload(files, `QR 라벨 ${files.length}장`);
+  } catch (e) { alert("실패: " + e.message); }
 }
 
 // ── 라이브러리 로드 후 렌더 ──
