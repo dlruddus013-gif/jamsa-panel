@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QR 코드 인쇄 기능 데모 — 한국잠사박물관</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Pretendard','Noto Sans KR',-apple-system,sans-serif; background: linear-gradient(135deg,#f8fafc,#e2e8f0); min-height: 100vh; padding: 24px; color: #0f172a; }
+  .container { max-width: 1100px; margin: 0 auto; }
+  header { text-align: center; margin-bottom: 28px; }
+  header h1 { font-size: 26px; font-weight: 900; margin-bottom: 6px; }
+  header h1 .emoji { font-size: 28px; margin-right: 6px; }
+  header p { color: #64748b; font-size: 14px; }
+  .badge { display: inline-block; padding: 3px 10px; background: #dcfce7; color: #166534; border-radius: 12px; font-size: 11px; font-weight: 700; margin-top: 6px; }
+
+  .panel { background: #fff; border-radius: 14px; padding: 22px; box-shadow: 0 4px 14px rgba(0,0,0,0.06); margin-bottom: 20px; }
+  .panel h2 { font-size: 17px; font-weight: 800; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+  .panel h2 .num { width: 24px; height: 24px; border-radius: 50%; background: #3b5bdb; color: #fff; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; }
+
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 12px; background: #f8fafc; border-radius: 10px; margin-bottom: 14px; }
+  .toolbar label { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .btn { padding: 8px 16px; border-radius: 8px; font-weight: 700; font-size: 13px; cursor: pointer; border: none; display: inline-flex; align-items: center; gap: 6px; transition: transform 0.1s; }
+  .btn:hover { transform: translateY(-1px); }
+  .btn.primary { background: #3b5bdb; color: #fff; }
+  .btn.secondary { background: #f1f3f5; color: #495057; border: 1px solid #dee2e6; }
+  .btn.success { background: #10b981; color: #fff; }
+  .info { font-size: 11px; color: #64748b; margin-left: auto; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+  .card { border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px; background: #fff; transition: all 0.15s; cursor: pointer; }
+  .card:hover { border-color: #3b5bdb; box-shadow: 0 4px 12px rgba(59,91,219,0.12); }
+  .card.selected { border-color: #3b5bdb; background: #eff6ff; }
+  .card .qr-wrap { display: flex; justify-content: center; padding: 8px; background: #fff; border-radius: 8px; margin-bottom: 10px; }
+  .card .check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #475569; margin-bottom: 6px; }
+  .card .code { font-size: 14px; font-weight: 900; letter-spacing: 1.5px; color: #0f172a; }
+  .card .name { font-size: 13px; font-weight: 700; color: #334155; margin: 3px 0; }
+  .card .meta { font-size: 11px; color: #94a3b8; }
+  .card .actions { margin-top: 10px; display: flex; gap: 6px; }
+  .card .actions button { flex: 1; padding: 6px; font-size: 11px; }
+
+  .step-list { list-style: none; padding-left: 0; }
+  .step-list li { padding: 8px 0; border-bottom: 1px dashed #e5e7eb; font-size: 13px; color: #475569; display: flex; gap: 10px; align-items: flex-start; }
+  .step-list li:last-child { border-bottom: none; }
+  .step-list li::before { content: "✓"; color: #10b981; font-weight: 900; flex-shrink: 0; }
+
+  .scan-test { display: flex; gap: 14px; align-items: center; padding: 14px; background: #fef3c7; border-radius: 10px; border: 1px solid #fcd34d; font-size: 13px; color: #78350f; }
+  .scan-test .icon { font-size: 24px; }
+</style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1><span class="emoji">🏛️</span>QR 코드 인쇄 기능 데모</h1>
+      <p>한국잠사박물관 통합관리 시스템 — 실제 스캔 가능한 QR 라벨 생성·인쇄</p>
+      <span class="badge">✓ qrcode-generator v1.4.4 · 오류정정 M레벨</span>
+    </header>
+
+    <!-- ─── 1. 사용 방법 ─── -->
+    <div class="panel">
+      <h2><span class="num">1</span>사용 방법</h2>
+      <ul class="step-list">
+        <li>아래 제품 카드를 클릭해 <b>선택</b>(체크박스 토글)</li>
+        <li><b>개별 인쇄</b> 버튼: 1장짜리 큰 라벨 (QR 160px + 제품 정보)</li>
+        <li><b>일괄 인쇄</b> 버튼: 선택된 제품을 A4 한 장에 5×5 = 25개 라벨 시트로 인쇄</li>
+        <li>인쇄창의 <b>🖨️ 인쇄</b> 클릭 → 프린터 또는 PDF로 저장 가능</li>
+        <li>휴대폰 카메라/QR 앱으로 출력물의 QR을 스캔하면 제품 코드(<code>JB-0001</code> 등)가 인식됨</li>
+      </ul>
+    </div>
+
+    <!-- ─── 2. 스캔 검증 안내 ─── -->
+    <div class="panel">
+      <h2><span class="num">2</span>스캔 검증</h2>
+      <div class="scan-test">
+        <span class="icon">📱</span>
+        <div>
+          <b>가짜 → 실제 QR</b> 교체 검증: 휴대폰 기본 카메라 또는 QR 스캐너 앱을 켜고 아래 카드의 QR을 비춰보세요.
+          기존(해시 기반 가짜)는 인식 불가 / 신규(실제)는 즉시 코드를 보여줍니다.
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── 3. 인쇄 도구 ─── -->
+    <div class="panel">
+      <h2><span class="num">3</span>샘플 제품 (5종)</h2>
+      <div class="toolbar">
+        <label><input type="checkbox" id="selectAll" checked> 전체선택</label>
+        <button class="btn primary" onclick="batchPrint()">🖨️ 선택 일괄 인쇄</button>
+        <button class="btn success" onclick="batchPrint(true)">📄 PDF 미리보기</button>
+        <span class="info" id="counter">5 / 5 선택됨</span>
+      </div>
+
+      <div class="grid" id="cards"></div>
+    </div>
+  </div>
+
+<script>
+// ── 샘플 제품 데이터 ──
+const SAMPLE_PRODUCTS = [
+  { id: 1, code: "JB-0001", name: "누에 인형 (대)",       cat: "체험교구",   loc: "누에과학관 A-1", qty: 24 },
+  { id: 2, code: "JB-0002", name: "뽕잎 표본 액자",        cat: "전시물",     loc: "본관 전시실 2",  qty: 6 },
+  { id: 3, code: "JB-0003", name: "실크 직조 체험 키트",    cat: "체험교구",   loc: "체험접수처",     qty: 50 },
+  { id: 4, code: "JB-0004", name: "잠사 역사 도서 (개정판)", cat: "출판물",     loc: "매점",          qty: 12 },
+  { id: 5, code: "JB-0005", name: "디지털 현미경 (HD)",     cat: "체험장비",   loc: "누에과학관 B-2", qty: 3 },
+];
+
+const selected = new Set(SAMPLE_PRODUCTS.map(p => p.id));
+
+// ── 실제 QR SVG 생성 ──
+function qrSVGString(text, size = 100, color = "#000") {
+  if (typeof window.qrcode !== "function") return "";
+  try {
+    const qr = window.qrcode(0, "M");
+    qr.addData(String(text || ""));
+    qr.make();
+    const n = qr.getModuleCount();
+    const cs = size / n;
+    let rects = "";
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
+      if (qr.isDark(r, c)) {
+        rects += `<rect x="${(c*cs).toFixed(3)}" y="${(r*cs).toFixed(3)}" width="${(cs+0.5).toFixed(3)}" height="${(cs+0.5).toFixed(3)}" fill="${color}"/>`;
+      }
+    }
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><rect width="${size}" height="${size}" fill="#fff"/>${rects}</svg>`;
+  } catch (e) { return ""; }
+}
+
+// ── 카드 렌더링 ──
+function renderCards() {
+  const container = document.getElementById("cards");
+  container.innerHTML = SAMPLE_PRODUCTS.map(p => `
+    <div class="card ${selected.has(p.id) ? 'selected' : ''}" onclick="toggleSelect(${p.id}, event)">
+      <div class="qr-wrap">${qrSVGString(p.code, 130)}</div>
+      <div class="check">
+        <input type="checkbox" ${selected.has(p.id) ? 'checked' : ''} onclick="event.stopPropagation();toggleSelect(${p.id})">
+        <span>선택</span>
+      </div>
+      <div class="code">${p.code}</div>
+      <div class="name">${p.name}</div>
+      <div class="meta">${p.cat} · ${p.loc} · 재고 ${p.qty}</div>
+      <div class="actions">
+        <button class="btn secondary" onclick="event.stopPropagation();singlePrint(${p.id})">🖨️ 개별 인쇄</button>
+      </div>
+    </div>
+  `).join("");
+  document.getElementById("counter").textContent = `${selected.size} / ${SAMPLE_PRODUCTS.length} 선택됨`;
+  document.getElementById("selectAll").checked = selected.size === SAMPLE_PRODUCTS.length;
+}
+
+function toggleSelect(id, ev) {
+  if (ev && ev.target.tagName === "BUTTON") return;
+  if (selected.has(id)) selected.delete(id); else selected.add(id);
+  renderCards();
+}
+
+document.getElementById("selectAll").addEventListener("change", e => {
+  if (e.target.checked) SAMPLE_PRODUCTS.forEach(p => selected.add(p.id));
+  else selected.clear();
+  renderCards();
+});
+
+// ── 인쇄 (실제 시스템과 동일 로직) ──
+const PRINT_CSS = `
+  @page { size: A4; margin: 8mm; }
+  * { box-sizing: border-box; }
+  body { font-family: 'Pretendard','Noto Sans KR',-apple-system,sans-serif; margin: 0; padding: 12px; color: #0f172a; background: #f8fafc; }
+  .toolbar { display:flex; gap:8px; align-items:center; margin-bottom:14px; padding:10px 14px; background:#fff; border:1px solid #e5e7eb; border-radius:10px; }
+  .toolbar h1 { font-size:14px; font-weight:800; flex:1; margin:0; }
+  .toolbar button { padding:7px 18px; font-size:13px; font-weight:700; cursor:pointer; border-radius:7px; border:none; }
+  .toolbar .pp { background:#3b5bdb; color:#fff; }
+  .toolbar .ps { background:#f1f3f5; color:#495057; border:1px solid #dee2e6; }
+  .sheet { display:grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  .label { border:1.5px dashed #94a3b8; border-radius:6px; padding:8px 6px; text-align:center; background:#fff; page-break-inside: avoid; break-inside: avoid; }
+  .label .qr { display:flex; justify-content:center; margin-bottom:4px; }
+  .label .org { font-size:9px; color:#64748b; margin-bottom:2px; }
+  .label .code { font-size:13px; font-weight:900; letter-spacing:1px; color:#0f172a; margin:2px 0; }
+  .label .name { font-size:11px; font-weight:700; color:#334155; margin:2px 0; line-height:1.2; max-height:2.4em; overflow:hidden; }
+  .label .meta { font-size:9px; color:#94a3b8; }
+  .label.single { border:2px solid #0f172a; border-radius:10px; padding:18px; max-width:300px; margin:24px auto; }
+  .label.single .org { font-size:12px; }
+  .label.single .code { font-size:22px; letter-spacing:3px; margin:8px 0; }
+  .label.single .name { font-size:16px; max-height:none; }
+  .label.single .meta { font-size:11px; margin-top:4px; }
+  @media print {
+    body { background:#fff; padding:0; }
+    .toolbar { display:none; }
+    .label { border-color:#d1d5db; }
+  }
+`;
+
+function buildLabel(p, single = false) {
+  const today = new Date().toLocaleDateString("ko-KR");
+  const safe = v => String(v || "").replace(/[<>&"]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;","\"":"&quot;"}[c]));
+  return `<div class="label${single ? ' single' : ''}">
+    <div class="qr">${qrSVGString(p.code, single ? 160 : 92)}</div>
+    <div class="org">🐛 한국잠사박물관</div>
+    <div class="code">${safe(p.code)}</div>
+    <div class="name">${safe(p.name)}</div>
+    <div class="meta">${safe(p.cat)} · ${safe(p.loc)}</div>
+    ${single ? `<div class="meta">발행: ${today}</div>` : ""}
+  </div>`;
+}
+
+function openPrintWindow(title, body, autoPrint = true) {
+  const w = window.open("", "_blank", "width=900,height=700");
+  if (!w) { alert("팝업이 차단되었습니다."); return; }
+  w.document.write(`<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${title}</title>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"><\/script>
+    <style>${PRINT_CSS}</style></head><body>
+    <div class="toolbar">
+      <h1>${title}</h1>
+      <button class="pp" onclick="window.print()">🖨️ 인쇄</button>
+      <button class="ps" onclick="window.close()">닫기</button>
+    </div>
+    ${body}
+    ${autoPrint ? "<script>window.addEventListener('load',()=>setTimeout(()=>window.print(),400));<\/script>" : ""}
+  </body></html>`);
+  w.document.close();
+}
+
+function singlePrint(id) {
+  const p = SAMPLE_PRODUCTS.find(x => x.id === id);
+  openPrintWindow(`QR 라벨 — ${p.name}`, buildLabel(p, true));
+}
+
+function batchPrint(noAuto) {
+  const chosen = SAMPLE_PRODUCTS.filter(p => selected.has(p.id));
+  if (chosen.length === 0) { alert("최소 1개 이상 선택해주세요."); return; }
+  const sheet = `<div class="sheet">${chosen.map(p => buildLabel(p, false)).join("")}</div>`;
+  openPrintWindow(`QR 라벨 일괄 인쇄 (${chosen.length}건)`, sheet, !noAuto);
+}
+
+// ── 라이브러리 로드 후 렌더 ──
+function init() {
+  if (typeof window.qrcode !== "function") {
+    setTimeout(init, 100);
+    return;
+  }
+  renderCards();
+}
+init();
+</script>
+</body>
+</html>
