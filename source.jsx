@@ -5383,6 +5383,9 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
   const [users,setUsers]=useState(DEF_USERS);
   const [prods,setProds]=useLocalStorage("jamsa_inv_prods", PRODS);
   const [hist,setHist]=useLocalStorage("jamsa_inv_hist", []);
+  // 품의/결제 — 재고와 동시 연동되는 발주 워크플로
+  const [requisitions,setRequisitions]=useLocalStorage("jamsa_requisitions", []);
+  const [payments,setPayments]=useLocalStorage("jamsa_payments", []);
   const [snapshots,setSnapshots]=useState([]); // for undo: [{id,prods}]
   // Custom user-defined zones (drawn on satellite map) — persisted
   const [customZones, setCustomZones] = useLocalStorage("jamsa_custom_zones", []);
@@ -5460,6 +5463,138 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
   },[hist, customZones]);
 
   const doIn=(pid,loc,qty,memo)=>{setProds(p=>p.map(x=>{if(x.id!==pid)return x;const l={...x.locs};l[loc]=(l[loc]||0)+qty;return{...x,qty:x.qty+qty,locs:l};}));addH("입고",prods.find(x=>x.id===pid)?.name,`${loc}에 ${qty}개 입고${memo?` - ${memo}`:""}`,qty);setModal(null);};
+
+  // ── 품의/결제 워크플로 (재고 자동 연동) ──
+  // 상태: draft → submitted → approved → ordered → paid → received(자동 입고)
+  const reqStatusOrder = ["draft","submitted","approved","ordered","paid","received","rejected","cancelled"];
+  const reqStatusLabel = {
+    draft:"📝 작성중", submitted:"📤 제출됨", approved:"✅ 승인", ordered:"📦 발주",
+    paid:"💳 결제완료", received:"📥 입고완료", rejected:"❌ 반려", cancelled:"⛔ 취소"
+  };
+  const reqStatusColor = {
+    draft:"#94a3b8", submitted:"#3b82f6", approved:"#10b981", ordered:"#f59e0b",
+    paid:"#8b5cf6", received:"#16a34a", rejected:"#ef4444", cancelled:"#64748b"
+  };
+
+  const createReq = (data) => {
+    const id = Date.now() + Math.floor(Math.random()*1000);
+    const req = {
+      id,
+      prodId: data.prodId || null,
+      prodName: data.prodName || "",
+      prodCode: data.prodCode || "",
+      qty: parseInt(data.qty)||0,
+      unit: data.unit || "개",
+      unitPrice: parseInt(data.unitPrice)||0,
+      totalPrice: (parseInt(data.qty)||0) * (parseInt(data.unitPrice)||0),
+      supplier: data.supplier || "",
+      reason: data.reason || "",
+      memo: data.memo || "",
+      status: data.status || "draft",
+      paymentId: null,
+      createdBy: curUser?.name || "시스템",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      statusLog: [{ status: data.status || "draft", at: new Date().toISOString(), by: curUser?.name || "시스템", note: "최초 등록" }],
+    };
+    setRequisitions(p => [req, ...p]);
+    addH("품의생성", req.prodName || "품의", `${req.qty}${req.unit} / ${req.totalPrice.toLocaleString()}원${req.supplier?` / ${req.supplier}`:""}`, req.qty);
+    return req;
+  };
+
+  const updateReqStatus = (reqId, newStatus, note) => {
+    let receivedReq = null;
+    setRequisitions(prev => prev.map(r => {
+      if (r.id !== reqId) return r;
+      const updated = {
+        ...r,
+        status: newStatus,
+        updatedAt: new Date().toISOString(),
+        statusLog: [...(r.statusLog||[]), { status: newStatus, at: new Date().toISOString(), by: curUser?.name || "시스템", note: note||"" }],
+      };
+      if (newStatus === "received") receivedReq = updated;
+      return updated;
+    }));
+    const r = requisitions.find(x => x.id === reqId);
+    if (r) addH("품의상태", r.prodName, `${reqStatusLabel[r.status]||r.status} → ${reqStatusLabel[newStatus]||newStatus}${note?` (${note})`:""}`, 0);
+    // 입고완료 시 자동으로 재고 입고 처리
+    if (receivedReq && receivedReq.prodId) {
+      const prod = prods.find(p => p.id === receivedReq.prodId);
+      if (prod) {
+        const targetLoc = prod.loc || LOCS[0];
+        setProds(ps => ps.map(x => {
+          if (x.id !== receivedReq.prodId) return x;
+          const l = { ...x.locs };
+          l[targetLoc] = (l[targetLoc]||0) + receivedReq.qty;
+          return { ...x, qty: x.qty + receivedReq.qty, locs: l };
+        }));
+        setHist(h => [{
+          id: Date.now() + 1,
+          date: new Date().toISOString(),
+          act: "입고",
+          pn: receivedReq.prodName,
+          det: `[품의 #${receivedReq.id.toString().slice(-6)}] ${targetLoc}에 ${receivedReq.qty}${receivedReq.unit} 입고 (자동연동)`,
+          q: receivedReq.qty,
+          user: curUser?.name || "시스템",
+          role: curUser?.role || "master",
+        }, ...h].slice(0, 500));
+      }
+    }
+  };
+
+  const deleteReq = (reqId) => {
+    const r = requisitions.find(x => x.id === reqId);
+    if (!r) return;
+    if (!confirm(`품의 "${r.prodName}" (${r.totalPrice.toLocaleString()}원)을(를) 삭제하시겠습니까?`)) return;
+    setRequisitions(prev => prev.filter(x => x.id !== reqId));
+    addH("품의삭제", r.prodName, `삭제됨 (${r.totalPrice.toLocaleString()}원)`, 0);
+  };
+
+  const addPayment = (data) => {
+    const id = Date.now() + Math.floor(Math.random()*1000);
+    const pay = {
+      id,
+      type: data.type || "card", // card | transfer
+      amount: parseInt(data.amount)||0,
+      vendor: data.vendor || "",
+      ref: data.ref || "",
+      date: data.date || new Date().toISOString().slice(0,10),
+      reqId: data.reqId || null,
+      memo: data.memo || "",
+      createdBy: curUser?.name || "시스템",
+      createdAt: new Date().toISOString(),
+    };
+    setPayments(p => [pay, ...p]);
+    // 품의에 결제 ID 연결 + 상태 자동 업데이트 (paid)
+    if (pay.reqId) {
+      setRequisitions(prev => prev.map(r => {
+        if (r.id !== pay.reqId) return r;
+        const newStatus = r.status === "received" ? "received" : "paid";
+        return {
+          ...r,
+          paymentId: pay.id,
+          status: newStatus,
+          updatedAt: new Date().toISOString(),
+          statusLog: [...(r.statusLog||[]), { status: newStatus, at: new Date().toISOString(), by: curUser?.name || "시스템", note: `결제 연결: ${pay.type==="card"?"카드":"이체"} ${pay.amount.toLocaleString()}원` }],
+        };
+      }));
+    }
+    addH("결제등록", pay.vendor || "거래처", `${pay.type==="card"?"💳 카드":"🏦 이체"} ${pay.amount.toLocaleString()}원${pay.reqId?` / 품의연동`:""}${pay.memo?` - ${pay.memo}`:""}`, 0);
+    return pay;
+  };
+
+  const deletePayment = (payId) => {
+    const pay = payments.find(p => p.id === payId);
+    if (!pay) return;
+    if (!confirm(`${pay.type==="card"?"카드":"이체"} ${pay.amount.toLocaleString()}원 결제 기록을 삭제하시겠습니까?`)) return;
+    setPayments(prev => prev.filter(p => p.id !== payId));
+    // 연결된 품의의 paymentId 해제
+    if (pay.reqId) {
+      setRequisitions(prev => prev.map(r => r.id === pay.reqId ? { ...r, paymentId: null } : r));
+    }
+    addH("결제삭제", pay.vendor || "거래처", `${pay.type==="card"?"💳":"🏦"} ${pay.amount.toLocaleString()}원 삭제`, 0);
+  };
+
   const doOut=(pid,loc,qty,memo)=>{setProds(p=>p.map(x=>{if(x.id!==pid)return x;const l={...x.locs};const a=l[loc]||0;const m=Math.min(qty,a);l[loc]=a-m;return{...x,qty:Math.max(0,x.qty-m),locs:l};}));addH("출고",prods.find(x=>x.id===pid)?.name,`${loc}에서 ${qty}개 출고${memo?` - ${memo}`:""}`,qty);setModal(null);};
   const doAdj=(pid,loc,nq,memo)=>{setProds(p=>p.map(x=>{if(x.id!==pid)return x;const l={...x.locs};const d=nq-(l[loc]||0);l[loc]=nq;return{...x,qty:x.qty+d,locs:l};}));addH("조정",prods.find(x=>x.id===pid)?.name,`${loc} → ${nq}개${memo?` - ${memo}`:""}`,nq);setModal(null);};
   const doAdd=d=>{
@@ -5673,6 +5808,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
           <div style={{display:"flex",gap:6}}>
             {can("export")&&<button className="btn bs" onClick={csv} style={{fontSize:12}}><IC.DL/>CSV</button>}
             {can("export")&&<button className="btn bs" onClick={()=>setModal({type:"qrBatch",prods:filtered.length?filtered:prods})} style={{fontSize:12}} title="QR 라벨 일괄 인쇄"><IC.QR/>QR 일괄인쇄</button>}
+            <button className="btn bs" onClick={()=>setModal({type:"reqPayments"})} style={{fontSize:12,background:"#fef3c7",color:"#92400e",border:"1px solid #fcd34d"}} title="품의·카드결제·이체 통합 관리">📋 품의/결제{requisitions.filter(r=>!["received","cancelled","rejected"].includes(r.status)).length>0&&<span style={{marginLeft:4,padding:"1px 5px",background:"#dc2626",color:"#fff",borderRadius:8,fontSize:9}}>{requisitions.filter(r=>!["received","cancelled","rejected"].includes(r.status)).length}</span>}</button>
             {can("add")&&<button className="btn bp" onClick={()=>setModal({type:"add"})} style={{fontSize:12}}><IC.Plus/>제품 추가</button>}
           </div>
         </div>
@@ -5699,6 +5835,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
                       style={{fontSize:13,padding:"8px 12px",background:"#f0f7ff",color:"#3b5bdb",border:"1px solid #bfdbfe"}}><IC.Cam/>스캔</button>
                     {can("export")&&<button className="btn bs" onClick={csv} style={{fontSize:12,padding:"8px 10px"}} title="CSV 내보내기"><IC.DL/></button>}
                     {can("export")&&<button className="btn bs" onClick={()=>setModal({type:"qrBatch",prods:filtered.length?filtered:prods})} style={{fontSize:12,padding:"8px 10px"}} title="QR 라벨 일괄 인쇄"><IC.QR/></button>}
+                    <button className="btn bs" onClick={()=>setModal({type:"reqPayments"})} style={{fontSize:12,padding:"8px 10px",background:"#fef3c7",color:"#92400e",border:"1px solid #fcd34d"}} title="품의·결제 통합">📋</button>
                     {can("add")&&<button className="btn bp" onClick={()=>setModal({type:"add"})} style={{fontSize:12,padding:"8px 10px"}}><IC.Plus/></button>}
                   </div>
                 </div>
@@ -5803,6 +5940,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
                 doAddPhoto={doAddPhoto} doDelPhoto={doDelPhoto}
                 zonePhotos={zonePhotos[selZone]||[]} doAddZonePhoto={doAddZonePhoto} doDelZonePhoto={doDelZonePhoto}
                 allProds={prods} allZonePhotos={zonePhotos} onAddFacAction={onAddFacAction}
+                onOpenReq={p=>setModal({type:"reqPayments",prod:p})}
                 can={can}/>}
             </div>
           )}
@@ -5834,6 +5972,13 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
       {modal?.type==="edit"&&<EMdl p={modal.p} onSave={d=>{setProds(pr=>pr.map(x=>x.id===d.id?{...x,...d}:x));addH("수정",d.name,"수정",0);setModal(null);}} onClose={()=>setModal(null)}/>}
       {modal?.type==="qr"&&<QRModal p={modal.p} onClose={()=>setModal(null)}/>}
       {modal?.type==="qrBatch"&&<QRBatchPrintModal prods={modal.prods} onClose={()=>setModal(null)}/>}
+      {modal?.type==="reqPayments"&&<ReqPaymentsModal
+        prods={prods} requisitions={requisitions} payments={payments}
+        statusLabel={reqStatusLabel} statusColor={reqStatusColor}
+        defaultProd={modal.prod}
+        onCreateReq={createReq} onUpdateStatus={updateReqStatus} onDeleteReq={deleteReq}
+        onAddPayment={addPayment} onDeletePayment={deletePayment}
+        onClose={()=>setModal(null)}/>}
       {modal?.type==="users"&&<UserMgmt users={users} setUsers={setUsers} curUser={curUser} onClose={()=>setModal(null)}/>}
       {modal?.type==="lowStockAlert"&&<LowStockAlertModal items={modal.items} onClose={()=>setModal(null)} onGoTo={(p)=>{setModal(null);setSelP(p);setHighlightPid(p.id);}}/>}
       {modal?.type==="sendLowStockNotif"&&<SendLowStockNotifModal items={modal.items} onClose={()=>setModal(null)}/>}
@@ -6314,6 +6459,387 @@ function QRBatchPrintModal({prods, onClose}){
         </button>
         <button className="btn bp" onClick={doPrint} style={{fontSize:13}}><IC.Print/>{sel.size}건 A4 인쇄</button>
       </div>
+    </Modal>
+  );
+}
+
+// ========== 품의 / 결제 통합 모달 ==========
+// 재고관리 ↔ 품의 ↔ 카드결제/이체 내역을 동시 연동.
+// 품의 상태 흐름: 작성중 → 제출 → 승인 → 발주 → 결제 → 입고완료(자동 stock-in)
+function ReqPaymentsModal({prods, requisitions, payments, statusLabel, statusColor, defaultProd,
+                           onCreateReq, onUpdateStatus, onDeleteReq, onAddPayment, onDeletePayment, onClose}) {
+  const [tab, setTab] = useState("req"); // req | pay
+  const [filter, setFilter] = useState("all"); // all | active | received | etc
+  const [q, setQ] = useState("");
+  const [showCreate, setShowCreate] = useState(!!defaultProd);
+  const [selectedReq, setSelectedReq] = useState(null);
+  const [showAddPay, setShowAddPay] = useState(false);
+
+  // 품의 작성 폼
+  const [fProdId, setFProdId] = useState(defaultProd?.id || "");
+  const [fQty, setFQty] = useState(defaultProd?.minQty ? String(Math.max(0, (defaultProd.minQty||0) - (defaultProd.qty||0))) : "10");
+  const [fPrice, setFPrice] = useState(defaultProd?.marketPrice?.avg ? String(defaultProd.marketPrice.avg) : "");
+  const [fSupplier, setFSupplier] = useState(defaultProd?.supplier || "");
+  const [fReason, setFReason] = useState(defaultProd ? `재고 부족 보충 (현재 ${defaultProd.qty||0}/${defaultProd.minQty||0})` : "");
+  const [fMemo, setFMemo] = useState("");
+
+  // 결제 등록 폼
+  const [payType, setPayType] = useState("card");
+  const [payAmount, setPayAmount] = useState("");
+  const [payVendor, setPayVendor] = useState("");
+  const [payRef, setPayRef] = useState("");
+  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0,10));
+  const [payReqId, setPayReqId] = useState("");
+  const [payMemo, setPayMemo] = useState("");
+
+  const fProd = useMemo(() => prods.find(p => String(p.id) === String(fProdId)), [prods, fProdId]);
+
+  const filteredReqs = useMemo(() => {
+    const ql = q.trim().toLowerCase();
+    return (requisitions||[]).filter(r => {
+      if (filter === "active" && ["received","cancelled","rejected"].includes(r.status)) return false;
+      if (filter !== "all" && filter !== "active" && r.status !== filter) return false;
+      if (!ql) return true;
+      return [r.prodName, r.prodCode, r.supplier, r.reason, r.memo].some(s => (s||"").toLowerCase().includes(ql));
+    });
+  }, [requisitions, filter, q]);
+
+  const filteredPays = useMemo(() => {
+    const ql = q.trim().toLowerCase();
+    return (payments||[]).filter(p => {
+      if (filter !== "all" && filter !== "card" && filter !== "transfer" && filter !== "linked" && filter !== "unlinked") return true;
+      if (filter === "card" && p.type !== "card") return false;
+      if (filter === "transfer" && p.type !== "transfer") return false;
+      if (filter === "linked" && !p.reqId) return false;
+      if (filter === "unlinked" && p.reqId) return false;
+      if (!ql) return true;
+      return [p.vendor, p.ref, p.memo].some(s => (s||"").toLowerCase().includes(ql));
+    });
+  }, [payments, filter, q]);
+
+  // 통계
+  const stats = useMemo(() => {
+    const active = (requisitions||[]).filter(r => !["received","cancelled","rejected"].includes(r.status));
+    const totalActive = active.reduce((s,r)=>s+(r.totalPrice||0), 0);
+    const paidThisMonth = (payments||[]).filter(p => {
+      const d = new Date(p.date);
+      const now = new Date();
+      return d.getFullYear()===now.getFullYear() && d.getMonth()===now.getMonth();
+    }).reduce((s,p)=>s+(p.amount||0), 0);
+    const cardSum = (payments||[]).filter(p=>p.type==="card").reduce((s,p)=>s+(p.amount||0),0);
+    const transferSum = (payments||[]).filter(p=>p.type==="transfer").reduce((s,p)=>s+(p.amount||0),0);
+    return { activeCount: active.length, totalActive, paidThisMonth, cardSum, transferSum };
+  }, [requisitions, payments]);
+
+  const submitReq = () => {
+    if (!fProdId) return alert("제품을 선택해주세요");
+    if (!fQty || parseInt(fQty) <= 0) return alert("수량 입력");
+    if (!fPrice || parseInt(fPrice) <= 0) return alert("단가 입력");
+    const prod = prods.find(p => String(p.id)===String(fProdId));
+    onCreateReq({
+      prodId: prod?.id, prodName: prod?.name, prodCode: prod?.code, unit: prod?.unit||"개",
+      qty: fQty, unitPrice: fPrice, supplier: fSupplier, reason: fReason, memo: fMemo,
+      status: "submitted",
+    });
+    setShowCreate(false);
+    setFProdId(""); setFQty("10"); setFPrice(""); setFSupplier(""); setFReason(""); setFMemo("");
+  };
+
+  const submitPay = () => {
+    if (!payAmount || parseInt(payAmount) <= 0) return alert("금액 입력");
+    if (!payVendor.trim()) return alert("거래처 입력");
+    onAddPayment({
+      type: payType, amount: payAmount, vendor: payVendor.trim(), ref: payRef.trim(),
+      date: payDate, reqId: payReqId ? Number(payReqId) : null, memo: payMemo.trim(),
+    });
+    setShowAddPay(false);
+    setPayAmount(""); setPayVendor(""); setPayRef(""); setPayMemo(""); setPayReqId("");
+  };
+
+  // 다음 가능한 상태 전이
+  const nextActions = (status) => {
+    switch (status) {
+      case "draft": return [["submitted","제출"],["cancelled","취소"]];
+      case "submitted": return [["approved","승인"],["rejected","반려"]];
+      case "approved": return [["ordered","발주"],["cancelled","취소"]];
+      case "ordered": return [["paid","결제완료"],["received","입고완료"]];
+      case "paid": return [["received","입고완료"]];
+      default: return [];
+    }
+  };
+
+  return (
+    <Modal title="📋 품의 / 카드·이체 통합 관리" onClose={onClose} w={900}>
+      {/* 요약 통계 */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:12}}>
+        <div style={{padding:10,background:"#eff6ff",borderRadius:8,textAlign:"center"}}>
+          <div style={{fontSize:9,color:"#1e40af",fontWeight:700}}>진행중 품의</div>
+          <div style={{fontSize:18,fontWeight:900,color:"#1e40af",marginTop:2}}>{stats.activeCount}건</div>
+          <div style={{fontSize:10,color:"#3b82f6"}}>{stats.totalActive.toLocaleString()}원</div>
+        </div>
+        <div style={{padding:10,background:"#fef3c7",borderRadius:8,textAlign:"center"}}>
+          <div style={{fontSize:9,color:"#92400e",fontWeight:700}}>이번달 결제</div>
+          <div style={{fontSize:18,fontWeight:900,color:"#92400e",marginTop:2}}>{stats.paidThisMonth.toLocaleString()}</div>
+          <div style={{fontSize:10,color:"#d97706"}}>원</div>
+        </div>
+        <div style={{padding:10,background:"#dbeafe",borderRadius:8,textAlign:"center"}}>
+          <div style={{fontSize:9,color:"#1e3a8a",fontWeight:700}}>💳 카드 누적</div>
+          <div style={{fontSize:16,fontWeight:900,color:"#1e3a8a",marginTop:2}}>{stats.cardSum.toLocaleString()}</div>
+          <div style={{fontSize:10,color:"#2563eb"}}>원</div>
+        </div>
+        <div style={{padding:10,background:"#dcfce7",borderRadius:8,textAlign:"center"}}>
+          <div style={{fontSize:9,color:"#14532d",fontWeight:700}}>🏦 이체 누적</div>
+          <div style={{fontSize:16,fontWeight:900,color:"#14532d",marginTop:2}}>{stats.transferSum.toLocaleString()}</div>
+          <div style={{fontSize:10,color:"#16a34a"}}>원</div>
+        </div>
+      </div>
+
+      {/* 탭 */}
+      <div style={{display:"flex",gap:4,borderBottom:"2px solid #e5e7eb",marginBottom:10}}>
+        {[["req","📝 품의 ("+(requisitions?.length||0)+")"],["pay","💳 결제 내역 ("+(payments?.length||0)+")"]].map(([k,l]) => (
+          <button key={k} onClick={()=>{setTab(k);setFilter("all");setShowCreate(false);setShowAddPay(false);setSelectedReq(null);}}
+            style={{padding:"8px 16px",border:"none",background:tab===k?"#3b5bdb":"transparent",color:tab===k?"#fff":"#475569",fontWeight:700,fontSize:13,borderRadius:"8px 8px 0 0",cursor:"pointer"}}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {/* 검색 + 필터 + 액션 */}
+      <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
+        <input className="inp" placeholder="🔍 검색 (품목/거래처/사유...)" value={q} onChange={e=>setQ(e.target.value)} style={{flex:"1 1 200px",fontSize:12,padding:"7px 10px"}}/>
+        {tab==="req" ? (
+          <select className="sel" value={filter} onChange={e=>setFilter(e.target.value)} style={{fontSize:11,padding:"7px 10px",flex:"0 1 130px"}}>
+            <option value="all">전체</option>
+            <option value="active">진행중</option>
+            <option value="draft">📝 작성중</option>
+            <option value="submitted">📤 제출됨</option>
+            <option value="approved">✅ 승인</option>
+            <option value="ordered">📦 발주</option>
+            <option value="paid">💳 결제완료</option>
+            <option value="received">📥 입고완료</option>
+          </select>
+        ) : (
+          <select className="sel" value={filter} onChange={e=>setFilter(e.target.value)} style={{fontSize:11,padding:"7px 10px",flex:"0 1 130px"}}>
+            <option value="all">전체</option>
+            <option value="card">💳 카드만</option>
+            <option value="transfer">🏦 이체만</option>
+            <option value="linked">품의 연동됨</option>
+            <option value="unlinked">독립 결제</option>
+          </select>
+        )}
+        {tab==="req" && <button className="btn bp" onClick={()=>setShowCreate(!showCreate)} style={{fontSize:12}}>{showCreate?"✕ 취소":"+ 새 품의"}</button>}
+        {tab==="pay" && <button className="btn bp" onClick={()=>setShowAddPay(!showAddPay)} style={{fontSize:12}}>{showAddPay?"✕ 취소":"+ 결제 등록"}</button>}
+      </div>
+
+      {/* 품의 작성 폼 */}
+      {tab==="req" && showCreate && (
+        <div style={{padding:12,background:"#f0f9ff",borderRadius:8,marginBottom:10,border:"1px solid #bfdbfe"}}>
+          <div style={{fontSize:13,fontWeight:800,color:"#1e40af",marginBottom:8}}>📝 새 품의 작성</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:8}}>
+            <div>
+              <label style={{fontSize:10,fontWeight:700,color:"#475569"}}>제품 *</label>
+              <select className="sel" value={fProdId} onChange={e=>setFProdId(e.target.value)} style={{fontSize:11,padding:6}}>
+                <option value="">— 선택 —</option>
+                {prods.map(p => <option key={p.id} value={p.id}>[{p.code}] {p.name} (재고 {p.qty})</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{fontSize:10,fontWeight:700,color:"#475569"}}>수량 *</label>
+              <input className="inp" type="number" min="1" value={fQty} onChange={e=>setFQty(e.target.value)} style={{fontSize:11,padding:6}}/>
+            </div>
+            <div>
+              <label style={{fontSize:10,fontWeight:700,color:"#475569"}}>단가 (원) *</label>
+              <input className="inp" type="number" min="0" value={fPrice} onChange={e=>setFPrice(e.target.value)} style={{fontSize:11,padding:6}} placeholder={fProd?.marketPrice?.avg?`AI 추정 ${fProd.marketPrice.avg.toLocaleString()}원`:""}/>
+            </div>
+            <div>
+              <label style={{fontSize:10,fontWeight:700,color:"#475569"}}>합계</label>
+              <div style={{padding:"7px 10px",background:"#fff",borderRadius:7,border:"1.5px solid #dee2e6",fontSize:12,fontWeight:800,color:"#1e40af"}}>
+                {((parseInt(fQty)||0)*(parseInt(fPrice)||0)).toLocaleString()}원
+              </div>
+            </div>
+            <div style={{gridColumn:"1 / -1"}}>
+              <label style={{fontSize:10,fontWeight:700,color:"#475569"}}>발주처/공급사</label>
+              <input className="inp" value={fSupplier} onChange={e=>setFSupplier(e.target.value)} style={{fontSize:11,padding:6}} placeholder={fProd?.supplier||"예: 도매꾹 / 02-1234-5678"}/>
+            </div>
+            <div style={{gridColumn:"1 / -1"}}>
+              <label style={{fontSize:10,fontWeight:700,color:"#475569"}}>구매 사유</label>
+              <input className="inp" value={fReason} onChange={e=>setFReason(e.target.value)} style={{fontSize:11,padding:6}} placeholder="예: 5월 단체관람 대비 재고 부족"/>
+            </div>
+            <div style={{gridColumn:"1 / -1"}}>
+              <label style={{fontSize:10,fontWeight:700,color:"#475569"}}>메모</label>
+              <input className="inp" value={fMemo} onChange={e=>setFMemo(e.target.value)} style={{fontSize:11,padding:6}}/>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
+            <button onClick={()=>setShowCreate(false)} className="btn bs" style={{fontSize:11}}>취소</button>
+            <button onClick={submitReq} className="btn bp" style={{fontSize:11}}>📤 품의 제출</button>
+          </div>
+        </div>
+      )}
+
+      {/* 결제 등록 폼 */}
+      {tab==="pay" && showAddPay && (
+        <div style={{padding:12,background:"#fef3c7",borderRadius:8,marginBottom:10,border:"1px solid #fcd34d"}}>
+          <div style={{fontSize:13,fontWeight:800,color:"#92400e",marginBottom:8}}>💳 결제 내역 등록</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:8,marginBottom:8}}>
+            <div>
+              <label style={{fontSize:10,fontWeight:700,color:"#475569"}}>결제 방식 *</label>
+              <select className="sel" value={payType} onChange={e=>setPayType(e.target.value)} style={{fontSize:11,padding:6}}>
+                <option value="card">💳 카드결제</option>
+                <option value="transfer">🏦 계좌이체</option>
+              </select>
+            </div>
+            <div>
+              <label style={{fontSize:10,fontWeight:700,color:"#475569"}}>금액 *</label>
+              <input className="inp" type="number" min="0" value={payAmount} onChange={e=>setPayAmount(e.target.value)} style={{fontSize:11,padding:6}}/>
+            </div>
+            <div>
+              <label style={{fontSize:10,fontWeight:700,color:"#475569"}}>거래처 *</label>
+              <input className="inp" value={payVendor} onChange={e=>setPayVendor(e.target.value)} style={{fontSize:11,padding:6}} placeholder="예: 도매꾹"/>
+            </div>
+            <div>
+              <label style={{fontSize:10,fontWeight:700,color:"#475569"}}>일자</label>
+              <input className="inp" type="date" value={payDate} onChange={e=>setPayDate(e.target.value)} style={{fontSize:11,padding:6}}/>
+            </div>
+            <div>
+              <label style={{fontSize:10,fontWeight:700,color:"#475569"}}>승인번호/이체번호</label>
+              <input className="inp" value={payRef} onChange={e=>setPayRef(e.target.value)} style={{fontSize:11,padding:6}} placeholder="옵션"/>
+            </div>
+            <div style={{gridColumn:"1 / -1"}}>
+              <label style={{fontSize:10,fontWeight:700,color:"#475569"}}>연결할 품의 (선택 시 자동으로 결제완료 처리)</label>
+              <select className="sel" value={payReqId} onChange={e=>setPayReqId(e.target.value)} style={{fontSize:11,padding:6}}>
+                <option value="">— 독립 결제 (품의 없음) —</option>
+                {(requisitions||[]).filter(r=>!["received","cancelled","rejected"].includes(r.status)).map(r => (
+                  <option key={r.id} value={r.id}>[{statusLabel[r.status]||r.status}] {r.prodName} · {r.totalPrice.toLocaleString()}원</option>
+                ))}
+              </select>
+            </div>
+            <div style={{gridColumn:"1 / -1"}}>
+              <label style={{fontSize:10,fontWeight:700,color:"#475569"}}>메모</label>
+              <input className="inp" value={payMemo} onChange={e=>setPayMemo(e.target.value)} style={{fontSize:11,padding:6}}/>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
+            <button onClick={()=>setShowAddPay(false)} className="btn bs" style={{fontSize:11}}>취소</button>
+            <button onClick={submitPay} className="btn bp" style={{fontSize:11}}>💾 결제 등록</button>
+          </div>
+        </div>
+      )}
+
+      {/* 품의 목록 */}
+      {tab==="req" && (
+        <div style={{maxHeight:420,overflowY:"auto",border:"1px solid #e5e7eb",borderRadius:8}}>
+          {filteredReqs.length===0 ? (
+            <div style={{padding:30,textAlign:"center",color:"#94a3b8",fontSize:12}}>
+              {requisitions?.length===0 ? "등록된 품의가 없습니다. + 새 품의로 시작하세요." : "검색 결과 없음"}
+            </div>
+          ) : filteredReqs.map(r => {
+            const isSelected = selectedReq === r.id;
+            const linkedPay = (payments||[]).find(p => p.id === r.paymentId);
+            return (
+              <div key={r.id} style={{borderBottom:"1px solid #f1f5f9",background:isSelected?"#fafbff":"#fff"}}>
+                <div style={{padding:"8px 12px",display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}
+                  onClick={()=>setSelectedReq(isSelected?null:r.id)}>
+                  <span style={{fontSize:10,padding:"3px 8px",borderRadius:6,background:(statusColor[r.status]||"#94a3b8")+"22",color:statusColor[r.status]||"#94a3b8",fontWeight:700,flexShrink:0,minWidth:74,textAlign:"center"}}>
+                    {statusLabel[r.status]||r.status}
+                  </span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:700,color:"#0f172a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {r.prodName} <span style={{fontSize:10,color:"#94a3b8",fontWeight:500}}>{r.prodCode}</span>
+                    </div>
+                    <div style={{fontSize:10,color:"#64748b"}}>
+                      {r.qty}{r.unit} · {r.unitPrice.toLocaleString()}원 = <strong style={{color:"#1e40af"}}>{r.totalPrice.toLocaleString()}원</strong>
+                      {r.supplier?` · ${r.supplier}`:""}{linkedPay?` · 💳 결제연동`:""}
+                    </div>
+                  </div>
+                  <span style={{fontSize:10,color:"#94a3b8",flexShrink:0}}>{new Date(r.createdAt).toLocaleDateString("ko-KR")}</span>
+                </div>
+                {isSelected && (
+                  <div style={{padding:"8px 12px 12px",background:"#fafbff",borderTop:"1px dashed #e5e7eb"}}>
+                    <div style={{fontSize:11,color:"#475569",marginBottom:6}}>
+                      <strong>사유:</strong> {r.reason || "-"}{r.memo?` · ${r.memo}`:""}
+                    </div>
+                    {linkedPay && (
+                      <div style={{padding:"6px 10px",background:"#dbeafe",borderRadius:6,fontSize:11,color:"#1e3a8a",marginBottom:8}}>
+                        💳 연결된 결제: {linkedPay.type==="card"?"카드":"이체"} · {linkedPay.amount.toLocaleString()}원 · {linkedPay.vendor} · {linkedPay.date}
+                      </div>
+                    )}
+                    {/* 상태 흐름 */}
+                    <div style={{fontSize:10,color:"#475569",marginBottom:6,fontWeight:700}}>📜 상태 이력:</div>
+                    <div style={{maxHeight:120,overflowY:"auto",background:"#fff",borderRadius:6,border:"1px solid #e5e7eb",marginBottom:8}}>
+                      {(r.statusLog||[]).map((s,i) => (
+                        <div key={i} style={{padding:"4px 8px",borderBottom:i<r.statusLog.length-1?"1px solid #f1f5f9":"none",fontSize:10,display:"flex",gap:6,alignItems:"center"}}>
+                          <span style={{padding:"1px 6px",borderRadius:4,background:(statusColor[s.status]||"#94a3b8")+"22",color:statusColor[s.status]||"#94a3b8",fontWeight:700,flexShrink:0}}>{statusLabel[s.status]||s.status}</span>
+                          <span style={{flex:1,color:"#334155"}}>{s.note||"-"}</span>
+                          <span style={{color:"#94a3b8"}}>{s.by} · {new Date(s.at).toLocaleString("ko-KR",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"})}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {/* 액션 */}
+                    <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                      {nextActions(r.status).map(([s,l]) => (
+                        <button key={s} onClick={()=>onUpdateStatus(r.id, s)}
+                          style={{padding:"5px 10px",fontSize:10,fontWeight:700,borderRadius:6,border:"none",cursor:"pointer",background:(statusColor[s]||"#94a3b8"),color:"#fff"}}>
+                          → {l}
+                        </button>
+                      ))}
+                      {!linkedPay && r.status !== "received" && r.status !== "cancelled" && r.status !== "rejected" && (
+                        <button onClick={()=>{
+                          setTab("pay");
+                          setShowAddPay(true);
+                          setPayReqId(String(r.id));
+                          setPayAmount(String(r.totalPrice));
+                          setPayVendor(r.supplier||"");
+                          setSelectedReq(null);
+                        }}
+                          style={{padding:"5px 10px",fontSize:10,fontWeight:700,borderRadius:6,border:"none",cursor:"pointer",background:"#fef3c7",color:"#92400e"}}>
+                          💳 결제 등록
+                        </button>
+                      )}
+                      <button onClick={()=>onDeleteReq(r.id)}
+                        style={{padding:"5px 10px",fontSize:10,fontWeight:700,borderRadius:6,border:"1px solid #fca5a5",cursor:"pointer",background:"#fff",color:"#b91c1c",marginLeft:"auto"}}>
+                        🗑️ 삭제
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 결제 목록 */}
+      {tab==="pay" && (
+        <div style={{maxHeight:420,overflowY:"auto",border:"1px solid #e5e7eb",borderRadius:8}}>
+          {filteredPays.length===0 ? (
+            <div style={{padding:30,textAlign:"center",color:"#94a3b8",fontSize:12}}>
+              {payments?.length===0 ? "등록된 결제 내역이 없습니다." : "검색 결과 없음"}
+            </div>
+          ) : filteredPays.map(p => {
+            const linkedReq = (requisitions||[]).find(r => r.id === p.reqId);
+            return (
+              <div key={p.id} style={{padding:"10px 12px",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:18,flexShrink:0}}>{p.type==="card"?"💳":"🏦"}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:700,color:"#0f172a"}}>
+                    {p.amount.toLocaleString()}원 · <span style={{fontWeight:500}}>{p.vendor}</span>
+                  </div>
+                  <div style={{fontSize:10,color:"#64748b",marginTop:2}}>
+                    {p.date} {p.ref?`· #${p.ref}`:""}
+                    {linkedReq && <span style={{marginLeft:6,padding:"1px 6px",background:"#dbeafe",color:"#1e3a8a",borderRadius:4,fontWeight:700}}>📋 {linkedReq.prodName}</span>}
+                    {p.memo?` · ${p.memo}`:""}
+                  </div>
+                </div>
+                <button onClick={()=>onDeletePayment(p.id)}
+                  style={{padding:"4px 8px",fontSize:10,fontWeight:700,borderRadius:5,border:"1px solid #fca5a5",cursor:"pointer",background:"#fff",color:"#b91c1c",flexShrink:0}}>
+                  삭제
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </Modal>
   );
 }
@@ -9024,7 +9550,7 @@ function DetailBlock({icon, title, text}) {
   );
 }
 
-function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDel,onShowQR,highlightPid,doAddPhoto,doDelPhoto,zonePhotos,doAddZonePhoto,doDelZonePhoto,allProds,allZonePhotos,onAddFacAction,can}){
+function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDel,onShowQR,highlightPid,doAddPhoto,doDelPhoto,zonePhotos,doAddZonePhoto,doDelZonePhoto,allProds,allZonePhotos,onAddFacAction,onOpenReq,can}){
   const [qPid,setQPid]=useState(null);
   const [qAct,setQAct]=useState(null);
   const [qQty,setQQty]=useState("");
@@ -9623,8 +10149,9 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
                       )}
                     </div>
 
-                    {/* 액션: 수정/삭제 */}
-                    <div style={{display:"flex",gap:6,justifyContent:"flex-end",marginTop:10}}>
+                    {/* 액션: 품의/QR/삭제 */}
+                    <div style={{display:"flex",gap:6,justifyContent:"flex-end",marginTop:10,flexWrap:"wrap"}}>
+                      {onOpenReq && <button onClick={()=>onOpenReq(p)} className="btn bs" style={{fontSize:11,padding:"6px 10px",background:"#fef3c7",color:"#92400e",border:"1px solid #fcd34d"}} title="이 제품에 대한 품의 작성">📝 품의 작성</button>}
                       <button onClick={()=>onShowQR(p)} className="btn bs" style={{fontSize:11,padding:"6px 10px"}}>🏷️ QR 라벨</button>
                       {can&&can("delete")&&<button onClick={()=>doDel(p.id)} className="btn bd" style={{fontSize:11,padding:"6px 10px"}}>🗑️ 삭제</button>}
                     </div>
