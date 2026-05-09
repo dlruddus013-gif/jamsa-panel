@@ -6163,12 +6163,56 @@ function QRModal({p,onClose}){
   );
 }
 
+// 검색어를 결과에서 노란색으로 강조 표시 (대소문자 무시)
+function highlightText(text, q) {
+  const s = String(text == null ? "" : text);
+  const ql = (q || "").trim();
+  if (!ql) return s;
+  const lower = s.toLowerCase();
+  const needle = ql.toLowerCase();
+  const parts = [];
+  let i = 0;
+  while (i < s.length) {
+    const idx = lower.indexOf(needle, i);
+    if (idx === -1) { parts.push(s.slice(i)); break; }
+    if (idx > i) parts.push(s.slice(i, idx));
+    parts.push(<mark key={idx} style={{background:"#fef08a",color:"inherit",padding:"0 1px",borderRadius:2}}>{s.slice(idx, idx + needle.length)}</mark>);
+    i = idx + needle.length;
+  }
+  return parts;
+}
+
 // ========== BATCH QR PRINT MODAL ==========
 function QRBatchPrintModal({prods, onClose}){
   const [sel, setSel] = useState(()=>new Set((prods||[]).map(p=>p.id)));
+  const [q, setQ] = useState("");
+  const [filterCat, setFilterCat] = useState("all");
+  const [filterLoc, setFilterLoc] = useState("all");
+  const cats = useMemo(() => Array.from(new Set((prods||[]).map(p=>p.cat).filter(Boolean))).sort(), [prods]);
+  const locs = useMemo(() => Array.from(new Set((prods||[]).map(p=>p.loc).filter(Boolean))).sort(), [prods]);
+  const filtered = useMemo(() => {
+    const ql = q.trim().toLowerCase();
+    return (prods||[]).filter(p => {
+      if (filterCat !== "all" && p.cat !== filterCat) return false;
+      if (filterLoc !== "all" && p.loc !== filterLoc) return false;
+      if (!ql) return true;
+      return (
+        (p.name||"").toLowerCase().includes(ql) ||
+        (p.code||"").toLowerCase().includes(ql) ||
+        (p.cat||"").toLowerCase().includes(ql) ||
+        (p.loc||"").toLowerCase().includes(ql)
+      );
+    });
+  }, [prods, q, filterCat, filterLoc]);
   const toggle = (id) => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const allOn = sel.size === (prods?.length || 0);
-  const toggleAll = () => setSel(allOn ? new Set() : new Set((prods||[]).map(p=>p.id)));
+  const filteredAllOn = filtered.length > 0 && filtered.every(p => sel.has(p.id));
+  const toggleAllFiltered = () => setSel(s => {
+    const n = new Set(s);
+    if (filteredAllOn) filtered.forEach(p => n.delete(p.id));
+    else filtered.forEach(p => n.add(p.id));
+    return n;
+  });
+  const clearAll = () => setSel(new Set());
   const chosen = (prods||[]).filter(p => sel.has(p.id));
   const doPrint = () => {
     if (chosen.length === 0) { alert("최소 1개 이상 선택해주세요."); return; }
@@ -6202,26 +6246,61 @@ function QRBatchPrintModal({prods, onClose}){
     }
   };
   return(
-    <Modal title={`QR 라벨 일괄 인쇄 (${prods?.length || 0}건 중 ${sel.size}건 선택)`} onClose={onClose} w={620}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,padding:"8px 10px",background:"#f8fafc",borderRadius:8}}>
-        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:13,fontWeight:600,cursor:"pointer"}}>
-          <input type="checkbox" checked={allOn} onChange={toggleAll}/>
-          전체선택 / 해제
-        </label>
-        <div style={{fontSize:11,color:"#64748b"}}>A4 용지 1장당 약 25개 라벨 (5×5 배치)</div>
+    <Modal title={`QR 라벨 일괄 인쇄 (전체 ${prods?.length || 0}건 · 선택 ${sel.size}건)`} onClose={onClose} w={680}>
+      {/* 검색 + 필터 */}
+      <div style={{display:"flex",gap:6,marginBottom:8,flexWrap:"wrap"}}>
+        <div style={{position:"relative",flex:"1 1 220px",minWidth:0}}>
+          <input className="inp" placeholder="🔍 제품명 / QR코드 / 카테고리 / 위치 검색"
+            value={q} onChange={e=>setQ(e.target.value)}
+            style={{fontSize:13,padding:"8px 30px 8px 12px"}} autoFocus/>
+          {q && (
+            <button onClick={()=>setQ("")} title="검색 지우기"
+              style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:14,color:"#94a3b8",padding:4}}>✕</button>
+          )}
+        </div>
+        <select className="sel" value={filterCat} onChange={e=>setFilterCat(e.target.value)} style={{fontSize:12,padding:"8px 10px",flex:"0 1 130px"}}>
+          <option value="all">전체 카테고리</option>
+          {cats.map(c=><option key={c} value={c}>{c}</option>)}
+        </select>
+        <select className="sel" value={filterLoc} onChange={e=>setFilterLoc(e.target.value)} style={{fontSize:12,padding:"8px 10px",flex:"0 1 130px"}}>
+          <option value="all">전체 위치</option>
+          {locs.map(l=><option key={l} value={l}>{l}</option>)}
+        </select>
       </div>
+
+      {/* 액션 바 */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8,padding:"8px 10px",background:"#f8fafc",borderRadius:8,flexWrap:"wrap",gap:6}}>
+        <div style={{display:"flex",gap:10,alignItems:"center",fontSize:12}}>
+          <label style={{display:"flex",alignItems:"center",gap:6,fontWeight:600,cursor:"pointer"}}>
+            <input type="checkbox" checked={filteredAllOn} onChange={toggleAllFiltered} disabled={filtered.length===0}/>
+            검색결과 전체선택 ({filtered.length}건)
+          </label>
+          {sel.size > 0 && (
+            <button onClick={clearAll} style={{fontSize:11,padding:"3px 8px",borderRadius:4,border:"1px solid #fca5a5",background:"#fff",color:"#b91c1c",cursor:"pointer",fontWeight:600}}>
+              선택 초기화
+            </button>
+          )}
+        </div>
+        <div style={{fontSize:11,color:"#64748b"}}>A4 한 장당 약 25개 (5×5)</div>
+      </div>
+
+      {/* 목록 */}
       <div style={{maxHeight:380,overflow:"auto",border:"1px solid #e5e7eb",borderRadius:8,padding:6}}>
         {(prods||[]).length === 0 ? (
           <div style={{padding:24,textAlign:"center",color:"#94a3b8",fontSize:13}}>인쇄할 제품이 없습니다.</div>
-        ) : (prods||[]).map(p => (
+        ) : filtered.length === 0 ? (
+          <div style={{padding:24,textAlign:"center",color:"#94a3b8",fontSize:13}}>
+            "{q}" 검색 결과 없음 {filterCat!=="all"||filterLoc!=="all"?"(필터 적용 중)":""}
+          </div>
+        ) : filtered.map(p => (
           <label key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"6px 8px",borderRadius:6,cursor:"pointer",background:sel.has(p.id)?"#eff6ff":"transparent"}}>
             <input type="checkbox" checked={sel.has(p.id)} onChange={()=>toggle(p.id)}/>
             <div style={{flexShrink:0,padding:2,border:"1px solid #e5e7eb",borderRadius:4,background:"#fff",lineHeight:0}}>
               <QRCodeSVG text={p.code} size={28} color="#333"/>
             </div>
             <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:13,fontWeight:700,color:"#0f172a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</div>
-              <div style={{fontSize:11,color:"#64748b"}}>{p.code} · {p.cat || "-"} · {p.loc || "-"}</div>
+              <div style={{fontSize:13,fontWeight:700,color:"#0f172a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{highlightText(p.name, q)}</div>
+              <div style={{fontSize:11,color:"#64748b"}}>{highlightText(p.code, q)} · {p.cat || "-"} · {p.loc || "-"}</div>
             </div>
           </label>
         ))}
