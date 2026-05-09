@@ -4743,10 +4743,26 @@ function FacAiResultTabs({ result, onSubmit }) {
 const MAP_IMG = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice"><defs><pattern id="g" width="10" height="10" patternUnits="userSpaceOnUse"><rect width="10" height="10" fill="%23f0f4f8"/><path d="M0 0L10 10M10 0L0 10" stroke="%23e2e8f0" stroke-width="0.3"/></pattern></defs><rect width="100" height="100" fill="url(%23g)"/><text x="50" y="50" text-anchor="middle" font-family="sans-serif" font-size="3" fill="%2364748b">한국잠사플레이팜 시설 배치도</text></svg>`;
 
 // ========== QR CODE GENERATOR ==========
+// Real, scannable QR codes via the qrcode-generator library loaded in index.html
+// (window.qrcode). Falls back to a simple placeholder pattern only if the CDN
+// hasn't loaded yet — actual production renders use the real library.
 function genQRMatrix(text) {
+  if (typeof window !== "undefined" && typeof window.qrcode === "function") {
+    try {
+      // type 0 = auto-fit version, 'M' = ~15% error correction (good for print)
+      const qr = window.qrcode(0, "M");
+      qr.addData(String(text == null ? "" : text));
+      qr.make();
+      const n = qr.getModuleCount();
+      const m = Array.from({length:n}, (_,r)=>Array.from({length:n}, (_,c)=>qr.isDark(r,c)?1:0));
+      return m;
+    } catch (e) {
+      // fall through to placeholder
+    }
+  }
+  // Placeholder (only shown briefly while CDN loads). Not scannable.
   const size = 21;
   const m = Array.from({length:size}, ()=>Array(size).fill(0));
-  // Finder patterns (3 corners)
   const setFinder = (r,c) => {
     for(let i=-1;i<=7;i++) for(let j=-1;j<=7;j++){
       const ri=r+i, ci=c+j;
@@ -4758,20 +4774,23 @@ function genQRMatrix(text) {
     }
   };
   setFinder(0,0); setFinder(0,size-7); setFinder(size-7,0);
-  // Timing
   for(let i=8;i<size-8;i++){m[6][i]=i%2===0?1:0;m[i][6]=i%2===0?1:0;}
-  // Data from text hash
-  let hash=0;
-  for(let i=0;i<text.length;i++){hash=((hash<<5)-hash+text.charCodeAt(i))|0;}
-  let seed=Math.abs(hash);
-  const rng=()=>{seed=(seed*16807+0)%2147483647;return seed/2147483647;};
-  for(let r=0;r<size;r++) for(let c=0;c<size;c++){
-    if(m[r][c]===1)continue;
-    if((r<9&&c<9)||(r<9&&c>=size-8)||(r>=size-8&&c<9))continue;
-    if(r===6||c===6)continue;
-    m[r][c]=rng()>0.55?1:0;
-  }
   return m;
+}
+
+// Produce raw SVG markup string for a QR code. Used by both the React component
+// and the print window (which needs HTML, not React elements).
+function qrSVGString(text, size=120, color="#000") {
+  const mx = genQRMatrix(text);
+  const n = mx.length;
+  const cs = size / n;
+  let rects = "";
+  for (let r=0; r<n; r++) for (let c=0; c<n; c++) {
+    if (mx[r][c]) {
+      rects += `<rect x="${(c*cs).toFixed(3)}" y="${(r*cs).toFixed(3)}" width="${(cs+0.5).toFixed(3)}" height="${(cs+0.5).toFixed(3)}" fill="${color}"/>`;
+    }
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><rect width="${size}" height="${size}" fill="#fff"/>${rects}</svg>`;
 }
 
 function QRCodeSVG({text,size=120,color="#000"}){
@@ -5653,6 +5672,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
           <h1 style={{fontSize:16,fontWeight:800,color:"#0f172a"}}>{menus.find(m=>m.id===page)?.label}</h1>
           <div style={{display:"flex",gap:6}}>
             {can("export")&&<button className="btn bs" onClick={csv} style={{fontSize:12}}><IC.DL/>CSV</button>}
+            {can("export")&&<button className="btn bs" onClick={()=>setModal({type:"qrBatch",prods:filtered.length?filtered:prods})} style={{fontSize:12}} title="QR 라벨 일괄 인쇄"><IC.QR/>QR 일괄인쇄</button>}
             {can("add")&&<button className="btn bp" onClick={()=>setModal({type:"add"})} style={{fontSize:12}}><IC.Plus/>제품 추가</button>}
           </div>
         </div>
@@ -5677,7 +5697,8 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
                     <button className="btn bp" onClick={()=>doQRLookup(qrSearch)} style={{fontSize:13,padding:"8px 16px"}}><IC.Srch/>조회</button>
                     <button className="btn" onClick={()=>setShowScanner(true)}
                       style={{fontSize:13,padding:"8px 12px",background:"#f0f7ff",color:"#3b5bdb",border:"1px solid #bfdbfe"}}><IC.Cam/>스캔</button>
-                    {can("export")&&<button className="btn bs" onClick={csv} style={{fontSize:12,padding:"8px 10px"}}><IC.DL/></button>}
+                    {can("export")&&<button className="btn bs" onClick={csv} style={{fontSize:12,padding:"8px 10px"}} title="CSV 내보내기"><IC.DL/></button>}
+                    {can("export")&&<button className="btn bs" onClick={()=>setModal({type:"qrBatch",prods:filtered.length?filtered:prods})} style={{fontSize:12,padding:"8px 10px"}} title="QR 라벨 일괄 인쇄"><IC.QR/></button>}
                     {can("add")&&<button className="btn bp" onClick={()=>setModal({type:"add"})} style={{fontSize:12,padding:"8px 10px"}}><IC.Plus/></button>}
                   </div>
                 </div>
@@ -5812,6 +5833,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
       {modal?.type==="adj"&&<SMdl type="adj" p={modal.p} onSubmit={doAdj} onClose={()=>setModal(null)}/>}
       {modal?.type==="edit"&&<EMdl p={modal.p} onSave={d=>{setProds(pr=>pr.map(x=>x.id===d.id?{...x,...d}:x));addH("수정",d.name,"수정",0);setModal(null);}} onClose={()=>setModal(null)}/>}
       {modal?.type==="qr"&&<QRModal p={modal.p} onClose={()=>setModal(null)}/>}
+      {modal?.type==="qrBatch"&&<QRBatchPrintModal prods={modal.prods} onClose={()=>setModal(null)}/>}
       {modal?.type==="users"&&<UserMgmt users={users} setUsers={setUsers} curUser={curUser} onClose={()=>setModal(null)}/>}
       {modal?.type==="lowStockAlert"&&<LowStockAlertModal items={modal.items} onClose={()=>setModal(null)} onGoTo={(p)=>{setModal(null);setSelP(p);setHighlightPid(p.id);}}/>}
       {modal?.type==="sendLowStockNotif"&&<SendLowStockNotifModal items={modal.items} onClose={()=>setModal(null)}/>}
@@ -5923,28 +5945,77 @@ function QRScanner({onScan,onClose}){
   );
 }
 
+// ========== QR PRINT (single + batch) ==========
+// Common stylesheet for printed label sheets. Layout assumes A4, 5 columns.
+const QR_PRINT_CSS = `
+  @page { size: A4; margin: 8mm; }
+  * { box-sizing: border-box; }
+  body { font-family: 'Pretendard','Noto Sans KR',-apple-system,sans-serif; margin: 0; padding: 12px; color: #0f172a; background: #f8fafc; }
+  .toolbar { display:flex; gap:8px; align-items:center; margin-bottom:14px; padding:10px 14px; background:#fff; border:1px solid #e5e7eb; border-radius:10px; box-shadow:0 1px 3px rgba(0,0,0,0.04); }
+  .toolbar h1 { font-size:14px; font-weight:800; flex:1; margin:0; }
+  .toolbar button { padding:7px 18px; font-size:13px; font-weight:700; cursor:pointer; border-radius:7px; border:none; }
+  .toolbar .pp { background:#3b5bdb; color:#fff; }
+  .toolbar .ps { background:#f1f3f5; color:#495057; border:1px solid #dee2e6; }
+  .sheet { display:grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  .label { border:1.5px dashed #94a3b8; border-radius:6px; padding:8px 6px; text-align:center; background:#fff; page-break-inside: avoid; break-inside: avoid; }
+  .label .qr { display:flex; justify-content:center; margin-bottom:4px; }
+  .label .org { font-size:9px; color:#64748b; margin-bottom:2px; }
+  .label .code { font-size:13px; font-weight:900; letter-spacing:1px; color:#0f172a; margin:2px 0; }
+  .label .name { font-size:11px; font-weight:700; color:#334155; margin:2px 0; line-height:1.2; max-height:2.4em; overflow:hidden; }
+  .label .meta { font-size:9px; color:#94a3b8; }
+  .label.single { border:2px solid #0f172a; border-radius:10px; padding:18px; max-width:300px; margin:24px auto; }
+  .label.single .org { font-size:12px; }
+  .label.single .code { font-size:22px; letter-spacing:3px; margin:8px 0; }
+  .label.single .name { font-size:16px; max-height:none; }
+  .label.single .meta { font-size:11px; margin-top:4px; }
+  @media print {
+    body { background:#fff; padding:0; }
+    .toolbar { display:none; }
+    .label { border-color:#d1d5db; }
+  }
+`;
+
+function buildLabelHTML(p, opts={}) {
+  const { single = false, qrSize = single ? 160 : 92 } = opts;
+  const today = new Date().toLocaleDateString("ko-KR");
+  const safe = (v) => String(v == null ? "" : v).replace(/[<>&"]/g, (c) => ({"<":"&lt;",">":"&gt;","&":"&amp;","\"":"&quot;"}[c]));
+  return `<div class="label${single ? " single" : ""}">
+    <div class="qr">${qrSVGString(p.code || "", qrSize)}</div>
+    <div class="org">🐛 한국잠사박물관</div>
+    <div class="code">${safe(p.code)}</div>
+    <div class="name">${safe(p.name)}</div>
+    <div class="meta">${safe(p.cat || "")}${p.loc ? " · " + safe(p.loc) : ""}</div>
+    ${single ? `<div class="meta">발행: ${today}</div>` : ""}
+  </div>`;
+}
+
+function openPrintWindow(title, bodyHTML, autoPrint=true) {
+  const w = window.open("", "_blank", "width=900,height=700");
+  if (!w) { alert("팝업이 차단되었습니다. 브라우저 설정에서 팝업을 허용해주세요."); return; }
+  w.document.write(`<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${title}</title><style>${QR_PRINT_CSS}</style></head><body>
+    <div class="toolbar">
+      <h1>${title}</h1>
+      <button class="pp" onclick="window.print()">🖨️ 인쇄</button>
+      <button class="ps" onclick="window.close()">닫기</button>
+    </div>
+    ${bodyHTML}
+    <script>${autoPrint ? "window.addEventListener('load',()=>setTimeout(()=>window.print(),300));" : ""}</script>
+  </body></html>`);
+  w.document.close();
+}
+
+function printSingleQR(p) {
+  openPrintWindow(`QR 라벨 — ${p.name || p.code}`, buildLabelHTML(p, { single: true }));
+}
+
+function printBatchQR(prods) {
+  if (!prods || prods.length === 0) { alert("인쇄할 제품이 없습니다."); return; }
+  const sheet = `<div class="sheet">${prods.map(p => buildLabelHTML(p, { single: false })).join("")}</div>`;
+  openPrintWindow(`QR 라벨 일괄 인쇄 (${prods.length}건)`, sheet);
+}
+
 // ========== QR MODAL ==========
 function QRModal({p,onClose}){
-  const printQR=()=>{
-    const w=window.open("","_blank","width=400,height=500");
-    w.document.write(`<html><head><title>QR - ${p.name}</title><style>
-      body{font-family:sans-serif;padding:20px;text-align:center}
-      .label{border:2px solid #000;padding:16px;display:inline-block;margin:10px}
-      h2{margin:0 0 4px;font-size:16px} .code{font-size:20px;font-weight:900;letter-spacing:2px;margin:8px 0}
-      .info{font-size:11px;color:#666} @media print{button{display:none}}
-    </style></head><body>
-      <div class="label">
-        <h2>🐛 한국잠사박물관</h2>
-        <div class="code">${p.code}</div>
-        <div style="font-size:14px;font-weight:700;margin:6px 0">${p.name}</div>
-        <div class="info">${p.cat} · ${p.loc}</div>
-        <div class="info">등록: ${new Date().toLocaleDateString('ko-KR')}</div>
-      </div>
-      <br/><button onclick="window.print()" style="margin-top:16px;padding:8px 24px;font-size:14px;cursor:pointer">🖨️ 인쇄</button>
-    </body></html>`);
-    w.document.close();
-  };
-
   return(
     <Modal title={`QR 코드 — ${p.name}`} onClose={onClose} w={380}>
       <div style={{textAlign:"center"}}>
@@ -5956,9 +6027,53 @@ function QRModal({p,onClose}){
         <div style={{fontSize:12,color:"#94a3b8",marginBottom:12}}>{p.cat} · {p.loc} · 재고: <strong style={{color:p.qty===0?"#ef4444":"#3b5bdb"}}>{p.qty}</strong></div>
 
         <div style={{display:"flex",gap:8,justifyContent:"center"}}>
-          <button className="btn bp" onClick={printQR} style={{fontSize:13}}><IC.Print/>인쇄</button>
+          <button className="btn bp" onClick={()=>printSingleQR(p)} style={{fontSize:13}}><IC.Print/>인쇄</button>
           <button className="btn bs" onClick={onClose}>닫기</button>
         </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ========== BATCH QR PRINT MODAL ==========
+function QRBatchPrintModal({prods, onClose}){
+  const [sel, setSel] = useState(()=>new Set((prods||[]).map(p=>p.id)));
+  const toggle = (id) => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const allOn = sel.size === (prods?.length || 0);
+  const toggleAll = () => setSel(allOn ? new Set() : new Set((prods||[]).map(p=>p.id)));
+  const chosen = (prods||[]).filter(p => sel.has(p.id));
+  const doPrint = () => {
+    if (chosen.length === 0) { alert("최소 1개 이상 선택해주세요."); return; }
+    printBatchQR(chosen);
+  };
+  return(
+    <Modal title={`QR 라벨 일괄 인쇄 (${prods?.length || 0}건 중 ${sel.size}건 선택)`} onClose={onClose} w={620}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,padding:"8px 10px",background:"#f8fafc",borderRadius:8}}>
+        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+          <input type="checkbox" checked={allOn} onChange={toggleAll}/>
+          전체선택 / 해제
+        </label>
+        <div style={{fontSize:11,color:"#64748b"}}>A4 용지 1장당 약 25개 라벨 (5×5 배치)</div>
+      </div>
+      <div style={{maxHeight:380,overflow:"auto",border:"1px solid #e5e7eb",borderRadius:8,padding:6}}>
+        {(prods||[]).length === 0 ? (
+          <div style={{padding:24,textAlign:"center",color:"#94a3b8",fontSize:13}}>인쇄할 제품이 없습니다.</div>
+        ) : (prods||[]).map(p => (
+          <label key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"6px 8px",borderRadius:6,cursor:"pointer",background:sel.has(p.id)?"#eff6ff":"transparent"}}>
+            <input type="checkbox" checked={sel.has(p.id)} onChange={()=>toggle(p.id)}/>
+            <div style={{flexShrink:0,padding:2,border:"1px solid #e5e7eb",borderRadius:4,background:"#fff",lineHeight:0}}>
+              <QRCodeSVG text={p.code} size={28} color="#333"/>
+            </div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:13,fontWeight:700,color:"#0f172a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</div>
+              <div style={{fontSize:11,color:"#64748b"}}>{p.code} · {p.cat || "-"} · {p.loc || "-"}</div>
+            </div>
+          </label>
+        ))}
+      </div>
+      <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
+        <button className="btn bs" onClick={onClose}>취소</button>
+        <button className="btn bp" onClick={doPrint} style={{fontSize:13}}><IC.Print/>{sel.size}건 인쇄</button>
       </div>
     </Modal>
   );
