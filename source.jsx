@@ -5583,6 +5583,25 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
     return pay;
   };
 
+  // 기존 결제 ↔ 품의 연결 (자동매칭/수동매칭 공통)
+  const linkPaymentToReq = (payId, reqId) => {
+    const pay = payments.find(p => p.id === payId);
+    if (!pay) return;
+    setPayments(prev => prev.map(p => p.id === payId ? { ...p, reqId } : p));
+    setRequisitions(prev => prev.map(r => {
+      if (r.id !== reqId) return r;
+      const newStatus = r.status === "received" ? "received" : "paid";
+      return {
+        ...r,
+        paymentId: payId,
+        status: newStatus,
+        updatedAt: new Date().toISOString(),
+        statusLog: [...(r.statusLog||[]), { status: newStatus, at: new Date().toISOString(), by: curUser?.name || "시스템", note: `결제 자동연결: ${pay.type==="card"?"카드":"이체"} ${pay.amount.toLocaleString()}원` }],
+      };
+    }));
+    addH("결제연동", pay.vendor || "거래처", `품의 연결: ${pay.amount.toLocaleString()}원`, 0);
+  };
+
   const deletePayment = (payId) => {
     const pay = payments.find(p => p.id === payId);
     if (!pay) return;
@@ -5975,9 +5994,9 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
       {modal?.type==="reqPayments"&&<ReqPaymentsModal
         prods={prods} requisitions={requisitions} payments={payments}
         statusLabel={reqStatusLabel} statusColor={reqStatusColor}
-        defaultProd={modal.prod}
+        defaultProd={modal.prod} curUser={curUser}
         onCreateReq={createReq} onUpdateStatus={updateReqStatus} onDeleteReq={deleteReq}
-        onAddPayment={addPayment} onDeletePayment={deletePayment}
+        onAddPayment={addPayment} onDeletePayment={deletePayment} onLinkPayment={linkPaymentToReq}
         onClose={()=>setModal(null)}/>}
       {modal?.type==="users"&&<UserMgmt users={users} setUsers={setUsers} curUser={curUser} onClose={()=>setModal(null)}/>}
       {modal?.type==="lowStockAlert"&&<LowStockAlertModal items={modal.items} onClose={()=>setModal(null)} onGoTo={(p)=>{setModal(null);setSelP(p);setHighlightPid(p.id);}}/>}
@@ -6714,9 +6733,17 @@ async function parsePaymentFile(file, opts = {}) {
 // ========== 품의 / 결제 통합 모달 ==========
 // 재고관리 ↔ 품의 ↔ 카드결제/이체 내역을 동시 연동.
 // 품의 상태 흐름: 작성중 → 제출 → 승인 → 발주 → 결제 → 입고완료(자동 stock-in)
-function ReqPaymentsModal({prods, requisitions, payments, statusLabel, statusColor, defaultProd,
-                           onCreateReq, onUpdateStatus, onDeleteReq, onAddPayment, onDeletePayment, onClose}) {
-  const [tab, setTab] = useState("req"); // req | pay
+function ReqPaymentsModal({prods, requisitions, payments, statusLabel, statusColor, defaultProd, curUser,
+                           onCreateReq, onUpdateStatus, onDeleteReq, onAddPayment, onDeletePayment, onLinkPayment, onClose}) {
+  // 결제 내역은 최종관리자(master)만 열람 가능
+  const isMaster = curUser?.role === "master";
+  // 재고 컨텍스트로 진입 시(특정 품목 클릭) 해당 품목의 품의만 필터링
+  const lockedProdId = defaultProd?.id ?? null;
+
+  const [tab, setTabRaw] = useState("req"); // req | pay
+  const setTab = (k) => setTabRaw((!isMaster && k === "pay") ? "req" : k);
+  // master 권한이 사라진 상태에서 pay 탭에 머물러 있으면 강제 전환
+  useEffect(() => { if (!isMaster && tab === "pay") setTabRaw("req"); }, [isMaster, tab]);
   const [filter, setFilter] = useState("all"); // all | active | received | etc
   const [q, setQ] = useState("");
   const [showCreate, setShowCreate] = useState(!!defaultProd);
@@ -6875,12 +6902,48 @@ function ReqPaymentsModal({prods, requisitions, payments, statusLabel, statusCol
   const filteredReqs = useMemo(() => {
     const ql = q.trim().toLowerCase();
     return (requisitions||[]).filter(r => {
+      // 재고 컨텍스트로 진입한 경우, 해당 품목의 품의만 노출
+      if (lockedProdId != null && String(r.prodId) !== String(lockedProdId)) return false;
       if (filter === "active" && ["received","cancelled","rejected"].includes(r.status)) return false;
       if (filter !== "all" && filter !== "active" && r.status !== filter) return false;
       if (!ql) return true;
       return [r.prodName, r.prodCode, r.supplier, r.reason, r.memo].some(s => (s||"").toLowerCase().includes(ql));
     });
-  }, [requisitions, filter, q]);
+  }, [requisitions, filter, q, lockedProdId]);
+
+  // 결제 ↔ 품의 자동 매칭 후보 계산
+  // 매칭 기준 (점수 합산):
+  //   - 금액 정확히 일치 (필수): 미일치 시 후보 제외
+  //   - 거래처명이 품의의 supplier 또는 prodName과 부분 일치: +30
+  //   - 결제일이 품의 생성일~+30일 이내: +10 (가까울수록 가산)
+  //   - 동일 prodId 컨텍스트: +20
+  // 자동 매칭은 reqId가 비어 있는 결제만 대상.
+  const matchCandidates = useMemo(() => {
+    const result = new Map(); // payId → {reqId, score, reqLabel}
+    const reqs = (requisitions||[]).filter(r => !["cancelled","rejected"].includes(r.status));
+    for (const p of (payments||[])) {
+      if (p.reqId) continue; // 이미 연결된 결제는 건너뜀
+      let best = null;
+      for (const r of reqs) {
+        if ((r.totalPrice||0) !== (p.amount||0)) continue;
+        let score = 50; // 금액 일치 기본 점수
+        const vend = (p.vendor||"").toLowerCase();
+        const supp = (r.supplier||"").toLowerCase();
+        const pname = (r.prodName||"").toLowerCase();
+        if (supp && (vend.includes(supp) || supp.includes(vend))) score += 30;
+        else if (pname && (vend.includes(pname) || pname.includes(vend))) score += 20;
+        // 일자 근접도 (품의 생성일 ~ +30일)
+        const reqDate = new Date(r.createdAt || r.date || 0);
+        const payDate = new Date(p.date || 0);
+        const dayDiff = Math.abs((payDate - reqDate) / 86400000);
+        if (dayDiff <= 30) score += Math.max(0, 10 - Math.floor(dayDiff/3));
+        if (lockedProdId != null && String(r.prodId) === String(lockedProdId)) score += 20;
+        if (!best || score > best.score) best = { reqId: r.id, score, reqLabel: `${r.prodName||""} ${(r.totalPrice||0).toLocaleString()}원 (${r.supplier||"-"})` };
+      }
+      if (best && best.score >= 60) result.set(p.id, best);
+    }
+    return result;
+  }, [payments, requisitions, lockedProdId]);
 
   const filteredPays = useMemo(() => {
     const ql = q.trim().toLowerCase();
@@ -6972,14 +7035,30 @@ function ReqPaymentsModal({prods, requisitions, payments, statusLabel, statusCol
         </div>
       </div>
 
-      {/* 탭 */}
+      {/* 재고 컨텍스트 안내 배너 */}
+      {lockedProdId != null && (
+        <div style={{margin:"6px 0 10px",padding:"8px 12px",background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,fontSize:11,color:"#1e40af",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span>📦 <strong>{defaultProd?.name}</strong> 품목의 품의만 표시 중 ({filteredReqs.length}건)</span>
+          <span style={{fontSize:10,color:"#475569"}}>※ 다른 품목 보려면 모달 닫고 상단 "📋 품의/결제" 버튼 사용</span>
+        </div>
+      )}
+
+      {/* 탭 — 결제 내역은 최종관리자(master)만 표시 */}
       <div style={{display:"flex",gap:4,borderBottom:"2px solid #e5e7eb",marginBottom:10}}>
-        {[["req","📝 품의 ("+(requisitions?.length||0)+")"],["pay","💳 결제 내역 ("+(payments?.length||0)+")"]].map(([k,l]) => (
+        {(isMaster
+          ? [["req","📝 품의 ("+(filteredReqs?.length||0)+")"],["pay","💳 결제 내역 ("+(payments?.length||0)+")"]]
+          : [["req","📝 품의 ("+(filteredReqs?.length||0)+")"]]
+        ).map(([k,l]) => (
           <button key={k} onClick={()=>{setTab(k);setFilter("all");setShowCreate(false);setShowAddPay(false);setSelectedReq(null);}}
             style={{padding:"8px 16px",border:"none",background:tab===k?"#3b5bdb":"transparent",color:tab===k?"#fff":"#475569",fontWeight:700,fontSize:13,borderRadius:"8px 8px 0 0",cursor:"pointer"}}>
             {l}
           </button>
         ))}
+        {!isMaster && (
+          <span style={{padding:"8px 12px",fontSize:10,color:"#94a3b8",alignSelf:"center"}} title="결제 내역은 최종관리자만 열람 가능">
+            🔒 결제 내역 (최종관리자 전용)
+          </span>
+        )}
       </div>
 
       {/* 검색 + 필터 + 액션 */}
@@ -7386,35 +7465,71 @@ function ReqPaymentsModal({prods, requisitions, payments, statusLabel, statusCol
         </div>
       )}
 
-      {/* 결제 목록 */}
-      {tab==="pay" && (
-        <div style={{maxHeight:420,overflowY:"auto",border:"1px solid #e5e7eb",borderRadius:8}}>
-          {filteredPays.length===0 ? (
-            <div style={{padding:30,textAlign:"center",color:"#94a3b8",fontSize:12}}>
-              {payments?.length===0 ? "등록된 결제 내역이 없습니다." : "검색 결과 없음"}
+      {/* 결제 목록 — 최종관리자 전용 */}
+      {tab==="pay" && isMaster && (
+        <>
+          {/* 자동 매칭 후보 일괄 적용 */}
+          {matchCandidates.size > 0 && (
+            <div style={{margin:"6px 0 8px",padding:"8px 12px",background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:8,fontSize:11,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              <span style={{color:"#92400e"}}>🎯 <strong>{matchCandidates.size}건</strong>의 결제가 품의와 자동매칭 가능합니다 (금액·거래처·일자 기반).</span>
+              <button onClick={()=>{
+                if (!onLinkPayment) return;
+                if (!confirm(`${matchCandidates.size}건을 일괄 자동매칭하시겠습니까?`)) return;
+                let cnt = 0;
+                for (const [payId, m] of matchCandidates.entries()) {
+                  onLinkPayment(payId, m.reqId); cnt++;
+                }
+                alert(`✅ ${cnt}건 자동매칭 완료`);
+              }} style={{padding:"5px 12px",fontSize:11,fontWeight:700,borderRadius:6,border:"none",cursor:"pointer",background:"#1e40af",color:"#fff"}}>
+                ⚡ 일괄 자동매칭
+              </button>
             </div>
-          ) : filteredPays.map(p => {
-            const linkedReq = (requisitions||[]).find(r => r.id === p.reqId);
-            return (
-              <div key={p.id} style={{padding:"10px 12px",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"center",gap:8}}>
-                <span style={{fontSize:18,flexShrink:0}}>{p.type==="card"?"💳":"🏦"}</span>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:13,fontWeight:700,color:"#0f172a"}}>
-                    {p.amount.toLocaleString()}원 · <span style={{fontWeight:500}}>{p.vendor}</span>
-                  </div>
-                  <div style={{fontSize:10,color:"#64748b",marginTop:2}}>
-                    {p.date} {p.ref?`· #${p.ref}`:""}
-                    {linkedReq && <span style={{marginLeft:6,padding:"1px 6px",background:"#dbeafe",color:"#1e3a8a",borderRadius:4,fontWeight:700}}>📋 {linkedReq.prodName}</span>}
-                    {p.memo?` · ${p.memo}`:""}
-                  </div>
-                </div>
-                <button onClick={()=>onDeletePayment(p.id)}
-                  style={{padding:"4px 8px",fontSize:10,fontWeight:700,borderRadius:5,border:"1px solid #fca5a5",cursor:"pointer",background:"#fff",color:"#b91c1c",flexShrink:0}}>
-                  삭제
-                </button>
+          )}
+
+          <div style={{maxHeight:420,overflowY:"auto",border:"1px solid #e5e7eb",borderRadius:8}}>
+            {filteredPays.length===0 ? (
+              <div style={{padding:30,textAlign:"center",color:"#94a3b8",fontSize:12}}>
+                {payments?.length===0 ? "등록된 결제 내역이 없습니다." : "검색 결과 없음"}
               </div>
-            );
-          })}
+            ) : filteredPays.map(p => {
+              const linkedReq = (requisitions||[]).find(r => r.id === p.reqId);
+              const cand = matchCandidates.get(p.id);
+              return (
+                <div key={p.id} style={{padding:"10px 12px",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:18,flexShrink:0}}>{p.type==="card"?"💳":"🏦"}</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:700,color:"#0f172a"}}>
+                      {p.amount.toLocaleString()}원 · <span style={{fontWeight:500}}>{p.vendor}</span>
+                    </div>
+                    <div style={{fontSize:10,color:"#64748b",marginTop:2}}>
+                      {p.date} {p.ref?`· #${p.ref}`:""}
+                      {linkedReq && <span style={{marginLeft:6,padding:"1px 6px",background:"#dbeafe",color:"#1e3a8a",borderRadius:4,fontWeight:700}}>📋 {linkedReq.prodName}</span>}
+                      {p.memo?` · ${p.memo}`:""}
+                    </div>
+                    {!linkedReq && cand && (
+                      <div style={{marginTop:4,padding:"4px 8px",background:"#fef9c3",border:"1px dashed #fcd34d",borderRadius:5,fontSize:10,color:"#92400e",display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                        <span>🎯 매칭 후보 (점수 {cand.score}): <strong>{cand.reqLabel}</strong></span>
+                        <button onClick={()=>onLinkPayment?.(p.id, cand.reqId)} style={{marginLeft:"auto",padding:"2px 8px",fontSize:10,fontWeight:700,borderRadius:4,border:"none",cursor:"pointer",background:"#1e40af",color:"#fff"}}>
+                          ✓ 연결
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <button onClick={()=>onDeletePayment(p.id)}
+                    style={{padding:"4px 8px",fontSize:10,fontWeight:700,borderRadius:5,border:"1px solid #fca5a5",cursor:"pointer",background:"#fff",color:"#b91c1c",flexShrink:0}}>
+                    삭제
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {/* 비-master가 어쩌다 pay 탭에 진입했을 때 */}
+      {tab==="pay" && !isMaster && (
+        <div style={{padding:30,textAlign:"center",color:"#94a3b8",fontSize:12,border:"1px dashed #e5e7eb",borderRadius:8}}>
+          🔒 결제 내역은 <strong>최종관리자(master)</strong>만 열람할 수 있습니다.
         </div>
       )}
     </Modal>
