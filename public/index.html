@@ -62,6 +62,7 @@
     .status-pill[data-state="offline"] .dot, .status-pill[data-state="error"] .dot { background: #ef4444; }
     .status-pill[data-state="pending"] .dot, .status-pill[data-state="syncing"] .dot { background: #fbbf24; animation: pulse 1s infinite; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    @keyframes pulseSync { 0%, 100% { box-shadow: 0 0 0 0 rgba(16,185,129,0.6); } 50% { box-shadow: 0 0 0 6px rgba(16,185,129,0); } }
 
     /* 로딩 중에는 검색창/상태 모두 숨김 — React 앱 마운트 후에만 표시 */
     body.loading #globalSearch,

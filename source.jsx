@@ -6463,6 +6463,137 @@ function QRBatchPrintModal({prods, onClose}){
   );
 }
 
+// ========== 결제 파일 파서 (홈택스/은행/카드사 자동 감지) ==========
+// 외부 SheetJS(XLSX)를 첫 업로드 시점에 동적 로드 (~700KB CDN)
+let __xlsxLoadPromise = null;
+function loadXLSX() {
+  if (typeof window === "undefined") return Promise.reject(new Error("no window"));
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (__xlsxLoadPromise) return __xlsxLoadPromise;
+  __xlsxLoadPromise = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
+    s.async = true;
+    s.onload = () => resolve(window.XLSX);
+    s.onerror = () => { __xlsxLoadPromise = null; reject(new Error("XLSX 로드 실패")); };
+    document.head.appendChild(s);
+  });
+  return __xlsxLoadPromise;
+}
+
+// 형식별 헤더 시그니처 + 행 매핑
+const PAYMENT_FORMATS = {
+  hometax_purchase: {
+    label: "🧾 홈택스 매입세금계산서",
+    detect: (h) => h.some(x => x.includes("공급자")) && (h.some(x => x.includes("공급가액")) || h.some(x => x.includes("합계금액"))),
+    map: (r) => ({
+      date: String(r["작성일자"] || r["발급일자"] || r["거래일자"] || "").slice(0, 10),
+      vendor: String(r["공급자"] || r["상호"] || r["거래처"] || "").trim(),
+      amount: parseAmount(r["합계금액"] || r["총금액"] || (toNum(r["공급가액"]) + toNum(r["세액"]))),
+      ref: String(r["승인번호"] || r["사업자등록번호"] || "").trim(),
+      memo: String(r["품목"] || r["적요"] || "").trim(),
+      type: "transfer",
+      source: "홈택스 세금계산서",
+    }),
+  },
+  hometax_card_in: {
+    label: "💳 홈택스 카드매입",
+    detect: (h) => h.some(x => x.includes("이용가맹점") || x.includes("가맹점명")) && h.some(x => x.includes("이용금액") || x.includes("승인금액")),
+    map: (r) => ({
+      date: String(r["이용일자"] || r["승인일자"] || r["거래일자"] || "").slice(0, 10),
+      vendor: String(r["이용가맹점"] || r["가맹점명"] || r["가맹점"] || "").trim(),
+      amount: parseAmount(r["이용금액"] || r["승인금액"] || r["거래금액"]),
+      ref: String(r["승인번호"] || "").trim(),
+      type: "card",
+      source: "카드사",
+    }),
+  },
+  bank_transaction: {
+    label: "🏦 은행 거래내역",
+    detect: (h) =>
+      (h.some(x => x.includes("출금액") || x === "출금") ||
+       h.some(x => x.includes("입금액") || x === "입금")) ||
+      (h.some(x => x.includes("적요")) && h.some(x => x.includes("잔액"))),
+    map: (r) => {
+      const date = String(r["거래일시"] || r["거래일자"] || r["일자"] || r["거래시각"] || "").slice(0, 10);
+      const out = parseAmount(r["출금액"] || r["출금"] || r["출금금액"] || 0);
+      const inn = parseAmount(r["입금액"] || r["입금"] || r["입금금액"] || 0);
+      return {
+        date,
+        vendor: String(r["적요"] || r["거래내용"] || r["내용"] || r["메모"] || r["거래기록사항"] || "").trim(),
+        amount: out > 0 ? out : inn,
+        ref: String(r["거래번호"] || r["취급점"] || "").trim(),
+        memo: inn > 0 && out === 0 ? `입금 +${inn.toLocaleString()}원` : "",
+        type: out > 0 ? "transfer" : "income",
+        source: "은행",
+      };
+    },
+  },
+  card_statement: {
+    label: "💳 카드 이용내역",
+    detect: (h) => h.some(x => x.includes("이용일") || x.includes("승인일")) && h.some(x => x.includes("가맹") || x.includes("이용처")),
+    map: (r) => ({
+      date: String(r["이용일자"] || r["승인일자"] || r["이용일"] || "").slice(0, 10),
+      vendor: String(r["이용가맹점"] || r["가맹점명"] || r["이용처"] || "").trim(),
+      amount: parseAmount(r["이용금액"] || r["승인금액"] || r["청구금액"]),
+      ref: String(r["승인번호"] || "").trim(),
+      type: "card",
+      source: "카드사",
+    }),
+  },
+};
+
+function toNum(v) {
+  if (v == null) return 0;
+  const s = String(v).replace(/[,\s원-]/g, "");
+  const n = Number(s);
+  return isFinite(n) ? n : 0;
+}
+function parseAmount(v) {
+  if (typeof v === "number") return Math.round(Math.abs(v));
+  return Math.round(Math.abs(toNum(v)));
+}
+
+function detectPaymentFormat(headers) {
+  const h = (headers || []).map(s => String(s || "").trim());
+  for (const [key, def] of Object.entries(PAYMENT_FORMATS)) {
+    try { if (def.detect(h)) return key; } catch (e) {}
+  }
+  return null;
+}
+
+// 파일(엑셀/CSV) → 결제 행 배열로 변환
+async function parsePaymentFile(file) {
+  const XLSX = await loadXLSX();
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array", cellDates: true, raw: false });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  // 헤더 행 자동 탐색 (홈택스는 1~5행에 메타데이터가 있을 수 있음)
+  const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: false });
+  let headerRow = -1;
+  for (let i = 0; i < Math.min(aoa.length, 12); i++) {
+    const row = aoa[i].map(c => String(c || "").trim());
+    if (row.some(c => /일자|일시|가맹점|적요|공급자|이용금액|출금|입금/.test(c))) {
+      headerRow = i; break;
+    }
+  }
+  if (headerRow === -1) headerRow = 0;
+  const headers = aoa[headerRow].map(c => String(c || "").trim());
+  const formatKey = detectPaymentFormat(headers);
+  if (!formatKey) {
+    return { ok: false, error: "형식 자동 감지 실패 (홈택스/은행/카드사 헤더 없음)", headers };
+  }
+  const def = PAYMENT_FORMATS[formatKey];
+  const rows = aoa.slice(headerRow + 1).filter(r => r.some(c => String(c || "").trim() !== ""));
+  const objects = rows.map(r => {
+    const o = {};
+    headers.forEach((h, i) => { o[h] = r[i]; });
+    return o;
+  });
+  const parsed = objects.map(def.map).filter(p => p.amount > 0 && p.date);
+  return { ok: true, format: formatKey, label: def.label, rows: parsed, total: parsed.length };
+}
+
 // ========== 품의 / 결제 통합 모달 ==========
 // 재고관리 ↔ 품의 ↔ 카드결제/이체 내역을 동시 연동.
 // 품의 상태 흐름: 작성중 → 제출 → 승인 → 발주 → 결제 → 입고완료(자동 stock-in)
@@ -6474,6 +6605,90 @@ function ReqPaymentsModal({prods, requisitions, payments, statusLabel, statusCol
   const [showCreate, setShowCreate] = useState(!!defaultProd);
   const [selectedReq, setSelectedReq] = useState(null);
   const [showAddPay, setShowAddPay] = useState(false);
+
+  // ── 결제 파일 업로드 + 실시간 동기화 ──
+  const [showUpload, setShowUpload] = useState(false);
+  const [uploadParsing, setUploadParsing] = useState(false);
+  const [uploadResult, setUploadResult] = useState(null); // {ok, format, label, rows[], error}
+  const [uploadDup, setUploadDup] = useState(0);
+  const [autoSync, setAutoSync] = useLocalStorage("jamsa_pay_autosync", false);
+  const [syncStatus, setSyncStatus] = useState({ at: null, ok: null, count: 0, msg: "" });
+
+  const handleUploadFile = async (file) => {
+    if (!file) return;
+    setUploadParsing(true); setUploadResult(null);
+    try {
+      const r = await parsePaymentFile(file);
+      if (!r.ok) {
+        setUploadResult({ ok: false, error: r.error, headers: r.headers || [] });
+      } else {
+        // 중복 감지 (date+amount+vendor 동일)
+        const existing = new Set((payments || []).map(p => `${p.date}_${p.amount}_${(p.vendor||"").trim()}`));
+        const dupCount = r.rows.filter(p => existing.has(`${p.date}_${p.amount}_${p.vendor}`)).length;
+        setUploadDup(dupCount);
+        setUploadResult(r);
+      }
+    } catch (e) {
+      setUploadResult({ ok: false, error: e.message || "파싱 실패" });
+    } finally {
+      setUploadParsing(false);
+    }
+  };
+
+  const importParsedRows = (skipDuplicates = true) => {
+    if (!uploadResult?.ok) return;
+    const existing = new Set((payments || []).map(p => `${p.date}_${p.amount}_${(p.vendor||"").trim()}`));
+    let added = 0, skipped = 0;
+    uploadResult.rows.forEach(p => {
+      const key = `${p.date}_${p.amount}_${p.vendor}`;
+      if (skipDuplicates && existing.has(key)) { skipped++; return; }
+      onAddPayment({
+        type: p.type === "income" ? "transfer" : (p.type || "card"),
+        amount: p.amount,
+        vendor: p.vendor || "(미상)",
+        ref: p.ref || "",
+        date: p.date,
+        reqId: null,
+        memo: `[${p.source}] ${p.memo || ""}`.trim(),
+      });
+      existing.add(key); added++;
+    });
+    alert(`✅ ${added}건 추가${skipped > 0 ? ` · ${skipped}건 중복 건너뜀` : ""}`);
+    setShowUpload(false); setUploadResult(null); setUploadDup(0);
+  };
+
+  // 실시간 동기화 (오픈뱅킹 폴링) — autoSync 켜져 있을 때만 작동
+  useEffect(() => {
+    if (!autoSync) { setSyncStatus(s => ({ ...s, msg: "" })); return; }
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const since = (payments || []).reduce((m, p) => p.date > m ? p.date : m, "");
+        const res = await fetch(`/api/openbanking-sync?since=${encodeURIComponent(since)}`, { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!data.ok) {
+          setSyncStatus({ at: new Date().toISOString(), ok: false, count: 0, msg: data.reason || "환경변수 미설정" });
+          return;
+        }
+        let added = 0;
+        const existing = new Set((payments || []).map(p => `${p.date}_${p.amount}_${(p.vendor||"").trim()}`));
+        (data.rows || []).forEach(p => {
+          const key = `${p.date}_${p.amount}_${(p.vendor||"").trim()}`;
+          if (existing.has(key)) return;
+          onAddPayment({ type: p.type, amount: p.amount, vendor: p.vendor, ref: p.ref || "",
+            date: p.date, reqId: null, memo: `[자동동기화/${p.source||"은행"}] ${p.memo||""}`.trim() });
+          existing.add(key); added++;
+        });
+        setSyncStatus({ at: new Date().toISOString(), ok: true, count: added, msg: added ? `+${added}건` : "신규 없음" });
+      } catch (e) {
+        if (!cancelled) setSyncStatus({ at: new Date().toISOString(), ok: false, count: 0, msg: e.message });
+      }
+    };
+    tick();
+    const id = setInterval(tick, 5 * 60 * 1000); // 5분마다
+    return () => { cancelled = true; clearInterval(id); };
+  }, [autoSync]); // eslint-disable-line
 
   // 품의 작성 폼
   const [fProdId, setFProdId] = useState(defaultProd?.id || "");
@@ -6628,8 +6843,119 @@ function ReqPaymentsModal({prods, requisitions, payments, statusLabel, statusCol
           </select>
         )}
         {tab==="req" && <button className="btn bp" onClick={()=>setShowCreate(!showCreate)} style={{fontSize:12}}>{showCreate?"✕ 취소":"+ 새 품의"}</button>}
-        {tab==="pay" && <button className="btn bp" onClick={()=>setShowAddPay(!showAddPay)} style={{fontSize:12}}>{showAddPay?"✕ 취소":"+ 결제 등록"}</button>}
+        {tab==="pay" && (
+          <>
+            <button className="btn bs" onClick={()=>{setShowUpload(!showUpload);setShowAddPay(false);}}
+              style={{fontSize:12, background: showUpload?"#dbeafe":"#eff6ff", color:"#1e40af", border:"1px solid #bfdbfe"}}
+              title="홈택스 / 은행 / 카드사 엑셀·CSV 일괄 가져오기">
+              {showUpload ? "✕ 닫기" : "📥 엑셀 업로드"}
+            </button>
+            <button className="btn bs" onClick={()=>setAutoSync(!autoSync)}
+              style={{fontSize:12, background: autoSync?"linear-gradient(135deg,#10b981,#059669)":"#fff",
+                color: autoSync?"#fff":"#475569", border: `1px solid ${autoSync?"#059669":"#cbd5e1"}`,
+                animation: autoSync?"pulseSync 2s infinite":"none"}}
+              title="오픈뱅킹 API 자동 동기화 (5분마다) - 환경변수 설정 필요">
+              {autoSync ? "🟢 실시간 ON" : "⚪ 실시간 OFF"}
+            </button>
+            <button className="btn bp" onClick={()=>{setShowAddPay(!showAddPay);setShowUpload(false);}} style={{fontSize:12}}>{showAddPay?"✕ 취소":"+ 결제 등록"}</button>
+          </>
+        )}
       </div>
+      {tab==="pay" && autoSync && syncStatus.at && (
+        <div style={{padding:"6px 10px",background:syncStatus.ok?"#ecfdf5":"#fef2f2",border:`1px solid ${syncStatus.ok?"#a7f3d0":"#fecaca"}`,borderRadius:6,fontSize:10,color:syncStatus.ok?"#065f46":"#991b1b",marginBottom:8,display:"flex",justifyContent:"space-between"}}>
+          <span>{syncStatus.ok?"🟢 자동 동기화":"⚠️ 동기화"} · {new Date(syncStatus.at).toLocaleTimeString("ko-KR")} · {syncStatus.msg||"대기"}</span>
+          <span style={{opacity:0.7}}>5분 주기 · /api/openbanking-sync</span>
+        </div>
+      )}
+
+      {/* ── 엑셀/CSV 업로드 패널 ── */}
+      {tab==="pay" && showUpload && (
+        <div style={{padding:14,background:"linear-gradient(135deg,#eff6ff,#dbeafe)",borderRadius:8,marginBottom:10,border:"1px solid #bfdbfe"}}>
+          <div style={{fontSize:13,fontWeight:800,color:"#1e40af",marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span>📥 결제 내역 일괄 가져오기 (자동 형식 감지)</span>
+            <span style={{fontSize:10,fontWeight:600,color:"#475569"}}>홈택스 · 은행 거래내역 · 카드사 이용내역</span>
+          </div>
+          <label style={{display:"block",padding:"18px",background:"#fff",border:"2px dashed #93c5fd",borderRadius:8,textAlign:"center",cursor:"pointer"}}
+            onDragOver={(e)=>{e.preventDefault();e.currentTarget.style.background="#f0f9ff";}}
+            onDragLeave={(e)=>{e.currentTarget.style.background="#fff";}}
+            onDrop={(e)=>{e.preventDefault();e.currentTarget.style.background="#fff";const f=e.dataTransfer.files?.[0];if(f) handleUploadFile(f);}}>
+            <input type="file" accept=".xlsx,.xls,.csv,.xml" style={{display:"none"}}
+              onChange={(e)=>handleUploadFile(e.target.files?.[0])}/>
+            {uploadParsing ? (
+              <div style={{fontSize:12,color:"#1e40af"}}>⏳ 파싱 중... (첫 업로드 시 SheetJS 로딩 ~700KB)</div>
+            ) : (
+              <>
+                <div style={{fontSize:13,fontWeight:700,color:"#1e40af",marginBottom:4}}>📂 파일을 끌어다 놓거나 클릭하여 선택</div>
+                <div style={{fontSize:10,color:"#475569"}}>
+                  지원: <strong>.xlsx</strong> · .xls · .csv · 홈택스 매입세금계산서 · KB/신한/우리/농협/카카오뱅크 거래내역 · 삼성/현대/신한카드 사용내역
+                </div>
+              </>
+            )}
+          </label>
+
+          {uploadResult && !uploadResult.ok && (
+            <div style={{marginTop:10,padding:10,background:"#fef2f2",border:"1px solid #fecaca",borderRadius:6,fontSize:11,color:"#991b1b"}}>
+              ⚠️ <strong>{uploadResult.error}</strong>
+              {uploadResult.headers?.length > 0 && (
+                <div style={{marginTop:6,fontSize:10,color:"#7f1d1d"}}>
+                  감지된 헤더: {uploadResult.headers.slice(0,8).join(" · ")}
+                </div>
+              )}
+              <div style={{marginTop:6,fontSize:10}}>💡 홈택스/은행에서 다운받은 원본 파일을 그대로 올려주세요. 헤더 행이 자동 탐색됩니다.</div>
+            </div>
+          )}
+
+          {uploadResult?.ok && (
+            <div style={{marginTop:10}}>
+              <div style={{padding:10,background:"#fff",borderRadius:6,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div>
+                  <div style={{fontSize:13,fontWeight:800,color:"#0f172a"}}>{uploadResult.label}</div>
+                  <div style={{fontSize:11,color:"#475569",marginTop:2}}>
+                    총 <strong>{uploadResult.total}건</strong> 파싱 완료
+                    {uploadDup > 0 && <span style={{color:"#dc2626",marginLeft:8}}>· 중복 {uploadDup}건</span>}
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:6}}>
+                  <button className="btn bs" onClick={()=>setUploadResult(null)} style={{fontSize:11}}>다시 선택</button>
+                  <button className="btn bp" onClick={()=>importParsedRows(true)} style={{fontSize:11,background:"linear-gradient(135deg,#10b981,#059669)",color:"#fff"}}>
+                    ✅ {uploadResult.total - uploadDup}건 가져오기 (중복 제외)
+                  </button>
+                </div>
+              </div>
+              <div style={{maxHeight:240,overflowY:"auto",background:"#fff",borderRadius:6,border:"1px solid #e5e7eb"}}>
+                <table style={{width:"100%",fontSize:10,borderCollapse:"collapse"}}>
+                  <thead style={{position:"sticky",top:0,background:"#f8fafc"}}>
+                    <tr>
+                      <th style={{padding:"6px 8px",textAlign:"left",borderBottom:"1px solid #e5e7eb",fontSize:10,fontWeight:700,color:"#475569"}}>일자</th>
+                      <th style={{padding:"6px 8px",textAlign:"left",borderBottom:"1px solid #e5e7eb",fontSize:10,fontWeight:700,color:"#475569"}}>거래처</th>
+                      <th style={{padding:"6px 8px",textAlign:"right",borderBottom:"1px solid #e5e7eb",fontSize:10,fontWeight:700,color:"#475569"}}>금액</th>
+                      <th style={{padding:"6px 8px",textAlign:"center",borderBottom:"1px solid #e5e7eb",fontSize:10,fontWeight:700,color:"#475569"}}>방식</th>
+                      <th style={{padding:"6px 8px",textAlign:"left",borderBottom:"1px solid #e5e7eb",fontSize:10,fontWeight:700,color:"#475569"}}>참조</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {uploadResult.rows.slice(0, 50).map((p, i) => {
+                      const existing = (payments||[]).some(x => x.date===p.date && x.amount===p.amount && (x.vendor||"").trim()===p.vendor);
+                      return (
+                        <tr key={i} style={{borderBottom:"1px solid #f1f5f9", background: existing?"#fef3c7":"transparent"}}>
+                          <td style={{padding:"5px 8px"}}>{p.date}</td>
+                          <td style={{padding:"5px 8px",fontWeight:600}}>{p.vendor}{existing && <span style={{marginLeft:4,fontSize:9,color:"#dc2626"}}>중복</span>}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",fontWeight:700,color:"#0f172a"}}>{p.amount.toLocaleString()}원</td>
+                          <td style={{padding:"5px 8px",textAlign:"center"}}>{p.type==="card"?"💳":p.type==="income"?"📥":"🏦"}</td>
+                          <td style={{padding:"5px 8px",fontSize:9,color:"#94a3b8"}}>{p.ref || "-"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {uploadResult.rows.length > 50 && (
+                  <div style={{padding:6,textAlign:"center",fontSize:10,color:"#94a3b8"}}>… 외 {uploadResult.rows.length - 50}건 (가져오기 시 모두 포함)</div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 품의 작성 폼 */}
       {tab==="req" && showCreate && (
