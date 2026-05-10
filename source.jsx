@@ -11987,39 +11987,156 @@ function ZoneLayoutModal({zone, layout, allProds, focusProdId, onSave, onAssignP
 
       {/* 모바일 스캔 탭 */}
       {tab === "scan" && (
-        <div style={{padding:14,background:"#f8fafc",borderRadius:8}}>
-          <div style={{fontSize:13,fontWeight:800,color:"#0f172a",marginBottom:8}}>📱 모바일로 구역을 3D 스캔하세요</div>
-          <div style={{fontSize:11,color:"#475569",marginBottom:14,lineHeight:1.6}}>
-            브라우저는 직접 3D 스캔을 못 하지만, 아래 무료 앱으로 1~3분 안에 스캔하면 .glb 또는 .usdz 파일이 만들어집니다.<br/>
-            그 파일을 위 <strong>"🎮 3D 모델"</strong> 탭에 올리시면 즉시 회전/AR로 확인 가능합니다.
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:10}}>
-            {[
-              { name: "Polycam", desc: "iOS/Android 모두 지원. AI 사진 합성으로 30~60장 사진만 찍어도 .glb 생성. 무료 플랜 OK.", link: "https://poly.cam/", icon: "📷", best: "범용 (가장 추천)" },
-              { name: "Scaniverse", desc: "iOS/Android. LiDAR 있으면 더 정확. 무료. .glb 내보내기.", link: "https://scaniverse.com/", icon: "🔍", best: "iPhone Pro/iPad Pro" },
-              { name: "Apple RoomPlan", desc: "iOS 16+ 전용. 방 구조를 자동으로 .usdz로 추출. 무료.", link: "https://apps.apple.com/app/roomplan/id6443685335", icon: "🏠", best: "iPhone/iPad LiDAR" },
-              { name: "Luma AI", desc: "사진/영상 → 사실적 3D NeRF. 정밀도 최고. 처리 시간 길음.", link: "https://lumalabs.ai/", icon: "✨", best: "고품질 결과 필요할 때" },
-            ].map(app => (
-              <a key={app.name} href={app.link} target="_blank" rel="noopener"
-                style={{display:"block",padding:12,background:"#fff",border:"1px solid #e5e7eb",borderRadius:8,textDecoration:"none",color:"inherit",transition:"transform 0.15s"}}
-                onMouseEnter={e=>e.currentTarget.style.transform="translateY(-2px)"}
-                onMouseLeave={e=>e.currentTarget.style.transform="translateY(0)"}>
-                <div style={{fontSize:24,marginBottom:6}}>{app.icon}</div>
-                <div style={{fontSize:13,fontWeight:800,color:"#0f172a"}}>{app.name}</div>
-                <div style={{fontSize:9,fontWeight:700,color:"#3b5bdb",marginTop:2}}>👉 {app.best}</div>
-                <div style={{fontSize:10,color:"#64748b",marginTop:4,lineHeight:1.4}}>{app.desc}</div>
-              </a>
-            ))}
+        <div style={{padding:0,background:"linear-gradient(180deg,#f0f9ff 0%,#fafbfc 100%)",borderRadius:8,overflow:"hidden"}}>
+          {/* 히어로 헤더 */}
+          <div style={{padding:"18px 16px 14px",background:"linear-gradient(135deg,#0ea5e9 0%,#1e40af 100%)",color:"#fff",position:"relative",overflow:"hidden"}}>
+            <div style={{position:"absolute",right:-30,top:-30,fontSize:140,opacity:0.08,transform:"rotate(15deg)"}}>📱</div>
+            <div style={{fontSize:11,fontWeight:700,letterSpacing:1,opacity:0.9,marginBottom:4}}>3D SCAN GUIDE</div>
+            <div style={{fontSize:18,fontWeight:900,marginBottom:4}}>📱 폰으로 구역을 3D 스캔하기</div>
+            <div style={{fontSize:11,opacity:0.95,lineHeight:1.5}}>1~3분이면 끝. 무료 앱으로 .glb 파일을 만든 뒤 이 화면에 올리세요.</div>
           </div>
 
-          <div style={{marginTop:16,padding:12,background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:8,fontSize:11,color:"#9a3412"}}>
-            <div style={{fontWeight:800,marginBottom:4}}>📋 스캔 워크플로우 (3분):</div>
-            <ol style={{margin:0,paddingLeft:18,lineHeight:1.7}}>
-              <li>위 앱 중 하나 설치 후 구역을 천천히 한 바퀴 돌며 스캔</li>
-              <li>앱에서 .glb 또는 .usdz로 내보내기 (Share → Save to Files)</li>
-              <li>이 화면 상단 <strong>"🎮 3D 모델"</strong> 탭으로 이동 → 파일 업로드</li>
-              <li>회전/AR 버튼으로 공간 확인. <strong>"📐 평면도"</strong> 탭에서 그 위에 마커로 물건 위치 지정</li>
-            </ol>
+          {/* 4-스텝 인포그래픽 플로우 */}
+          <div style={{padding:"18px 14px",position:"relative"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:0,position:"relative"}}>
+              {[
+                { num:"1", color:"#3b82f6", bg:"#dbeafe", icon:"📲", title:"앱 설치", desc:"아래 4개 중 1개 선택", time:"30초" },
+                { num:"2", color:"#10b981", bg:"#d1fae5", icon:"🎥", title:"천천히 한 바퀴", desc:"구역을 360° 돌며 스캔", time:"1~2분" },
+                { num:"3", color:"#f59e0b", bg:"#fef3c7", icon:"💾", title:".glb 내보내기", desc:"Share → Save to Files", time:"20초" },
+                { num:"4", color:"#dc2626", bg:"#fee2e2", icon:"🚀", title:"3D 탭에 업로드", desc:"즉시 회전 + AR 확인", time:"즉시" },
+              ].map((s,i,arr) => (
+                <div key={s.num} style={{position:"relative",textAlign:"center"}}>
+                  {/* 연결선 (마지막 제외) */}
+                  {i < arr.length-1 && (
+                    <div style={{position:"absolute",top:32,left:"50%",width:"100%",height:2,background:`linear-gradient(90deg,${s.color},${arr[i+1].color})`,zIndex:0}}/>
+                  )}
+                  {/* 번호+아이콘 원 */}
+                  <div style={{position:"relative",zIndex:1,display:"inline-block"}}>
+                    <div style={{width:64,height:64,borderRadius:"50%",background:s.bg,border:`3px solid ${s.color}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,boxShadow:"0 4px 12px rgba(0,0,0,0.08)",margin:"0 auto"}}>
+                      {s.icon}
+                    </div>
+                    <div style={{position:"absolute",top:-4,right:-4,width:22,height:22,borderRadius:"50%",background:s.color,color:"#fff",fontSize:11,fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 4px rgba(0,0,0,0.2)"}}>
+                      {s.num}
+                    </div>
+                  </div>
+                  <div style={{marginTop:8,fontSize:11,fontWeight:800,color:"#0f172a"}}>{s.title}</div>
+                  <div style={{fontSize:9,color:"#64748b",marginTop:2,lineHeight:1.3}}>{s.desc}</div>
+                  <div style={{display:"inline-block",marginTop:4,padding:"1px 6px",background:s.color,color:"#fff",borderRadius:8,fontSize:9,fontWeight:800}}>⏱ {s.time}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 스캔 동선 SVG 다이어그램 */}
+          <div style={{margin:"0 14px 14px",padding:14,background:"#fff",borderRadius:10,border:"1px solid #e5e7eb"}}>
+            <div style={{fontSize:11,fontWeight:800,color:"#0f172a",marginBottom:8,display:"flex",alignItems:"center",gap:6}}>
+              <span style={{padding:"2px 8px",background:"#fef3c7",color:"#92400e",borderRadius:6,fontSize:10}}>STEP 2 상세</span>
+              <span>🎥 어떻게 스캔할까?</span>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"160px 1fr",gap:14,alignItems:"center"}}>
+              {/* SVG: 위에서 본 방 + 동선 + 폰 위치 */}
+              <svg viewBox="0 0 160 130" style={{width:"100%",height:"auto"}}>
+                <defs>
+                  <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                    <path d="M0,0 L10,5 L0,10 Z" fill="#10b981"/>
+                  </marker>
+                </defs>
+                {/* 방 (구역) 외곽선 */}
+                <rect x="30" y="30" width="100" height="70" fill="#f1f5f9" stroke="#94a3b8" strokeWidth="2" strokeDasharray="3,3" rx="4"/>
+                {/* 안의 물건들 */}
+                <rect x="40" y="40" width="18" height="14" fill="#fbbf24" rx="2"/>
+                <rect x="70" y="42" width="22" height="12" fill="#34d399" rx="2"/>
+                <rect x="105" y="40" width="14" height="22" fill="#a78bfa" rx="2"/>
+                <rect x="42" y="75" width="16" height="18" fill="#fb7185" rx="2"/>
+                <rect x="92" y="78" width="20" height="14" fill="#60a5fa" rx="2"/>
+                {/* 동선 (둥근 화살표) */}
+                <path d="M 20,80 Q 20,20 80,20 Q 140,20 140,65 Q 140,110 80,110 Q 25,110 22,82" fill="none" stroke="#10b981" strokeWidth="2.2" strokeLinecap="round" markerEnd="url(#arr)"/>
+                {/* 폰 아이콘 */}
+                <g transform="translate(15,72)">
+                  <rect x="0" y="0" width="14" height="22" fill="#0f172a" rx="3"/>
+                  <rect x="2" y="2" width="10" height="16" fill="#3b82f6"/>
+                  <circle cx="7" cy="20" r="0.8" fill="#fff"/>
+                </g>
+                {/* 라벨 */}
+                <text x="80" y="14" textAnchor="middle" fontSize="9" fontWeight="700" fill="#475569">위에서 본 구역</text>
+                <text x="80" y="125" textAnchor="middle" fontSize="8" fill="#94a3b8">사람=파란점, 물건=색상자</text>
+              </svg>
+              <div style={{fontSize:11,color:"#475569",lineHeight:1.7}}>
+                <div style={{display:"flex",gap:8,marginBottom:6}}><span style={{color:"#10b981",fontWeight:900,fontSize:14}}>↻</span><span><strong style={{color:"#0f172a"}}>천천히 한 바퀴</strong> — 벽을 따라 1~2분에 걸쳐 360도 회전</span></div>
+                <div style={{display:"flex",gap:8,marginBottom:6}}><span style={{fontSize:14}}>📐</span><span><strong style={{color:"#0f172a"}}>여러 높이</strong> — 무릎/허리/머리 높이 3번 더 돌면 정밀도↑</span></div>
+                <div style={{display:"flex",gap:8,marginBottom:6}}><span style={{fontSize:14}}>💡</span><span><strong style={{color:"#0f172a"}}>밝은 조명</strong> — 어두우면 노이즈, 정오 자연광 최적</span></div>
+                <div style={{display:"flex",gap:8}}><span style={{fontSize:14}}>🚫</span><span><strong style={{color:"#0f172a"}}>거울/유리 피하기</strong> — 반사면은 스캔 오류 유발</span></div>
+              </div>
+            </div>
+          </div>
+
+          {/* 앱 카드 — STEP 1 */}
+          <div style={{margin:"0 14px 14px"}}>
+            <div style={{fontSize:11,fontWeight:800,color:"#0f172a",marginBottom:8,display:"flex",alignItems:"center",gap:6}}>
+              <span style={{padding:"2px 8px",background:"#dbeafe",color:"#1e40af",borderRadius:6,fontSize:10}}>STEP 1</span>
+              <span>📲 어떤 앱을 쓸까?</span>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:10}}>
+              {[
+                { name:"Polycam", icon:"📷", color:"#3b82f6", bgc:"#dbeafe", best:"가장 추천", desc:"iOS/Android 모두 OK. AI 사진합성으로 30~60장만 찍어도 .glb 생성", link:"https://poly.cam/", badge:"⭐ 1순위", platform:"iOS · Android" },
+                { name:"Scaniverse", icon:"🔍", color:"#10b981", bgc:"#d1fae5", best:"LiDAR 폰", desc:"iOS/Android. LiDAR 있으면 매우 정확. 완전 무료, .glb 내보내기", link:"https://scaniverse.com/", badge:"🔧 정밀", platform:"iOS · Android" },
+                { name:"RoomPlan", icon:"🏠", color:"#a855f7", bgc:"#f3e8ff", best:"방 자동 추출", desc:"iOS 16+ 전용. 방 구조(벽/문/가구)를 자동으로 .usdz로 만듦", link:"https://apps.apple.com/app/roomplan/id6443685335", badge:"🍎 Apple", platform:"iOS only" },
+                { name:"Luma AI", icon:"✨", color:"#f59e0b", bgc:"#fef3c7", best:"최고 품질", desc:"사진/영상 → 사실적 3D NeRF. 처리 시간 길지만 결과는 최상", link:"https://lumalabs.ai/", badge:"🎨 고급", platform:"iOS · Android" },
+              ].map(app => (
+                <a key={app.name} href={app.link} target="_blank" rel="noopener"
+                  style={{display:"block",padding:0,background:"#fff",border:`2px solid ${app.color}`,borderRadius:10,textDecoration:"none",color:"inherit",overflow:"hidden",transition:"transform 0.15s, box-shadow 0.15s",position:"relative"}}
+                  onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 8px 20px ${app.color}33`;}}
+                  onMouseLeave={e=>{e.currentTarget.style.transform="translateY(0)";e.currentTarget.style.boxShadow="none";}}>
+                  <div style={{padding:"10px 12px",background:app.bgc,borderBottom:`1px solid ${app.color}33`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                    <span style={{fontSize:30}}>{app.icon}</span>
+                    <span style={{fontSize:9,fontWeight:800,padding:"2px 7px",background:app.color,color:"#fff",borderRadius:6}}>{app.badge}</span>
+                  </div>
+                  <div style={{padding:"10px 12px"}}>
+                    <div style={{fontSize:14,fontWeight:900,color:"#0f172a",display:"flex",alignItems:"center",gap:6}}>
+                      {app.name}
+                    </div>
+                    <div style={{fontSize:9,color:app.color,fontWeight:700,marginTop:2}}>👉 {app.best}</div>
+                    <div style={{fontSize:9,color:"#94a3b8",marginTop:1,fontWeight:600}}>{app.platform}</div>
+                    <div style={{fontSize:10,color:"#64748b",marginTop:6,lineHeight:1.4}}>{app.desc}</div>
+                  </div>
+                  <div style={{padding:"7px 12px",background:"#f8fafc",borderTop:"1px solid #f1f5f9",fontSize:10,color:app.color,fontWeight:800,textAlign:"center"}}>
+                    설치하러 가기 →
+                  </div>
+                </a>
+              ))}
+            </div>
+          </div>
+
+          {/* 결과물 흐름 다이어그램 */}
+          <div style={{margin:"0 14px 14px",padding:"14px 14px 12px",background:"linear-gradient(135deg,#fefce8 0%,#fef3c7 100%)",borderRadius:10,border:"1px solid #fbbf24"}}>
+            <div style={{fontSize:11,fontWeight:800,color:"#92400e",marginBottom:10}}>🔄 전체 데이터 흐름</div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:6,flexWrap:"wrap"}}>
+              {[
+                { ic:"🏛️", lbl:"실제 구역", clr:"#64748b" },
+                { ic:"📱", lbl:"폰 스캔", clr:"#3b82f6" },
+                { ic:"📦", lbl:".glb 파일", clr:"#f59e0b" },
+                { ic:"🎮", lbl:"3D 뷰어", clr:"#10b981" },
+                { ic:"📐", lbl:"평면도 마커", clr:"#a855f7" },
+                { ic:"📍", lbl:"물건 위치", clr:"#dc2626" },
+              ].map((n,i,arr) => (
+                <React.Fragment key={n.lbl}>
+                  <div style={{textAlign:"center",flex:"0 0 auto"}}>
+                    <div style={{width:42,height:42,borderRadius:"50%",background:"#fff",border:`2px solid ${n.clr}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,margin:"0 auto"}}>{n.ic}</div>
+                    <div style={{fontSize:9,fontWeight:700,color:n.clr,marginTop:3,whiteSpace:"nowrap"}}>{n.lbl}</div>
+                  </div>
+                  {i < arr.length-1 && <div style={{flex:"0 0 12px",fontSize:14,color:"#fbbf24",fontWeight:900,textAlign:"center"}}>→</div>}
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+
+          {/* 알림 박스 */}
+          <div style={{margin:"0 14px 14px",padding:"10px 12px",background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,fontSize:10,color:"#1e40af",display:"flex",alignItems:"flex-start",gap:8}}>
+            <span style={{fontSize:14,flexShrink:0}}>💡</span>
+            <div style={{lineHeight:1.55}}>
+              <strong>팁:</strong> 스캔 결과(.glb)는 보통 1~10MB. 파일이 크면 업로드가 느려질 수 있으니 앱에서 "Low/Medium quality" 내보내기 권장.
+              생성된 모델은 위 <strong style={{color:"#dc2626"}}>"🎮 3D 모델"</strong> 탭에서 즉시 확인 가능합니다.
+            </div>
           </div>
         </div>
       )}
