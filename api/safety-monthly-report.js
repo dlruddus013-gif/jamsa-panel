@@ -2,18 +2,38 @@
 // 월간 안전 리포트 자동 생성
 // - ANTHROPIC_API_KEY 있으면: Claude API로 인사이트 + 권고사항 생성
 // - 없으면: 룰 기반 fallback으로 기본 리포트 생성 (404/500 대신 항상 결과 반환)
+//
+// 인증 정책: 클라이언트가 보낸 데이터를 가공만 하므로 인증 없이도 동작한다.
+// (저장하거나 외부 정보를 읽지 않음). IP 기반 rate limit만 적용.
 
-import { requireAuth } from '../lib/auth.js';
+import { applyCors, checkRateLimit, adminClient } from '../lib/auth.js';
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514';
 
 export default async function handler(req, res) {
-  const ctx = await requireAuth(req, res);
-  if (!ctx) return;
+  applyCors(req, res);
+  if (req.method === 'OPTIONS') { res.status(204).end(); return; }
 
   if (req.method !== 'POST') {
     return res.status(405).json({ ok: false, error: 'method_not_allowed' });
+  }
+
+  // Rate limit (IP 기반) — 분당 120회
+  const ip = req.headers['x-forwarded-for']?.split(',')[0].trim()
+    || req.socket?.remoteAddress || 'unknown';
+  if (!checkRateLimit(ip)) {
+    return res.status(429).json({ ok: false, error: 'rate_limit_exceeded', retryAfter: 60 });
+  }
+
+  // (선택) 토큰이 있으면 사용자명을 기록해두지만, 없어도 거부하지 않음
+  let user = null;
+  const auth = req.headers.authorization;
+  if (auth?.startsWith('Bearer ')) {
+    try {
+      const { data } = await adminClient.auth.getUser(auth.slice(7));
+      user = data?.user || null;
+    } catch (e) { /* ignore */ }
   }
 
   try {
@@ -47,6 +67,7 @@ export default async function handler(req, res) {
             result: aiResult,
             generatedAt: new Date().toISOString(),
             source: 'claude',
+            requestedBy: user?.email || 'anonymous',
           });
         }
       } catch (e) {
@@ -61,6 +82,7 @@ export default async function handler(req, res) {
       result,
       generatedAt: new Date().toISOString(),
       source: ANTHROPIC_API_KEY ? 'rule_based_fallback' : 'rule_based',
+      requestedBy: user?.email || 'anonymous',
     });
   } catch (e) {
     return res.status(500).json({ ok: false, error: e.message });
