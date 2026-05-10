@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>품의 ↔ 결제 ↔ 재고 통합 연동 · 미리보기</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Pretendard','Noto Sans KR',-apple-system,sans-serif; background: linear-gradient(135deg,#f8fafc,#e2e8f0); min-height: 100vh; padding: 20px; color: #0f172a; }
+  .wrap { max-width: 1200px; margin: 0 auto; }
+  header { text-align: center; margin-bottom: 24px; }
+  header h1 { font-size: 22px; font-weight: 900; }
+  header p { color: #64748b; font-size: 13px; margin-top: 4px; }
+  .pill { display: inline-block; padding: 3px 12px; background: #fef3c7; color: #92400e; border-radius: 12px; font-size: 11px; font-weight: 700; margin-top: 6px; }
+
+  .card { background: #fff; border-radius: 14px; padding: 18px; box-shadow: 0 4px 14px rgba(0,0,0,0.06); margin-bottom: 18px; }
+  .card h2 { font-size: 15px; font-weight: 800; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #f1f5f9; display: flex; align-items: center; gap: 8px; }
+  .num { width: 24px; height: 24px; border-radius: 50%; background: #3b5bdb; color: #fff; font-size: 12px; display: inline-flex; align-items: center; justify-content: center; }
+
+  /* ===== Workflow diagram ===== */
+  .workflow { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; padding: 18px 6px; background: linear-gradient(135deg,#f0f9ff,#fef3c7); border-radius: 12px; }
+  .step { padding: 10px 14px; background: #fff; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); text-align: center; min-width: 110px; border-top: 3px solid; }
+  .step .icon { font-size: 22px; margin-bottom: 4px; }
+  .step .label { font-size: 11px; font-weight: 800; }
+  .step .sub { font-size: 9px; color: #64748b; margin-top: 2px; }
+  .arr { font-size: 18px; color: #94a3b8; font-weight: 700; }
+
+  .s1 { border-color: #94a3b8; } .s1 .label { color: #475569; }
+  .s2 { border-color: #3b82f6; } .s2 .label { color: #1e40af; }
+  .s3 { border-color: #10b981; } .s3 .label { color: #065f46; }
+  .s4 { border-color: #f59e0b; } .s4 .label { color: #78350f; }
+  .s5 { border-color: #8b5cf6; } .s5 .label { color: #5b21b6; }
+  .s6 { border-color: #16a34a; } .s6 .label { color: #14532d; background: #dcfce7; }
+
+  /* ===== Modal mock ===== */
+  .modal-mock { background: #fff; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.12); overflow: hidden; }
+  .modal-head { padding: 14px 18px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; background: #f8fafc; }
+  .modal-head h3 { font-size: 15px; font-weight: 900; }
+  .modal-head .x { background: none; border: none; font-size: 18px; color: #94a3b8; cursor: pointer; }
+  .modal-body { padding: 16px; }
+
+  /* KPI cards */
+  .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+  .kpi { padding: 10px; border-radius: 8px; text-align: center; }
+  .kpi .l { font-size: 9px; font-weight: 700; }
+  .kpi .v { font-size: 18px; font-weight: 900; margin-top: 2px; }
+  .kpi .u { font-size: 10px; }
+  .kpi.b1 { background: #eff6ff; } .kpi.b1 .l, .kpi.b1 .v { color: #1e40af; } .kpi.b1 .u { color: #3b82f6; }
+  .kpi.b2 { background: #fef3c7; } .kpi.b2 .l, .kpi.b2 .v { color: #92400e; } .kpi.b2 .u { color: #d97706; }
+  .kpi.b3 { background: #dbeafe; } .kpi.b3 .l, .kpi.b3 .v { color: #1e3a8a; } .kpi.b3 .u { color: #2563eb; }
+  .kpi.b4 { background: #dcfce7; } .kpi.b4 .l, .kpi.b4 .v { color: #14532d; } .kpi.b4 .u { color: #16a34a; }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 4px; border-bottom: 2px solid #e5e7eb; margin-bottom: 10px; }
+  .tab { padding: 8px 16px; border: none; background: transparent; color: #475569; font-weight: 700; font-size: 13px; border-radius: 8px 8px 0 0; cursor: pointer; }
+  .tab.active { background: #3b5bdb; color: #fff; }
+
+  /* Filter bar */
+  .filter-bar { display: flex; gap: 6px; margin-bottom: 10px; }
+  .filter-bar input, .filter-bar select { padding: 7px 10px; border: 1.5px solid #dee2e6; border-radius: 7px; font-size: 12px; outline: none; background: #fff; }
+  .filter-bar input { flex: 1; }
+  .btn-pri { padding: 7px 14px; border-radius: 8px; border: none; background: #3b5bdb; color: #fff; font-weight: 700; font-size: 12px; cursor: pointer; }
+
+  /* Requisition list */
+  .req-list { border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+  .req-item { border-bottom: 1px solid #f1f5f9; }
+  .req-item:last-child { border-bottom: none; }
+  .req-head { padding: 8px 12px; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .req-head:hover { background: #fafbff; }
+  .req-item.selected { background: #fafbff; }
+  .badge-status { font-size: 10px; padding: 3px 8px; border-radius: 6px; font-weight: 700; min-width: 74px; text-align: center; }
+  .b-draft { background: #94a3b822; color: #94a3b8; }
+  .b-submit { background: #3b82f622; color: #3b82f6; }
+  .b-approve { background: #10b98122; color: #10b981; }
+  .b-order { background: #f59e0b22; color: #f59e0b; }
+  .b-paid { background: #8b5cf622; color: #8b5cf6; }
+  .b-receive { background: #16a34a22; color: #16a34a; }
+
+  .req-name { font-size: 13px; font-weight: 700; color: #0f172a; }
+  .req-code { font-size: 10px; color: #94a3b8; font-weight: 500; }
+  .req-meta { font-size: 10px; color: #64748b; margin-top: 1px; }
+  .req-total { color: #1e40af; font-weight: 800; }
+  .req-date { font-size: 10px; color: #94a3b8; }
+
+  /* Expanded detail */
+  .req-detail { padding: 8px 12px 12px; background: #fafbff; border-top: 1px dashed #e5e7eb; }
+  .req-detail .row { font-size: 11px; color: #475569; margin-bottom: 6px; }
+  .pay-link { padding: 6px 10px; background: #dbeafe; border-radius: 6px; font-size: 11px; color: #1e3a8a; margin-bottom: 8px; }
+  .status-log { background: #fff; border-radius: 6px; border: 1px solid #e5e7eb; max-height: 130px; overflow-y: auto; margin-bottom: 8px; }
+  .status-log-row { padding: 4px 8px; border-bottom: 1px solid #f1f5f9; font-size: 10px; display: flex; gap: 6px; align-items: center; }
+  .status-log-row:last-child { border-bottom: none; }
+  .status-log-row .badge-status { min-width: 60px; padding: 1px 6px; }
+  .status-log-row .note { flex: 1; color: #334155; }
+  .status-log-row .meta { color: #94a3b8; }
+
+  .actions { display: flex; gap: 5px; flex-wrap: wrap; }
+  .next-btn { padding: 5px 10px; font-size: 10px; font-weight: 700; border-radius: 6px; border: none; cursor: pointer; color: #fff; }
+  .next-paid { background: #8b5cf6; }
+  .next-receive { background: #16a34a; }
+  .pay-now { padding: 5px 10px; font-size: 10px; font-weight: 700; border-radius: 6px; border: none; cursor: pointer; background: #fef3c7; color: #92400e; }
+  .del-btn { padding: 5px 10px; font-size: 10px; font-weight: 700; border-radius: 6px; border: 1px solid #fca5a5; background: #fff; color: #b91c1c; margin-left: auto; cursor: pointer; }
+
+  /* Payment list */
+  .pay-list { border: 1px solid #e5e7eb; border-radius: 8px; }
+  .pay-item { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; gap: 8px; }
+  .pay-item:last-child { border-bottom: none; }
+  .pay-icon { font-size: 18px; }
+  .pay-amount { font-size: 13px; font-weight: 700; color: #0f172a; }
+  .pay-vendor { font-weight: 500; }
+  .pay-meta { font-size: 10px; color: #64748b; margin-top: 2px; }
+  .req-link { margin-left: 6px; padding: 1px 6px; background: #dbeafe; color: #1e3a8a; border-radius: 4px; font-weight: 700; font-size: 10px; }
+
+  /* Header buttons */
+  .header-mock { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; margin-bottom: 12px; }
+  .header-mock h4 { font-size: 14px; font-weight: 800; }
+  .header-mock .btns { display: flex; gap: 6px; }
+  .h-btn { padding: 6px 12px; border-radius: 7px; font-size: 11px; font-weight: 700; border: 1px solid #dee2e6; background: #f1f3f5; color: #495057; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+  .h-btn.req { background: #fef3c7; color: #92400e; border-color: #fcd34d; }
+  .h-btn.req .badge-cnt { padding: 1px 5px; background: #dc2626; color: #fff; border-radius: 8px; font-size: 9px; }
+  .h-btn.add { background: #3b5bdb; color: #fff; border-color: #3b5bdb; }
+
+  /* Sync flow diagram */
+  .sync-grid { display: grid; grid-template-columns: 1fr 60px 1fr 60px 1fr; align-items: center; gap: 10px; margin: 10px 0; }
+  .sync-box { padding: 14px; border-radius: 10px; text-align: center; }
+  .sync-box.inv { background: #eff6ff; border: 2px solid #3b82f6; }
+  .sync-box.req { background: #fef3c7; border: 2px solid #f59e0b; }
+  .sync-box.pay { background: #dbeafe; border: 2px solid #8b5cf6; }
+  .sync-box .ic { font-size: 28px; margin-bottom: 4px; }
+  .sync-box .ttl { font-size: 12px; font-weight: 800; }
+  .sync-box .desc { font-size: 10px; color: #64748b; margin-top: 4px; }
+  .sync-arr { text-align: center; }
+  .sync-arr .a { font-size: 22px; color: #94a3b8; }
+  .sync-arr .a-text { font-size: 9px; color: #64748b; margin-top: 2px; }
+
+  /* Side-by-side */
+  .side2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 900px) { .side2 { grid-template-columns: 1fr; } }
+
+  .scenario { display: flex; gap: 10px; padding: 8px 0; align-items: flex-start; }
+  .scenario .num { background: #3b5bdb; color: #fff; min-width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; flex-shrink: 0; margin-top: 1px; }
+  .scenario .txt { font-size: 12px; color: #334155; line-height: 1.5; }
+  .scenario .txt b { color: #0f172a; }
+  .scenario .txt .hl { background: #fef3c7; padding: 1px 4px; border-radius: 3px; font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>📋 재고관리 ↔ 품의 ↔ 카드결제/이체 통합 연동</h1>
+    <p>한 화면에서 발주 요청·결제 등록·재고 입고를 자동 동기화</p>
+    <span class="pill">✓ PR #6 머지 · jamsa-panel.vercel.app 배포 완료</span>
+  </header>
+
+  <!-- ===== 1. 워크플로 ===== -->
+  <div class="card">
+    <h2><span class="num">1</span>품의 → 결제 → 재고 자동 흐름</h2>
+    <div class="workflow">
+      <div class="step s1"><div class="icon">📝</div><div class="label">작성중</div><div class="sub">draft</div></div>
+      <span class="arr">→</span>
+      <div class="step s2"><div class="icon">📤</div><div class="label">제출됨</div><div class="sub">submitted</div></div>
+      <span class="arr">→</span>
+      <div class="step s3"><div class="icon">✅</div><div class="label">승인</div><div class="sub">approved</div></div>
+      <span class="arr">→</span>
+      <div class="step s4"><div class="icon">📦</div><div class="label">발주</div><div class="sub">ordered</div></div>
+      <span class="arr">→</span>
+      <div class="step s5"><div class="icon">💳</div><div class="label">결제완료</div><div class="sub">paid</div></div>
+      <span class="arr">→</span>
+      <div class="step s6"><div class="icon">📥</div><div class="label">입고완료</div><div class="sub">자동 stock-in ✨</div></div>
+    </div>
+
+    <!-- Sync diagram -->
+    <div class="sync-grid" style="margin-top: 18px;">
+      <div class="sync-box inv">
+        <div class="ic">📦</div>
+        <div class="ttl">재고관리</div>
+        <div class="desc">prods · 활동로그 hist</div>
+      </div>
+      <div class="sync-arr">
+        <div class="a">⇄</div>
+        <div class="a-text">자동 입고 +N</div>
+      </div>
+      <div class="sync-box req">
+        <div class="ic">📋</div>
+        <div class="ttl">품의 (Requisition)</div>
+        <div class="desc">jamsa_requisitions</div>
+      </div>
+      <div class="sync-arr">
+        <div class="a">⇄</div>
+        <div class="a-text">paymentId 연결</div>
+      </div>
+      <div class="sync-box pay">
+        <div class="ic">💳🏦</div>
+        <div class="ttl">결제 내역</div>
+        <div class="desc">jamsa_payments</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 2. 진입점 ===== -->
+  <div class="card">
+    <h2><span class="num">2</span>진입점 — 3곳에서 모달 열기</h2>
+    <div class="header-mock">
+      <h4>재고관리 (헤더)</h4>
+      <div class="btns">
+        <button class="h-btn">📥 CSV</button>
+        <button class="h-btn">🏷️ QR 일괄인쇄</button>
+        <button class="h-btn req">📋 품의/결제 <span class="badge-cnt">3</span></button>
+        <button class="h-btn add">+ 제품 추가</button>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:12px;color:#475569;margin-top:6px">
+      <div style="padding:10px;background:#f8fafc;border-radius:8px;">
+        <strong style="color:#0f172a">시설맵 QR Lookup 바</strong>: <code>📋</code> 아이콘 버튼
+      </div>
+      <div style="padding:10px;background:#f8fafc;border-radius:8px;">
+        <strong style="color:#0f172a">제품 상세 펼침</strong>: <code>📝 품의 작성</code> 버튼 (제품 자동 선택, 부족 수량 자동 계산)
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 3. 모달 미리보기 ===== -->
+  <div class="card">
+    <h2><span class="num">3</span>📋 품의/결제 통합 모달</h2>
+    <div class="modal-mock">
+      <div class="modal-head">
+        <h3>📋 품의 / 카드·이체 통합 관리</h3>
+        <button class="x">✕</button>
+      </div>
+      <div class="modal-body">
+        <!-- KPI -->
+        <div class="kpi-grid">
+          <div class="kpi b1"><div class="l">진행중 품의</div><div class="v">3건</div><div class="u">285,000원</div></div>
+          <div class="kpi b2"><div class="l">이번달 결제</div><div class="v">412,500</div><div class="u">원</div></div>
+          <div class="kpi b3"><div class="l">💳 카드 누적</div><div class="v">1,847,000</div><div class="u">원</div></div>
+          <div class="kpi b4"><div class="l">🏦 이체 누적</div><div class="v">650,000</div><div class="u">원</div></div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+          <button class="tab active">📝 품의 (5)</button>
+          <button class="tab">💳 결제 내역 (4)</button>
+        </div>
+
+        <!-- Filters -->
+        <div class="filter-bar">
+          <input placeholder="🔍 검색 (품목/거래처/사유...)" value="" />
+          <select><option>전체</option></select>
+          <button class="btn-pri">+ 새 품의</button>
+        </div>
+
+        <!-- Requisition list -->
+        <div class="req-list">
+          <!-- Selected/expanded item -->
+          <div class="req-item selected">
+            <div class="req-head">
+              <span class="badge-status b-paid">💳 결제완료</span>
+              <div style="flex:1">
+                <div class="req-name">8mm 디폼 블럭 <span class="req-code">JB-0001</span></div>
+                <div class="req-meta">10박스 · 9,500원 = <span class="req-total">95,000원</span> · 도매꾹 · 💳 결제연동</div>
+              </div>
+              <span class="req-date">5월 9일</span>
+            </div>
+            <div class="req-detail">
+              <div class="row"><strong>사유:</strong> 5월 단체관람 대비 재고 부족 (현재 0/10)</div>
+              <div class="pay-link">💳 연결된 결제: 카드 · 95,000원 · 도매꾹 · 2026-05-09</div>
+              <div style="font-size:10px;color:#475569;margin-bottom:6px;font-weight:700">📜 상태 이력:</div>
+              <div class="status-log">
+                <div class="status-log-row">
+                  <span class="badge-status b-submit">제출됨</span>
+                  <span class="note">최초 등록</span>
+                  <span class="meta">이경연 · 5/9 09:14</span>
+                </div>
+                <div class="status-log-row">
+                  <span class="badge-status b-approve">승인</span>
+                  <span class="note">예산 승인</span>
+                  <span class="meta">관리자 · 5/9 10:02</span>
+                </div>
+                <div class="status-log-row">
+                  <span class="badge-status b-order">발주</span>
+                  <span class="note">도매꾹 발주 완료</span>
+                  <span class="meta">박매니저 · 5/9 11:30</span>
+                </div>
+                <div class="status-log-row">
+                  <span class="badge-status b-paid">결제완료</span>
+                  <span class="note">결제 연결: 카드 95,000원</span>
+                  <span class="meta">시스템 · 5/9 14:20</span>
+                </div>
+              </div>
+              <div class="actions">
+                <button class="next-btn next-receive">→ 입고완료</button>
+                <button class="del-btn">🗑️ 삭제</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Other items -->
+          <div class="req-item">
+            <div class="req-head">
+              <span class="badge-status b-order">📦 발주</span>
+              <div style="flex:1">
+                <div class="req-name">디지털 현미경 (HD) <span class="req-code">JB-0005</span></div>
+                <div class="req-meta">2개 · 85,000원 = <span class="req-total">170,000원</span> · 학원사</div>
+              </div>
+              <span class="req-date">5월 8일</span>
+            </div>
+          </div>
+          <div class="req-item">
+            <div class="req-head">
+              <span class="badge-status b-submit">📤 제출됨</span>
+              <div style="flex:1">
+                <div class="req-name">실크 직조 체험 키트 <span class="req-code">JB-0003</span></div>
+                <div class="req-meta">5세트 · 4,000원 = <span class="req-total">20,000원</span> · 청주문구</div>
+              </div>
+              <span class="req-date">5월 8일</span>
+            </div>
+          </div>
+          <div class="req-item">
+            <div class="req-head">
+              <span class="badge-status b-receive">📥 입고완료</span>
+              <div style="flex:1">
+                <div class="req-name">방충망 보수 키트 <span class="req-code">JB-0024</span></div>
+                <div class="req-meta">8개 · 6,500원 = <span class="req-total">52,000원</span> · 쿠팡 · 💳 결제연동</div>
+              </div>
+              <span class="req-date">5월 5일</span>
+            </div>
+          </div>
+          <div class="req-item">
+            <div class="req-head">
+              <span class="badge-status b-approve">✅ 승인</span>
+              <div style="flex:1">
+                <div class="req-name">누에 인형 (대) <span class="req-code">JB-0001</span></div>
+                <div class="req-meta">12개 · 8,300원 = <span class="req-total">99,600원</span> · 도매꾹</div>
+              </div>
+              <span class="req-date">5월 4일</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 4. 결제 탭 미리보기 ===== -->
+  <div class="card">
+    <h2><span class="num">4</span>💳 결제 내역 탭 (카드 + 이체 통합)</h2>
+    <div class="modal-mock">
+      <div class="modal-body">
+        <div class="tabs" style="margin-bottom:10px">
+          <button class="tab">📝 품의 (5)</button>
+          <button class="tab active">💳 결제 내역 (4)</button>
+        </div>
+        <div class="filter-bar">
+          <input placeholder="🔍 검색 (거래처/메모...)" value="" />
+          <select><option>전체</option></select>
+          <button class="btn-pri">+ 결제 등록</button>
+        </div>
+        <div class="pay-list">
+          <div class="pay-item">
+            <span class="pay-icon">💳</span>
+            <div style="flex:1">
+              <div class="pay-amount">95,000원 · <span class="pay-vendor">도매꾹</span></div>
+              <div class="pay-meta">2026-05-09 · #APR2024050912 <span class="req-link">📋 8mm 디폼 블럭</span></div>
+            </div>
+            <button class="del-btn">삭제</button>
+          </div>
+          <div class="pay-item">
+            <span class="pay-icon">💳</span>
+            <div style="flex:1">
+              <div class="pay-amount">52,000원 · <span class="pay-vendor">쿠팡</span></div>
+              <div class="pay-meta">2026-05-05 · #PAY-887564 <span class="req-link">📋 방충망 보수 키트</span> · 다음날 도착</div>
+            </div>
+            <button class="del-btn">삭제</button>
+          </div>
+          <div class="pay-item">
+            <span class="pay-icon">🏦</span>
+            <div style="flex:1">
+              <div class="pay-amount">450,000원 · <span class="pay-vendor">교구상사</span></div>
+              <div class="pay-meta">2026-05-02 · 우리은행 #20250502-0012 · 봄 시즌 일괄 발주</div>
+            </div>
+            <button class="del-btn">삭제</button>
+          </div>
+          <div class="pay-item">
+            <span class="pay-icon">💳</span>
+            <div style="flex:1">
+              <div class="pay-amount">200,000원 · <span class="pay-vendor">11번가</span></div>
+              <div class="pay-meta">2026-04-28 · #ELV-998877 · 일반 운영비</div>
+            </div>
+            <button class="del-btn">삭제</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 5. 사용 시나리오 ===== -->
+  <div class="card">
+    <h2><span class="num">5</span>실제 사용 시나리오</h2>
+    <div class="side2">
+      <div>
+        <div style="font-size:13px;font-weight:800;color:#3b5bdb;margin-bottom:8px">📝 시나리오 A — 부족 재고 자동 보충</div>
+        <div class="scenario">
+          <div class="num">1</div>
+          <div class="txt">시설맵 → 구역 → <b>재고 0</b> 제품 행 클릭</div>
+        </div>
+        <div class="scenario">
+          <div class="num">2</div>
+          <div class="txt">펼침 패널 → <span class="hl">📝 품의 작성</span> → 부족 수량·AI 시세 단가 자동 채움</div>
+        </div>
+        <div class="scenario">
+          <div class="num">3</div>
+          <div class="txt">"📤 제출" → 헤더 <span class="hl">📋 품의/결제 [3]</span> 빨간 배지 +1</div>
+        </div>
+        <div class="scenario">
+          <div class="num">4</div>
+          <div class="txt">관리자: 승인 → 발주 → "💳 결제 등록" 단축 버튼 클릭</div>
+        </div>
+        <div class="scenario">
+          <div class="num">5</div>
+          <div class="txt">결제 폼 자동 채움 (금액·거래처·품의ID) → 등록 → 품의 <b>자동 paid</b></div>
+        </div>
+        <div class="scenario">
+          <div class="num">6</div>
+          <div class="txt">"→ 입고완료" → 재고 <span class="hl">+10 자동 증가</span> + 활동로그 자동 기록</div>
+        </div>
+      </div>
+      <div>
+        <div style="font-size:13px;font-weight:800;color:#10b981;margin-bottom:8px">💳 시나리오 B — 카드 영수증만 등록</div>
+        <div class="scenario">
+          <div class="num">1</div>
+          <div class="txt">📋 품의/결제 → <b>결제 내역</b> 탭</div>
+        </div>
+        <div class="scenario">
+          <div class="num">2</div>
+          <div class="txt">"+ 결제 등록" → 카드/금액/거래처 입력</div>
+        </div>
+        <div class="scenario">
+          <div class="num">3</div>
+          <div class="txt"><b>품의 연결 안 함</b> → 독립 결제로 저장</div>
+        </div>
+        <div class="scenario">
+          <div class="num">4</div>
+          <div class="txt">상단 KPI <span class="hl">💳 카드 누적</span>에 자동 합산</div>
+        </div>
+        <div style="font-size:13px;font-weight:800;color:#f59e0b;margin-top:14px;margin-bottom:8px">🔁 자동 동기화 매트릭스</div>
+        <table style="width:100%;font-size:11px;border-collapse:collapse">
+          <tr style="background:#f1f5f9"><th style="padding:6px;text-align:left">트리거</th><th style="padding:6px;text-align:left">자동 결과</th></tr>
+          <tr><td style="padding:6px;border-top:1px solid #e5e7eb">결제 등록 (품의 연결)</td><td style="padding:6px;border-top:1px solid #e5e7eb">→ 품의 paid 처리, paymentId 연결</td></tr>
+          <tr><td style="padding:6px;border-top:1px solid #e5e7eb">품의 → received</td><td style="padding:6px;border-top:1px solid #e5e7eb">→ prods 수량 +N, hist '입고' 생성</td></tr>
+          <tr><td style="padding:6px;border-top:1px solid #e5e7eb">품의 생성/상태변경</td><td style="padding:6px;border-top:1px solid #e5e7eb">→ 재고 활동로그에 동시 기록</td></tr>
+          <tr><td style="padding:6px;border-top:1px solid #e5e7eb">결제 삭제</td><td style="padding:6px;border-top:1px solid #e5e7eb">→ 연결 품의 paymentId 해제</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 푸터 -->
+  <div style="text-align:center;padding:20px;font-size:11px;color:#94a3b8">
+    🐛 한국잠사박물관 통합관리 시스템 · PR #6 시각화
+  </div>
+</div>
+</body>
+</html>
