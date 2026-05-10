@@ -11770,15 +11770,23 @@ function AddMdl({onAdd,onClose,defaultLoc,zoneInfo}){
 // (2) 3D 모델(.glb/.usdz) 뷰어, (3) 모바일 3D 스캔 앱 deep-link 제공.
 // ============================================================
 function ZoneLayoutModal({zone, layout, allProds, focusProdId, onSave, onAssignProduct, onClose}) {
-  const [tab, setTab] = useState("plan"); // plan | 3d | scan
+  const [tab, setTab] = useState("plan"); // plan | pano | 3d | scan
   const [floorUrl, setFloorUrl] = useState(layout?.floorPlanUrl || "");
-  const [markers, setMarkers] = useState(layout?.markers || []); // {id, x%, y%, label, productIds[]}
+  // markers: {id, x%, y%, label, productIds[], view: "plan"|"pano"} — view 미지정 시 "plan"으로 간주
+  const [markers, setMarkers] = useState((layout?.markers || []).map(m => ({...m, view: m.view || "plan"})));
+  const [panoUrl, setPanoUrl] = useState(layout?.panoramaUrl || "");
+  const [pano360, setPano360] = useState(layout?.panorama360 || false); // 2:1 equirectangular 여부
   const [model3dUrl, setModel3dUrl] = useState(layout?.model3dUrl || "");
   const [model3dName, setModel3dName] = useState(layout?.model3dName || "");
   const [selMarkerId, setSelMarkerId] = useState(null);
-  const [placing, setPlacing] = useState(false); // 평면도에서 다음 클릭=새 마커
+  const [placing, setPlacing] = useState(false);
   const [mvLoaded, setMvLoaded] = useState(false);
   const imgRef = useRef(null);
+  const panoRef = useRef(null);
+
+  // 평면도/파노라마 마커 분리
+  const planMarkers = markers.filter(m => m.view === "plan");
+  const panoMarkers = markers.filter(m => m.view === "pano");
 
   // 동일 구역에 속한 제품들
   const zoneProds = useMemo(() => {
@@ -11786,16 +11794,53 @@ function ZoneLayoutModal({zone, layout, allProds, focusProdId, onSave, onAssignP
     return (allProds || []).filter(p => p.loc === zone.name || (p.locs && p.locs[zone.name] != null));
   }, [allProds, zone]);
 
-  // model-viewer 라이브러리 동적 로딩 (CDN, ~150KB)
+  // model-viewer 라이브러리 동적 로딩 (CDN, ~150KB) — 3D 탭 또는 360 파노라마 진입 시
   useEffect(() => {
-    if (tab !== "3d" || mvLoaded) return;
+    const need = tab === "3d" || (tab === "pano" && pano360 && panoUrl);
+    if (!need || mvLoaded) return;
     if (window.customElements?.get("model-viewer")) { setMvLoaded(true); return; }
     const s = document.createElement("script");
     s.type = "module";
     s.src = "https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js";
     s.onload = () => setMvLoaded(true);
     document.head.appendChild(s);
-  }, [tab, mvLoaded]);
+  }, [tab, mvLoaded, pano360, panoUrl]);
+
+  // 파노라마 업로드 시 가로:세로 비율을 자동 검사해 360°(2:1±10%) 여부 판단
+  const onPickPano = (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      const url = e.target.result;
+      const im = new Image();
+      im.onload = () => {
+        const ratio = im.width / im.height;
+        // 1.8 이상이면 파노라마, 1.9~2.1이면 equirectangular 360 가능성
+        const is360 = ratio >= 1.85 && ratio <= 2.15;
+        setPanoUrl(url);
+        setPano360(is360);
+      };
+      im.src = url;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const onPanoClick = (e) => {
+    if (!placing || !panoRef.current) return;
+    const rect = panoRef.current.getBoundingClientRect();
+    // 가로 스크롤 보정: 클릭 위치를 컨테이너의 scrollLeft 기준으로 계산
+    const scrollEl = panoRef.current;
+    const xPx = (e.clientX - rect.left) + scrollEl.scrollLeft;
+    const yPx = (e.clientY - rect.top);
+    const totalW = panoRef.current.querySelector("img")?.naturalWidth ? panoRef.current.scrollWidth : rect.width;
+    const totalH = rect.height;
+    const x = (xPx / totalW) * 100;
+    const y = (yPx / totalH) * 100;
+    const newM = { id:`m${Date.now()}`, x, y, label:`P${panoMarkers.length+1}`, productIds:[], view:"pano" };
+    setMarkers(arr => [...arr, newM]);
+    setSelMarkerId(newM.id);
+    setPlacing(false);
+  };
 
   // 진입 시 focusProdId가 있으면 자동으로 그 마커 선택
   useEffect(() => {
@@ -11823,7 +11868,7 @@ function ZoneLayoutModal({zone, layout, allProds, focusProdId, onSave, onAssignP
     const rect = imgRef.current.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * 100;
     const y = ((e.clientY - rect.top) / rect.height) * 100;
-    const newM = { id: `m${Date.now()}`, x, y, label: `M${markers.length + 1}`, productIds: [] };
+    const newM = { id: `m${Date.now()}`, x, y, label: `M${planMarkers.length + 1}`, productIds: [], view: "plan" };
     setMarkers(arr => [...arr, newM]);
     setSelMarkerId(newM.id);
     setPlacing(false);
@@ -11847,7 +11892,7 @@ function ZoneLayoutModal({zone, layout, allProds, focusProdId, onSave, onAssignP
   };
 
   const save = () => {
-    onSave?.({ floorPlanUrl: floorUrl, markers, model3dUrl, model3dName });
+    onSave?.({ floorPlanUrl: floorUrl, panoramaUrl: panoUrl, panorama360: pano360, markers, model3dUrl, model3dName });
     onClose();
   };
 
@@ -11855,9 +11900,9 @@ function ZoneLayoutModal({zone, layout, allProds, focusProdId, onSave, onAssignP
 
   return (
     <Modal title={`🗺️ ${zone?.icon || "📍"} ${zone?.name || ""} — 세부위치 / 3D / 스캔`} onClose={onClose} w={900}>
-      <div style={{display:"flex",gap:4,borderBottom:"2px solid #e5e7eb",marginBottom:10}}>
-        {[["plan","📐 평면도"],["3d","🎮 3D 모델"],["scan","📱 모바일 스캔"]].map(([k,l]) => (
-          <button key={k} onClick={()=>setTab(k)}
+      <div style={{display:"flex",gap:4,borderBottom:"2px solid #e5e7eb",marginBottom:10,flexWrap:"wrap"}}>
+        {[["plan","📐 평면도"],["pano","🌄 파노라마"],["3d","🎮 3D 모델"],["scan","📱 모바일 스캔"]].map(([k,l]) => (
+          <button key={k} onClick={()=>{setTab(k);setSelMarkerId(null);setPlacing(false);}}
             style={{padding:"8px 14px",border:"none",background:tab===k?"#3b5bdb":"transparent",color:tab===k?"#fff":"#475569",fontWeight:700,fontSize:12,borderRadius:"8px 8px 0 0",cursor:"pointer"}}>
             {l}
           </button>
@@ -11871,7 +11916,7 @@ function ZoneLayoutModal({zone, layout, allProds, focusProdId, onSave, onAssignP
             {floorUrl ? (
               <div style={{position:"relative",width:"100%",height:"100%",cursor:placing?"crosshair":"default"}} onClick={onPlanClick}>
                 <img ref={imgRef} src={floorUrl} alt="평면도" style={{width:"100%",height:"auto",display:"block",userSelect:"none",pointerEvents:"none"}}/>
-                {markers.map(m => (
+                {planMarkers.map(m => (
                   <div key={m.id}
                     onClick={e=>{e.stopPropagation();setSelMarkerId(m.id);setPlacing(false);}}
                     style={{position:"absolute",left:`${m.x}%`,top:`${m.y}%`,transform:"translate(-50%,-100%)",cursor:"pointer",pointerEvents:"auto"}}>
@@ -11937,6 +11982,166 @@ function ZoneLayoutModal({zone, layout, allProds, focusProdId, onSave, onAssignP
 
             <div style={{padding:8,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:6,fontSize:10,color:"#1e40af"}}>
               💡 마커 색상: <span style={{color:"#10b981"}}>●</span> 물건 할당됨, <span style={{color:"#3b5bdb"}}>●</span> 빈 위치, <span style={{color:"#dc2626"}}>●</span> 선택중
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 파노라마 탭 — 평면도(위에서 본 그림)를 만들기 어려운 구역용 */}
+      {tab === "pano" && (
+        <div style={{display:"grid",gridTemplateColumns:"1fr 280px",gap:12}}>
+          <div>
+            {/* 360° 모드 */}
+            {panoUrl && pano360 ? (
+              mvLoaded ? (
+                <model-viewer skybox-image={panoUrl} src="" camera-controls
+                  style={{width:"100%",height:430,background:"#0f172a",borderRadius:8,display:"block"}}
+                  exposure="1.0" disable-zoom={false}/>
+              ) : (
+                <div style={{height:430,background:"#0f172a",borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",color:"#94a3b8",fontSize:12}}>
+                  ⏳ 360° 뷰어 로딩 중...
+                </div>
+              )
+            ) : panoUrl ? (
+              /* 일반 파노라마: 가로 스크롤 + 클릭으로 마커 추가 */
+              <div ref={panoRef} onClick={onPanoClick}
+                style={{position:"relative",width:"100%",height:380,overflowX:"auto",overflowY:"hidden",background:"#0f172a",borderRadius:8,cursor:placing?"crosshair":"grab",WebkitOverflowScrolling:"touch"}}>
+                <div style={{position:"relative",height:"100%",display:"inline-block",minWidth:"100%"}}>
+                  <img src={panoUrl} alt="파노라마" style={{height:"100%",width:"auto",display:"block",userSelect:"none",pointerEvents:"none"}}/>
+                  {panoMarkers.map(m => (
+                    <div key={m.id}
+                      onClick={e=>{e.stopPropagation();setSelMarkerId(m.id);setPlacing(false);}}
+                      style={{position:"absolute",left:`${m.x}%`,top:`${m.y}%`,transform:"translate(-50%,-100%)",cursor:"pointer"}}>
+                      <div style={{padding:"3px 8px",background:m.id===selMarkerId?"#dc2626":(m.productIds?.length?"#10b981":"#3b5bdb"),color:"#fff",borderRadius:"12px 12px 12px 0",fontSize:11,fontWeight:800,whiteSpace:"nowrap",boxShadow:"0 2px 6px rgba(0,0,0,0.5)"}}>
+                        📍 {m.label} {m.productIds?.length ? `(${m.productIds.length})` : ""}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              /* 업로드 영역 + 인포그래픽 가이드 */
+              <div style={{padding:0,background:"#fff",border:"2px dashed #cbd5e1",borderRadius:8,overflow:"hidden"}}>
+                {/* 업로드 헤더 */}
+                <label style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"24px 16px",cursor:"pointer",color:"#64748b",borderBottom:"1px solid #f1f5f9",background:"linear-gradient(180deg,#f0f9ff,#fff)"}}>
+                  <div style={{fontSize:36,marginBottom:6}}>🌄</div>
+                  <div style={{fontSize:13,fontWeight:800,color:"#0f172a"}}>파노라마/와이드 사진 업로드</div>
+                  <div style={{fontSize:10,marginTop:3,color:"#94a3b8"}}>(폰의 파노라마 모드로 찍은 사진 또는 360° equirectangular)</div>
+                  <div style={{marginTop:10,padding:"7px 16px",background:"#3b5bdb",color:"#fff",borderRadius:6,fontSize:12,fontWeight:700}}>📂 사진 선택</div>
+                  <input type="file" accept="image/*" capture="environment" style={{display:"none"}}
+                    onChange={e=>onPickPano(e.target.files?.[0])}/>
+                </label>
+
+                {/* 파노라마 찍는 법 인포그래픽 */}
+                <div style={{padding:"14px 16px",background:"#fafbfc"}}>
+                  <div style={{fontSize:11,fontWeight:800,color:"#0f172a",marginBottom:10,display:"flex",alignItems:"center",gap:6}}>
+                    <span style={{padding:"2px 7px",background:"#fef3c7",color:"#92400e",borderRadius:6,fontSize:10}}>HOW TO</span>
+                    <span>📷 폰으로 파노라마 찍는 법</span>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,position:"relative"}}>
+                    {[
+                      { ic:"📱", t:"카메라 → 파노라마", d:"기본 카메라 앱에서 모드 변경", c:"#3b82f6" },
+                      { ic:"↔️", t:"천천히 회전", d:"수평 유지하며 좌→우 1바퀴", c:"#10b981" },
+                      { ic:"💾", t:"사진앱에서 업로드", d:"위 '사진 선택' 버튼으로 첨부", c:"#f59e0b" },
+                    ].map((s,i,arr) => (
+                      <div key={i} style={{textAlign:"center",position:"relative"}}>
+                        <div style={{width:48,height:48,borderRadius:"50%",background:"#fff",border:`2px solid ${s.c}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,margin:"0 auto",position:"relative",zIndex:1}}>{s.ic}</div>
+                        <div style={{fontSize:10,fontWeight:800,color:"#0f172a",marginTop:5}}>{s.t}</div>
+                        <div style={{fontSize:9,color:"#64748b",marginTop:1,lineHeight:1.3}}>{s.d}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {/* 동선 SVG */}
+                  <div style={{marginTop:12,padding:"10px 12px",background:"#fff",border:"1px solid #e5e7eb",borderRadius:8}}>
+                    <div style={{fontSize:10,fontWeight:700,color:"#475569",marginBottom:6}}>회전 가이드 (위에서 본 모습)</div>
+                    <svg viewBox="0 0 280 60" style={{width:"100%",height:50}}>
+                      {/* 사람 (중앙) */}
+                      <circle cx="140" cy="40" r="8" fill="#3b82f6"/>
+                      <text x="140" y="56" fontSize="7" textAnchor="middle" fill="#3b82f6" fontWeight="700">YOU</text>
+                      {/* 회전 호 */}
+                      <path d="M 30 40 Q 140 -10 250 40" fill="none" stroke="#10b981" strokeWidth="2" strokeDasharray="4,3"/>
+                      {/* 시작/끝 폰 */}
+                      <g transform="translate(22,32)"><rect width="10" height="16" fill="#0f172a" rx="2"/><rect x="1.5" y="1.5" width="7" height="11" fill="#3b82f6"/></g>
+                      <text x="27" y="58" fontSize="7" textAnchor="middle" fill="#64748b">시작</text>
+                      <g transform="translate(248,32)"><rect width="10" height="16" fill="#0f172a" rx="2"/><rect x="1.5" y="1.5" width="7" height="11" fill="#3b82f6"/></g>
+                      <text x="253" y="58" fontSize="7" textAnchor="middle" fill="#64748b">끝</text>
+                      {/* 화살표 */}
+                      <polygon points="240,12 248,16 240,20" fill="#10b981"/>
+                      <text x="140" y="14" fontSize="9" textAnchor="middle" fill="#10b981" fontWeight="700">→ 천천히 한 바퀴 →</text>
+                    </svg>
+                  </div>
+                  <div style={{marginTop:10,padding:"8px 10px",background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:6,fontSize:10,color:"#1e40af",lineHeight:1.55}}>
+                    💡 가로:세로 비율이 <strong>2:1에 가까우면</strong> 자동으로 360° 모드로 표시됩니다 (Insta360, Theta 등으로 찍은 equirectangular).
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 모드 전환 + 업로드 변경 */}
+            {panoUrl && (
+              <div style={{display:"flex",gap:6,marginTop:6,fontSize:11,flexWrap:"wrap"}}>
+                <label className="btn bs" style={{cursor:"pointer",fontSize:11}}>
+                  🔄 사진 변경
+                  <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>onPickPano(e.target.files?.[0])}/>
+                </label>
+                <button onClick={()=>setPano360(v=>!v)} className="btn bs" style={{fontSize:11,background:pano360?"#dbeafe":"#fff",color:pano360?"#1e40af":"#475569",fontWeight:700}}>
+                  {pano360 ? "🌐 360° 모드 (현재)" : "🌐 360°로 보기"}
+                </button>
+                {!pano360 && (
+                  <button onClick={()=>{setPlacing(p=>!p);setSelMarkerId(null);}}
+                    style={{padding:"6px 12px",fontSize:11,fontWeight:700,borderRadius:6,border:"none",cursor:"pointer",background:placing?"#dc2626":"#10b981",color:"#fff"}}>
+                    {placing ? "✕ 마커 추가 취소" : "+ 위치 마커 추가"}
+                  </button>
+                )}
+                <button onClick={()=>{if(confirm("파노라마 + 해당 마커 삭제?")){setPanoUrl("");setPano360(false);setMarkers(arr=>arr.filter(m=>m.view!=="pano"));setSelMarkerId(null);}}}
+                  className="btn bs" style={{fontSize:11,color:"#dc2626"}}>🗑️</button>
+              </div>
+            )}
+            {panoUrl && !pano360 && <div style={{marginTop:4,fontSize:10,color:"#64748b"}}>💡 가로 스크롤로 좌우 이동. {placing && "사진 위 클릭 = 마커 추가"}</div>}
+          </div>
+
+          {/* 사이드바 (마커 편집) — 평면도와 동일한 구조 */}
+          <div style={{display:"flex",flexDirection:"column",gap:8,fontSize:12}}>
+            <div style={{padding:8,background:"#f8fafc",border:"1px solid #e5e7eb",borderRadius:6,fontSize:11,color:"#475569"}}>
+              <div style={{fontWeight:800,marginBottom:4,color:"#0f172a"}}>🌄 파노라마 마커 ({panoMarkers.length})</div>
+              {!panoUrl ? "파노라마 사진을 먼저 업로드하세요." :
+               pano360 ? "360° 모드에서는 마커를 사용할 수 없습니다. 평면 보기로 전환 시 마커 가능." :
+               panoMarkers.length === 0 ? "사진을 업로드한 뒤 위 '+ 마커 추가' 버튼으로 위치를 지정하세요." :
+               "마커를 클릭하면 편집할 수 있습니다."}
+            </div>
+
+            {tab === "pano" && selMarkerId && markers.find(m=>m.id===selMarkerId)?.view==="pano" && (() => {
+              const sm = markers.find(m=>m.id===selMarkerId);
+              return (
+                <div style={{padding:10,background:"#fef9c3",border:"1px solid #fcd34d",borderRadius:8}}>
+                  <div style={{fontSize:11,fontWeight:800,color:"#92400e",marginBottom:6}}>📍 {sm.label} 편집</div>
+                  <input className="inp" value={sm.label} onChange={e=>updateMarker(sm.id,{label:e.target.value})}
+                    placeholder="라벨" style={{fontSize:11,padding:"5px 8px",marginBottom:6}}/>
+                  <div style={{fontSize:10,fontWeight:700,color:"#92400e",margin:"6px 0 4px"}}>이 위치의 물건 ({sm.productIds?.length || 0})</div>
+                  <div style={{maxHeight:160,overflowY:"auto",border:"1px solid #fde68a",borderRadius:4,background:"#fff"}}>
+                    {zoneProds.length === 0 ? (
+                      <div style={{padding:8,fontSize:10,color:"#94a3b8",textAlign:"center"}}>이 구역에 등록된 물건이 없습니다</div>
+                    ) : zoneProds.map(p => {
+                      const checked = sm.productIds?.includes(p.id);
+                      return (
+                        <label key={p.id} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 8px",borderBottom:"1px solid #fef3c7",cursor:"pointer",fontSize:11}}>
+                          <input type="checkbox" checked={!!checked} onChange={()=>toggleProductAtMarker(sm.id,p.id)}/>
+                          <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name} <span style={{color:"#94a3b8",fontSize:9}}>({p.code})</span></span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <button onClick={()=>deleteMarker(sm.id)}
+                    style={{marginTop:6,padding:"4px 8px",fontSize:10,fontWeight:700,borderRadius:4,border:"1px solid #fca5a5",cursor:"pointer",background:"#fff",color:"#b91c1c",width:"100%"}}>
+                    🗑️ 마커 삭제
+                  </button>
+                </div>
+              );
+            })()}
+
+            <div style={{padding:8,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:6,fontSize:10,color:"#1e40af",lineHeight:1.5}}>
+              💡 <strong>언제 파노라마?</strong><br/>
+              평면도(위에서 본 그림)를 만들 수 없는 실내·창고·전시실에 적합. 사진 한 장으로 좌우 전체를 한눈에 볼 수 있어요.
             </div>
           </div>
         </div>
