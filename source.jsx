@@ -5413,6 +5413,9 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
   const [highlightPid,setHighlightPid]=useState(null);
   const [showScanner,setShowScanner]=useState(false);
   const [zonePhotos,setZonePhotos]=useState({});
+  // 구역별 평면도/3D 모델/마커 저장 — { [zoneId]: { floorPlanUrl, markers: [{id,x,y,label,productIds[]}], model3dUrl, model3dName } }
+  const [zoneLayouts,setZoneLayouts]=useLocalStorage("jamsa_zone_layouts", {});
+  const [showZoneLayout,setShowZoneLayout]=useState(null); // {zoneId, focusProdId}
   const [rfidTags,setRfidTags]=useState({});
   const [rfidScans,setRfidScans]=useState([]);
   const mapWrap=useRef(null);
@@ -5641,6 +5644,10 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
       usageBlocks: d.usageBlocks || null,    // 사용법 블록 (시각화)
       careIcons: d.careIcons || null,        // 보관 픽토그램
       monthlyPattern: d.monthlyPattern || null, // 월별 입출고 패턴
+      // 세부 위치 (예: "3번 선반 / 2칸") — 자유 입력 텍스트
+      subLoc: d.subLoc || "",
+      // 평면도 마커 ID 참조 (zoneLayouts에 있는 marker.id) — 선택사항
+      subPosMarkerId: d.subPosMarkerId || null,
       createdAt: new Date().toISOString(),
       createdBy: curUser?.name || "시스템",
     };
@@ -5960,7 +5967,23 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
                 zonePhotos={zonePhotos[selZone]||[]} doAddZonePhoto={doAddZonePhoto} doDelZonePhoto={doDelZonePhoto}
                 allProds={prods} allZonePhotos={zonePhotos} onAddFacAction={onAddFacAction}
                 onOpenReq={p=>setModal({type:"reqPayments",prod:p})}
+                onOpenLayout={(prodId)=>setShowZoneLayout({zoneId:selZone, focusProdId:prodId||null})}
+                zoneLayout={zoneLayouts[selZone]||null}
                 can={can}/>}
+              {showZoneLayout && (() => {
+                const z = mergedZones.find(zz => zz.id === showZoneLayout.zoneId);
+                if (!z) return null;
+                return <ZoneLayoutModal
+                  zone={z}
+                  layout={zoneLayouts[showZoneLayout.zoneId]}
+                  allProds={prods}
+                  focusProdId={showZoneLayout.focusProdId}
+                  onSave={(data)=>setZoneLayouts(prev=>({...prev,[showZoneLayout.zoneId]:data}))}
+                  onAssignProduct={(prodId, markerId)=>{
+                    setProds(pr=>pr.map(p=>p.id===prodId?{...p,subPosMarkerId:markerId}:p));
+                  }}
+                  onClose={()=>setShowZoneLayout(null)}/>;
+              })()}
             </div>
           )}
 
@@ -10242,7 +10265,7 @@ function DetailBlock({icon, title, text}) {
   );
 }
 
-function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDel,onShowQR,highlightPid,doAddPhoto,doDelPhoto,zonePhotos,doAddZonePhoto,doDelZonePhoto,allProds,allZonePhotos,onAddFacAction,onOpenReq,can}){
+function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDel,onShowQR,highlightPid,doAddPhoto,doDelPhoto,zonePhotos,doAddZonePhoto,doDelZonePhoto,allProds,allZonePhotos,onAddFacAction,onOpenReq,onOpenLayout,zoneLayout,can}){
   const [qPid,setQPid]=useState(null);
   const [qAct,setQAct]=useState(null);
   const [qQty,setQQty]=useState("");
@@ -10431,6 +10454,13 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
         <div style={{display:"flex",alignItems:"center",gap:6}}>
           <div style={{background:"#fff",borderRadius:8,padding:"5px 14px",textAlign:"center",border:"1px solid #e5e7eb"}}><div style={{fontSize:9,color:"#94a3b8"}}>품목</div><div style={{fontSize:17,fontWeight:900,color:zone.color}}>{prods.length}</div></div>
           <div style={{background:"#fff",borderRadius:8,padding:"5px 14px",textAlign:"center",border:"1px solid #e5e7eb"}}><div style={{fontSize:9,color:"#94a3b8"}}>재고</div><div style={{fontSize:17,fontWeight:900,color:tq===0?"#ef4444":zone.color}}>{tq.toLocaleString()}</div></div>
+          {onOpenLayout && (
+            <button onClick={()=>onOpenLayout(null)}
+              style={{fontSize:11,padding:"7px 12px",borderRadius:8,border:"none",cursor:"pointer",color:"#fff",fontWeight:700,background:"linear-gradient(135deg,#0ea5e9,#1e40af)",display:"inline-flex",alignItems:"center",gap:4}}
+              title="평면도/3D 모델/모바일 스캔으로 물건 위치를 정밀 지정">
+              🗺️ 세부위치 / 3D{zoneLayout?.markers?.length ? <span style={{padding:"1px 5px",background:"#fff",color:"#1e40af",borderRadius:6,fontSize:9,marginLeft:2}}>{zoneLayout.markers.length}</span> : null}
+            </button>
+          )}
           {can&&can("add")&&<button className="btn bp" onClick={()=>setShowAdd(!showAdd)} style={{fontSize:11,padding:"7px 12px"}}><IC.Plus/>{showAdd?"취소":"추가"}</button>}
           <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:"#94a3b8"}}><IC.X/></button>
         </div>
@@ -10727,7 +10757,17 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
                       {p.name}
                       {itemHist.length>0&&<span style={{fontSize:9,padding:"1px 6px",borderRadius:8,background:"#e0e7ff",color:"#4338ca",fontWeight:700,flexShrink:0}}>📜 {itemHist.length}</span>}
                     </div>
-                    <div style={{fontSize:10,color:"#94a3b8"}}>{p.code} · {p.cat} · {p.loc}</div>
+                    <div style={{fontSize:10,color:"#94a3b8"}}>
+                      {p.code} · {p.cat} · {p.loc}
+                      {p.subLoc && <span style={{marginLeft:6,padding:"1px 6px",background:"#dbeafe",color:"#1e40af",borderRadius:6,fontWeight:700}}>📍 {p.subLoc}</span>}
+                      {onOpenLayout && (zoneLayout?.markers||[]).some(m => (m.productIds||[]).includes(p.id)) && (
+                        <button onClick={(e)=>{e.stopPropagation();onOpenLayout(p.id);}}
+                          style={{marginLeft:6,padding:"1px 6px",background:"#10b981",color:"#fff",borderRadius:6,fontWeight:700,fontSize:9,border:"none",cursor:"pointer"}}
+                          title="평면도에서 위치 보기">
+                          🗺️ 평면도
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <div style={{fontSize:18,fontWeight:900,color:p.qty===0?"#ef4444":p.qty<5?"#f59e0b":"#3b5bdb",flexShrink:0,minWidth:36,textAlign:"right"}}>{p.qty}</div>
                 </div>
@@ -11692,6 +11732,7 @@ function AddMdl({onAdd,onClose,defaultLoc,zoneInfo}){
   const effectiveLocs = zoneInfo ? [zoneInfo.name, ...LOCS.filter(x => x !== zoneInfo.name)] : LOCS;
   const [l,sL]=useState(defaultLoc || effectiveLocs[0]);
   const [q,sQ]=useState("0");const [m,sM]=useState("");
+  const [sub,setSub]=useState("");
   return(<Modal title={zoneInfo ? `${zoneInfo.icon} ${zoneInfo.name} — 재고 등록` : "제품 추가 (QR 자동생성)"} onClose={onClose}>
     <div style={{display:"flex",flexDirection:"column",gap:12}}>
       {zoneInfo ? (
@@ -11710,27 +11751,307 @@ function AddMdl({onAdd,onClose,defaultLoc,zoneInfo}){
         <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>위치</label><select className="sel" value={l} onChange={e=>sL(e.target.value)} disabled={!!zoneInfo}>{effectiveLocs.map(x=><option key={x}>{x}</option>)}</select></div>
       </div>
       <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>수량</label><input className="inp" type="number" min="0" value={q} onChange={e=>sQ(e.target.value)}/></div>
+      <div>
+        <label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>📍 세부위치 <span style={{fontWeight:400,color:"#94a3b8"}}>(선택, 예: 3번 선반)</span></label>
+        <input className="inp" value={sub} onChange={e=>setSub(e.target.value)} placeholder="예: 3번 선반 / 2칸"/>
+      </div>
       <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>메모</label><textarea className="inp" rows={2} value={m} onChange={e=>sM(e.target.value)}/></div>
       <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
         <button className="btn bs" onClick={onClose}>취소</button>
-        <button className="btn bp" onClick={()=>{if(!n.trim())return alert("제품명 필수");onAdd({name:n.trim(),cat:c,loc:l,qty:q,memo:m});}}><IC.QR/>등록 + QR생성</button>
+        <button className="btn bp" onClick={()=>{if(!n.trim())return alert("제품명 필수");onAdd({name:n.trim(),cat:c,loc:l,qty:q,memo:m,subLoc:sub.trim()});}}><IC.QR/>등록 + QR생성</button>
       </div>
     </div>
   </Modal>);
 }
 
+// ============================================================
+// 🗺️ 구역 세부위치 / 3D / 모바일스캔 통합 모달
+// 한 구역에 대해 (1) 평면도 사진 위에 마커로 물건 위치 지정,
+// (2) 3D 모델(.glb/.usdz) 뷰어, (3) 모바일 3D 스캔 앱 deep-link 제공.
+// ============================================================
+function ZoneLayoutModal({zone, layout, allProds, focusProdId, onSave, onAssignProduct, onClose}) {
+  const [tab, setTab] = useState("plan"); // plan | 3d | scan
+  const [floorUrl, setFloorUrl] = useState(layout?.floorPlanUrl || "");
+  const [markers, setMarkers] = useState(layout?.markers || []); // {id, x%, y%, label, productIds[]}
+  const [model3dUrl, setModel3dUrl] = useState(layout?.model3dUrl || "");
+  const [model3dName, setModel3dName] = useState(layout?.model3dName || "");
+  const [selMarkerId, setSelMarkerId] = useState(null);
+  const [placing, setPlacing] = useState(false); // 평면도에서 다음 클릭=새 마커
+  const [mvLoaded, setMvLoaded] = useState(false);
+  const imgRef = useRef(null);
+
+  // 동일 구역에 속한 제품들
+  const zoneProds = useMemo(() => {
+    if (!zone) return [];
+    return (allProds || []).filter(p => p.loc === zone.name || (p.locs && p.locs[zone.name] != null));
+  }, [allProds, zone]);
+
+  // model-viewer 라이브러리 동적 로딩 (CDN, ~150KB)
+  useEffect(() => {
+    if (tab !== "3d" || mvLoaded) return;
+    if (window.customElements?.get("model-viewer")) { setMvLoaded(true); return; }
+    const s = document.createElement("script");
+    s.type = "module";
+    s.src = "https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js";
+    s.onload = () => setMvLoaded(true);
+    document.head.appendChild(s);
+  }, [tab, mvLoaded]);
+
+  // 진입 시 focusProdId가 있으면 자동으로 그 마커 선택
+  useEffect(() => {
+    if (!focusProdId) return;
+    const m = markers.find(m => (m.productIds || []).includes(focusProdId));
+    if (m) setSelMarkerId(m.id);
+  }, [focusProdId, markers]);
+
+  const onPickFloor = (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => setFloorUrl(e.target.result);
+    reader.readAsDataURL(file);
+  };
+
+  const onPick3d = (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => { setModel3dUrl(e.target.result); setModel3dName(file.name); };
+    reader.readAsDataURL(file);
+  };
+
+  const onPlanClick = (e) => {
+    if (!placing || !imgRef.current) return;
+    const rect = imgRef.current.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    const newM = { id: `m${Date.now()}`, x, y, label: `M${markers.length + 1}`, productIds: [] };
+    setMarkers(arr => [...arr, newM]);
+    setSelMarkerId(newM.id);
+    setPlacing(false);
+  };
+
+  const updateMarker = (id, patch) => setMarkers(arr => arr.map(m => m.id === id ? { ...m, ...patch } : m));
+  const deleteMarker = (id) => {
+    if (!confirm("이 위치 마커를 삭제하시겠습니까? (할당된 물건은 남고 위치만 해제됨)")) return;
+    setMarkers(arr => arr.filter(m => m.id !== id));
+    if (selMarkerId === id) setSelMarkerId(null);
+  };
+
+  const toggleProductAtMarker = (markerId, prodId) => {
+    setMarkers(arr => arr.map(m => {
+      if (m.id !== markerId) return m;
+      const ids = new Set(m.productIds || []);
+      if (ids.has(prodId)) ids.delete(prodId); else ids.add(prodId);
+      return { ...m, productIds: Array.from(ids) };
+    }));
+    onAssignProduct?.(prodId, markerId);
+  };
+
+  const save = () => {
+    onSave?.({ floorPlanUrl: floorUrl, markers, model3dUrl, model3dName });
+    onClose();
+  };
+
+  const selMarker = markers.find(m => m.id === selMarkerId);
+
+  return (
+    <Modal title={`🗺️ ${zone?.icon || "📍"} ${zone?.name || ""} — 세부위치 / 3D / 스캔`} onClose={onClose} w={900}>
+      <div style={{display:"flex",gap:4,borderBottom:"2px solid #e5e7eb",marginBottom:10}}>
+        {[["plan","📐 평면도"],["3d","🎮 3D 모델"],["scan","📱 모바일 스캔"]].map(([k,l]) => (
+          <button key={k} onClick={()=>setTab(k)}
+            style={{padding:"8px 14px",border:"none",background:tab===k?"#3b5bdb":"transparent",color:tab===k?"#fff":"#475569",fontWeight:700,fontSize:12,borderRadius:"8px 8px 0 0",cursor:"pointer"}}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {/* 평면도 탭 */}
+      {tab === "plan" && (
+        <div style={{display:"grid",gridTemplateColumns:"1fr 280px",gap:12}}>
+          <div style={{position:"relative",background:"#f1f5f9",border:"2px dashed #cbd5e1",borderRadius:8,minHeight:380,overflow:"hidden"}}>
+            {floorUrl ? (
+              <div style={{position:"relative",width:"100%",height:"100%",cursor:placing?"crosshair":"default"}} onClick={onPlanClick}>
+                <img ref={imgRef} src={floorUrl} alt="평면도" style={{width:"100%",height:"auto",display:"block",userSelect:"none",pointerEvents:"none"}}/>
+                {markers.map(m => (
+                  <div key={m.id}
+                    onClick={e=>{e.stopPropagation();setSelMarkerId(m.id);setPlacing(false);}}
+                    style={{position:"absolute",left:`${m.x}%`,top:`${m.y}%`,transform:"translate(-50%,-100%)",cursor:"pointer",pointerEvents:"auto"}}>
+                    <div style={{padding:"3px 8px",background:m.id===selMarkerId?"#dc2626":(m.productIds?.length?"#10b981":"#3b5bdb"),color:"#fff",borderRadius:"12px 12px 12px 0",fontSize:11,fontWeight:800,whiteSpace:"nowrap",boxShadow:"0 2px 6px rgba(0,0,0,0.3)"}}>
+                      📍 {m.label} {m.productIds?.length ? `(${m.productIds.length})` : ""}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <label style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",width:"100%",height:380,cursor:"pointer",color:"#64748b"}}>
+                <div style={{fontSize:36,marginBottom:8}}>📐</div>
+                <div style={{fontSize:13,fontWeight:700}}>평면도/사진을 업로드해 시작하세요</div>
+                <div style={{fontSize:11,marginTop:4,color:"#94a3b8"}}>(JPG/PNG, 손그림 스케치도 가능)</div>
+                <input type="file" accept="image/*" capture="environment" style={{display:"none"}}
+                  onChange={e=>onPickFloor(e.target.files?.[0])}/>
+              </label>
+            )}
+          </div>
+
+          <div style={{display:"flex",flexDirection:"column",gap:8,fontSize:12}}>
+            {floorUrl && (
+              <>
+                <div style={{display:"flex",gap:6}}>
+                  <label className="btn bs" style={{flex:1,fontSize:11,textAlign:"center",cursor:"pointer"}}>
+                    🔄 변경
+                    <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>onPickFloor(e.target.files?.[0])}/>
+                  </label>
+                  <button className="btn bs" style={{fontSize:11,color:"#dc2626"}} onClick={()=>{if(confirm("평면도 + 모든 마커 삭제?")){setFloorUrl("");setMarkers([]);setSelMarkerId(null);}}}>🗑️</button>
+                </div>
+                <button onClick={()=>{setPlacing(p=>!p);setSelMarkerId(null);}}
+                  style={{padding:"8px 12px",fontSize:12,fontWeight:700,borderRadius:6,border:"none",cursor:"pointer",background:placing?"#dc2626":"#10b981",color:"#fff"}}>
+                  {placing ? "✕ 마커 추가 취소" : "+ 새 위치 마커 추가 (평면도 클릭)"}
+                </button>
+              </>
+            )}
+
+            {selMarker && (
+              <div style={{padding:10,background:"#fef9c3",border:"1px solid #fcd34d",borderRadius:8}}>
+                <div style={{fontSize:11,fontWeight:800,color:"#92400e",marginBottom:6}}>📍 {selMarker.label} 편집</div>
+                <input className="inp" value={selMarker.label} onChange={e=>updateMarker(selMarker.id,{label:e.target.value})}
+                  placeholder="라벨 (예: 3번 선반)" style={{fontSize:11,padding:"5px 8px",marginBottom:6}}/>
+                <div style={{fontSize:10,fontWeight:700,color:"#92400e",margin:"6px 0 4px"}}>이 위치의 물건 ({selMarker.productIds?.length || 0})</div>
+                <div style={{maxHeight:180,overflowY:"auto",border:"1px solid #fde68a",borderRadius:4,background:"#fff"}}>
+                  {zoneProds.length === 0 ? (
+                    <div style={{padding:8,fontSize:10,color:"#94a3b8",textAlign:"center"}}>이 구역에 등록된 물건이 없습니다</div>
+                  ) : zoneProds.map(p => {
+                    const checked = selMarker.productIds?.includes(p.id);
+                    return (
+                      <label key={p.id} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 8px",borderBottom:"1px solid #fef3c7",cursor:"pointer",fontSize:11}}>
+                        <input type="checkbox" checked={!!checked} onChange={()=>toggleProductAtMarker(selMarker.id,p.id)}/>
+                        <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name} <span style={{color:"#94a3b8",fontSize:9}}>({p.code})</span></span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <button onClick={()=>deleteMarker(selMarker.id)}
+                  style={{marginTop:6,padding:"4px 8px",fontSize:10,fontWeight:700,borderRadius:4,border:"1px solid #fca5a5",cursor:"pointer",background:"#fff",color:"#b91c1c",width:"100%"}}>
+                  🗑️ 마커 삭제
+                </button>
+              </div>
+            )}
+
+            <div style={{padding:8,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:6,fontSize:10,color:"#1e40af"}}>
+              💡 마커 색상: <span style={{color:"#10b981"}}>●</span> 물건 할당됨, <span style={{color:"#3b5bdb"}}>●</span> 빈 위치, <span style={{color:"#dc2626"}}>●</span> 선택중
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3D 모델 탭 */}
+      {tab === "3d" && (
+        <div>
+          {!model3dUrl ? (
+            <div style={{padding:30,background:"#f8fafc",border:"2px dashed #cbd5e1",borderRadius:8,textAlign:"center"}}>
+              <div style={{fontSize:36,marginBottom:8}}>🎮</div>
+              <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:4}}>3D 모델 업로드 (.glb / .usdz)</div>
+              <div style={{fontSize:11,color:"#64748b",marginBottom:14}}>
+                Polycam, Scaniverse, RoomPlan 등으로 스캔한 파일을 올려주세요.<br/>
+                <span style={{fontSize:10}}>(.glb 권장 — 모든 기기 호환. .usdz는 iOS 전용)</span>
+              </div>
+              <label className="btn bp" style={{cursor:"pointer",fontSize:12}}>
+                📂 파일 선택
+                <input type="file" accept=".glb,.gltf,.usdz,model/*" style={{display:"none"}}
+                  onChange={e=>onPick3d(e.target.files?.[0])}/>
+              </label>
+            </div>
+          ) : (
+            <div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6,fontSize:11}}>
+                <span style={{color:"#475569"}}>📦 <strong>{model3dName}</strong></span>
+                <div style={{display:"flex",gap:6}}>
+                  <label className="btn bs" style={{fontSize:10,cursor:"pointer"}}>
+                    🔄 교체
+                    <input type="file" accept=".glb,.gltf,.usdz,model/*" style={{display:"none"}} onChange={e=>onPick3d(e.target.files?.[0])}/>
+                  </label>
+                  <button className="btn bs" style={{fontSize:10,color:"#dc2626"}} onClick={()=>{if(confirm("3D 모델 삭제?")){setModel3dUrl("");setModel3dName("");}}}>🗑️</button>
+                </div>
+              </div>
+              {mvLoaded ? (
+                <model-viewer src={model3dUrl} alt={zone?.name||"3D 모델"} camera-controls auto-rotate ar
+                  style={{width:"100%",height:430,background:"#0f172a",borderRadius:8}}/>
+              ) : (
+                <div style={{height:430,background:"#0f172a",borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",color:"#94a3b8",fontSize:12}}>
+                  ⏳ 3D 뷰어 로딩 중... (~150KB CDN)
+                </div>
+              )}
+              <div style={{marginTop:6,fontSize:10,color:"#64748b"}}>💡 마우스 드래그=회전, 스크롤=확대/축소, AR 버튼(모바일)=실제 공간 배치</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 모바일 스캔 탭 */}
+      {tab === "scan" && (
+        <div style={{padding:14,background:"#f8fafc",borderRadius:8}}>
+          <div style={{fontSize:13,fontWeight:800,color:"#0f172a",marginBottom:8}}>📱 모바일로 구역을 3D 스캔하세요</div>
+          <div style={{fontSize:11,color:"#475569",marginBottom:14,lineHeight:1.6}}>
+            브라우저는 직접 3D 스캔을 못 하지만, 아래 무료 앱으로 1~3분 안에 스캔하면 .glb 또는 .usdz 파일이 만들어집니다.<br/>
+            그 파일을 위 <strong>"🎮 3D 모델"</strong> 탭에 올리시면 즉시 회전/AR로 확인 가능합니다.
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:10}}>
+            {[
+              { name: "Polycam", desc: "iOS/Android 모두 지원. AI 사진 합성으로 30~60장 사진만 찍어도 .glb 생성. 무료 플랜 OK.", link: "https://poly.cam/", icon: "📷", best: "범용 (가장 추천)" },
+              { name: "Scaniverse", desc: "iOS/Android. LiDAR 있으면 더 정확. 무료. .glb 내보내기.", link: "https://scaniverse.com/", icon: "🔍", best: "iPhone Pro/iPad Pro" },
+              { name: "Apple RoomPlan", desc: "iOS 16+ 전용. 방 구조를 자동으로 .usdz로 추출. 무료.", link: "https://apps.apple.com/app/roomplan/id6443685335", icon: "🏠", best: "iPhone/iPad LiDAR" },
+              { name: "Luma AI", desc: "사진/영상 → 사실적 3D NeRF. 정밀도 최고. 처리 시간 길음.", link: "https://lumalabs.ai/", icon: "✨", best: "고품질 결과 필요할 때" },
+            ].map(app => (
+              <a key={app.name} href={app.link} target="_blank" rel="noopener"
+                style={{display:"block",padding:12,background:"#fff",border:"1px solid #e5e7eb",borderRadius:8,textDecoration:"none",color:"inherit",transition:"transform 0.15s"}}
+                onMouseEnter={e=>e.currentTarget.style.transform="translateY(-2px)"}
+                onMouseLeave={e=>e.currentTarget.style.transform="translateY(0)"}>
+                <div style={{fontSize:24,marginBottom:6}}>{app.icon}</div>
+                <div style={{fontSize:13,fontWeight:800,color:"#0f172a"}}>{app.name}</div>
+                <div style={{fontSize:9,fontWeight:700,color:"#3b5bdb",marginTop:2}}>👉 {app.best}</div>
+                <div style={{fontSize:10,color:"#64748b",marginTop:4,lineHeight:1.4}}>{app.desc}</div>
+              </a>
+            ))}
+          </div>
+
+          <div style={{marginTop:16,padding:12,background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:8,fontSize:11,color:"#9a3412"}}>
+            <div style={{fontWeight:800,marginBottom:4}}>📋 스캔 워크플로우 (3분):</div>
+            <ol style={{margin:0,paddingLeft:18,lineHeight:1.7}}>
+              <li>위 앱 중 하나 설치 후 구역을 천천히 한 바퀴 돌며 스캔</li>
+              <li>앱에서 .glb 또는 .usdz로 내보내기 (Share → Save to Files)</li>
+              <li>이 화면 상단 <strong>"🎮 3D 모델"</strong> 탭으로 이동 → 파일 업로드</li>
+              <li>회전/AR 버튼으로 공간 확인. <strong>"📐 평면도"</strong> 탭에서 그 위에 마커로 물건 위치 지정</li>
+            </ol>
+          </div>
+        </div>
+      )}
+
+      {/* 저장/취소 */}
+      <div style={{display:"flex",gap:6,justifyContent:"flex-end",marginTop:14,paddingTop:10,borderTop:"1px solid #e5e7eb"}}>
+        <button className="btn bs" onClick={onClose}>취소</button>
+        <button className="btn bp" onClick={save}>💾 저장</button>
+      </div>
+    </Modal>
+  );
+}
+
 function EMdl({p,onSave,onClose}){
-  const [n,sN]=useState(p.name);const [c,sC]=useState(p.cat);const [l,sL]=useState(p.loc);const [m,sM]=useState(p.memo||"");
+  const [n,sN]=useState(p.name);const [c,sC]=useState(p.cat);const [l,sL]=useState(p.loc);
+  const [sub,setSub]=useState(p.subLoc||"");
+  const [m,sM]=useState(p.memo||"");
   return(<Modal title="수정" onClose={onClose}>
     <div style={{display:"flex",flexDirection:"column",gap:12}}>
       <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>제품명</label><input className="inp" value={n} onChange={e=>sN(e.target.value)}/></div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+        <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>위치(구역)</label><select className="sel" value={l} onChange={e=>sL(e.target.value)}>{LOCS.map(x=><option key={x}>{x}</option>)}</select></div>
         <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>카테고리</label><select className="sel" value={c} onChange={e=>sC(e.target.value)}>{CATS.map(x=><option key={x}>{x}</option>)}</select></div>
-        <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>위치</label><select className="sel" value={l} onChange={e=>sL(e.target.value)}>{LOCS.map(x=><option key={x}>{x}</option>)}</select></div>
       </div>
+      <div>
+        <label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>📍 세부위치 <span style={{fontWeight:400,color:"#94a3b8"}}>(예: 3번 선반 / 2칸, 입구쪽 좌측)</span></label>
+        <input className="inp" value={sub} onChange={e=>setSub(e.target.value)} placeholder="예: 3번 선반 / 2칸"/>
+      </div>
+      <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>메모</label><textarea className="inp" rows={2} value={m} onChange={e=>sM(e.target.value)}/></div>
       <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
         <button className="btn bs" onClick={onClose}>취소</button>
-        <button className="btn bp" onClick={()=>{if(!n.trim())return alert("필수");onSave({...p,name:n.trim(),cat:c,loc:l,memo:m});}}>저장</button>
+        <button className="btn bp" onClick={()=>{if(!n.trim())return alert("필수");onSave({...p,name:n.trim(),cat:c,loc:l,subLoc:sub.trim(),memo:m});}}>저장</button>
       </div>
     </div>
   </Modal>);
