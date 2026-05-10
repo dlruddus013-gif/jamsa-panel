@@ -4878,6 +4878,144 @@ const BASE_ZONES = [
 // Dynamic custom zones are provided via InvModule state + passed to MapView as prop.
 const ZONES = BASE_ZONES;
 
+// ============================================================
+// 🌦️ 실시간 날씨 + 시설 안전점검 자동 알림 시스템
+// Open-Meteo (무료, API 키 불필요) — 현재 + 단기예보
+// ============================================================
+const WEATHER_API = `https://api.open-meteo.com/v1/forecast?latitude=${JAMSA_CENTER.lat}&longitude=${JAMSA_CENTER.lng}&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m,wind_gusts_10m&hourly=temperature_2m,precipitation_probability,precipitation,wind_gusts_10m&timezone=Asia%2FSeoul&forecast_days=2`;
+
+// WMO weather codes → 한글 라벨 + 이모지
+const WMO_LABELS = {
+  0: { label: "맑음", icon: "☀️" }, 1: { label: "대체로 맑음", icon: "🌤️" },
+  2: { label: "구름조금", icon: "⛅" }, 3: { label: "흐림", icon: "☁️" },
+  45: { label: "안개", icon: "🌫️" }, 48: { label: "짙은 안개", icon: "🌫️" },
+  51: { label: "약한 이슬비", icon: "🌦️" }, 53: { label: "이슬비", icon: "🌦️" }, 55: { label: "강한 이슬비", icon: "🌧️" },
+  61: { label: "약한 비", icon: "🌦️" }, 63: { label: "비", icon: "🌧️" }, 65: { label: "강한 비", icon: "⛈️" },
+  71: { label: "약한 눈", icon: "🌨️" }, 73: { label: "눈", icon: "❄️" }, 75: { label: "강한 눈", icon: "❄️" },
+  80: { label: "소나기", icon: "🌦️" }, 81: { label: "강한 소나기", icon: "🌧️" }, 82: { label: "폭우", icon: "⛈️" },
+  95: { label: "뇌우", icon: "⛈️" }, 96: { label: "뇌우+우박", icon: "⛈️" }, 99: { label: "강한 뇌우+우박", icon: "⛈️" },
+};
+const wmoLabel = (c) => WMO_LABELS[c] || { label: "정보없음", icon: "🌡️" };
+
+// 날씨 데이터 → 한국 기상청 스타일 경보/주의보 자동 추출
+function deriveWeatherAlerts(snap) {
+  if (!snap) return [];
+  const alerts = [];
+  const t = snap.temp ?? 20;
+  const h = snap.humidity ?? 50;
+  const w = snap.windGust ?? 0;
+  const p1 = snap.precipNext1h ?? 0;
+  const p24 = snap.precipNext24h ?? 0;
+  const code = snap.weatherCode ?? 0;
+
+  if (t >= 35) alerts.push({ k:"HEAT_WARN", lbl:"🔥 폭염경보", sev:"critical", msg:`체감 ${snap.feelsLike?.toFixed(0) || t.toFixed(0)}°C`, color:"#dc2626" });
+  else if (t >= 33) alerts.push({ k:"HEAT_ADV", lbl:"🔥 폭염주의보", sev:"warning", msg:`기온 ${t.toFixed(0)}°C`, color:"#f59e0b" });
+
+  if (t <= -15) alerts.push({ k:"COLD_WARN", lbl:"🥶 한파경보", sev:"critical", msg:`기온 ${t.toFixed(0)}°C`, color:"#1e40af" });
+  else if (t <= -10) alerts.push({ k:"COLD_ADV", lbl:"🥶 한파주의보", sev:"warning", msg:`기온 ${t.toFixed(0)}°C`, color:"#3b82f6" });
+
+  if (w >= 20) alerts.push({ k:"WIND_WARN", lbl:"💨 강풍경보", sev:"critical", msg:`순간풍속 ${w.toFixed(1)}m/s`, color:"#dc2626" });
+  else if (w >= 14) alerts.push({ k:"WIND_ADV", lbl:"💨 강풍주의보", sev:"warning", msg:`순간풍속 ${w.toFixed(1)}m/s`, color:"#f59e0b" });
+
+  if (p1 >= 50) alerts.push({ k:"RAIN_WARN", lbl:"🌧️ 호우경보", sev:"critical", msg:`시간당 ${p1.toFixed(0)}mm`, color:"#1e40af" });
+  else if (p1 >= 30) alerts.push({ k:"RAIN_ADV", lbl:"🌧️ 호우주의보", sev:"warning", msg:`시간당 ${p1.toFixed(0)}mm`, color:"#3b82f6" });
+
+  if (h < 25 && p24 < 1) alerts.push({ k:"DRY_WARN", lbl:"🔥 건조경보", sev:"critical", msg:`습도 ${h}% · 24h 강수 ${p24}mm`, color:"#dc2626" });
+  else if (h < 35 && p24 < 1) alerts.push({ k:"DRY_ADV", lbl:"🔥 건조주의보", sev:"warning", msg:`습도 ${h}% · 24h 강수 ${p24}mm`, color:"#f59e0b" });
+
+  if (t <= 0 && p1 > 0) alerts.push({ k:"ICE", lbl:"❄️ 결빙주의", sev:"warning", msg:"기온 0℃ 이하 + 강수 → 도로 결빙", color:"#3b82f6" });
+  if (code >= 71 && code <= 77) alerts.push({ k:"SNOW", lbl:"❄️ 눈 알림", sev:"info", msg:wmoLabel(code).label, color:"#64748b" });
+  if (code >= 95) alerts.push({ k:"THUNDER", lbl:"⛈️ 뇌우주의", sev:"warning", msg:wmoLabel(code).label, color:"#7c3aed" });
+
+  return alerts;
+}
+
+// 경보 → 시설/구역 영향 매핑 + 권장 점검 항목 (한국잠사박물관 맞춤)
+// zones는 BASE_ZONES의 id (또는 "all")
+const WEATHER_RULES = {
+  HEAT_WARN: { zones:["water","field","garden","farm","park","plaza"], items:[
+    { txt:"🥤 음수대 정상작동 + 그늘막/파라솔 확보", priority:"high" },
+    { txt:"🐛 누에·동물 음수통 추가, 환기·차광 점검", priority:"high" },
+    { txt:"🍳 매점/식당 냉장고 온도 확인 (식중독 예방)", priority:"high" },
+    { txt:"⚡ 냉방기·실외기 과부하 점검 (전기실)", priority:"medium" },
+    { txt:"🚸 야외 체험 일시중단 안내, 노약자 보호", priority:"high" },
+  ]},
+  HEAT_ADV: { zones:["water","field","garden","farm","park"], items:[
+    { txt:"🥤 음수대 + 그늘막 확인", priority:"medium" },
+    { txt:"🐛 동물·식물 음수 추가", priority:"medium" },
+    { txt:"🚸 직원·관람객 수분 섭취 안내", priority:"medium" },
+  ]},
+  COLD_WARN: { zones:["water","farm","gh","bldg"], items:[
+    { txt:"🚰 외부 수도·물놀이장 배관 동파 예방 (보온재/배수)", priority:"high" },
+    { txt:"🐛 누에·동물 보온등·환기 점검", priority:"high" },
+    { txt:"🌱 온실 난방기 가동 + 작물 보온", priority:"high" },
+    { txt:"🛣️ 도로/통로 결빙 모니터링", priority:"medium" },
+  ]},
+  COLD_ADV: { zones:["water","farm","gh"], items:[
+    { txt:"🚰 외부 수도 동파 점검", priority:"medium" },
+    { txt:"🌱 온실 보온 확인", priority:"medium" },
+  ]},
+  WIND_WARN: { zones:["field","park","garden","water"], items:[
+    { txt:"⛺ 검정비닐천막·텐트·차양 결속 강화 (즉시!)", priority:"high" },
+    { txt:"🪧 입간판·현수막 임시 철거 또는 결박", priority:"high" },
+    { txt:"🌳 노후 수목·가지 낙하 위험 점검", priority:"high" },
+    { txt:"🛝 야외 놀이기구 운영 일시중단", priority:"high" },
+    { txt:"🪜 고소작업·간판 작업 전면 금지", priority:"high" },
+  ]},
+  WIND_ADV: { zones:["field","park","garden"], items:[
+    { txt:"⛺ 천막·차양 결속 확인", priority:"medium" },
+    { txt:"🪧 간판/현수막 결박 상태 점검", priority:"medium" },
+  ]},
+  RAIN_WARN: { zones:["all"], items:[
+    { txt:"💧 배수로·집수정 막힘 즉시 청소", priority:"high" },
+    { txt:"⚡ 누전차단기·옥외콘센트 작동 점검", priority:"high" },
+    { txt:"🛣️ 통로 미끄럼·고임물 안내판 설치", priority:"high" },
+    { txt:"📦 옥외 전시물·자재 비닐 덮개", priority:"medium" },
+    { txt:"🚌 주차장 침수 위험 차량 이동 안내", priority:"medium" },
+  ]},
+  RAIN_ADV: { zones:["all"], items:[
+    { txt:"💧 배수로 점검", priority:"medium" },
+    { txt:"⚡ 옥외 전기설비 누전 점검", priority:"medium" },
+    { txt:"🛣️ 통로 미끄럼 주의 안내", priority:"medium" },
+  ]},
+  DRY_WARN: { zones:["farm","field","garden","gh"], items:[
+    { txt:"🧯 소화기·소화전 압력·위치 점검 (모든 동)", priority:"high" },
+    { txt:"🚭 흡연구역 외 흡연 단속 강화", priority:"high" },
+    { txt:"⚡ 전기 단락·과부하 점검 (배전반)", priority:"high" },
+    { txt:"🔥 잔디·뽕밭 화재 위험 — 작업등 사용 금지", priority:"high" },
+  ]},
+  DRY_ADV: { zones:["farm","field","garden"], items:[
+    { txt:"🧯 소화기 점검", priority:"medium" },
+    { txt:"🚭 흡연 단속", priority:"medium" },
+  ]},
+  ICE: { zones:["park","plaza","all"], items:[
+    { txt:"🧂 제설제·제빙 매트 사전 비치", priority:"high" },
+    { txt:"🛣️ 통로·계단 미끄럼 안내, 노약자 우회로 안내", priority:"high" },
+  ]},
+  SNOW: { zones:["all"], items:[
+    { txt:"🧹 제설 작업 + 지붕 적설 모니터링", priority:"medium" },
+    { txt:"🛣️ 진입로 안전 확보", priority:"medium" },
+  ]},
+  THUNDER: { zones:["all"], items:[
+    { txt:"⚡ 야외 체험 즉시 중단, 실내 대피 안내", priority:"high" },
+    { txt:"🌳 큰 나무·금속 구조물 접근 금지 안내", priority:"high" },
+  ]},
+};
+
+// 알림에 영향받는 zone id 집합 (모든 zone 적용 시 "all" → 전체)
+function alertAffectedZones(alerts, allZoneIds) {
+  const set = new Set();
+  for (const a of alerts) {
+    const rule = WEATHER_RULES[a.k];
+    if (!rule) continue;
+    if (rule.zones.includes("all")) { allZoneIds.forEach(z => set.add(z)); continue; }
+    rule.zones.forEach(z => set.add(z));
+  }
+  return set;
+}
+
+// ============================================================
+
 const Z_LOCS = {
   farm:["뽕밭"], gh:["온실창고","온실창고 B-3","온실창고 C-4"], water:["물놀이장"],
   garden:["텃밭","정원"], storage:["수장고","수장고 A-5","수장고 A-6","수장고 B-2","수장고 C-2","수장고 뒤쪽"],
@@ -5416,6 +5554,66 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
   // 구역별 평면도/3D 모델/마커 저장 — { [zoneId]: { floorPlanUrl, markers: [{id,x,y,label,productIds[]}], model3dUrl, model3dName } }
   const [zoneLayouts,setZoneLayouts]=useLocalStorage("jamsa_zone_layouts", {});
   const [showZoneLayout,setShowZoneLayout]=useState(null); // {zoneId, focusProdId}
+
+  // ── 🌦️ 실시간 날씨 + 자동 안전점검 알림 ──
+  const [weather, setWeather] = useState(null); // {temp, humidity, feelsLike, windGust, weatherCode, precipNext1h, precipNext24h, fetchedAt, hourly[]}
+  const [weatherErr, setWeatherErr] = useState(null);
+  const [showWeather, setShowWeather] = useState(false);
+  const [seenAlertKeys, setSeenAlertKeys] = useLocalStorage("jamsa_weather_seen_alerts", []);
+
+  const fetchWeather = useCallback(async () => {
+    try {
+      const res = await fetch(WEATHER_API);
+      const j = await res.json();
+      const cur = j.current || {};
+      const hourly = j.hourly || {};
+      // 다음 1시간 강수, 24시간 강수 합계
+      const nowIdx = (hourly.time || []).findIndex(t => new Date(t) >= new Date());
+      const idx = Math.max(0, nowIdx);
+      const precipNext1h = hourly.precipitation?.[idx] ?? 0;
+      const precipNext24h = (hourly.precipitation || []).slice(idx, idx+24).reduce((s,v)=>s+(v||0), 0);
+      const snap = {
+        temp: cur.temperature_2m,
+        humidity: cur.relative_humidity_2m,
+        feelsLike: cur.apparent_temperature,
+        isDay: cur.is_day,
+        windSpeed: cur.wind_speed_10m,
+        windGust: cur.wind_gusts_10m,
+        weatherCode: cur.weather_code,
+        precipNow: cur.precipitation,
+        precipNext1h, precipNext24h,
+        hourly: (hourly.time || []).slice(idx, idx+12).map((t,i) => ({
+          time: t, temp: hourly.temperature_2m?.[idx+i],
+          precipProb: hourly.precipitation_probability?.[idx+i],
+          precip: hourly.precipitation?.[idx+i],
+          windGust: hourly.wind_gusts_10m?.[idx+i],
+        })),
+        fetchedAt: new Date().toISOString(),
+      };
+      setWeather(snap); setWeatherErr(null);
+      // 새 경보 자동 알림 (이미 본 것은 건너뜀)
+      const alerts = deriveWeatherAlerts(snap);
+      const newAlerts = alerts.filter(a => !seenAlertKeys.includes(a.k));
+      if (newAlerts.length > 0) {
+        for (const a of newAlerts) {
+          addH("⚠️ 날씨경보", "기상", `${a.lbl} — ${a.msg}`, 0);
+        }
+        setSeenAlertKeys(arr => [...new Set([...arr, ...newAlerts.map(a=>a.k)])]);
+      }
+      // 1시간 동안 경보가 사라진 항목은 seen에서 제거 (다음에 다시 발생 시 재알림)
+      const activeKeys = new Set(alerts.map(a=>a.k));
+      setSeenAlertKeys(arr => arr.filter(k => activeKeys.has(k) || true));
+    } catch (e) { setWeatherErr(e.message || "날씨 정보 조회 실패"); }
+  }, [seenAlertKeys, setSeenAlertKeys]);
+
+  useEffect(() => {
+    fetchWeather();
+    const id = setInterval(fetchWeather, 15 * 60 * 1000); // 15분
+    return () => clearInterval(id);
+  }, []); // mount-only (fetchWeather는 seenAlertKeys에 의존하지만 매 호출마다 새로 만들 필요 없음)
+
+  const weatherAlerts = useMemo(() => deriveWeatherAlerts(weather), [weather]);
+  const affectedZoneIds = useMemo(() => alertAffectedZones(weatherAlerts, ZONES.map(z=>z.id)), [weatherAlerts]);
   const [rfidTags,setRfidTags]=useState({});
   const [rfidScans,setRfidScans]=useState([]);
   const mapWrap=useRef(null);
@@ -5843,7 +6041,21 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
         <div style={{flex:1,overflow:"auto",background:page==="map"?"#f5f5f5":"#f0f2f5"}}>
           {/* ==================== MAP PAGE ==================== */}
           {page==="map"&&(
-            <div style={{display:"flex",flexDirection:"column"}}>
+            <div style={{display:"flex",flexDirection:"column",position:"relative"}}>
+              {/* 🌦️ 날씨 위젯 (지도 우상단 부동) */}
+              <button onClick={()=>setShowWeather(true)}
+                title={weather ? `${wmoLabel(weather.weatherCode).label} · 클릭=상세` : "날씨 정보 로딩중..."}
+                style={{position:"absolute",top:60,right:14,zIndex:30,padding:"6px 12px",borderRadius:14,border:"none",cursor:"pointer",background:"rgba(255,255,255,0.97)",boxShadow:"0 4px 14px rgba(0,0,0,0.12)",display:"flex",alignItems:"center",gap:8,fontSize:12,fontWeight:700,color:"#0f172a"}}>
+                <span style={{fontSize:18}}>{weather ? wmoLabel(weather.weatherCode).icon : "⏳"}</span>
+                {weather && <span style={{fontWeight:900}}>{Math.round(weather.temp)}°</span>}
+                {weather && <span style={{fontSize:10,color:"#64748b"}}>강내면</span>}
+                {weatherAlerts.length > 0 && (
+                  <span style={{padding:"2px 7px",background:weatherAlerts.some(a=>a.sev==="critical")?"#dc2626":"#f59e0b",color:"#fff",borderRadius:8,fontSize:10,fontWeight:900,animation:"pulse-alert 1.6s infinite"}}>
+                    ⚠ {weatherAlerts.length}
+                  </span>
+                )}
+              </button>
+              <style>{`@keyframes pulse-alert{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.7;transform:scale(1.07)}}`}</style>
               {/* QR Lookup Bar */}
               <div className="no-print" style={{position:"sticky",top:0,zIndex:20,background:"rgba(255,255,255,0.97)",backdropFilter:"blur(8px)",
                 padding:"8px 12px",borderBottom:"1px solid #e5e7eb"}}>
@@ -5921,6 +6133,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
               </div>
 
               <MapView mapWrap={mapWrap} hZone={hZone} setHZone={setHZone} tip={tip} setTip={setTip} zQty={zQty} zProds={zProds} zHist={zHist} setSelZone={setSelZone} zonePhotos={zonePhotos}
+                weatherAffectedZones={affectedZoneIds} weatherAlerts={weatherAlerts}
                 userCtx={userCtx}
                 zones={mergedZones}
                 customZones={customZones}
@@ -5984,6 +6197,25 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
                   }}
                   onClose={()=>setShowZoneLayout(null)}/>;
               })()}
+              {/* 🌦️ 날씨 상세 모달 */}
+              {showWeather && (
+                <WeatherModal weather={weather} alerts={weatherAlerts} affectedZones={affectedZoneIds}
+                  zones={mergedZones} onRefresh={fetchWeather} weatherErr={weatherErr}
+                  onCreateInspection={(zoneId, items)=>{
+                    if (!onAddFacAction) return;
+                    const zone = mergedZones.find(z=>z.id===zoneId);
+                    items.forEach(it => {
+                      onAddFacAction({
+                        title: `[날씨자동] ${zone?.name || zoneId} - ${it.txt.replace(/^[^\s]+\s/, '')}`,
+                        zoneId, priority: it.priority || "medium",
+                        source: "weather_alert", createdBy: curUser?.name || "시스템",
+                      });
+                    });
+                    addH("⚠️ 날씨대응", zone?.name||zoneId, `점검 ${items.length}건 자동 등록`, items.length);
+                    alert(`✅ ${zone?.name} 점검 ${items.length}건이 등록되었습니다`);
+                  }}
+                  onClose={()=>setShowWeather(false)}/>
+              )}
             </div>
           )}
 
@@ -7927,7 +8159,7 @@ function CctvMappingModal({ zones, cctvMap, onSave, onClose }) {
   );
 }
 
-function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone,zonePhotos,zones,customZones=[],facActions=[],onCreateZone,onDeleteCustomZone,onAddInventoryToZone,onCreateFacAction,switchToFacility,userCtx,onUpdateZone}){
+function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone,zonePhotos,zones,customZones=[],facActions=[],onCreateZone,onDeleteCustomZone,onAddInventoryToZone,onCreateFacAction,switchToFacility,userCtx,onUpdateZone,weatherAffectedZones,weatherAlerts=[]}){
   // Use passed zones if provided, else fall back to static ZONES
   const baseZones = zones || ZONES;
   const [gpsZone, setGpsZone] = useState(null);
@@ -8591,17 +8823,28 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
               const h = usingGps ? Math.max(3, z.h * 0.4) : z.h;
               const x = usingGps ? pos.x - w/2 : pos.x;
               const y = usingGps ? pos.y - h/2 : pos.y;
+              const isWeatherAffected = weatherAffectedZones?.has?.(z.id);
+              const critAlert = (weatherAlerts||[]).some(a => a.sev === "critical");
               return (
-                <rect key={z.id} className="zbox" x={x} y={y} width={w} height={h}
-                  rx="1" fill={z.color}
-                  style={{pointerEvents:drawMode?"none":"all",opacity:hZone===z.id?0.5:(usingGps?0.25:0.08),stroke:hZone===z.id||usingGps?z.color:"transparent",strokeWidth:hZone===z.id?0.6:(usingGps?0.3:0)}}
-                  onMouseEnter={e=>{if(drawMode)return;setHZone(z.id);const r=mapWrap.current?.getBoundingClientRect();if(r)setTip({x:e.clientX-r.left,y:e.clientY-r.top});}}
-                  onMouseMove={e=>{const r=mapWrap.current?.getBoundingClientRect();if(r)setTip({x:e.clientX-r.left,y:e.clientY-r.top});}}
-                  onMouseLeave={()=>{setHZone(null);setTip(null);}}
-                  onClick={()=>{if(usingGps){setGpsZone(z);}else{setSelZone(z.id);}setHZone(null);setTip(null);}}
-                />
+                <g key={z.id}>
+                  {/* 날씨 경보 펄스 링 */}
+                  {isWeatherAffected && (
+                    <rect x={x-1} y={y-1} width={w+2} height={h+2} rx="1.5" fill="none"
+                      stroke={critAlert ? "#dc2626" : "#f59e0b"} strokeWidth="0.5" strokeDasharray="0.8,0.5"
+                      style={{pointerEvents:"none",opacity:0.85,animation:"weather-pulse 1.4s ease-in-out infinite"}}/>
+                  )}
+                  <rect className="zbox" x={x} y={y} width={w} height={h}
+                    rx="1" fill={z.color}
+                    style={{pointerEvents:drawMode?"none":"all",opacity:hZone===z.id?0.5:(usingGps?0.25:0.08),stroke:hZone===z.id||usingGps?z.color:"transparent",strokeWidth:hZone===z.id?0.6:(usingGps?0.3:0)}}
+                    onMouseEnter={e=>{if(drawMode)return;setHZone(z.id);const r=mapWrap.current?.getBoundingClientRect();if(r)setTip({x:e.clientX-r.left,y:e.clientY-r.top});}}
+                    onMouseMove={e=>{const r=mapWrap.current?.getBoundingClientRect();if(r)setTip({x:e.clientX-r.left,y:e.clientY-r.top});}}
+                    onMouseLeave={()=>{setHZone(null);setTip(null);}}
+                    onClick={()=>{if(usingGps){setGpsZone(z);}else{setSelZone(z.id);}setHZone(null);setTip(null);}}
+                  />
+                </g>
               );
             })}
+            <style>{`@keyframes weather-pulse{0%,100%{opacity:0.85;stroke-width:0.5}50%{opacity:0.4;stroke-width:1}}`}</style>
             {/* Custom zones: circles (only visible in GPS modes) */}
             {usingGps && allZones.filter(z => z.custom).map(z => {
               const pos = zoneToSatPct(z);
@@ -11762,6 +12005,140 @@ function AddMdl({onAdd,onClose,defaultLoc,zoneInfo}){
       </div>
     </div>
   </Modal>);
+}
+
+// ============================================================
+// 🌦️ 날씨 상세 + 시설안전점검 자동 권장 모달
+// ============================================================
+function WeatherModal({weather, alerts, affectedZones, zones, onRefresh, onCreateInspection, weatherErr, onClose}) {
+  const w = weather;
+  const wlbl = w ? wmoLabel(w.weatherCode) : { label:"-", icon:"⏳" };
+  // 영향받는 zone × 권장 점검 항목 매트릭스
+  const zoneRecommendations = useMemo(() => {
+    const map = new Map(); // zoneId → [{txt, priority, alertK}]
+    for (const a of alerts) {
+      const rule = WEATHER_RULES[a.k];
+      if (!rule) continue;
+      const targetZones = rule.zones.includes("all") ? zones.map(z=>z.id) : rule.zones;
+      for (const zid of targetZones) {
+        if (!map.has(zid)) map.set(zid, []);
+        rule.items.forEach(it => map.get(zid).push({...it, alertK: a.k, alertLbl: a.lbl}));
+      }
+    }
+    return map;
+  }, [alerts, zones]);
+
+  return (
+    <Modal title="🌦️ 실시간 날씨 + 시설 안전점검" onClose={onClose} w={780}>
+      {/* 현재 날씨 헤더 */}
+      <div style={{padding:"14px 16px",borderRadius:10,background:w?.isDay ? "linear-gradient(135deg,#0ea5e9,#3b82f6)" : "linear-gradient(135deg,#1e293b,#334155)",color:"#fff",marginBottom:12,position:"relative",overflow:"hidden"}}>
+        <div style={{position:"absolute",right:-20,top:-20,fontSize:140,opacity:0.18}}>{wlbl.icon}</div>
+        <div style={{display:"flex",alignItems:"center",gap:6,fontSize:11,opacity:0.9,marginBottom:4}}>
+          <span>📍 한국잠사박물관 (강내면)</span>
+          {w?.fetchedAt && <span style={{fontSize:10,opacity:0.7}}>· 업데이트 {new Date(w.fetchedAt).toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"})}</span>}
+          <button onClick={onRefresh} style={{marginLeft:"auto",padding:"3px 8px",fontSize:10,background:"rgba(255,255,255,0.2)",color:"#fff",border:"none",borderRadius:6,cursor:"pointer"}}>🔄 새로고침</button>
+        </div>
+        {weatherErr ? (
+          <div style={{padding:10,background:"rgba(239,68,68,0.2)",borderRadius:6,fontSize:12}}>⚠️ {weatherErr}</div>
+        ) : !w ? (
+          <div style={{fontSize:13}}>⏳ 날씨 정보 로딩 중...</div>
+        ) : (
+          <>
+            <div style={{display:"flex",alignItems:"flex-end",gap:14,marginTop:6}}>
+              <div style={{fontSize:48,fontWeight:900,lineHeight:1}}>{Math.round(w.temp)}°</div>
+              <div>
+                <div style={{fontSize:14,fontWeight:700}}>{wlbl.label}</div>
+                <div style={{fontSize:11,opacity:0.85}}>체감 {Math.round(w.feelsLike)}° · 습도 {w.humidity}%</div>
+                <div style={{fontSize:11,opacity:0.85}}>풍속 {w.windSpeed?.toFixed(1)}m/s (순간 {w.windGust?.toFixed(1)})</div>
+              </div>
+            </div>
+            {/* 12시간 예보 미니바 */}
+            <div style={{display:"flex",gap:4,marginTop:12,overflowX:"auto"}}>
+              {(w.hourly||[]).slice(0,12).map((h,i) => (
+                <div key={i} style={{flex:"0 0 50px",textAlign:"center",padding:"6px 4px",background:"rgba(255,255,255,0.1)",borderRadius:6,fontSize:10}}>
+                  <div style={{opacity:0.8}}>{new Date(h.time).getHours()}시</div>
+                  <div style={{fontSize:14,fontWeight:800,margin:"3px 0"}}>{Math.round(h.temp)}°</div>
+                  <div style={{opacity:0.8,color:h.precipProb>30?"#7dd3fc":"inherit"}}>💧{h.precipProb||0}%</div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* 활성 경보 */}
+      {alerts.length === 0 ? (
+        <div style={{padding:20,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:10,textAlign:"center",color:"#065f46"}}>
+          ✅ <strong>현재 발효 중인 기상 경보·주의보가 없습니다.</strong>
+          <div style={{fontSize:11,marginTop:4,color:"#047857"}}>날씨 변동 시 자동으로 알려드립니다.</div>
+        </div>
+      ) : (
+        <div style={{marginBottom:12}}>
+          <div style={{fontSize:13,fontWeight:800,color:"#0f172a",marginBottom:8,display:"flex",alignItems:"center",gap:6}}>
+            <span>⚠️ 발효 중인 경보 · 주의보 ({alerts.length})</span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:8}}>
+            {alerts.map(a => (
+              <div key={a.k} style={{padding:"10px 12px",background:"#fff",border:`2px solid ${a.color}`,borderLeft:`6px solid ${a.color}`,borderRadius:8}}>
+                <div style={{fontSize:13,fontWeight:800,color:a.color}}>{a.lbl}</div>
+                <div style={{fontSize:11,color:"#475569",marginTop:2}}>{a.msg}</div>
+                <div style={{fontSize:9,marginTop:4,padding:"1px 6px",display:"inline-block",background:a.sev==="critical"?"#fee2e2":a.sev==="warning"?"#fef3c7":"#dbeafe",color:a.color,borderRadius:6,fontWeight:700}}>
+                  {a.sev==="critical"?"경보":a.sev==="warning"?"주의보":"안내"}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 영향받는 구역별 권장 점검 */}
+      {zoneRecommendations.size > 0 && (
+        <div style={{marginTop:14}}>
+          <div style={{fontSize:13,fontWeight:800,color:"#0f172a",marginBottom:8}}>📋 구역별 권장 안전점검 (자동 추천)</div>
+          <div style={{maxHeight:300,overflowY:"auto",border:"1px solid #e5e7eb",borderRadius:8}}>
+            {Array.from(zoneRecommendations.entries()).map(([zid, items]) => {
+              const z = zones.find(zz => zz.id === zid);
+              if (!z) return null;
+              // 같은 텍스트 중복 제거
+              const uniq = []; const seen = new Set();
+              for (const it of items) { if (!seen.has(it.txt)) { seen.add(it.txt); uniq.push(it); } }
+              return (
+                <div key={zid} style={{padding:"10px 12px",borderBottom:"1px solid #f1f5f9",background:"#fff"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                    <span style={{fontSize:18}}>{z.icon}</span>
+                    <span style={{fontSize:13,fontWeight:800,color:z.color}}>{z.name}</span>
+                    <span style={{fontSize:10,padding:"1px 6px",background:"#fef3c7",color:"#92400e",borderRadius:6,fontWeight:700}}>{uniq.length}건</span>
+                    {onCreateInspection && (
+                      <button onClick={()=>onCreateInspection(zid, uniq)}
+                        style={{marginLeft:"auto",padding:"4px 10px",fontSize:10,background:"#1e40af",color:"#fff",border:"none",borderRadius:6,fontWeight:700,cursor:"pointer"}}>
+                        ⚡ 전체 점검 등록
+                      </button>
+                    )}
+                  </div>
+                  <ul style={{margin:0,paddingLeft:18,fontSize:11,color:"#475569",lineHeight:1.7}}>
+                    {uniq.map((it,i) => (
+                      <li key={i} style={{display:"flex",alignItems:"flex-start",gap:6}}>
+                        <span style={{color:it.priority==="high"?"#dc2626":"#64748b",fontWeight:700,fontSize:9,marginTop:2,padding:"1px 4px",background:it.priority==="high"?"#fee2e2":"#f1f5f9",borderRadius:4,flexShrink:0}}>
+                          {it.priority==="high"?"높음":"보통"}
+                        </span>
+                        <span>{it.txt}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{marginTop:6,fontSize:10,color:"#64748b"}}>💡 "⚡ 전체 점검 등록" 클릭 시 시설관리 모듈에 점검 항목이 자동으로 추가됩니다. 지도의 해당 구역은 빨강/노랑 펄스 링으로 표시됩니다.</div>
+        </div>
+      )}
+
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:14,paddingTop:10,borderTop:"1px solid #e5e7eb"}}>
+        <span style={{fontSize:9,color:"#94a3b8"}}>데이터 출처: Open-Meteo (15분 자동 갱신) · 경보·주의보는 기상청 기준 임계값 자동 적용</span>
+        <button className="btn bs" onClick={onClose}>닫기</button>
+      </div>
+    </Modal>
+  );
 }
 
 // ============================================================
