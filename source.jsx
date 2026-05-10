@@ -5002,6 +5002,38 @@ const WEATHER_RULES = {
   ]},
 };
 
+// 알림 키 → 라벨/심각도/색상 (KMA 공식 특보 표시용 통합 매핑)
+const ALERT_LABEL = {
+  HEAT_WARN: { lbl:"🔥 폭염경보", sev:"critical", color:"#dc2626" },
+  HEAT_ADV:  { lbl:"🔥 폭염주의보", sev:"warning", color:"#f59e0b" },
+  COLD_WARN: { lbl:"🥶 한파경보", sev:"critical", color:"#1e40af" },
+  COLD_ADV:  { lbl:"🥶 한파주의보", sev:"warning", color:"#3b82f6" },
+  WIND_WARN: { lbl:"💨 강풍경보", sev:"critical", color:"#dc2626" },
+  WIND_ADV:  { lbl:"💨 강풍주의보", sev:"warning", color:"#f59e0b" },
+  RAIN_WARN: { lbl:"🌧️ 호우경보", sev:"critical", color:"#1e40af" },
+  RAIN_ADV:  { lbl:"🌧️ 호우주의보", sev:"warning", color:"#3b82f6" },
+  DRY_WARN:  { lbl:"🔥 건조경보", sev:"critical", color:"#dc2626" },
+  DRY_ADV:   { lbl:"🔥 건조주의보", sev:"warning", color:"#f59e0b" },
+  ICE:       { lbl:"❄️ 결빙주의", sev:"warning", color:"#3b82f6" },
+  SNOW:      { lbl:"❄️ 대설/눈 알림", sev:"warning", color:"#64748b" },
+  THUNDER:   { lbl:"⛈️ 뇌우주의", sev:"warning", color:"#7c3aed" },
+  TYPHOON:   { lbl:"🌀 태풍경보", sev:"critical", color:"#7c3aed" },
+  DUST:      { lbl:"🌫️ 황사주의보", sev:"warning", color:"#a16207" },
+};
+
+// 태풍/황사 영향 구역 추가
+WEATHER_RULES.TYPHOON = { zones:["all"], items:[
+  { txt:"🌀 모든 야외 시설·천막 사전 결박", priority:"high" },
+  { txt:"🌳 가로수·간판·낙하물 위험요소 제거", priority:"high" },
+  { txt:"⚡ 옥외 전기·통신 점검", priority:"high" },
+  { txt:"🚸 모든 야외 체험·운영 중단 검토", priority:"high" },
+]};
+WEATHER_RULES.DUST = { zones:["all"], items:[
+  { txt:"😷 마스크 비치 + 야외활동 자제 안내", priority:"medium" },
+  { txt:"🪟 환기설비 필터 점검", priority:"medium" },
+  { txt:"🐛 누에·동물 실내 격리 검토", priority:"medium" },
+]};
+
 // 알림에 영향받는 zone id 집합 (모든 zone 적용 시 "all" → 전체)
 function alertAffectedZones(alerts, allZoneIds) {
   const set = new Set();
@@ -5556,31 +5588,81 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
   const [showZoneLayout,setShowZoneLayout]=useState(null); // {zoneId, focusProdId}
 
   // ── 🌦️ 실시간 날씨 + 자동 안전점검 알림 ──
-  const [weather, setWeather] = useState(null); // {temp, humidity, feelsLike, windGust, weatherCode, precipNext1h, precipNext24h, fetchedAt, hourly[]}
+  // 우선순위: 기상청(KMA) 공식 API → 실패/미설정 시 Open-Meteo 폴백
+  const [weather, setWeather] = useState(null);
+  const [weatherSource, setWeatherSource] = useState(null); // "KMA" | "OpenMeteo" | null
   const [weatherErr, setWeatherErr] = useState(null);
   const [showWeather, setShowWeather] = useState(false);
   const [seenAlertKeys, setSeenAlertKeys] = useLocalStorage("jamsa_weather_seen_alerts", []);
 
   const fetchWeather = useCallback(async () => {
+    // 1단계: 기상청 공식 API 시도 (Vercel 프록시 /api/weather-kma)
+    try {
+      const r = await fetch(`/api/weather-kma?lat=${JAMSA_CENTER.lat}&lng=${JAMSA_CENTER.lng}`);
+      if (r.ok) {
+        const j = await r.json();
+        if (j.ok && j.current) {
+          const snap = {
+            temp: j.current.temp,
+            humidity: j.current.humidity,
+            feelsLike: j.current.feelsLike,
+            isDay: j.current.isDay,
+            windSpeed: j.current.windSpeed,
+            windGust: j.current.windGust,
+            weatherCode: j.current.weatherCode,
+            precipNow: j.current.precipNow,
+            precipNext1h: j.current.precipNext1h,
+            precipNext24h: j.current.precipNext24h,
+            hourly: j.hourly || [],
+            officialWarnings: j.warnings || [], // KMA 공식 특보
+            fetchedAt: j.fetchedAt,
+            source: "KMA",
+          };
+          setWeather(snap); setWeatherSource("KMA"); setWeatherErr(null);
+          // 공식 특보가 있으면 derive 결과보다 우선
+          const officialKeys = new Set(snap.officialWarnings.map(w => w.k));
+          const derivedAlerts = deriveWeatherAlerts(snap).filter(a => !officialKeys.has(a.k));
+          const officialAlerts = snap.officialWarnings.map(w => ({
+            k: w.k, lbl: ALERT_LABEL[w.k]?.lbl || w.title, sev: ALERT_LABEL[w.k]?.sev || "warning",
+            color: ALERT_LABEL[w.k]?.color || "#dc2626", msg: w.title || w.area, official: true,
+            issuedAt: w.issuedAt, endsAt: w.endsAt,
+          }));
+          const allAlerts = [...officialAlerts, ...derivedAlerts];
+          // 새 알림은 history에 자동 추가
+          const newAlerts = allAlerts.filter(a => !seenAlertKeys.includes(a.k));
+          for (const a of newAlerts) {
+            addH(a.official ? "📡 기상청특보" : "⚠️ 날씨경보", "기상청", `${a.lbl}${a.msg?` — ${a.msg}`:""}`, 0);
+          }
+          if (newAlerts.length > 0) {
+            setSeenAlertKeys(arr => [...new Set([...arr, ...newAlerts.map(a=>a.k)])]);
+          }
+          return;
+        }
+      } else if (r.status === 503) {
+        // KMA 키 미설정 — 폴백
+        console.info("[weather] KMA_API_KEY 미설정 → Open-Meteo로 폴백");
+      } else {
+        console.warn("[weather] KMA 응답 오류, Open-Meteo로 폴백");
+      }
+    } catch (e) {
+      console.warn("[weather] KMA 호출 실패, Open-Meteo로 폴백:", e.message);
+    }
+
+    // 2단계: Open-Meteo 폴백
     try {
       const res = await fetch(WEATHER_API);
       const j = await res.json();
       const cur = j.current || {};
       const hourly = j.hourly || {};
-      // 다음 1시간 강수, 24시간 강수 합계
       const nowIdx = (hourly.time || []).findIndex(t => new Date(t) >= new Date());
       const idx = Math.max(0, nowIdx);
       const precipNext1h = hourly.precipitation?.[idx] ?? 0;
       const precipNext24h = (hourly.precipitation || []).slice(idx, idx+24).reduce((s,v)=>s+(v||0), 0);
       const snap = {
-        temp: cur.temperature_2m,
-        humidity: cur.relative_humidity_2m,
-        feelsLike: cur.apparent_temperature,
-        isDay: cur.is_day,
-        windSpeed: cur.wind_speed_10m,
-        windGust: cur.wind_gusts_10m,
-        weatherCode: cur.weather_code,
-        precipNow: cur.precipitation,
+        temp: cur.temperature_2m, humidity: cur.relative_humidity_2m,
+        feelsLike: cur.apparent_temperature, isDay: cur.is_day,
+        windSpeed: cur.wind_speed_10m, windGust: cur.wind_gusts_10m,
+        weatherCode: cur.weather_code, precipNow: cur.precipitation,
         precipNext1h, precipNext24h,
         hourly: (hourly.time || []).slice(idx, idx+12).map((t,i) => ({
           time: t, temp: hourly.temperature_2m?.[idx+i],
@@ -5588,31 +5670,40 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
           precip: hourly.precipitation?.[idx+i],
           windGust: hourly.wind_gusts_10m?.[idx+i],
         })),
+        officialWarnings: [],
         fetchedAt: new Date().toISOString(),
+        source: "OpenMeteo",
       };
-      setWeather(snap); setWeatherErr(null);
-      // 새 경보 자동 알림 (이미 본 것은 건너뜀)
+      setWeather(snap); setWeatherSource("OpenMeteo"); setWeatherErr(null);
       const alerts = deriveWeatherAlerts(snap);
       const newAlerts = alerts.filter(a => !seenAlertKeys.includes(a.k));
+      for (const a of newAlerts) addH("⚠️ 날씨경보", "기상", `${a.lbl} — ${a.msg}`, 0);
       if (newAlerts.length > 0) {
-        for (const a of newAlerts) {
-          addH("⚠️ 날씨경보", "기상", `${a.lbl} — ${a.msg}`, 0);
-        }
         setSeenAlertKeys(arr => [...new Set([...arr, ...newAlerts.map(a=>a.k)])]);
       }
-      // 1시간 동안 경보가 사라진 항목은 seen에서 제거 (다음에 다시 발생 시 재알림)
-      const activeKeys = new Set(alerts.map(a=>a.k));
-      setSeenAlertKeys(arr => arr.filter(k => activeKeys.has(k) || true));
-    } catch (e) { setWeatherErr(e.message || "날씨 정보 조회 실패"); }
+    } catch (e) {
+      setWeatherErr(e.message || "날씨 정보 조회 실패");
+    }
   }, [seenAlertKeys, setSeenAlertKeys]);
 
   useEffect(() => {
     fetchWeather();
     const id = setInterval(fetchWeather, 15 * 60 * 1000); // 15분
     return () => clearInterval(id);
-  }, []); // mount-only (fetchWeather는 seenAlertKeys에 의존하지만 매 호출마다 새로 만들 필요 없음)
+  }, []);
 
-  const weatherAlerts = useMemo(() => deriveWeatherAlerts(weather), [weather]);
+  // 활성 경보 = 공식특보 우선 + 임계값 추출
+  const weatherAlerts = useMemo(() => {
+    if (!weather) return [];
+    const officialKeys = new Set((weather.officialWarnings || []).map(w => w.k));
+    const officialAlerts = (weather.officialWarnings || []).map(w => ({
+      k: w.k, lbl: ALERT_LABEL[w.k]?.lbl || w.title, sev: ALERT_LABEL[w.k]?.sev || "warning",
+      color: ALERT_LABEL[w.k]?.color || "#dc2626", msg: w.title || w.area, official: true,
+      issuedAt: w.issuedAt, endsAt: w.endsAt,
+    }));
+    const derived = deriveWeatherAlerts(weather).filter(a => !officialKeys.has(a.k));
+    return [...officialAlerts, ...derived];
+  }, [weather]);
   const affectedZoneIds = useMemo(() => alertAffectedZones(weatherAlerts, ZONES.map(z=>z.id)), [weatherAlerts]);
   const [rfidTags,setRfidTags]=useState({});
   const [rfidScans,setRfidScans]=useState([]);
@@ -6200,7 +6291,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
               {/* 🌦️ 날씨 상세 모달 */}
               {showWeather && (
                 <WeatherModal weather={weather} alerts={weatherAlerts} affectedZones={affectedZoneIds}
-                  zones={mergedZones} onRefresh={fetchWeather} weatherErr={weatherErr}
+                  zones={mergedZones} onRefresh={fetchWeather} weatherErr={weatherErr} weatherSource={weatherSource}
                   onCreateInspection={(zoneId, items)=>{
                     if (!onAddFacAction) return;
                     const zone = mergedZones.find(z=>z.id===zoneId);
@@ -12010,7 +12101,7 @@ function AddMdl({onAdd,onClose,defaultLoc,zoneInfo}){
 // ============================================================
 // 🌦️ 날씨 상세 + 시설안전점검 자동 권장 모달
 // ============================================================
-function WeatherModal({weather, alerts, affectedZones, zones, onRefresh, onCreateInspection, weatherErr, onClose}) {
+function WeatherModal({weather, alerts, affectedZones, zones, onRefresh, onCreateInspection, weatherErr, weatherSource, onClose}) {
   const w = weather;
   const wlbl = w ? wmoLabel(w.weatherCode) : { label:"-", icon:"⏳" };
   // 영향받는 zone × 권장 점검 항목 매트릭스
@@ -12033,9 +12124,12 @@ function WeatherModal({weather, alerts, affectedZones, zones, onRefresh, onCreat
       {/* 현재 날씨 헤더 */}
       <div style={{padding:"14px 16px",borderRadius:10,background:w?.isDay ? "linear-gradient(135deg,#0ea5e9,#3b82f6)" : "linear-gradient(135deg,#1e293b,#334155)",color:"#fff",marginBottom:12,position:"relative",overflow:"hidden"}}>
         <div style={{position:"absolute",right:-20,top:-20,fontSize:140,opacity:0.18}}>{wlbl.icon}</div>
-        <div style={{display:"flex",alignItems:"center",gap:6,fontSize:11,opacity:0.9,marginBottom:4}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,fontSize:11,opacity:0.9,marginBottom:4,flexWrap:"wrap"}}>
           <span>📍 한국잠사박물관 (강내면)</span>
-          {w?.fetchedAt && <span style={{fontSize:10,opacity:0.7}}>· 업데이트 {new Date(w.fetchedAt).toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"})}</span>}
+          <span style={{padding:"2px 7px",background:weatherSource==="KMA"?"rgba(34,197,94,0.3)":"rgba(255,255,255,0.18)",borderRadius:6,fontSize:10,fontWeight:800}}>
+            {weatherSource==="KMA" ? "📡 기상청 공식" : weatherSource==="OpenMeteo" ? "🌐 Open-Meteo" : "⏳ 연결중"}
+          </span>
+          {w?.fetchedAt && <span style={{fontSize:10,opacity:0.7}}>· {new Date(w.fetchedAt).toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"})}</span>}
           <button onClick={onRefresh} style={{marginLeft:"auto",padding:"3px 8px",fontSize:10,background:"rgba(255,255,255,0.2)",color:"#fff",border:"none",borderRadius:6,cursor:"pointer"}}>🔄 새로고침</button>
         </div>
         {weatherErr ? (
@@ -12133,8 +12227,21 @@ function WeatherModal({weather, alerts, affectedZones, zones, onRefresh, onCreat
         </div>
       )}
 
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:14,paddingTop:10,borderTop:"1px solid #e5e7eb"}}>
-        <span style={{fontSize:9,color:"#94a3b8"}}>데이터 출처: Open-Meteo (15분 자동 갱신) · 경보·주의보는 기상청 기준 임계값 자동 적용</span>
+      {/* 공식 특보 카드에 issuedAt/endsAt 표시 (KMA 데이터일 때만) */}
+      {weatherSource === "OpenMeteo" && (
+        <div style={{marginTop:12,padding:10,background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:8,fontSize:10,color:"#9a3412",lineHeight:1.55}}>
+          💡 <strong>기상청 공식 API 연동 안내:</strong> Vercel 환경변수 <code style={{padding:"1px 4px",background:"#fef3c7",borderRadius:3}}>KMA_API_KEY</code>를 설정하면 더 정확한 공식 발표 데이터를 사용할 수 있습니다.<br/>
+          1) <a href="https://www.data.go.kr/data/15084084/openapi.do" target="_blank" rel="noopener" style={{color:"#1e40af",fontWeight:700}}>data.go.kr → 기상청_단기예보 신청</a> (즉시 승인)<br/>
+          2) <a href="https://www.data.go.kr/data/15059093/openapi.do" target="_blank" rel="noopener" style={{color:"#1e40af",fontWeight:700}}>기상청_기상특보 조회 신청</a> (즉시 승인)<br/>
+          3) Vercel Dashboard → Settings → Environment Variables → <code>KMA_API_KEY</code> 등록 후 재배포
+        </div>
+      )}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:14,paddingTop:10,borderTop:"1px solid #e5e7eb",gap:8,flexWrap:"wrap"}}>
+        <span style={{fontSize:9,color:"#94a3b8"}}>
+          {weatherSource==="KMA"
+            ? "📡 기상청 공식 발표 (단기예보 + 초단기실황 + 기상특보) · 15분 자동 갱신"
+            : "🌐 Open-Meteo 추정 데이터 · 임계값 기반 자동 분류 · 15분 자동 갱신"}
+        </span>
         <button className="btn bs" onClick={onClose}>닫기</button>
       </div>
     </Modal>
