@@ -6613,6 +6613,10 @@ function ReqPaymentsModal({prods, requisitions, payments, statusLabel, statusCol
   const [uploadDup, setUploadDup] = useState(0);
   const [autoSync, setAutoSync] = useLocalStorage("jamsa_pay_autosync", false);
   const [syncStatus, setSyncStatus] = useState({ at: null, ok: null, count: 0, msg: "" });
+  // SMS 파싱 테스트 (Tasker 설정 전 검증용)
+  const [smsTestText, setSmsTestText] = useState("");
+  const [smsTestResult, setSmsTestResult] = useState(null);
+  const [smsTestRunning, setSmsTestRunning] = useState(false);
 
   const handleUploadFile = async (file) => {
     if (!file) return;
@@ -6655,6 +6659,41 @@ function ReqPaymentsModal({prods, requisitions, payments, statusLabel, statusCol
     });
     alert(`✅ ${added}건 추가${skipped > 0 ? ` · ${skipped}건 중복 건너뜀` : ""}`);
     setShowUpload(false); setUploadResult(null); setUploadDup(0);
+  };
+
+  // SMS 파싱 테스트 (Tasker 설정 전 미리 파싱 결과 확인)
+  const runSmsTest = async () => {
+    if (!smsTestText.trim()) return;
+    setSmsTestRunning(true); setSmsTestResult(null);
+    try {
+      const res = await fetch("/api/bank-webhook?preview=1", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: smsTestText, preview: true }),
+      });
+      const data = await res.json();
+      setSmsTestResult(data);
+    } catch (e) {
+      setSmsTestResult({ ok: false, reason: e.message });
+    } finally {
+      setSmsTestRunning(false);
+    }
+  };
+
+  const importSmsTestResult = () => {
+    const p = smsTestResult?.parsed;
+    if (!p) return;
+    onAddPayment({
+      type: p.type === "income" ? "transfer" : (p.type || "card"),
+      amount: p.amount,
+      vendor: p.vendor || "(미상)",
+      ref: p.ref || "",
+      date: p.date,
+      reqId: null,
+      memo: `[SMS테스트] ${p.memo || ""}`.trim(),
+    });
+    setSmsTestText(""); setSmsTestResult(null);
+    alert("✅ 테스트 결과를 결제 내역에 추가했습니다.");
   };
 
   // 실시간 동기화 (오픈뱅킹 폴링) — autoSync 켜져 있을 때만 작동
@@ -6904,6 +6943,51 @@ function ReqPaymentsModal({prods, requisitions, payments, statusLabel, statusCol
               <div style={{marginTop:6,fontSize:10}}>💡 홈택스/은행에서 다운받은 원본 파일을 그대로 올려주세요. 헤더 행이 자동 탐색됩니다.</div>
             </div>
           )}
+
+          {/* SMS 텍스트 직접 파싱 테스트 (Tasker 설정 전 검증용) */}
+          <div style={{marginTop:12,padding:12,background:"#fff",borderRadius:8,border:"1px dashed #cbd5e1"}}>
+            <div style={{fontSize:12,fontWeight:800,color:"#0f172a",marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span>📱 은행/카드 SMS 텍스트 직접 등록 (또는 Tasker 파싱 테스트)</span>
+              <a href="/payment-import-demo.html#tasker" target="_blank" style={{fontSize:10,color:"#3b82f6",textDecoration:"none"}}>📖 Tasker 설정 가이드 →</a>
+            </div>
+            <textarea value={smsTestText} onChange={e=>setSmsTestText(e.target.value)}
+              placeholder="예시: [Web발신] [신한카드] 5/10 14:23 일시불 14,500원 GS25잠사역점 (잔액 8,500,000원)"
+              rows={2} style={{width:"100%",padding:8,fontSize:11,border:"1px solid #e5e7eb",borderRadius:6,fontFamily:"inherit",resize:"vertical"}}/>
+            <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>
+              <button onClick={runSmsTest} disabled={!smsTestText.trim()||smsTestRunning} className="btn bs"
+                style={{fontSize:11,background:"#1e40af",color:"#fff",border:"none",opacity:(!smsTestText.trim()||smsTestRunning)?0.5:1}}>
+                {smsTestRunning ? "⏳ 분석 중..." : "🔍 파싱 테스트"}
+              </button>
+              <button onClick={()=>setSmsTestText("[Web발신] [신한카드] 5/10 14:23 일시불 14,500원 GS25잠사역점 (잔액 8,500,000원)")} className="btn bs" style={{fontSize:10}}>예시: 신한카드</button>
+              <button onClick={()=>setSmsTestText("[Web발신] [농협] 5/10 14:23 NH체크승인 14,500원 일시불 GS25잠사역점 잔액 320,000원")} className="btn bs" style={{fontSize:10}}>예시: 농협</button>
+              <button onClick={()=>setSmsTestText("[Web발신] [Woori] 5/10 14:23 박물관계좌 출금 50,000원 잔액 2,300,000원 (주)도매꾹")} className="btn bs" style={{fontSize:10}}>예시: 우리은행</button>
+              <button onClick={()=>setSmsTestText("[Web발신] [하나카드] 승인 14,500원 일시불 GS25잠사역점 5/10 14:23")} className="btn bs" style={{fontSize:10}}>예시: 하나카드</button>
+            </div>
+            {smsTestResult && (
+              <div style={{marginTop:8,padding:10,background:smsTestResult.ok?"#ecfdf5":"#fef2f2",border:`1px solid ${smsTestResult.ok?"#a7f3d0":"#fecaca"}`,borderRadius:6,fontSize:11}}>
+                {smsTestResult.ok && smsTestResult.parsed ? (
+                  <>
+                    <div style={{fontWeight:800,color:"#065f46",marginBottom:6}}>✅ 파싱 성공</div>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:6,fontSize:10}}>
+                      <div><strong>일자</strong><div style={{color:"#475569"}}>{smsTestResult.parsed.date}</div></div>
+                      <div><strong>거래처</strong><div style={{color:"#475569"}}>{smsTestResult.parsed.vendor}</div></div>
+                      <div><strong>금액</strong><div style={{color:"#0f172a",fontWeight:700}}>{(smsTestResult.parsed.amount||0).toLocaleString()}원</div></div>
+                      <div><strong>방식</strong><div style={{color:"#475569"}}>{smsTestResult.parsed.type==="card"?"💳 카드":smsTestResult.parsed.type==="income"?"📥 입금":"🏦 이체"}</div></div>
+                      {smsTestResult.parsed.balance != null && <div><strong>잔액</strong><div style={{color:"#475569"}}>{smsTestResult.parsed.balance.toLocaleString()}원</div></div>}
+                    </div>
+                    <button onClick={importSmsTestResult} className="btn" style={{marginTop:8,fontSize:11,background:"linear-gradient(135deg,#10b981,#059669)",color:"#fff",border:"none",borderRadius:6,padding:"6px 12px",fontWeight:700,cursor:"pointer"}}>
+                      ➕ 결제 내역에 추가
+                    </button>
+                  </>
+                ) : (
+                  <div style={{color:"#991b1b"}}>
+                    ⚠️ 파싱 실패: {smsTestResult.reason || smsTestResult.error || "텍스트에서 금액/일자를 찾을 수 없습니다"}
+                    <div style={{marginTop:4,fontSize:10}}>💡 SMS 텍스트 전체를 복사해서 붙여넣어 보세요. (발신번호 + 본문 포함)</div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           {uploadResult?.ok && (
             <div style={{marginTop:10}}>
