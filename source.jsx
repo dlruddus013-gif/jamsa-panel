@@ -6534,14 +6534,21 @@ const PAYMENT_FORMATS = {
       if (/^\d{8}$/.test(dateRaw)) date = `${dateRaw.slice(0,4)}-${dateRaw.slice(4,6)}-${dateRaw.slice(6,8)}`;
       const out = parseAmount(pickKey(/출금액/, /^출금$/, /출금금액/, /지급액/, /^지급$/));
       const inn = parseAmount(pickKey(/입금액/, /^입금$/, /입금금액/, /수취액/));
-      const memo = String(pickKey(/적요/, /거래내용/, /^내용$/, /^메모$/, /거래기록/, /비고/) || "").trim();
+      // 농협: 거래기록사항이 실제 거래처명 (예: "롯데쇼핑(주)롯데마트서청주점")
+      // 우리/하나: 적요나 거래내용에 거래처가 들어 있는 경우가 많음
+      const record = String(pickKey(/거래기록사항/, /거래기록/) || "").trim();
+      const memo = String(pickKey(/적요/, /거래내용/, /^내용$/, /^메모$/, /비고/) || "").trim();
       const counterparty = String(pickKey(/의뢰인/, /수취인/, /거래상대/, /상대계좌/) || "").trim();
+      // 거래기록사항(농협) > 의뢰인/수취인 > 적요/거래내용 순으로 vendor 결정
+      const vendor = record || counterparty || memo || "(미상)";
+      // 보조정보(거래종류)는 memo로
+      const sub = (vendor !== memo && memo) ? memo : "";
       return {
         date,
-        vendor: counterparty || memo || "(미상)",
+        vendor,
         amount: out > 0 ? out : inn,
-        ref: String(pickKey(/거래번호/, /거래고유/, /취급점/, /거래점/) || "").trim(),
-        memo: [memo && counterparty ? memo : "", inn > 0 && out === 0 ? `입금 +${inn.toLocaleString()}원` : ""].filter(Boolean).join(" "),
+        ref: String(pickKey(/거래번호/, /거래고유/, /^취급점$/, /^거래점$/) || "").trim(),
+        memo: [sub, inn > 0 && out === 0 ? `입금 +${inn.toLocaleString()}원` : ""].filter(Boolean).join(" · "),
         type: out > 0 ? "transfer" : "income",
         source: "은행",
       };
@@ -6580,17 +6587,55 @@ function detectPaymentFormat(headers) {
   return null;
 }
 
-// 파일(엑셀/CSV) → 결제 행 배열로 변환
+// HTML 위장 .xls 파일을 DOMParser로 파싱 (한국 은행/카드사 다운로드 형식)
+// SheetJS는 일부 은행의 잘못된 마크업(<tr> 누락)에서 데이터 행을 통째로 누락시킴
+function parseHtmlAsAoa(htmlText) {
+  // 마크업 정상화: </tr> 다음 <tr> 없이 <td>가 오면 <tr> 삽입 (농협 등)
+  let html = htmlText.replace(/<\/tr>\s*(?=<td[\s>])/gi, '</tr><tr>');
+  // <table> 직속 <td> 시퀀스 처리 (드물지만)
+  html = html.replace(/<table[^>]*>\s*(<td[\s>])/gi, (m, td) => m.replace(td, '<tr>' + td));
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const aoa = [];
+  doc.querySelectorAll('tr').forEach(tr => {
+    const cells = Array.from(tr.children)
+      .filter(el => /^(td|th)$/i.test(el.tagName))
+      .map(el => {
+        // <br>은 줄바꿈으로, &nbsp;는 공백으로
+        const text = el.innerHTML
+          .replace(/<br\s*\/?>/gi, ' ')
+          .replace(/<[^>]+>/g, '')
+          .replace(/&nbsp;/g, ' ')
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/\s+/g, ' ')
+          .trim();
+        return text;
+      });
+    if (cells.length > 0) aoa.push(cells);
+  });
+  return aoa;
+}
+
+// 파일(엑셀/CSV/HTML위장.xls) → 결제 행 배열로 변환
 // opts.forceHeaderRow: 사용자가 미리보기에서 직접 헤더 행을 지정한 경우 (자동 탐색 우회)
 // opts.aoa: 동일 파일을 재파싱할 때 캐시된 array-of-array 재사용
 async function parsePaymentFile(file, opts = {}) {
   let aoa = opts.aoa;
   if (!aoa) {
-    const XLSX = await loadXLSX();
     const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, { type: "array", cellDates: true, raw: false });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: false });
+    // 파일 첫 200바이트로 HTML 위장 .xls 감지
+    const head = new TextDecoder("utf-8", { fatal: false }).decode(buf.slice(0, 256)).toLowerCase();
+    const isHtml = head.includes("<html") || head.includes("<!doctype html") || head.includes("<table");
+    if (isHtml) {
+      const fullText = new TextDecoder("utf-8", { fatal: false }).decode(buf);
+      aoa = parseHtmlAsAoa(fullText);
+    } else {
+      const XLSX = await loadXLSX();
+      const wb = XLSX.read(buf, { type: "array", cellDates: true, raw: false });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: false });
+    }
   }
 
   // 헤더 행 자동 탐색 — 점수 기반
