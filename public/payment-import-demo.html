@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>품의·결제 자동연동 데모 · jamsa-panel</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;font-family:'Pretendard','Noto Sans KR',sans-serif}
+  body{background:linear-gradient(135deg,#1e293b,#0f172a);min-height:100vh;padding:24px;color:#0f172a}
+  .wrap{max-width:1280px;margin:0 auto}
+  header{text-align:center;margin-bottom:24px;color:#fff}
+  header h1{font-size:26px;font-weight:900}
+  header .sub{color:#cbd5e1;font-size:13px;margin-top:6px}
+  .pill{display:inline-block;padding:4px 14px;background:rgba(34,197,94,0.2);color:#86efac;border:1px solid #10b981;border-radius:12px;font-size:11px;font-weight:700;margin-top:8px}
+
+  .card{background:#fff;border-radius:14px;padding:20px;box-shadow:0 6px 20px rgba(0,0,0,0.15);margin-bottom:18px}
+  .card h2{font-size:16px;font-weight:900;margin-bottom:14px;padding-bottom:8px;border-bottom:2px solid #f1f5f9;display:flex;align-items:center;gap:8px}
+  .num{width:26px;height:26px;border-radius:50%;background:#3b82f6;color:#fff;font-size:12px;display:inline-flex;align-items:center;justify-content:center;font-weight:800}
+
+  /* Modal mockup */
+  .modal{background:#fff;border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,0.12);overflow:hidden}
+  .mhead{padding:14px 18px;background:linear-gradient(135deg,#fbbf24,#f59e0b);color:#fff;display:flex;justify-content:space-between;align-items:center}
+  .mhead h3{font-size:15px;font-weight:900}
+  .mhead .x{padding:4px 10px;background:rgba(255,255,255,0.2);border-radius:6px;font-size:14px;cursor:pointer;border:none;color:#fff}
+  .mtabs{display:flex;border-bottom:1px solid #e5e7eb;background:#fafafa}
+  .mtab{padding:12px 16px;font-size:11px;font-weight:700;background:transparent;color:#64748b;border:none;border-bottom:2px solid transparent;cursor:pointer}
+  .mtab.active{background:#fff;color:#f59e0b;border-bottom-color:#f59e0b}
+  .mbody{padding:16px;background:#f8fafc}
+
+  /* Toolbar */
+  .toolbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+  .input{padding:7px 12px;border:1px solid #e5e7eb;border-radius:6px;font-size:11px;flex:1;min-width:120px}
+  .sel{padding:7px 10px;border:1px solid #e5e7eb;border-radius:6px;font-size:11px;background:#fff}
+  .btn{padding:7px 12px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+  .btn-primary{background:#f59e0b;color:#fff;border-color:#f59e0b}
+  .btn-upload{background:#eff6ff;color:#1e40af;border-color:#bfdbfe}
+  .btn-sync-on{background:linear-gradient(135deg,#10b981,#059669);color:#fff;border-color:#059669;animation:pulse-sync 2s infinite}
+  @keyframes pulse-sync{0%,100%{box-shadow:0 0 0 0 rgba(16,185,129,0.6)}50%{box-shadow:0 0 0 6px rgba(16,185,129,0)}}
+  .btn-sync-off{background:#fff;color:#64748b;border-color:#cbd5e1}
+
+  /* Sync status bar */
+  .sync-bar{padding:6px 10px;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:6px;font-size:10px;color:#065f46;margin-bottom:10px;display:flex;justify-content:space-between}
+
+  /* Upload panel */
+  .upload-panel{padding:14px;background:linear-gradient(135deg,#eff6ff,#dbeafe);border-radius:8px;margin-bottom:12px;border:1px solid #bfdbfe}
+  .upload-title{font-size:13px;font-weight:800;color:#1e40af;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+  .drop-zone{padding:20px;background:#fff;border:2px dashed #93c5fd;border-radius:8px;text-align:center;cursor:pointer;transition:all 0.2s}
+  .drop-zone:hover{background:#f0f9ff}
+  .drop-zone .ic{font-size:36px;margin-bottom:6px}
+  .drop-zone .t1{font-size:13px;font-weight:700;color:#1e40af;margin-bottom:4px}
+  .drop-zone .t2{font-size:10px;color:#475569}
+
+  /* Detected format */
+  .detected{margin-top:12px;padding:12px;background:#fff;border-radius:6px;display:flex;justify-content:space-between;align-items:center}
+  .detected .label{font-size:14px;font-weight:800;color:#0f172a}
+  .detected .stats{font-size:11px;color:#475569;margin-top:2px}
+
+  /* Preview table */
+  .preview{margin-top:8px;background:#fff;border-radius:6px;border:1px solid #e5e7eb;overflow:hidden}
+  table{width:100%;border-collapse:collapse;font-size:10px}
+  thead{position:sticky;top:0;background:#f8fafc}
+  th{padding:6px 8px;text-align:left;border-bottom:1px solid #e5e7eb;font-size:10px;font-weight:700;color:#475569}
+  td{padding:5px 8px;border-bottom:1px solid #f1f5f9}
+  td.r{text-align:right;font-weight:700}
+  td.c{text-align:center}
+  .dup{background:#fef3c7}
+  .dup-tag{margin-left:4px;font-size:9px;color:#dc2626;font-weight:700}
+
+  /* Source badges */
+  .src-badge{display:inline-block;padding:3px 8px;border-radius:5px;font-size:10px;font-weight:700;margin:2px}
+  .src-hometax{background:#fef3c7;color:#92400e}
+  .src-bank{background:#dbeafe;color:#1e3a8a}
+  .src-card{background:#fce7f3;color:#9f1239}
+
+  /* 흐름 도식 */
+  .flow{padding:18px;background:linear-gradient(135deg,#fff7ed,#fee2e2);border-radius:12px}
+  .flow-cols{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
+  .flow-col{padding:12px;background:#fff;border-radius:8px;text-align:center}
+  .flow-col .ic{font-size:24px;display:block;margin-bottom:4px}
+  .flow-col .t{font-size:11px;font-weight:700;margin-bottom:3px}
+  .flow-col .d{font-size:10px;color:#64748b}
+  .flow-col.s1{border-top:3px solid #3b82f6}
+  .flow-col.s2{border-top:3px solid #f59e0b}
+  .flow-col.s3{border-top:3px solid #8b5cf6}
+  .flow-col.s4{border-top:3px solid #10b981}
+
+  /* SMS phone */
+  .sms-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+  @media(max-width:900px){.sms-grid{grid-template-columns:1fr}}
+  .phone{background:#1f2937;padding:12px 8px 24px;border-radius:24px;box-shadow:0 6px 16px rgba(0,0,0,0.25)}
+  .scrn{background:#f3f4f6;border-radius:12px;padding:10px;min-height:170px}
+  .stime{text-align:center;font-size:9px;color:#6b7280;margin-bottom:6px}
+  .bub{background:#1e88e5;color:#fff;padding:7px 9px;border-radius:11px 11px 11px 2px;font-size:10px;line-height:1.4;max-width:90%}
+  .bub.kakao{background:#fae100;color:#3c1e1e}
+  .bfrom{font-size:9px;color:#6b7280;margin-top:3px;padding-left:4px}
+
+  /* Code block */
+  .code{background:#1e293b;color:#e2e8f0;padding:14px;border-radius:8px;font-family:ui-monospace,Consolas,monospace;font-size:10px;overflow-x:auto;line-height:1.5}
+  .code .k{color:#fbbf24}
+  .code .s{color:#86efac}
+  .code .c{color:#94a3b8}
+
+  /* Two col */
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:900px){.two{grid-template-columns:1fr}}
+
+  .footer{color:#94a3b8;text-align:center;padding:20px;font-size:11px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>📥 품의·결제 자동 연동 시스템</h1>
+    <div class="sub">엑셀 업로드 + 홈택스/은행/카드사 자동 형식 감지 + 오픈뱅킹 실시간 동기화 + SMS Webhook</div>
+    <div class="pill">✓ 4개 데이터 소스 통합 — 클라이언트 단독 동작 가능</div>
+  </header>
+
+  <!-- 1. 4-소스 데이터 흐름 -->
+  <div class="card">
+    <h2><span class="num">1</span>📊 4가지 데이터 소스 → 결제 내역 통합</h2>
+    <div class="flow">
+      <div class="flow-cols">
+        <div class="flow-col s1">
+          <span class="ic">📥</span>
+          <div class="t">엑셀/CSV 업로드</div>
+          <div class="d">홈택스 / 은행 / 카드사 다운로드 파일</div>
+        </div>
+        <div class="flow-col s2">
+          <span class="ic">📱</span>
+          <div class="t">은행 SMS Webhook</div>
+          <div class="d">Tasker 등 자동전달</div>
+        </div>
+        <div class="flow-col s3">
+          <span class="ic">🔄</span>
+          <div class="t">오픈뱅킹 API</div>
+          <div class="d">5분 주기 자동 폴링</div>
+        </div>
+        <div class="flow-col s4">
+          <span class="ic">✏️</span>
+          <div class="t">수동 등록</div>
+          <div class="d">기존 + 결제 등록 폼</div>
+        </div>
+      </div>
+      <div style="text-align:center;font-size:14px;color:#64748b;margin:10px 0">↓ 자동 형식 감지 + 중복 제거 (date+amount+vendor)</div>
+      <div style="background:#fff;padding:12px;border-radius:8px;text-align:center;font-weight:800;color:#0f172a">
+        💳 통합 결제 내역 (payments / payments_imported)
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. 모달 미리보기 (업로드 패널 + 실시간 토글) -->
+  <div class="card">
+    <h2><span class="num">2</span>🖥️ 품의/결제 모달 — 업로드 패널 + 실시간 동기화 토글</h2>
+    <div class="modal">
+      <div class="mhead">
+        <h3>📋 품의 / 카드·이체 통합 관리</h3>
+        <button class="x">✕</button>
+      </div>
+      <div class="mtabs">
+        <button class="mtab">📝 품의 (3)</button>
+        <button class="mtab active">💳 결제 내역 (12)</button>
+      </div>
+      <div class="mbody">
+        <div class="toolbar">
+          <input class="input" placeholder="🔍 검색 (거래처/메모...)">
+          <select class="sel"><option>전체</option><option>💳 카드만</option><option>🏦 이체만</option></select>
+          <button class="btn btn-upload">📥 엑셀 업로드</button>
+          <button class="btn btn-sync-on">🟢 실시간 ON</button>
+          <button class="btn btn-primary">+ 결제 등록</button>
+        </div>
+
+        <div class="sync-bar">
+          <span>🟢 자동 동기화 · 오후 2:35:12 · +3건 (오픈뱅킹)</span>
+          <span style="opacity:0.7">5분 주기 · /api/openbanking-sync</span>
+        </div>
+
+        <div class="upload-panel">
+          <div class="upload-title">
+            <span>📥 결제 내역 일괄 가져오기 (자동 형식 감지)</span>
+            <span style="font-size:10px;font-weight:600;color:#475569">홈택스 · 은행 · 카드사</span>
+          </div>
+          <div class="drop-zone">
+            <div class="ic">📂</div>
+            <div class="t1">파일을 끌어다 놓거나 클릭하여 선택</div>
+            <div class="t2">.xlsx · .xls · .csv · 홈택스 · KB/신한/우리/농협/카카오뱅크 · 삼성/현대/신한카드</div>
+          </div>
+
+          <div class="detected">
+            <div>
+              <div class="label">🏦 은행 거래내역</div>
+              <div class="stats">총 <strong>27건</strong> 파싱 완료 · <span style="color:#dc2626">중복 4건</span></div>
+            </div>
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-upload">다시 선택</button>
+              <button class="btn" style="background:linear-gradient(135deg,#10b981,#059669);color:#fff;border-color:#059669">✅ 23건 가져오기</button>
+            </div>
+          </div>
+
+          <div class="preview" style="margin-top:8px">
+            <table>
+              <thead><tr><th>일자</th><th>거래처</th><th class="r">금액</th><th class="c">방식</th><th>참조</th></tr></thead>
+              <tbody>
+                <tr><td>2026-05-09</td><td>(주)도매꾹 <span class="dup-tag">중복</span></td><td class="r">540,000원</td><td class="c">🏦</td><td style="font-size:9px;color:#94a3b8">202605090001</td></tr>
+                <tr class="dup"><td>2026-05-08</td><td>GS25 잠사역점 <span class="dup-tag">중복</span></td><td class="r">14,500원</td><td class="c">💳</td><td style="font-size:9px;color:#94a3b8">12345678</td></tr>
+                <tr><td>2026-05-08</td><td>네이버페이 정기결제</td><td class="r">9,900원</td><td class="c">💳</td><td style="font-size:9px;color:#94a3b8">87654321</td></tr>
+                <tr><td>2026-05-07</td><td>한국전력공사 자동이체</td><td class="r">142,000원</td><td class="c">🏦</td><td style="font-size:9px;color:#94a3b8">-</td></tr>
+                <tr><td>2026-05-06</td><td>스타벅스 본관점</td><td class="r">5,800원</td><td class="c">💳</td><td style="font-size:9px;color:#94a3b8">98765432</td></tr>
+                <tr><td>2026-05-05</td><td>입금 (관람료)</td><td class="r">85,000원</td><td class="c">📥</td><td style="font-size:9px;color:#94a3b8">-</td></tr>
+                <tr><td>2026-05-04</td><td>다이소 잠사점</td><td class="r">23,400원</td><td class="c">💳</td><td style="font-size:9px;color:#94a3b8">11223344</td></tr>
+              </tbody>
+            </table>
+            <div style="padding:6px;text-align:center;font-size:10px;color:#94a3b8">… 외 20건 (가져오기 시 모두 포함)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. 4가지 형식 자동 감지 -->
+  <div class="card">
+    <h2><span class="num">3</span>🔍 4가지 형식 자동 감지 (헤더 매칭)</h2>
+    <table style="font-size:11px;background:#fff;border-radius:8px;overflow:hidden">
+      <thead style="background:#1e293b;color:#fff">
+        <tr><th>형식</th><th>판별 헤더</th><th>매핑된 필드</th><th>결제 방식</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="src-badge src-hometax">🧾 홈택스 매입세금계산서</span></td>
+          <td><code>공급자</code> + <code>공급가액</code> 또는 <code>합계금액</code></td>
+          <td>작성일자 → date · 공급자 → vendor · 합계금액 → amount · 승인번호 → ref</td>
+          <td>이체</td>
+        </tr>
+        <tr>
+          <td><span class="src-badge src-hometax">💳 홈택스 카드매입</span></td>
+          <td><code>이용가맹점</code> + <code>이용금액</code></td>
+          <td>이용일자 → date · 이용가맹점 → vendor · 이용금액 → amount</td>
+          <td>카드</td>
+        </tr>
+        <tr>
+          <td><span class="src-badge src-bank">🏦 은행 거래내역</span></td>
+          <td><code>출금액</code> / <code>입금액</code> 또는 <code>적요</code> + <code>잔액</code></td>
+          <td>거래일시 → date · 적요 → vendor · 출금/입금 → amount · 거래번호 → ref</td>
+          <td>출금→이체 / 입금→수익</td>
+        </tr>
+        <tr>
+          <td><span class="src-badge src-card">💳 카드 이용내역</span></td>
+          <td><code>이용일</code> + <code>가맹점</code></td>
+          <td>이용일자 → date · 이용가맹점 → vendor · 이용금액 → amount</td>
+          <td>카드</td>
+        </tr>
+      </tbody>
+    </table>
+    <div style="margin-top:10px;padding:10px;background:#f1f5f9;border-radius:8px;font-size:11px;color:#475569">
+      💡 <strong>자동 헤더 행 탐색</strong>: 홈택스처럼 1~5행에 메타데이터(파일제목/조회기간 등)가 있어도 헤더 행을 자동 감지해서 처리합니다.
+    </div>
+  </div>
+
+  <!-- 4. 실시간 SMS Webhook -->
+  <div class="card">
+    <h2><span class="num">4</span>📱 은행 알림 SMS → Webhook 자동 등록 (선택)</h2>
+    <div class="two">
+      <div>
+        <div style="font-size:13px;font-weight:800;color:#0f172a;margin-bottom:8px">설정 방법 (Tasker / Macrodroid)</div>
+        <ol style="font-size:11px;color:#475569;line-height:1.8;padding-left:20px">
+          <li>안드로이드폰에 <strong>Tasker</strong> 또는 <strong>Macrodroid</strong> 설치</li>
+          <li>프로파일: <code>SMS 수신</code> → 발신자 <code>15881111</code> (KB), <code>15885555</code> (신한) 등</li>
+          <li>액션: HTTP POST → <code>https://jamsa-panel.vercel.app/api/bank-webhook</code></li>
+          <li>Body: <code>{"text": "%SMSRB"}</code></li>
+          <li>Header: <code>Authorization: Bearer YOUR_TOKEN</code></li>
+          <li>Vercel 환경변수: <code>BANK_WEBHOOK_TOKEN</code> 동일 값 등록</li>
+        </ol>
+        <div style="margin-top:10px;padding:10px;background:#fef3c7;border-radius:6px;font-size:10px;color:#78350f">
+          🔐 토큰 미설정 시 webhook 차단됨 (보안)
+        </div>
+      </div>
+      <div>
+        <div style="font-size:13px;font-weight:800;color:#0f172a;margin-bottom:8px">자동 파싱 예시 (실제 SMS)</div>
+        <div class="sms-grid" style="grid-template-columns:1fr">
+          <div class="phone">
+            <div class="scrn">
+              <div class="stime">04/30 13:45</div>
+              <div class="bub">[KB]04/30 13:45 NH체크승인 1234** 14,500원 일시불 GS25서울역점 잔액 320,000원</div>
+              <div class="bfrom">📨 KB국민은행 (15881111)</div>
+            </div>
+          </div>
+        </div>
+        <div class="code" style="margin-top:8px">
+<span class="c">// /api/bank-webhook 자동 파싱 결과</span>
+{
+  <span class="k">"date"</span>: <span class="s">"2026-04-30"</span>,
+  <span class="k">"vendor"</span>: <span class="s">"GS25서울역점"</span>,
+  <span class="k">"amount"</span>: <span class="s">14500</span>,
+  <span class="k">"type"</span>: <span class="s">"card"</span>,
+  <span class="k">"balance"</span>: <span class="s">320000</span>,
+  <span class="k">"source"</span>: <span class="s">"bank_webhook"</span>
+}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. 오픈뱅킹 자동 동기화 -->
+  <div class="card">
+    <h2><span class="num">5</span>🔄 오픈뱅킹 자동 동기화 (5분 주기)</h2>
+    <div class="two">
+      <div>
+        <div style="font-size:13px;font-weight:800;color:#0f172a;margin-bottom:8px">설정 절차</div>
+        <ol style="font-size:11px;color:#475569;line-height:1.8;padding-left:20px">
+          <li><a href="https://www.openbanking.or.kr" target="_blank" style="color:#3b82f6">openbanking.or.kr</a> → 이용기관 등록</li>
+          <li>앱 생성 → <code>client_id</code>, <code>client_secret</code> 발급</li>
+          <li>사용자 인증 → access_token 발급</li>
+          <li>계좌 등록 → 핀테크이용번호(fintech_use_num) 획득</li>
+          <li>Vercel 환경변수 4개 등록:
+            <ul style="margin-top:4px;padding-left:14px">
+              <li><code>OPENBANKING_CLIENT_ID</code></li>
+              <li><code>OPENBANKING_CLIENT_SECRET</code></li>
+              <li><code>OPENBANKING_ACCESS_TOKEN</code></li>
+              <li><code>OPENBANKING_FINTECH_USE_NUM</code></li>
+            </ul>
+          </li>
+          <li>모달 우상단 "🟢 실시간 ON" 토글 → 5분 주기 자동 폴링 시작</li>
+        </ol>
+        <div style="margin-top:10px;padding:10px;background:#ecfdf5;border-radius:6px;font-size:10px;color:#065f46">
+          ✅ 환경변수 미설정 상태에서도 시스템은 정상 작동 (수동 업로드만 사용)
+        </div>
+      </div>
+      <div>
+        <div style="font-size:13px;font-weight:800;color:#0f172a;margin-bottom:8px">동기화 흐름</div>
+        <div class="code">
+<span class="c">// 5분마다 자동 호출</span>
+GET /api/openbanking-sync?since=2026-05-09
+
+<span class="c">// 응답 (성공)</span>
+{
+  <span class="k">"ok"</span>: true,
+  <span class="k">"count"</span>: 3,
+  <span class="k">"rows"</span>: [
+    {
+      <span class="k">"date"</span>: <span class="s">"2026-05-10"</span>,
+      <span class="k">"vendor"</span>: <span class="s">"한국전력공사"</span>,
+      <span class="k">"amount"</span>: <span class="s">142000</span>,
+      <span class="k">"type"</span>: <span class="s">"transfer"</span>,
+      <span class="k">"source"</span>: <span class="s">"오픈뱅킹"</span>
+    }, ...
+  ]
+}
+
+<span class="c">// 환경변수 미설정 시</span>
+{
+  <span class="k">"ok"</span>: false,
+  <span class="k">"reason"</span>: <span class="s">"오픈뱅킹 환경변수 미설정"</span>,
+  <span class="k">"configured"</span>: { ... }
+}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6. API + 환경변수 정리 -->
+  <div class="card">
+    <h2><span class="num">6</span>🌐 API 엔드포인트 (3개) + 환경변수</h2>
+    <table style="font-size:11px">
+      <thead style="background:#1e293b;color:#fff"><tr><th>엔드포인트</th><th>메서드</th><th>용도</th><th>환경변수</th></tr></thead>
+      <tbody>
+        <tr><td><code>/api/payment-import</code></td><td>POST</td><td>엑셀 파싱 결과를 Supabase에 일괄 INSERT</td><td>(없음, Supabase 자동)</td></tr>
+        <tr><td><code>/api/bank-webhook</code></td><td>POST</td><td>은행 SMS 텍스트를 자동 파싱하여 저장</td><td><code>BANK_WEBHOOK_TOKEN</code></td></tr>
+        <tr><td><code>/api/openbanking-sync</code></td><td>GET</td><td>오픈뱅킹 거래내역 5분 주기 폴링</td><td><code>OPENBANKING_*</code> 4개</td></tr>
+      </tbody>
+    </table>
+    <div style="margin-top:10px;padding:10px;background:#f1f5f9;border-radius:8px;font-size:11px;color:#475569">
+      💡 <strong>완전 무설정 작동</strong>: 환경변수 0개 + Supabase 미연결 상태에서도 엑셀 업로드가 localStorage로 정상 작동합니다.
+      Supabase 테이블 생성 시 자동으로 서버 동기화가 추가됩니다.
+    </div>
+  </div>
+
+  <!-- 7. Supabase 스키마 -->
+  <div class="card">
+    <h2><span class="num">7</span>🗄️ Supabase 스키마 (선택)</h2>
+    <div style="padding:10px;background:#fef3c7;border-radius:8px;font-size:12px;color:#78350f;margin-bottom:10px">
+      📁 <code>supabase/payments_import.sql</code> 파일을 SQL Editor에 붙여넣고 Run ▶️
+    </div>
+    <div class="code">
+<span class="k">CREATE TABLE</span> payments_imported (
+  id          BIGSERIAL <span class="k">PRIMARY KEY</span>,
+  date        DATE <span class="k">NOT NULL</span>,
+  vendor      TEXT <span class="k">NOT NULL</span>,
+  amount      BIGINT <span class="k">NOT NULL</span>,
+  type        TEXT,         <span class="c">-- card | transfer | income</span>
+  ref         TEXT,
+  memo        TEXT,
+  source      TEXT,         <span class="c">-- 홈택스/은행/카드사/openbanking/bank_webhook</span>
+  format      TEXT,         <span class="c">-- 자동 감지된 형식 키</span>
+  raw_data    JSONB,        <span class="c">-- 원본 보존</span>
+  imported_at TIMESTAMPTZ <span class="k">DEFAULT</span> NOW(),
+  <span class="k">UNIQUE</span> (date, amount, vendor)   <span class="c">-- 중복 자동 방지</span>
+);
+<span class="k">CREATE INDEX</span> ON payments_imported(date <span class="k">DESC</span>);
+<span class="k">CREATE INDEX</span> ON payments_imported(vendor);
+<span class="k">CREATE INDEX</span> ON payments_imported(source, imported_at);
+
+<span class="c">-- 월별 집계 뷰</span>
+<span class="k">CREATE VIEW</span> v_payments_monthly <span class="k">AS</span>
+<span class="k">SELECT</span> DATE_TRUNC(<span class="s">'month'</span>, date), type, source,
+       COUNT(*), SUM(amount)
+<span class="k">FROM</span> payments_imported <span class="k">GROUP BY</span> 1, 2, 3;
+    </div>
+  </div>
+
+  <!-- 8. 적용 체크리스트 -->
+  <div class="card">
+    <h2><span class="num">8</span>✅ 적용 체크리스트</h2>
+    <div class="two">
+      <div>
+        <div style="font-size:12px;font-weight:800;margin-bottom:8px">📦 코드 (자동 적용됨)</div>
+        <ul style="list-style:none;font-size:11px;color:#475569;line-height:1.9">
+          <li>✅ <code>source.jsx</code> — 업로드 패널 + 토글 + 파서 (~250줄)</li>
+          <li>✅ <code>public/app.bundle.js</code> — 빌드 결과 (1.3MB)</li>
+          <li>✅ <code>api/payment-import.js</code> — 일괄 import API</li>
+          <li>✅ <code>api/bank-webhook.js</code> — SMS 푸시 webhook</li>
+          <li>✅ <code>api/openbanking-sync.js</code> — 오픈뱅킹 폴링</li>
+          <li>✅ <code>supabase/payments_import.sql</code> — 테이블 + 뷰</li>
+          <li>✅ <code>public/index.html</code> — pulseSync 애니메이션</li>
+        </ul>
+      </div>
+      <div>
+        <div style="font-size:12px;font-weight:800;margin-bottom:8px">⚙️ 사용자 작업 (선택)</div>
+        <ul style="list-style:none;font-size:11px;color:#475569;line-height:1.9">
+          <li>⬜ <strong>즉시 사용</strong>: 별도 설정 없이 엑셀 업로드 가능 (localStorage 모드)</li>
+          <li>⬜ Supabase: <code>payments_import.sql</code> 실행 (서버 백업)</li>
+          <li>⬜ 은행 SMS Webhook: Tasker 설정 + <code>BANK_WEBHOOK_TOKEN</code> 등록</li>
+          <li>⬜ 오픈뱅킹: <code>OPENBANKING_*</code> 4개 환경변수 등록</li>
+          <li>⬜ 강력 새로고침 (Ctrl+Shift+R)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="footer">🐛 한국잠사박물관 통합관리 · 결제 자동연동 시스템 · 2026</div>
+</body>
+</html>
