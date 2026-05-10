@@ -5,7 +5,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild entry.jsx --bundle --minify --loader:.jsx=jsx --loader:.js=jsx --jsx=automatic --define:process.env.NODE_ENV=\"\\\"production\\\"\" --target=es2020 --outfile=public/app.bundle.js",
+    "build": "esbuild entry.jsx --bundle --minify --loader:.jsx=jsx --loader:.js=jsx --jsx=automatic --define:process.env.NODE_ENV=\"\\\"production\\\"\" --target=es2020 --outfile=public/app.bundle.js && node scripts/cachebust.mjs",
     "dev": "esbuild entry.jsx --bundle --watch --loader:.jsx=jsx --loader:.js=jsx --jsx=automatic --target=es2020 --outfile=public/app.bundle.js",
     "vercel-build": "npm run build"
   },

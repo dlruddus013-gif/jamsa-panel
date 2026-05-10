@@ -6581,12 +6581,17 @@ function detectPaymentFormat(headers) {
 }
 
 // 파일(엑셀/CSV) → 결제 행 배열로 변환
-async function parsePaymentFile(file) {
-  const XLSX = await loadXLSX();
-  const buf = await file.arrayBuffer();
-  const wb = XLSX.read(buf, { type: "array", cellDates: true, raw: false });
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: false });
+// opts.forceHeaderRow: 사용자가 미리보기에서 직접 헤더 행을 지정한 경우 (자동 탐색 우회)
+// opts.aoa: 동일 파일을 재파싱할 때 캐시된 array-of-array 재사용
+async function parsePaymentFile(file, opts = {}) {
+  let aoa = opts.aoa;
+  if (!aoa) {
+    const XLSX = await loadXLSX();
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array", cellDates: true, raw: false });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: false });
+  }
 
   // 헤더 행 자동 탐색 — 점수 기반
   // 한국 은행/홈택스 엑셀은 1~10행에 "입출금거래내역조회 결과", "조회기간:", "계좌번호:" 같은
@@ -6615,38 +6620,50 @@ async function parsePaymentFile(file) {
   };
 
   let headerRow = -1;
-  let bestScore = 0;
-  const scanLimit = Math.min(aoa.length, 20);
-  for (let i = 0; i < scanLimit; i++) {
-    const sc = scoreRow(aoa[i] || []);
-    if (sc > bestScore) { bestScore = sc; headerRow = i; }
+  const scanLimit = Math.min(aoa.length, 25);
+  if (typeof opts.forceHeaderRow === "number" && opts.forceHeaderRow >= 0 && opts.forceHeaderRow < aoa.length) {
+    headerRow = opts.forceHeaderRow;
+  } else {
+    let bestScore = 0;
+    for (let i = 0; i < scanLimit; i++) {
+      const sc = scoreRow(aoa[i] || []);
+      if (sc > bestScore) { bestScore = sc; headerRow = i; }
+    }
+    // 점수 기반 탐색 실패 시 — 첫 번째로 비-제목 행(≥3개 비-단조 셀) 채택
+    if (headerRow === -1) {
+      for (let i = 0; i < scanLimit; i++) {
+        const cells = (aoa[i] || []).map(c => String(c || "").trim()).filter(Boolean);
+        // 단일 텍스트가 모든 셀에 들어 있는 머지 셀 행은 distinct 값 1개로 간주
+        const distinct = new Set(cells).size;
+        if (cells.length >= 3 && distinct >= 3) { headerRow = i; break; }
+      }
+    }
+    if (headerRow === -1) headerRow = 0;
   }
 
-  // 점수 기반 탐색 실패 시 — 첫 번째로 의미있는 셀 ≥ 3개인 행 채택
-  if (headerRow === -1) {
-    for (let i = 0; i < scanLimit; i++) {
-      const cells = (aoa[i] || []).map(c => String(c || "").trim()).filter(Boolean);
-      if (cells.length >= 3) { headerRow = i; break; }
-    }
-  }
-  if (headerRow === -1) headerRow = 0;
+  // 사용자가 미리보기에서 직접 선택할 수 있도록 항상 미리보기를 반환에 포함
+  const preview = aoa.slice(0, Math.min(aoa.length, 15)).map(r =>
+    r.map(c => String(c || "").trim())
+  );
 
   const headers = (aoa[headerRow] || []).map(c => String(c || "").trim());
   const formatKey = detectPaymentFormat(headers);
   if (!formatKey) {
-    // 디버깅용: 첫 5행을 함께 반환해서 어디가 잘못됐는지 보여준다
-    const preview = aoa.slice(0, 5).map(r => r.map(c => String(c || "").trim()).filter(Boolean).join(" | "));
-    return { ok: false, error: "형식 자동 감지 실패 (홈택스/은행/카드사 헤더 없음)", headers, preview, headerRow };
+    return {
+      ok: false,
+      error: "형식 자동 감지 실패 — 아래 미리보기에서 실제 헤더 행을 직접 선택해주세요",
+      headers, preview, headerRow, aoa, // aoa를 돌려보내서 재파싱 시 재사용
+    };
   }
-  const def = PAYMENT_FORMATS[formatKey];
   const rows = aoa.slice(headerRow + 1).filter(r => r.some(c => String(c || "").trim() !== ""));
   const objects = rows.map(r => {
     const o = {};
     headers.forEach((h, i) => { o[h] = r[i]; });
     return o;
   });
+  const def = PAYMENT_FORMATS[formatKey];
   const parsed = objects.map(def.map).filter(p => p.amount > 0 && p.date);
-  return { ok: true, format: formatKey, label: def.label, rows: parsed, total: parsed.length, headerRow };
+  return { ok: true, format: formatKey, label: def.label, rows: parsed, total: parsed.length, headerRow, preview, aoa };
 }
 
 // ========== 품의 / 결제 통합 모달 ==========
@@ -6673,15 +6690,16 @@ function ReqPaymentsModal({prods, requisitions, payments, statusLabel, statusCol
   const [smsTestResult, setSmsTestResult] = useState(null);
   const [smsTestRunning, setSmsTestRunning] = useState(false);
 
-  const handleUploadFile = async (file) => {
+  const [uploadFile, setUploadFile] = useState(null); // 사용자 헤더 재지정용 캐시
+  const handleUploadFile = async (file, opts = {}) => {
     if (!file) return;
     setUploadParsing(true); setUploadResult(null);
+    if (!opts.aoa) setUploadFile(file);
     try {
-      const r = await parsePaymentFile(file);
+      const r = await parsePaymentFile(file, opts);
       if (!r.ok) {
-        setUploadResult({ ok: false, error: r.error, headers: r.headers || [] });
+        setUploadResult(r); // preview, aoa, headerRow 모두 포함
       } else {
-        // 중복 감지 (date+amount+vendor 동일)
         const existing = new Set((payments || []).map(p => `${p.date}_${p.amount}_${(p.vendor||"").trim()}`));
         const dupCount = r.rows.filter(p => existing.has(`${p.date}_${p.amount}_${p.vendor}`)).length;
         setUploadDup(dupCount);
@@ -6692,6 +6710,12 @@ function ReqPaymentsModal({prods, requisitions, payments, statusLabel, statusCol
     } finally {
       setUploadParsing(false);
     }
+  };
+
+  // 사용자가 미리보기에서 특정 행을 헤더로 강제 지정
+  const reparseWithHeaderRow = (rowIdx) => {
+    if (!uploadFile || !uploadResult?.aoa) return;
+    handleUploadFile(uploadFile, { aoa: uploadResult.aoa, forceHeaderRow: rowIdx });
   };
 
   const importParsedRows = (skipDuplicates = true) => {
@@ -6990,20 +7014,55 @@ function ReqPaymentsModal({prods, requisitions, payments, statusLabel, statusCol
           {uploadResult && !uploadResult.ok && (
             <div style={{marginTop:10,padding:10,background:"#fef2f2",border:"1px solid #fecaca",borderRadius:6,fontSize:11,color:"#991b1b"}}>
               ⚠️ <strong>{uploadResult.error}</strong>
-              {uploadResult.headers?.length > 0 && (
-                <div style={{marginTop:6,fontSize:10,color:"#7f1d1d"}}>
-                  감지된 헤더 (행 #{(uploadResult.headerRow ?? 0) + 1}): {uploadResult.headers.slice(0,12).filter(Boolean).join(" · ")}
+              <div style={{marginTop:8,fontSize:11,color:"#7f1d1d",fontWeight:600}}>
+                💡 아래 미리보기에서 <span style={{color:"#1e40af"}}>실제 컬럼 헤더가 있는 행의 "이 행을 헤더로 지정"</span> 버튼을 누르세요.
+              </div>
+              {uploadResult.preview?.length > 0 && (
+                <div style={{marginTop:8,maxHeight:300,overflowY:"auto",border:"1px solid #fecaca",borderRadius:4,background:"#fff"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
+                    <thead style={{position:"sticky",top:0,background:"#fef2f2"}}>
+                      <tr>
+                        <th style={{padding:"4px 6px",borderBottom:"1px solid #fecaca",textAlign:"left",width:40}}>행#</th>
+                        <th style={{padding:"4px 6px",borderBottom:"1px solid #fecaca",textAlign:"left"}}>내용 (열 단위 · 가로 스크롤)</th>
+                        <th style={{padding:"4px 6px",borderBottom:"1px solid #fecaca",width:120}}>지정</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {uploadResult.preview.map((row, i) => {
+                        const isCurrent = i === (uploadResult.headerRow ?? -1);
+                        const cells = (row || []).map(c => String(c || "").trim());
+                        const cellCount = cells.filter(Boolean).length;
+                        return (
+                          <tr key={i} style={{background:isCurrent?"#fef9c3":(i%2?"#fafafa":"#fff")}}>
+                            <td style={{padding:"3px 6px",borderBottom:"1px solid #fee2e2",fontWeight:700,color:"#0f172a",verticalAlign:"top"}}>
+                              {i+1}{isCurrent && <span style={{color:"#a16207",marginLeft:4}}>★</span>}
+                            </td>
+                            <td style={{padding:"3px 6px",borderBottom:"1px solid #fee2e2",fontFamily:"monospace",color:"#475569",maxWidth:0}}>
+                              <div style={{overflowX:"auto",whiteSpace:"nowrap"}}>
+                                {cells.filter(Boolean).slice(0,15).map((c,j)=>(
+                                  <span key={j} style={{display:"inline-block",padding:"1px 5px",margin:"1px 2px",background:"#f1f5f9",borderRadius:3}}>{c.length>20?c.slice(0,20)+"…":c}</span>
+                                ))}
+                                {cellCount === 0 && <span style={{color:"#94a3b8",fontStyle:"italic"}}>(빈 행)</span>}
+                              </div>
+                            </td>
+                            <td style={{padding:"3px 6px",borderBottom:"1px solid #fee2e2",textAlign:"center"}}>
+                              {cellCount >= 2 ? (
+                                <button onClick={()=>reparseWithHeaderRow(i)}
+                                  style={{fontSize:10,padding:"3px 8px",background:"#1e40af",color:"#fff",border:"none",borderRadius:4,cursor:"pointer",fontWeight:700}}>
+                                  이 행을 헤더로
+                                </button>
+                              ) : <span style={{color:"#94a3b8",fontSize:9}}>-</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               )}
-              {uploadResult.preview?.length > 0 && (
-                <details style={{marginTop:6,fontSize:10,color:"#7f1d1d"}}>
-                  <summary style={{cursor:"pointer",fontWeight:700}}>📋 파일 첫 5행 미리보기 (펼치기)</summary>
-                  <div style={{marginTop:4,padding:6,background:"#fff",border:"1px solid #fecaca",borderRadius:4,fontFamily:"monospace",fontSize:9,whiteSpace:"pre-wrap",lineHeight:1.5}}>
-                    {uploadResult.preview.map((line, i) => `행${i+1}: ${line}`).join("\n")}
-                  </div>
-                </details>
-              )}
-              <div style={{marginTop:6,fontSize:10}}>💡 홈택스/은행에서 다운받은 원본 파일을 그대로 올려주세요. 헤더 행이 자동 탐색됩니다. 그래도 인식 안 되면 미리보기 내용을 알려주시면 파서를 보완해드립니다.</div>
+              <div style={{marginTop:6,fontSize:10}}>
+                현재 자동 선택: 행 #{(uploadResult.headerRow ?? 0) + 1} ({uploadResult.headers?.filter(Boolean).slice(0,5).join(" · ") || "(없음)"})
+              </div>
             </div>
           )}
 
