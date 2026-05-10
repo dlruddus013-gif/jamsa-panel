@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Part B 풀 시스템 · 7대 기능 데모 · jamsa-panel</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Pretendard','Noto Sans KR',-apple-system,sans-serif; background: linear-gradient(135deg,#1e293b,#0f172a); min-height: 100vh; padding: 20px; color: #0f172a; }
+  .wrap { max-width: 1280px; margin: 0 auto; }
+  header { text-align: center; margin-bottom: 24px; color: #fff; }
+  header h1 { font-size: 26px; font-weight: 900; }
+  header .sub { color: #cbd5e1; font-size: 13px; margin-top: 6px; }
+  .pill { display: inline-block; padding: 4px 14px; background: rgba(220,38,38,0.2); color: #fca5a5; border: 1px solid #ef4444; border-radius: 12px; font-size: 11px; font-weight: 700; margin-top: 8px; }
+  .feat-pill { display: inline-block; padding: 3px 10px; background: rgba(252,211,77,0.2); color: #fcd34d; border-radius: 10px; font-size: 10px; font-weight: 700; margin: 2px 3px; }
+
+  .card { background: #fff; border-radius: 14px; padding: 18px; box-shadow: 0 6px 20px rgba(0,0,0,0.15); margin-bottom: 18px; }
+  .card h2 { font-size: 16px; font-weight: 900; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #f1f5f9; display: flex; align-items: center; gap: 8px; }
+  .num { width: 26px; height: 26px; border-radius: 50%; background: #dc2626; color: #fff; font-size: 12px; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; }
+
+  /* ===== 통합지도 mockup with toggle ===== */
+  .map-mock { position: relative; height: 320px; background: linear-gradient(135deg,#a7f3d0,#86efac); border-radius: 12px; overflow: hidden; }
+  .map-mock::before {
+    content: ""; position: absolute; inset: 0;
+    background: radial-gradient(circle at 30% 40%, rgba(255,255,255,0.6) 0%, transparent 35%),
+                radial-gradient(circle at 65% 70%, rgba(34,197,94,0.4) 0%, transparent 30%),
+                repeating-linear-gradient(0deg, transparent 0 60px, rgba(255,255,255,0.1) 60px 61px),
+                repeating-linear-gradient(90deg, transparent 0 60px, rgba(255,255,255,0.1) 60px 61px);
+  }
+  .left-ctrl { position: absolute; top: 12px; left: 12px; z-index: 10; background: rgba(255,255,255,0.95); padding: 8px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.15); width: 200px; backdrop-filter: blur(6px); }
+  .left-ctrl-title { font-size: 10px; font-weight: 700; color: #475569; margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid #e5e7eb; }
+  .ctrl-btn { display: block; width: 100%; padding: 6px 10px; font-size: 10px; font-weight: 800; border-radius: 5px; cursor: pointer; margin-bottom: 4px; border: 1px solid; text-align: left; }
+  .ctrl-btn:last-child { margin-bottom: 0; }
+  .ctrl-btn.stat { background: linear-gradient(135deg,#7c3aed,#5b21b6); color: #fff; border-color: #7c3aed; }
+  .ctrl-btn.alert-on { background: linear-gradient(135deg,#dc2626,#b91c1c); color: #fff; border-color: #dc2626; animation: pulse-alert 1.5s infinite; }
+  .ctrl-btn.off { background: #fff; color: #64748b; border-color: #cbd5e1; }
+  @keyframes pulse-alert { 0%, 100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.6); } 50% { box-shadow: 0 0 0 6px rgba(220,38,38,0); } }
+
+  /* zone markers */
+  .zone-mark { position: absolute; padding: 4px 10px; background: rgba(255,255,255,0.95); border-radius: 14px; font-size: 10px; font-weight: 800; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+  .zone-mark.crowd { background: linear-gradient(135deg,#fef3c7,#fde68a); color: #92400e; border: 2px solid #f59e0b; animation: pulse-warn 2s infinite; }
+  .zone-mark.danger { background: linear-gradient(135deg,#fecaca,#fca5a5); color: #991b1b; border: 2px solid #dc2626; animation: pulse-warn 1s infinite; }
+  @keyframes pulse-warn { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
+
+  /* toast */
+  .toast {
+    position: absolute; top: 12px; right: 12px; z-index: 20;
+    padding: 12px 14px; border-radius: 8px; max-width: 280px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+    animation: toast-slide 0.3s ease;
+  }
+  .toast.warning { background: linear-gradient(135deg,#f59e0b,#d97706); color: #fff; }
+  .toast.danger { background: linear-gradient(135deg,#ef4444,#dc2626); color: #fff; }
+  .toast .t-title { font-size: 12px; font-weight: 900; margin-bottom: 4px; }
+  .toast .t-msg { font-size: 11px; opacity: 0.95; }
+  .toast .t-time { font-size: 9px; opacity: 0.7; margin-top: 4px; }
+  @keyframes toast-slide { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: translateX(0); } }
+
+  /* ===== Modal mock ===== */
+  .modal-mock { background: #fff; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.12); overflow: hidden; }
+  .modal-head { padding: 14px 18px; background: linear-gradient(135deg,#7c3aed,#5b21b6); color: #fff; display: flex; justify-content: space-between; align-items: center; }
+  .modal-head h3 { font-size: 15px; font-weight: 900; display: flex; align-items: center; gap: 8px; }
+  .modal-head .actions { display: flex; gap: 6px; }
+  .modal-head .btn { padding: 5px 12px; border-radius: 6px; font-size: 11px; font-weight: 700; border: 1px solid rgba(255,255,255,0.3); background: rgba(255,255,255,0.15); color: #fff; cursor: pointer; }
+  .modal-head .btn.pdf { background: #fff; color: #7c3aed; border-color: #fff; }
+  .tabs-bar { display: flex; border-bottom: 1px solid #e5e7eb; background: #fafafa; overflow-x: auto; }
+  .tab { padding: 12px 16px; font-size: 11px; font-weight: 700; background: transparent; color: #64748b; border: none; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; }
+  .tab.active { background: #fff; color: #7c3aed; border-bottom-color: #7c3aed; }
+  .tab.new { color: #dc2626; }
+  .tab.new.active { color: #dc2626; border-bottom-color: #dc2626; }
+  .tab .star { color: #f59e0b; }
+  .modal-body { padding: 18px; background: #f8fafc; min-height: 380px; }
+
+  /* ===== Forecast tab ===== */
+  .forecast-summary { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; margin-bottom: 14px; }
+  .forecast-card { padding: 14px; border-radius: 10px; text-align: center; }
+  .fc-1 { background: linear-gradient(135deg,#dbeafe,#bfdbfe); color: #1e3a8a; }
+  .fc-2 { background: linear-gradient(135deg,#dcfce7,#bbf7d0); color: #14532d; }
+  .fc-3 { background: linear-gradient(135deg,#fef3c7,#fde68a); color: #78350f; }
+  .fc-card .l { font-size: 10px; font-weight: 700; }
+  .fc-card .v { font-size: 22px; font-weight: 900; margin: 4px 0; }
+  .fc-card .u { font-size: 10px; opacity: 0.7; }
+
+  .forecast-chart { background: #fff; border-radius: 10px; padding: 14px; }
+  .chart-title { font-size: 12px; font-weight: 800; color: #475569; margin-bottom: 10px; }
+  .bars { display: flex; gap: 6px; align-items: flex-end; height: 140px; padding: 0 10px; }
+  .bar { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .bar .bar-fill { width: 100%; border-radius: 4px 4px 0 0; min-height: 8px; transition: all 0.3s; position: relative; }
+  .bar.weekday .bar-fill { background: linear-gradient(180deg,#a78bfa,#7c3aed); }
+  .bar.weekend .bar-fill { background: linear-gradient(180deg,#f87171,#dc2626); }
+  .bar .bar-day { font-size: 9px; color: #64748b; }
+  .bar .bar-val { font-size: 9px; color: #475569; font-weight: 700; position: absolute; top: -14px; left: 50%; transform: translateX(-50%); white-space: nowrap; }
+
+  /* ===== KPI tab ===== */
+  .kpi-overall { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; margin-bottom: 14px; }
+  .kpi-o { padding: 10px; border-radius: 8px; text-align: center; background: #fff; border: 1px solid #e5e7eb; }
+  .kpi-o .l { font-size: 9px; color: #64748b; font-weight: 700; }
+  .kpi-o .v { font-size: 18px; font-weight: 900; color: #0f172a; margin-top: 2px; }
+  .kpi-table { background: #fff; border-radius: 10px; overflow: hidden; }
+  .kpi-row { padding: 10px 14px; border-bottom: 1px solid #f1f5f9; display: grid; grid-template-columns: 30px 1fr 60px 60px 80px 70px; gap: 10px; align-items: center; font-size: 11px; }
+  .kpi-row.head { background: #f8fafc; font-weight: 800; color: #475569; font-size: 10px; }
+  .kpi-row .rank { font-weight: 900; text-align: center; }
+  .kpi-row .name { font-weight: 700; color: #0f172a; }
+  .kpi-row .num-c { text-align: right; color: #475569; font-weight: 600; }
+  .sms-rate { padding: 2px 8px; border-radius: 6px; font-weight: 800; text-align: center; font-size: 10px; }
+  .sms-90 { background: #dcfce7; color: #14532d; }
+  .sms-70 { background: #fef3c7; color: #78350f; }
+  .sms-low { background: #fee2e2; color: #991b1b; }
+
+  /* ===== Alert history tab ===== */
+  .alert-filters { display: flex; gap: 5px; margin-bottom: 10px; flex-wrap: wrap; }
+  .alert-filter { padding: 4px 10px; border-radius: 12px; font-size: 10px; font-weight: 700; border: 1px solid #cbd5e1; background: #fff; cursor: pointer; }
+  .alert-filter.active { background: #dc2626; color: #fff; border-color: #dc2626; }
+  .alert-list { background: #fff; border-radius: 10px; overflow: hidden; }
+  .alert-item { padding: 10px 14px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; gap: 10px; }
+  .alert-item:last-child { border-bottom: none; }
+  .alert-time { font-size: 10px; color: #94a3b8; min-width: 60px; }
+  .alert-sev { font-size: 10px; padding: 2px 8px; border-radius: 5px; font-weight: 800; min-width: 64px; text-align: center; }
+  .sev-info { background: #dbeafe; color: #1e3a8a; }
+  .sev-warn { background: #fef3c7; color: #92400e; }
+  .sev-danger { background: #fecaca; color: #991b1b; }
+  .alert-body { flex: 1; }
+  .alert-body .a-zone { font-size: 12px; font-weight: 700; color: #0f172a; }
+  .alert-body .a-msg { font-size: 10px; color: #64748b; margin-top: 1px; }
+  .alert-call { font-size: 10px; padding: 2px 8px; border-radius: 5px; background: #dbeafe; color: #1e3a8a; font-weight: 700; }
+
+  /* ===== Workflow ===== */
+  .flow { padding: 16px; background: linear-gradient(135deg,#fee2e2,#fef3c7); border-radius: 12px; }
+  .flow-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center; margin-bottom: 8px; }
+  .flow-step { padding: 8px 12px; background: #fff; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.08); font-size: 11px; font-weight: 700; text-align: center; }
+  .flow-step .ic { font-size: 18px; display: block; margin-bottom: 2px; }
+  .flow-step.s1 { border-top: 3px solid #f59e0b; }
+  .flow-step.s2 { border-top: 3px solid #ef4444; }
+  .flow-step.s3 { border-top: 3px solid #3b82f6; }
+  .flow-step.s4 { border-top: 3px solid #8b5cf6; }
+  .flow-step.s5 { border-top: 3px solid #10b981; }
+  .flow-arr { font-size: 18px; color: #94a3b8; }
+
+  /* ===== Schema mockup ===== */
+  .schema-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 800px) { .schema-grid { grid-template-columns: 1fr; } }
+  .schema-card { background: #1e293b; color: #e2e8f0; padding: 14px; border-radius: 10px; font-family: ui-monospace, SF Mono, Consolas, monospace; font-size: 11px; }
+  .schema-card .tbl { color: #fbbf24; font-weight: 800; }
+  .schema-card .col { color: #93c5fd; }
+  .schema-card .typ { color: #86efac; }
+
+  /* SMS preview */
+  .sms-phone { background: #1f2937; padding: 14px 8px 30px; border-radius: 28px; max-width: 200px; margin: 14px auto 0; box-shadow: 0 6px 16px rgba(0,0,0,0.25); }
+  .sms-screen { background: #f3f4f6; border-radius: 16px; padding: 14px 8px; min-height: 200px; }
+  .sms-time { text-align: center; font-size: 9px; color: #6b7280; margin-bottom: 8px; }
+  .sms-bubble { background: #1e88e5; color: #fff; padding: 8px 10px; border-radius: 12px 12px 12px 2px; font-size: 11px; line-height: 1.4; max-width: 85%; }
+  .sms-from { font-size: 9px; color: #6b7280; margin-top: 4px; padding-left: 4px; }
+
+  /* ===== Two columns ===== */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+
+  /* ===== Tables ===== */
+  .api-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .api-table th { background: #1e293b; color: #fff; padding: 8px; text-align: left; font-weight: 800; }
+  .api-table td { padding: 6px 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+  .api-table code { background: #fef3c7; padding: 1px 5px; border-radius: 3px; font-size: 10px; }
+
+  .footer { color: #94a3b8; text-align: center; padding: 20px; font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🚨 Part B 풀 시스템 — 7대 신규 기능</h1>
+    <div class="sub">jamsa-panel · 자동 알림 + SMS 호출 + 매출 예측 + 직원 KPI + 알림 이력 + PDF + 자동 토글</div>
+    <div class="pill">✓ 운영 배포 완료 · jamsa-panel.vercel.app</div>
+    <div style="margin-top:6px">
+      <span class="feat-pill">자동 알림</span>
+      <span class="feat-pill">Ppurio SMS</span>
+      <span class="feat-pill">7일 매출 예측</span>
+      <span class="feat-pill">직원 KPI</span>
+      <span class="feat-pill">알림 이력</span>
+      <span class="feat-pill">PDF 리포트</span>
+      <span class="feat-pill">자동 토글</span>
+    </div>
+  </header>
+
+  <!-- ===== 1. 통합지도 + 자동알림 토글 + 토스트 ===== -->
+  <div class="card">
+    <h2><span class="num">1</span>🔔 자동 알림 토글 (좌상단) + 🚨 토스트 (우상단)</h2>
+    <div class="map-mock">
+      <!-- 좌상단 컨트롤 패널 -->
+      <div class="left-ctrl">
+        <div class="left-ctrl-title">🛠️ 통합지도 컨트롤</div>
+        <button class="ctrl-btn stat">📊 운영 통계 + 동선 분석</button>
+        <button class="ctrl-btn alert-on">🚨 자동 알림 활성 (3)</button>
+      </div>
+
+      <!-- 우상단 토스트 -->
+      <div class="toast danger">
+        <div class="t-title">🚨 위험 감지 — DANGER</div>
+        <div class="t-msg">누에과학관 CCTV CH11<br>화재/연기 의심 (AI score 85)<br><strong>📞 직원 3명 자동 호출됨</strong></div>
+        <div class="t-time">방금 · 클릭하면 이력으로 이동</div>
+      </div>
+
+      <!-- 구역 마커 -->
+      <div class="zone-mark danger" style="top:38%;left:42%">🔥 누에과학관 (CH11)</div>
+      <div class="zone-mark crowd" style="top:60%;left:62%">⚠️ 본관 28명</div>
+      <div class="zone-mark" style="top:25%;left:75%">🌿 뽕밭 4명</div>
+      <div class="zone-mark" style="top:75%;left:30%">🛒 매점 12명</div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;font-size:11px">
+      <div style="padding:10px;background:#fef3c7;border-radius:8px;border-left:4px solid #f59e0b">
+        <strong>⚠️ WARNING (8초 표시)</strong> — 한 구역 25명+ 또는 CCTV AI density VERY_HIGH
+      </div>
+      <div style="padding:10px;background:#fee2e2;border-radius:8px;border-left:4px solid #dc2626">
+        <strong>🚨 DANGER (10초 표시)</strong> — CCTV AI score 80+ 또는 분류 DANGER · 자동 SMS 호출 동시 작동
+      </div>
+    </div>
+    <div style="margin-top:10px;padding:10px;background:#f1f5f9;border-radius:8px;font-size:11px;color:#475569">
+      💾 <strong>중복 방지</strong>: 같은 zone_id + alert_type은 5분 내 중복 트리거 차단 · 클라이언트(localStorage) + 서버(<code>auto_alerts.created_at</code>) 양쪽 검증
+    </div>
+  </div>
+
+  <!-- ===== 2. 운영 통계 모달 (8 탭) + PDF ===== -->
+  <div class="card">
+    <h2><span class="num">2</span>📊 운영 통계 모달 — 8 탭 + PDF 리포트</h2>
+    <div class="modal-mock">
+      <div class="modal-head">
+        <h3><span>📊</span> 박물관 운영 통계 + 동선 분석</h3>
+        <div class="actions">
+          <button class="btn pdf">📄 PDF</button>
+          <button class="btn">✕</button>
+        </div>
+      </div>
+      <div class="tabs-bar">
+        <button class="tab">📈 핵심 지표</button>
+        <button class="tab">🌊 동선 분석</button>
+        <button class="tab">⏰ 시간대별</button>
+        <button class="tab">📍 구역 통계</button>
+        <button class="tab new active">📊 매출 예측 <span class="star">⭐</span></button>
+        <button class="tab new">👥 직원 KPI <span class="star">⭐</span></button>
+        <button class="tab new">🚨 알림 이력 <span class="star">⭐</span></button>
+        <button class="tab">🤖 AI 권고</button>
+      </div>
+
+      <!-- 매출 예측 탭 본문 -->
+      <div class="modal-body">
+        <div class="forecast-summary">
+          <div class="forecast-card fc-1"><div class="l">📅 다음 7일 예상 매출</div><div class="v">2,450,000</div><div class="u">원</div></div>
+          <div class="forecast-card fc-2"><div class="l">📈 전주 대비</div><div class="v">+12%</div><div class="u">성장 중</div></div>
+          <div class="forecast-card fc-3"><div class="l">🎯 신뢰도</div><div class="v">높음</div><div class="u">최근 14일 데이터</div></div>
+        </div>
+        <div class="forecast-chart">
+          <div class="chart-title">📅 다음 7일 일별 예측 (주말 1.4× 가중치)</div>
+          <div class="bars">
+            <div class="bar weekday"><div class="bar-fill" style="height:48%"><div class="bar-val">31만</div></div><div class="bar-day">월</div></div>
+            <div class="bar weekday"><div class="bar-fill" style="height:42%"><div class="bar-val">29만</div></div><div class="bar-day">화</div></div>
+            <div class="bar weekday"><div class="bar-fill" style="height:50%"><div class="bar-val">33만</div></div><div class="bar-day">수</div></div>
+            <div class="bar weekday"><div class="bar-fill" style="height:54%"><div class="bar-val">35만</div></div><div class="bar-day">목</div></div>
+            <div class="bar weekday"><div class="bar-fill" style="height:60%"><div class="bar-val">38만</div></div><div class="bar-day">금</div></div>
+            <div class="bar weekend"><div class="bar-fill" style="height:96%"><div class="bar-val">48만</div></div><div class="bar-day">토</div></div>
+            <div class="bar weekend"><div class="bar-fill" style="height:88%"><div class="bar-val">42만</div></div><div class="bar-day">일</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 3. 직원 KPI 탭 ===== -->
+  <div class="card">
+    <h2><span class="num">3</span>👥 직원 효율 KPI 탭 (개인별 + 종합)</h2>
+    <div style="background:#f8fafc;padding:14px;border-radius:10px">
+      <div class="kpi-overall">
+        <div class="kpi-o"><div class="l">전체 호출</div><div class="v">86건</div></div>
+        <div class="kpi-o"><div class="l">활성 직원</div><div class="v">5명</div></div>
+        <div class="kpi-o"><div class="l">SMS 성공률</div><div class="v">96%</div></div>
+        <div class="kpi-o"><div class="l">직원당 평균</div><div class="v">17건</div></div>
+      </div>
+      <div class="kpi-table">
+        <div class="kpi-row head">
+          <div>순위</div><div>직원</div><div class="num-c">호출</div><div class="num-c">긴급</div><div class="num-c">평균거리</div><div class="num-c">SMS</div>
+        </div>
+        <div class="kpi-row">
+          <div class="rank" style="font-size:18px">🏆</div>
+          <div class="name">김효진</div>
+          <div class="num-c">32</div><div class="num-c">5</div><div class="num-c">42m</div>
+          <div><div class="sms-rate sms-90">100%</div></div>
+        </div>
+        <div class="kpi-row">
+          <div class="rank">2</div>
+          <div class="name">박민수</div>
+          <div class="num-c">21</div><div class="num-c">3</div><div class="num-c">68m</div>
+          <div><div class="sms-rate sms-90">95%</div></div>
+        </div>
+        <div class="kpi-row">
+          <div class="rank">3</div>
+          <div class="name">이지영</div>
+          <div class="num-c">18</div><div class="num-c">2</div><div class="num-c">85m</div>
+          <div><div class="sms-rate sms-70">82%</div></div>
+        </div>
+        <div class="kpi-row">
+          <div class="rank">4</div>
+          <div class="name">최준호</div>
+          <div class="num-c">12</div><div class="num-c">1</div><div class="num-c">120m</div>
+          <div><div class="sms-rate sms-low">66%</div></div>
+        </div>
+        <div class="kpi-row">
+          <div class="rank">5</div>
+          <div class="name">정수현</div>
+          <div class="num-c">3</div><div class="num-c">0</div><div class="num-c">94m</div>
+          <div><div class="sms-rate sms-70">75%</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 4. 알림 이력 탭 ===== -->
+  <div class="card">
+    <h2><span class="num">4</span>🚨 알림 이력 탭 (필터 + 상세)</h2>
+    <div style="background:#f8fafc;padding:14px;border-radius:10px">
+      <div class="alert-filters">
+        <button class="alert-filter active">전체 12건</button>
+        <button class="alert-filter">⚠️ 과밀 7</button>
+        <button class="alert-filter">🚨 위험 2</button>
+        <button class="alert-filter">🔄 수동 3</button>
+        <button class="alert-filter">📞 호출됨 5</button>
+      </div>
+      <div class="alert-list">
+        <div class="alert-item">
+          <div class="alert-time">14:30</div>
+          <div class="alert-sev sev-warn">⚠️ 과밀</div>
+          <div class="alert-body"><div class="a-zone">누에과학관 (CH11) · 28명</div><div class="a-msg">CCTV AI density VERY_HIGH 감지</div></div>
+        </div>
+        <div class="alert-item">
+          <div class="alert-time">14:22</div>
+          <div class="alert-sev sev-danger">🚨 위험</div>
+          <div class="alert-body"><div class="a-zone">본관 (CH3)</div><div class="a-msg">화재/연기 의심 (AI score 85)</div></div>
+          <div class="alert-call">📞 3명 호출</div>
+        </div>
+        <div class="alert-item">
+          <div class="alert-time">13:48</div>
+          <div class="alert-sev sev-warn">⚠️ 과밀</div>
+          <div class="alert-body"><div class="a-zone">매점 (CH24) · 26명</div><div class="a-msg">단체 관람객 동시 도착</div></div>
+          <div class="alert-call">📞 1명 호출</div>
+        </div>
+        <div class="alert-item">
+          <div class="alert-time">13:12</div>
+          <div class="alert-sev sev-info">ℹ️ 수동</div>
+          <div class="alert-body"><div class="a-zone">주차장</div><div class="a-msg">관리자 수동 호출 — 차량 진입 안내</div></div>
+        </div>
+        <div class="alert-item">
+          <div class="alert-time">12:05</div>
+          <div class="alert-sev sev-warn">⚠️ 과밀</div>
+          <div class="alert-body"><div class="a-zone">체험장 · 25명</div><div class="a-msg">단체 체험 시작 직후</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 5. 자동 호출 워크플로 + SMS 미리보기 ===== -->
+  <div class="card">
+    <h2><span class="num">5</span>📞 직원 호출 워크플로 (Ppurio SMS)</h2>
+    <div class="flow">
+      <div class="flow-row">
+        <div class="flow-step s1"><span class="ic">⚠️</span>위험 감지<br><span style="font-size:9px;color:#94a3b8">DANGER 분류</span></div>
+        <span class="flow-arr">→</span>
+        <div class="flow-step s2"><span class="ic">📡</span>auto_alerts<br>INSERT</div>
+        <span class="flow-arr">→</span>
+        <div class="flow-step s3"><span class="ic">📐</span>거리 계산<br><span style="font-size:9px;color:#94a3b8">Haversine</span></div>
+        <span class="flow-arr">→</span>
+        <div class="flow-step s4"><span class="ic">👥</span>가까운 3명<br>자동 선택</div>
+        <span class="flow-arr">→</span>
+        <div class="flow-step s5"><span class="ic">💬</span>Ppurio SMS<br>동시 발송</div>
+      </div>
+    </div>
+
+    <div class="two-col" style="margin-top:14px">
+      <div>
+        <div style="font-size:12px;font-weight:800;color:#0f172a;margin-bottom:8px">📋 staff_calls 테이블 기록</div>
+        <table class="api-table">
+          <tr><th>직원</th><th>구역</th><th>거리</th><th>SMS</th></tr>
+          <tr><td>김효진</td><td>누에과학관</td><td>42m</td><td>✓ 성공</td></tr>
+          <tr><td>박민수</td><td>누에과학관</td><td>68m</td><td>✓ 성공</td></tr>
+          <tr><td>이지영</td><td>누에과학관</td><td>85m</td><td>✓ 성공</td></tr>
+        </table>
+      </div>
+      <div>
+        <div style="font-size:12px;font-weight:800;color:#0f172a;margin-bottom:8px">📱 직원에게 도착하는 SMS</div>
+        <div class="sms-phone">
+          <div class="sms-screen">
+            <div class="sms-time">오늘 14:22</div>
+            <div class="sms-bubble">
+              [잠사박물관 🚨DANGER]<br>누에과학관 화재 의심 (AI 85)<br>김효진님 확인 부탁드립니다.
+            </div>
+            <div class="sms-from">📨 1644-XXXX (PPURIO_SENDER)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 6. Supabase 스키마 ===== -->
+  <div class="card">
+    <h2><span class="num">6</span>🗄️ Supabase 신규 테이블 (2개)</h2>
+    <div style="font-size:12px;color:#475569;margin-bottom:10px;padding:8px;background:#fef3c7;border-radius:8px">
+      📁 <code>supabase/partB_alerts.sql</code> 파일을 Supabase SQL Editor에 복붙 후 Run ▶️
+    </div>
+    <div class="schema-grid">
+      <div class="schema-card">
+<pre>CREATE TABLE <span class="tbl">auto_alerts</span> (
+  <span class="col">id</span>            <span class="typ">BIGSERIAL</span> PRIMARY KEY,
+  <span class="col">alert_type</span>    <span class="typ">TEXT</span> NOT NULL,
+  <span class="col">zone_id</span>       <span class="typ">TEXT</span>,
+  <span class="col">zone_name</span>     <span class="typ">TEXT</span>,
+  <span class="col">severity</span>      <span class="typ">TEXT</span>,
+  <span class="col">message</span>       <span class="typ">TEXT</span>,
+  <span class="col">channel_ch</span>    <span class="typ">INTEGER</span>,
+  <span class="col">people_count</span>  <span class="typ">INTEGER</span>,
+  <span class="col">auto_called</span>   <span class="typ">BOOLEAN</span>,
+  <span class="col">recipients</span>    <span class="typ">JSONB</span>,
+  <span class="col">created_at</span>    <span class="typ">TIMESTAMPTZ</span>
+);
+-- 인덱스 3개 (created/zone/type)</pre>
+      </div>
+      <div class="schema-card">
+<pre>CREATE TABLE <span class="tbl">staff_calls</span> (
+  <span class="col">id</span>                <span class="typ">BIGSERIAL</span> PRIMARY KEY,
+  <span class="col">staff_id</span>          <span class="typ">TEXT</span>,
+  <span class="col">staff_name</span>        <span class="typ">TEXT</span>,
+  <span class="col">zone_id</span>           <span class="typ">TEXT</span>,
+  <span class="col">zone_name</span>         <span class="typ">TEXT</span>,
+  <span class="col">message</span>           <span class="typ">TEXT</span>,
+  <span class="col">urgency</span>           <span class="typ">TEXT</span>,
+  <span class="col">distance_meters</span>   <span class="typ">INTEGER</span>,
+  <span class="col">sms_sent</span>          <span class="typ">BOOLEAN</span>,
+  <span class="col">responded_at</span>      <span class="typ">TIMESTAMPTZ</span>,
+  <span class="col">called_at</span>         <span class="typ">TIMESTAMPTZ</span>
+);
+-- 인덱스 3개 (staff/zone/urgency)</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 7. API 엔드포인트 ===== -->
+  <div class="card">
+    <h2><span class="num">7</span>🌐 신규 API 엔드포인트 (3개) + 환경변수</h2>
+    <table class="api-table">
+      <tr><th>엔드포인트</th><th>메서드</th><th>용도</th></tr>
+      <tr><td><code>/api/auto-alerts</code></td><td>POST</td><td>알림 생성 → DB 저장 → (조건부) 자동 호출</td></tr>
+      <tr><td><code>/api/auto-alerts?range=today</code></td><td>GET</td><td>오늘/주간 알림 이력 + 통계</td></tr>
+      <tr><td><code>/api/staff-dispatch</code></td><td>POST</td><td>거리 기반 직원 선택 + Ppurio SMS 동시 발송</td></tr>
+      <tr><td><code>/api/forecast-kpi?type=forecast</code></td><td>GET</td><td>다음 7일 매출 예측 (선형 + 주말 1.4×)</td></tr>
+      <tr><td><code>/api/forecast-kpi?type=kpi</code></td><td>GET</td><td>직원별 + 종합 KPI 집계</td></tr>
+    </table>
+    <div style="margin-top:12px;padding:10px;background:#f1f5f9;border-radius:8px;font-size:11px;color:#475569">
+      🔑 <strong>Vercel 환경변수</strong> (선택): <code>PPURIO_USERNAME</code> · <code>PPURIO_API_KEY</code> · <code>PPURIO_SENDER</code><br>
+      미설정 시에도 모든 기능 작동 — SMS만 발송되지 않고 <code>staff_calls.sms_sent=false</code>로 기록
+    </div>
+  </div>
+
+  <!-- ===== 8. 운영 시나리오 ===== -->
+  <div class="card">
+    <h2><span class="num">8</span>📝 운영 시나리오 3종</h2>
+    <div class="two-col">
+      <div style="padding:14px;background:linear-gradient(135deg,#fef3c7,#fde68a);border-radius:10px">
+        <div style="font-size:13px;font-weight:900;color:#78350f;margin-bottom:8px">시나리오 1 · 평일 오후 과밀</div>
+        <div style="font-size:11px;color:#475569;line-height:1.7">
+          14:30 누에과학관 28명 자동 감지 →<br>
+          🚨 우상단 토스트 8초 →<br>
+          <code>auto_alerts</code> INSERT (WARNING) →<br>
+          알림 이력 탭에서 확인 →<br>
+          직원 KPI에서 효율 좋은 직원 식별 →<br>
+          수동 호출 → 24명으로 감소
+        </div>
+      </div>
+      <div style="padding:14px;background:linear-gradient(135deg,#fee2e2,#fca5a5);border-radius:10px">
+        <div style="font-size:13px;font-weight:900;color:#991b1b;margin-bottom:8px">시나리오 2 · 화재 의심 (DANGER)</div>
+        <div style="font-size:11px;color:#475569;line-height:1.7">
+          CH11 AI score 85 → DANGER →<br>
+          🔥 토스트 10초 + DB INSERT →<br>
+          auto_called=true →<br>
+          가까운 직원 3명 자동 선택 →<br>
+          Ppurio SMS 동시 발송 →<br>
+          5분 중복 방지 작동
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:14px;padding:14px;background:linear-gradient(135deg,#dbeafe,#bfdbfe);border-radius:10px">
+      <div style="font-size:13px;font-weight:900;color:#1e3a8a;margin-bottom:8px">시나리오 3 · 월간 회의 자료</div>
+      <div style="font-size:11px;color:#475569;line-height:1.7">
+        통계 모달 → 매출 예측 탭 → 다음 7일 ₩2,450,000 (+12%) →
+        헤더 <strong>📄 PDF</strong> → 인쇄 창 → "PDF로 저장" →
+        직원 KPI 탭 → 김효진 1위 (32건/45m/100%) →
+        알림 이력 → 이번 달 12건 →
+        운영 결정: 13시 직원 1명 추가 배치
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 9. 적용 체크리스트 ===== -->
+  <div class="card">
+    <h2><span class="num">9</span>✅ 적용 후 확인 체크리스트</h2>
+    <div class="two-col">
+      <div>
+        <div style="font-size:12px;font-weight:800;color:#0f172a;margin-bottom:8px">📦 코드 적용 (자동 머지됨)</div>
+        <ul style="font-size:11px;color:#475569;line-height:1.9;list-style:none">
+          <li>✅ <code>source.jsx</code> — 자동알림 토글 + 토스트 + 8 탭 + PDF</li>
+          <li>✅ <code>public/app.bundle.js</code> — 빌드 결과 (1.3MB)</li>
+          <li>✅ <code>api/auto-alerts.js</code> — POST 알림/GET 이력 + Ppurio</li>
+          <li>✅ <code>api/staff-dispatch.js</code> — 거리 기반 + SMS</li>
+          <li>✅ <code>api/forecast-kpi.js</code> — 매출 예측 + 직원 KPI</li>
+          <li>✅ <code>api/operation-stats.js</code> — 8 탭 데이터 소스</li>
+          <li>✅ <code>supabase/partB_alerts.sql</code> — 신규 테이블 SQL</li>
+        </ul>
+      </div>
+      <div>
+        <div style="font-size:12px;font-weight:800;color:#0f172a;margin-bottom:8px">⚙️ 사용자 수동 작업</div>
+        <ul style="font-size:11px;color:#475569;line-height:1.9;list-style:none">
+          <li>⬜ Supabase SQL Editor에서 <code>partB_alerts.sql</code> 실행</li>
+          <li>⬜ Vercel 환경변수 등록 (선택): <code>PPURIO_*</code> 3개</li>
+          <li>⬜ 강력 새로고침 (Ctrl+Shift+R)</li>
+          <li>⬜ 좌상단 "🔔 자동 알림 OFF" 클릭 → "🚨 활성"으로 전환</li>
+          <li>⬜ 운영 통계 모달 → 8 탭 표시 확인</li>
+          <li>⬜ 📄 PDF 버튼 → 인쇄 창 호출 확인</li>
+          <li>⬜ Supabase에서 <code>auto_alerts</code>/<code>staff_calls</code> 확인</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    🐛 한국잠사박물관 통합관리 시스템 · Part B 풀 시스템 · 2026
+  </div>
+</div>
+</body>
+</html>
