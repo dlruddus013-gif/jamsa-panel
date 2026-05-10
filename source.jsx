@@ -6510,20 +6510,38 @@ const PAYMENT_FORMATS = {
   },
   bank_transaction: {
     label: "🏦 은행 거래내역",
-    detect: (h) =>
-      (h.some(x => x.includes("출금액") || x === "출금") ||
-       h.some(x => x.includes("입금액") || x === "입금")) ||
-      (h.some(x => x.includes("적요")) && h.some(x => x.includes("잔액"))),
+    detect: (h) => {
+      const hasOut = h.some(x => /출금액|^출금$|출금금액|지급액|^지급$/.test(x));
+      const hasIn  = h.some(x => /입금액|^입금$|입금금액|수취액/.test(x));
+      const hasBal = h.some(x => /잔액|거래후잔액/.test(x));
+      const hasMemo = h.some(x => /적요|거래내용|^내용$|거래기록/.test(x));
+      const hasDate = h.some(x => /거래일시|거래일자|거래일|^일자|^일시/.test(x));
+      // (출금|입금) AND (잔액 OR 적요 OR 일자) 또는 잔액+적요 조합
+      return ((hasOut || hasIn) && (hasBal || hasMemo || hasDate)) || (hasMemo && hasBal);
+    },
     map: (r) => {
-      const date = String(r["거래일시"] || r["거래일자"] || r["일자"] || r["거래시각"] || "").slice(0, 10);
-      const out = parseAmount(r["출금액"] || r["출금"] || r["출금금액"] || 0);
-      const inn = parseAmount(r["입금액"] || r["입금"] || r["입금금액"] || 0);
+      const pickKey = (...patterns) => {
+        const keys = Object.keys(r);
+        for (const re of patterns) {
+          const k = keys.find(k => re.test(k));
+          if (k && r[k] != null && String(r[k]).trim() !== "") return r[k];
+        }
+        return "";
+      };
+      let dateRaw = String(pickKey(/거래일시/, /거래일자/, /^거래일$/, /^일자/, /^일시/, /거래시각/) || "").trim();
+      // "2025-05-10 14:23:00" or "2025/05/10" 모두 처리
+      let date = dateRaw.slice(0, 10).replace(/\./g, "-").replace(/\//g, "-");
+      if (/^\d{8}$/.test(dateRaw)) date = `${dateRaw.slice(0,4)}-${dateRaw.slice(4,6)}-${dateRaw.slice(6,8)}`;
+      const out = parseAmount(pickKey(/출금액/, /^출금$/, /출금금액/, /지급액/, /^지급$/));
+      const inn = parseAmount(pickKey(/입금액/, /^입금$/, /입금금액/, /수취액/));
+      const memo = String(pickKey(/적요/, /거래내용/, /^내용$/, /^메모$/, /거래기록/, /비고/) || "").trim();
+      const counterparty = String(pickKey(/의뢰인/, /수취인/, /거래상대/, /상대계좌/) || "").trim();
       return {
         date,
-        vendor: String(r["적요"] || r["거래내용"] || r["내용"] || r["메모"] || r["거래기록사항"] || "").trim(),
+        vendor: counterparty || memo || "(미상)",
         amount: out > 0 ? out : inn,
-        ref: String(r["거래번호"] || r["취급점"] || "").trim(),
-        memo: inn > 0 && out === 0 ? `입금 +${inn.toLocaleString()}원` : "",
+        ref: String(pickKey(/거래번호/, /거래고유/, /취급점/, /거래점/) || "").trim(),
+        memo: [memo && counterparty ? memo : "", inn > 0 && out === 0 ? `입금 +${inn.toLocaleString()}원` : ""].filter(Boolean).join(" "),
         type: out > 0 ? "transfer" : "income",
         source: "은행",
       };
@@ -6568,20 +6586,57 @@ async function parsePaymentFile(file) {
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: "array", cellDates: true, raw: false });
   const ws = wb.Sheets[wb.SheetNames[0]];
-  // 헤더 행 자동 탐색 (홈택스는 1~5행에 메타데이터가 있을 수 있음)
   const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: false });
+
+  // 헤더 행 자동 탐색 — 점수 기반
+  // 한국 은행/홈택스 엑셀은 1~10행에 "입출금거래내역조회 결과", "조회기간:", "계좌번호:" 같은
+  // 단일-셀 제목/메타 행이 있고, 그 아래에 실제 컬럼 헤더가 위치한다.
+  // 따라서 (1) 셀 개수가 충분하고 (2) 헤더 키워드가 여러 개 일치하는 행을 선택해야 한다.
+  const HEADER_KEYWORDS = [
+    /거래일시/, /거래일자/, /거래일/, /이용일자/, /이용일/, /승인일자/, /승인일/, /작성일자/, /발급일자/, /일자$/, /^일자/, /^일시/,
+    /적요/, /거래내용/, /거래기록/, /^내용$/, /비고/, /메모/,
+    /출금액/, /^출금$/, /출금금액/, /지급액/, /^지급$/,
+    /입금액/, /^입금$/, /입금금액/, /수취/,
+    /잔액/, /거래후잔액/,
+    /가맹점/, /이용가맹점/, /이용처/,
+    /공급자/, /공급가액/, /합계금액/, /이용금액/, /승인금액/, /청구금액/, /거래금액/,
+    /승인번호/, /거래번호/, /사업자등록번호/,
+    /의뢰인/, /수취인/, /거래점/, /취급점/,
+  ];
+  const scoreRow = (row) => {
+    const cells = row.map(c => String(c || "").trim()).filter(Boolean);
+    if (cells.length < 3) return 0; // 단일-셀 제목 행 제외
+    let hits = 0;
+    for (const c of cells) {
+      if (HEADER_KEYWORDS.some(re => re.test(c))) hits++;
+    }
+    // 키워드 일치 셀이 2개 이상일 때만 유효 (일반 데이터 행은 1개 정도만 우연히 매칭)
+    return hits >= 2 ? hits * 10 + cells.length : 0;
+  };
+
   let headerRow = -1;
-  for (let i = 0; i < Math.min(aoa.length, 12); i++) {
-    const row = aoa[i].map(c => String(c || "").trim());
-    if (row.some(c => /일자|일시|가맹점|적요|공급자|이용금액|출금|입금/.test(c))) {
-      headerRow = i; break;
+  let bestScore = 0;
+  const scanLimit = Math.min(aoa.length, 20);
+  for (let i = 0; i < scanLimit; i++) {
+    const sc = scoreRow(aoa[i] || []);
+    if (sc > bestScore) { bestScore = sc; headerRow = i; }
+  }
+
+  // 점수 기반 탐색 실패 시 — 첫 번째로 의미있는 셀 ≥ 3개인 행 채택
+  if (headerRow === -1) {
+    for (let i = 0; i < scanLimit; i++) {
+      const cells = (aoa[i] || []).map(c => String(c || "").trim()).filter(Boolean);
+      if (cells.length >= 3) { headerRow = i; break; }
     }
   }
   if (headerRow === -1) headerRow = 0;
-  const headers = aoa[headerRow].map(c => String(c || "").trim());
+
+  const headers = (aoa[headerRow] || []).map(c => String(c || "").trim());
   const formatKey = detectPaymentFormat(headers);
   if (!formatKey) {
-    return { ok: false, error: "형식 자동 감지 실패 (홈택스/은행/카드사 헤더 없음)", headers };
+    // 디버깅용: 첫 5행을 함께 반환해서 어디가 잘못됐는지 보여준다
+    const preview = aoa.slice(0, 5).map(r => r.map(c => String(c || "").trim()).filter(Boolean).join(" | "));
+    return { ok: false, error: "형식 자동 감지 실패 (홈택스/은행/카드사 헤더 없음)", headers, preview, headerRow };
   }
   const def = PAYMENT_FORMATS[formatKey];
   const rows = aoa.slice(headerRow + 1).filter(r => r.some(c => String(c || "").trim() !== ""));
@@ -6591,7 +6646,7 @@ async function parsePaymentFile(file) {
     return o;
   });
   const parsed = objects.map(def.map).filter(p => p.amount > 0 && p.date);
-  return { ok: true, format: formatKey, label: def.label, rows: parsed, total: parsed.length };
+  return { ok: true, format: formatKey, label: def.label, rows: parsed, total: parsed.length, headerRow };
 }
 
 // ========== 품의 / 결제 통합 모달 ==========
@@ -6937,10 +6992,18 @@ function ReqPaymentsModal({prods, requisitions, payments, statusLabel, statusCol
               ⚠️ <strong>{uploadResult.error}</strong>
               {uploadResult.headers?.length > 0 && (
                 <div style={{marginTop:6,fontSize:10,color:"#7f1d1d"}}>
-                  감지된 헤더: {uploadResult.headers.slice(0,8).join(" · ")}
+                  감지된 헤더 (행 #{(uploadResult.headerRow ?? 0) + 1}): {uploadResult.headers.slice(0,12).filter(Boolean).join(" · ")}
                 </div>
               )}
-              <div style={{marginTop:6,fontSize:10}}>💡 홈택스/은행에서 다운받은 원본 파일을 그대로 올려주세요. 헤더 행이 자동 탐색됩니다.</div>
+              {uploadResult.preview?.length > 0 && (
+                <details style={{marginTop:6,fontSize:10,color:"#7f1d1d"}}>
+                  <summary style={{cursor:"pointer",fontWeight:700}}>📋 파일 첫 5행 미리보기 (펼치기)</summary>
+                  <div style={{marginTop:4,padding:6,background:"#fff",border:"1px solid #fecaca",borderRadius:4,fontFamily:"monospace",fontSize:9,whiteSpace:"pre-wrap",lineHeight:1.5}}>
+                    {uploadResult.preview.map((line, i) => `행${i+1}: ${line}`).join("\n")}
+                  </div>
+                </details>
+              )}
+              <div style={{marginTop:6,fontSize:10}}>💡 홈택스/은행에서 다운받은 원본 파일을 그대로 올려주세요. 헤더 행이 자동 탐색됩니다. 그래도 인식 안 되면 미리보기 내용을 알려주시면 파서를 보완해드립니다.</div>
             </div>
           )}
 
