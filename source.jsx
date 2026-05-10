@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { PanoramaAddonPage, draftObjectsToMarkers } from "./panorama-addon.jsx";
 // 자동 초기화: cctv.thejamsa.com을 기본 백엔드로 설정
 try {
   if (typeof window !== 'undefined' && window.localStorage) {
@@ -6016,6 +6017,8 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
     {id:"history",label:"로그",icon:<IC.Hist/>,perm:"view"},
     {id:"rfid",label:"RFID",icon:<IC.Rfid/>,perm:"view"},
     {id:"analysis",label:"분석",icon:<IC.Chart/>,perm:"view"},
+    // 부가기능 (master 전용)
+    {id:"panoramaAddon",label:"🌐 파노라마 평면도",icon:<IC.Map/>,perm:"manage_users"},
   ].filter(m=>can(m.perm));
 
   return(
@@ -6318,6 +6321,20 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
           {page==="rfid"&&<RfidPg prods={prods} rfidTags={rfidTags} rfidScans={rfidScans} zones={ZONES} assignRfid={assignRfid} removeRfid={removeRfid} doRfidScan={doRfidScan} genRfidTag={genRfidTag}/>}
           {page==="analysis"&&<APg prods={prods} hist={hist} zones={ZONES} onAddFacAction={onAddFacAction}/>}
           {page==="required"&&<RequiredMaterialsPage facActions={facActions} prods={prods} zonePhotos={zonePhotos} setSelZone={setSelZone} setPage={setPage}/>}
+          {page==="panoramaAddon"&&<PanoramaAddonPage zones={mergedZones} curUser={curUser}
+            isMaster={curUser?.role==="master"}
+            onImportToZone={(zone, draftObjects, addon)=>{
+              // ZoneLayoutModal과 동일한 zoneLayouts 스토어에 마커로 병합
+              const newMarkers = draftObjectsToMarkers(draftObjects);
+              setZoneLayouts(prev => {
+                const cur = prev[zone.id] || { floorPlanUrl:"", panoramaUrl:"", panorama360:false, markers:[], model3dUrl:"", model3dName:"" };
+                return {
+                  ...prev,
+                  [zone.id]: { ...cur, markers: [...(cur.markers||[]), ...newMarkers] },
+                };
+              });
+              addH("🌐 파노라마초안", zone.name, `${draftObjects.length}개 객체 병합 (addon: ${addon.title})`, draftObjects.length);
+            }}/>}
         </div>
       </div>
 
@@ -12254,6 +12271,29 @@ function WeatherModal({weather, alerts, affectedZones, zones, onRefresh, onCreat
 // (2) 3D 모델(.glb/.usdz) 뷰어, (3) 모바일 3D 스캔 앱 deep-link 제공.
 // ============================================================
 function ZoneLayoutModal({zone, layout, allProds, focusProdId, onSave, onAssignProduct, onClose}) {
+  // 파노라마 부가기능에서 생성된 초안 목록 (이 구역에 연결된 것)
+  const [showImportPicker, setShowImportPicker] = useState(false);
+  const availableAddons = useMemo(() => {
+    try {
+      const all = JSON.parse(localStorage.getItem("jamsa_pano_addons") || "[]");
+      return all.filter(a => a.floorMapId === zone?.id && (a.draftObjects?.length || 0) > 0);
+    } catch (e) { return []; }
+  }, [zone, showImportPicker]);
+  const importFromAddon = (addon, includeStaffOnly) => {
+    const objs = (addon.draftObjects||[]).filter(o => includeStaffOnly ? true : (o.publicVisible && !o.staffOnly));
+    if (objs.length === 0) { alert("가져올 객체가 없습니다"); return; }
+    const newMarkers = objs.map((o, i) => ({
+      id: `pa_${o.id}`,
+      x: Math.max(0, Math.min(100, o.x)),
+      y: Math.max(0, Math.min(100, o.y)),
+      label: o.name,
+      productIds: [],
+      view: "plan",
+    }));
+    setMarkers(arr => [...arr, ...newMarkers]);
+    setShowImportPicker(false);
+    alert(`✅ "${addon.title}"에서 ${newMarkers.length}개 마커를 추가했습니다.`);
+  };
   const [tab, setTab] = useState("plan"); // plan | pano | 3d | scan
   const [floorUrl, setFloorUrl] = useState(layout?.floorPlanUrl || "");
   // markers: {id, x%, y%, label, productIds[], view: "plan"|"pano"} — view 미지정 시 "plan"으로 간주
@@ -12436,6 +12476,36 @@ function ZoneLayoutModal({zone, layout, allProds, focusProdId, onSave, onAssignP
                   {placing ? "✕ 마커 추가 취소" : "+ 새 위치 마커 추가 (평면도 클릭)"}
                 </button>
               </>
+            )}
+            {availableAddons.length > 0 && (
+              <button onClick={()=>setShowImportPicker(true)}
+                style={{padding:"7px 12px",fontSize:11,fontWeight:700,borderRadius:6,border:"1px solid #0ea5e9",cursor:"pointer",background:"#fff",color:"#0ea5e9"}}>
+                🌐 파노라마 초안에서 가져오기 ({availableAddons.length})
+              </button>
+            )}
+            {showImportPicker && (
+              <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:14}}>
+                <div style={{background:"#fff",borderRadius:10,padding:16,maxWidth:480,width:"100%",maxHeight:"80vh",overflowY:"auto"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                    <h3 style={{margin:0,fontSize:14,fontWeight:900}}>🌐 파노라마 초안에서 마커 가져오기</h3>
+                    <button onClick={()=>setShowImportPicker(false)} style={{background:"none",border:"none",fontSize:18,color:"#94a3b8",cursor:"pointer"}}>✕</button>
+                  </div>
+                  {availableAddons.map(addon => (
+                    <div key={addon.id} style={{padding:10,border:"1px solid #e5e7eb",borderRadius:8,marginBottom:8}}>
+                      <div style={{fontSize:12,fontWeight:800,color:"#0f172a"}}>{addon.title}</div>
+                      <div style={{fontSize:10,color:"#64748b",marginTop:2}}>{addon.zoneName} · 객체 {addon.draftObjects.length}개 · {addon.confidence}</div>
+                      <div style={{display:"flex",gap:6,marginTop:8}}>
+                        <button onClick={()=>importFromAddon(addon, false)} style={{flex:1,padding:"6px 10px",fontSize:11,background:"#3b5bdb",color:"#fff",border:"none",borderRadius:6,fontWeight:700,cursor:"pointer"}}>
+                          👥 공개만 ({addon.draftObjects.filter(o=>o.publicVisible && !o.staffOnly).length})
+                        </button>
+                        <button onClick={()=>importFromAddon(addon, true)} style={{flex:1,padding:"6px 10px",fontSize:11,background:"#fff",color:"#1e40af",border:"1px solid #1e40af",borderRadius:6,fontWeight:700,cursor:"pointer"}}>
+                          🔓 전체 ({addon.draftObjects.length})
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
 
             {selMarker && (
