@@ -5584,7 +5584,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
   const [qrResult,setQrResult]=useState(null);
   const [highlightPid,setHighlightPid]=useState(null);
   const [showScanner,setShowScanner]=useState(false);
-  const [zonePhotos,setZonePhotos]=useState({});
+  const [zonePhotos,setZonePhotos]=useLocalStorage("jamsa_zone_photos", {});
   // 구역별 평면도/3D 모델/마커 저장 — { [zoneId]: { floorPlanUrl, markers: [{id,x,y,label,productIds[]}], model3dUrl, model3dName } }
   const [zoneLayouts,setZoneLayouts]=useLocalStorage("jamsa_zone_layouts", {});
   const [showZoneLayout,setShowZoneLayout]=useState(null); // {zoneId, focusProdId}
@@ -8593,12 +8593,20 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
             ? `<div style="position:absolute;top:-4px;right:-4px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:${hasUrgent ? "#dc2626" : hasHigh ? "#ea580c" : "#6b7280"};color:#fff;font-size:9px;font-weight:800;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-sizing:border-box;z-index:2;">${zoneActions.length}</div>`
             : "";
           const stockBadge = q > 0 ? `<div style="position:absolute;bottom:-6px;left:50%;transform:translateX(-50%);background:#fff;color:${z.color};padding:1px 6px;border-radius:8px;font-size:${9 * Math.max(scale, 0.7)}px;font-weight:800;border:1.5px solid ${z.color};white-space:nowrap;z-index:2;">${q}</div>` : "";
+          // 🆕 구역 이름 라벨 (핀 아래)
+          const labelFontSize = 10 * Math.max(scale, 0.85);
+          const nameLabel = `<div style="position:absolute;left:50%;top:${containerSize + 4}px;transform:translateX(-50%);background:rgba(255,255,255,0.95);color:#0f172a;padding:2px 7px;border-radius:6px;font-size:${labelFontSize}px;font-weight:800;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.25);border:1px solid ${z.color};z-index:3;pointer-events:none;">${z.icon} ${z.name}</div>`;
+          // 🆕 구역 사진 썸네일 (있을 때만, 핀 오른쪽 위)
+          const photos = (zonePhotos && zonePhotos[z.id]) || [];
+          const photoThumb = photos.length > 0
+            ? `<div style="position:absolute;top:-8px;right:-12px;width:28px;height:28px;border-radius:50%;background:url(${photos[photos.length-1].url}) center/cover #fff;border:2px solid ${z.color};box-shadow:0 2px 6px rgba(0,0,0,0.4);z-index:4;"></div>`
+            : "";
           const marker = new naver.maps.Marker({
             position: new naver.maps.LatLng(z.lat, z.lng),
             map,
             draggable: editMode && currentUserCanEdit,
             icon: {
-              content: `<div style="position:relative;width:${containerSize}px;height:${containerSize}px;${pulseAnim}${editMode && currentUserCanEdit ? "cursor:move;" : ""}"><div style="background:${statusColor};border:2px solid #fff;border-radius:50% 50% 50% 0;width:${baseSize}px;height:${baseSize}px;transform:rotate(-45deg);box-shadow:0 3px 10px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;margin:${(containerSize - baseSize) / 2}px;"><div style="transform:rotate(45deg);font-size:${iconFontSize}px;">${z.icon}</div></div>${badgeHtml}${stockBadge}${editIndicator}</div>`,
+              content: `<div style="position:relative;width:${containerSize}px;height:${containerSize + Math.round(labelFontSize) + 12}px;${pulseAnim}${editMode && currentUserCanEdit ? "cursor:move;" : ""}"><div style="background:${statusColor};border:2px solid #fff;border-radius:50% 50% 50% 0;width:${baseSize}px;height:${baseSize}px;transform:rotate(-45deg);box-shadow:0 3px 10px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;margin:${(containerSize - baseSize) / 2}px;"><div style="transform:rotate(45deg);font-size:${iconFontSize}px;">${z.icon}</div></div>${badgeHtml}${stockBadge}${photoThumb}${nameLabel}${editIndicator}</div>`,
               anchor: new naver.maps.Point(containerSize / 2, containerSize),
             },
             title: `${z.name}${zoneActions.length > 0 ? ` (진행중 ${zoneActions.length}건)` : ""}${q > 0 ? ` · 재고 ${q}` : ""}${editMode && currentUserCanEdit ? " · 드래그로 이동 가능" : ""}`,
@@ -18767,12 +18775,24 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         // 마커 컨테이너 너비 — CCTV 미니창 있으면 더 넓게
         const _markerWidth = (_cctvEnabled && _firstCh) ? 150 : 46;
 
+        // 🆕 zonePhotos 로컬스토리지 직접 조회 (구역별 최신 사진 1장)
+        let _photoThumb = "";
+        try {
+          const _zp = JSON.parse(localStorage.getItem("jamsa_zone_photos") || "{}");
+          const _list = _zp[z.id];
+          if (_list && _list.length > 0) {
+            const _last = _list[_list.length - 1];
+            _photoThumb = `<div style="position:absolute;top:-8px;left:38px;width:30px;height:30px;border-radius:50%;background:url(${_last.url}) center/cover #fff;border:2px solid ${z.color};box-shadow:0 2px 6px rgba(0,0,0,0.4);z-index:5;"></div>`;
+          }
+        } catch (e) {}
+        // 🆕 구역 이름 라벨
+        const _nameLabel = `<div style="position:absolute;left:23px;top:50px;transform:translateX(-50%);background:rgba(255,255,255,0.96);color:#0f172a;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:800;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.3);border:1px solid ${z.color};z-index:4;pointer-events:none;">${z.icon} ${z.name}</div>`;
         const marker = new naver.maps.Marker({
           position: new naver.maps.LatLng(z.lat, z.lng),
           map: naverMapRef.current,
-          draggable: editMode,  // Enable drag in edit mode
+          draggable: editMode,
           icon: {
-            content: `<div style="position:relative;width:${_markerWidth}px;height:64px;${pulseAnim}cursor:${editMode ? "move" : "pointer"};${editMode ? "outline:3px dashed #2563eb;outline-offset:2px;border-radius:8px;" : ""}"><div style="position:absolute;left:0;top:0;width:46px;height:46px;"><div style="background:${z.color};border:3px solid #fff;border-radius:50% 50% 50% 0;width:38px;height:38px;transform:rotate(-45deg);box-shadow:0 4px 12px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;margin:4px;"><div style="transform:rotate(45deg);font-size:18px;">${z.icon}</div></div>${badgeHtml}${statusLabelHtml}${crowdBadgeHtml}</div>${_cctvHtml}</div>`,
+            content: `<div style="position:relative;width:${_markerWidth}px;height:82px;${pulseAnim}cursor:${editMode ? "move" : "pointer"};${editMode ? "outline:3px dashed #2563eb;outline-offset:2px;border-radius:8px;" : ""}"><div style="position:absolute;left:0;top:0;width:46px;height:46px;"><div style="background:${z.color};border:3px solid #fff;border-radius:50% 50% 50% 0;width:38px;height:38px;transform:rotate(-45deg);box-shadow:0 4px 12px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;margin:4px;"><div style="transform:rotate(45deg);font-size:18px;">${z.icon}</div></div>${badgeHtml}${statusLabelHtml}${crowdBadgeHtml}${_photoThumb}${_nameLabel}</div>${_cctvHtml}</div>`,
             anchor: new naver.maps.Point(23, 46),
           },
           title: editMode ? `[편집] ${z.name} (드래그로 이동)` : `${z.name} · ${s.statusLabel}${badgeNum > 0 ? ` (과제/재고부족 ${badgeNum}건)` : ""}${_firstCh ? ` · CH${_firstCh}` : ""}`,
