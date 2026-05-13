@@ -130,6 +130,45 @@ export default async function handler(req, res) {
         const { data: dev } = await supabaseSvc.from('tapo_devices').select('*').eq('id', queryId).single();
         if (!dev) return res.status(404).json({ error: 'device_not_found' });
 
+        // Generic command queue for bridge/Home Assistant/Tapo worker.
+        // The museum PC bridge can poll tapo_device_events and execute these actions locally.
+        const genericActions = [
+          'command', 'snapshot', 'start_recording', 'stop_recording',
+          'turn_on', 'turn_off', 'set_brightness', 'set_color_temp',
+          'set_mode', 'siren_on', 'siren_off'
+        ];
+        if (genericActions.includes(queryAction)) {
+          const body = req.body || {};
+          const command = body.command || queryAction;
+          const payload = {
+            command,
+            params: body,
+            requested_at: new Date().toISOString(),
+          };
+          const nextState = { ...(dev.current_state || {}) };
+          if (command === 'turn_on') nextState.power = 'ON';
+          if (command === 'turn_off') nextState.power = 'OFF';
+          if (command === 'set_brightness' && body.brightness != null) nextState.brightness = Number(body.brightness);
+          if (command === 'set_color_temp' && body.colorTemp != null) nextState.color_temp = Number(body.colorTemp);
+
+          const { data: event, error } = await supabaseSvc.from('tapo_device_events').insert({
+            device_id: queryId,
+            zone: dev.zone_id,
+            event_type: 'iot_command',
+            severity: command === 'turn_off' || command === 'start_recording' ? 'warning' : 'normal',
+            title: `IoT 명령: ${command}`,
+            description: `${dev.name || queryId} ${command} 명령 대기열 등록`,
+            raw_payload: payload,
+            confirmed: false,
+            created_at: new Date().toISOString(),
+          }).select().single();
+          if (error) throw error;
+          await supabaseSvc.from('tapo_devices')
+            .update({ current_state: nextState, updated_at: new Date().toISOString() })
+            .eq('id', queryId);
+          return res.status(200).json({ ok: true, queued: true, command, command_id: event?.id, state: nextState });
+        }
+
         // 전원 토글 (플러그/조명)
         if (queryAction === 'power_toggle') {
           const cur = dev.current_state?.power === 'ON';
