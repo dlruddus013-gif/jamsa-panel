@@ -3,6 +3,7 @@ import { PanoramaAddonPage, draftObjectsToMarkers } from "./panorama-addon.jsx";
 import { useAutoSafetyHazards, useAutoHazardNotifications, SOURCE_META, SEVERITY_META } from "./safety-auto-detect.jsx";
 import { InsuranceManagementPage, SafetyCalendarPage } from "./safety-insurance-calendar.jsx";
 import { ReportsNotificationsPage } from "./safety-reports-notifications.jsx";
+import { SafetyIotControlPage } from "./safety-iot-control.jsx";
 
 const DEFAULT_CCTV_SERVER_URL = "https://cctv.thejamsa.com";
 
@@ -15405,6 +15406,7 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction, worklogs 
             { id: "dashboard", label: "안전 대시보드", icon: "🛡️" },
             { id: "calendar", label: "안전관리 캘린더", icon: "📅" },
             { id: "reports", label: "종합 보고/알림", icon: "📊" },
+            { id: "iot", label: "IoT 안전제어", icon: "🔌" },
             { id: "hazard", label: "AI 위험성 평가", icon: "🤖" },
             { id: "tasks", label: "보완조치 관리", icon: "🔧" },
             { id: "incident", label: "사고/아차사고 기록", icon: "🚨" },
@@ -15438,6 +15440,7 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction, worklogs 
           {page === "dashboard" && "🛡️ 종합 안전 대시보드"}
           {page === "calendar" && "📅 안전관리 캘린더"}
           {page === "reports" && "📊 종합 보고서 + 알림 채널"}
+          {page === "iot" && "🔌 IoT 안전제어 (Tapo + Roborock + 자동화)"}
           {page === "education" && "📚 법정 의무 및 직무 안전 교육 일지"}
           {page === "hazard" && "🤖 시설 작업 환경 AI 위험성 평가"}
           {page === "tasks" && "🔧 보완조치 관리"}
@@ -15465,6 +15468,10 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction, worklogs 
             autoHazards={autoHazards}
             dailyChecks={dailyChecks}
             curUser={user}/>
+        )}
+
+        {page === "iot" && (
+          <SafetyIotControlPage facilities={facilities} curUser={user}/>
         )}
 
         {page === "dashboard" && (
