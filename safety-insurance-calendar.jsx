@@ -643,9 +643,13 @@ export function SafetyCalendarPage({ facilities = [], curUser, weatherAlerts = [
         </div>
         <div className="flex gap-2">
           <button onClick={()=>setShowAiPanel(true)}
-            className="px-4 py-2 bg-gradient-to-r from-purple-600 to-blue-600 text-white text-xs font-bold rounded-lg shadow">🤖 AI 자동 일정 생성</button>
+            style={{padding:"8px 16px",background:"linear-gradient(90deg,#9333ea,#2563eb)",color:"#fff",border:"none",borderRadius:8,fontSize:12,fontWeight:800,cursor:"pointer",boxShadow:"0 4px 12px rgba(124,58,237,0.35)",display:"inline-flex",alignItems:"center",gap:4,whiteSpace:"nowrap"}}>
+            🤖 AI 자동 일정 생성
+          </button>
           <button onClick={()=>setShowForm({mode:"new", date:selectedDay})}
-            className="px-4 py-2 bg-emerald-600 text-white text-xs font-bold rounded-lg">＋ 일정 추가</button>
+            style={{padding:"8px 16px",background:"#059669",color:"#fff",border:"none",borderRadius:8,fontSize:12,fontWeight:800,cursor:"pointer",whiteSpace:"nowrap"}}>
+            ＋ 일정 추가
+          </button>
         </div>
       </div>
 
