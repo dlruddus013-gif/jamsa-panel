@@ -13070,41 +13070,312 @@ function StorageSectionModal({sections,onSave,onClose}){
 }
 
 function LocationManagerModal({locs,customLocs,onSave,onClose}){
+  const [tab,setTab]=useState("manage"); // manage | guide
   const [add,setAdd]=useState("");
   const [renames,setRenames]=useState({});
   const [deletes,setDeletes]=useState(new Set());
   const toggleDel=(v)=>setDeletes(prev=>{const n=new Set(prev);n.has(v)?n.delete(v):n.add(v);return n;});
-  return <Modal title="모든 위치 추가 · 수정 · 삭제" onClose={onClose} w={560}>
-    <div style={{display:"grid",gap:10}}>
-      <div style={{display:"flex",gap:6}}><input className="inp" value={add} onChange={e=>setAdd(e.target.value)} placeholder="새 위치명 예: 수장고 B-2, 수장고 3번 선반"/><button className="btn bp" onClick={()=>onSave({add,renames,deletes:Array.from(deletes)})}>저장</button></div>
-      <div style={{maxHeight:380,overflow:"auto",border:"1px solid #e5e7eb",borderRadius:8}}>
-        {(locs||[]).map(l=><div key={l} style={{display:"grid",gridTemplateColumns:"28px 130px 1fr",gap:8,padding:8,borderBottom:"1px solid #f1f5f9",alignItems:"center",opacity:deletes.has(l) ? .6 : 1}}>
-          <input type="checkbox" checked={deletes.has(l)} onChange={()=>toggleDel(l)} title="삭제"/>
-          <div style={{fontSize:12,fontWeight:900,color:"#334155"}}>{l}</div>
-          <input className="inp" value={renames[l] ?? l} onChange={e=>setRenames(r=>({...r,[l]:e.target.value}))} style={{fontSize:12,padding:7}}/>
-        </div>)}
-      </div>
-      <div style={{fontSize:11,color:"#64748b"}}>삭제 체크 후 저장하면 해당 위치 재고는 `미지정`으로 옮겨지고 필터 목록에서 숨겨집니다.</div>
-      <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}><button className="btn bs" onClick={onClose}>취소</button><button className="btn bp" onClick={()=>onSave({add,renames,deletes:Array.from(deletes)})}>변경 저장</button></div>
+
+  // 위치별 사용 중인 제품 수 (localStorage에서 직접 조회)
+  const usage = useMemo(() => {
+    const u = {};
+    try {
+      const prods = JSON.parse(localStorage.getItem("jamsa_inv_prods") || "[]");
+      for (const p of prods) {
+        const ls = Object.keys(p.locs || {});
+        if (ls.length === 0 && p.loc) ls.push(p.loc);
+        for (const l of ls) u[l] = (u[l]||0) + 1;
+      }
+    } catch (e) {}
+    return u;
+  }, []);
+
+  const customSet = new Set(customLocs || []);
+  const dirty = !!add.trim() || Object.keys(renames).length > 0 || deletes.size > 0;
+
+  return <Modal title="📍 위치(구역) 관리 — 추가 · 수정 · 삭제" onClose={onClose} w={680}>
+    <div style={{display:"flex",gap:4,borderBottom:"2px solid #e5e7eb",marginBottom:12}}>
+      {[["manage","🛠 위치 관리"],["guide","📖 사용법"]].map(([k,l]) => (
+        <button key={k} onClick={()=>setTab(k)}
+          style={{padding:"8px 14px",border:"none",background:tab===k?"#3b5bdb":"transparent",color:tab===k?"#fff":"#475569",fontWeight:700,fontSize:12,borderRadius:"8px 8px 0 0",cursor:"pointer"}}>{l}</button>
+      ))}
     </div>
+
+    {tab === "manage" && (
+      <div style={{display:"grid",gap:10}}>
+        {/* 추가 입력 */}
+        <div style={{padding:10,background:"#f0f9ff",border:"1px solid #bfdbfe",borderRadius:8}}>
+          <div style={{fontSize:11,fontWeight:800,color:"#1e40af",marginBottom:6}}>➕ 새 위치 추가</div>
+          <div style={{display:"flex",gap:6}}>
+            <input className="inp" value={add} onChange={e=>setAdd(e.target.value)}
+              placeholder="예: 수장고 B-2, 매점 카운터, 사무실 책장 3번"
+              style={{flex:1,padding:"8px 12px",fontSize:13,border:"1px solid #93c5fd",borderRadius:6}}/>
+            <button className="btn bp" disabled={!add.trim()}
+              onClick={()=>{ onSave({add: add.trim(), renames, deletes:Array.from(deletes)}); }}
+              style={{opacity: add.trim()?1:0.5}}>＋ 추가</button>
+          </div>
+          <div style={{fontSize:10,color:"#64748b",marginTop:4}}>💡 입력 후 ＋추가 또는 하단 변경저장 버튼으로 저장됩니다.</div>
+        </div>
+
+        {/* 위치 목록 */}
+        <div style={{fontSize:11,fontWeight:700,color:"#475569",display:"flex",justifyContent:"space-between"}}>
+          <span>📋 전체 위치 목록 ({(locs||[]).length}개)</span>
+          {deletes.size > 0 && <span style={{color:"#dc2626",fontWeight:800}}>🗑️ 삭제 예정 {deletes.size}개</span>}
+        </div>
+        <div style={{maxHeight:340,overflow:"auto",border:"1px solid #e5e7eb",borderRadius:8}}>
+          <div style={{display:"grid",gridTemplateColumns:"32px 50px 1fr 1fr 60px",gap:8,padding:"6px 10px",background:"#f8fafc",borderBottom:"1px solid #e5e7eb",fontSize:10,fontWeight:700,color:"#64748b"}}>
+            <span></span><span>유형</span><span>현재 이름</span><span>새 이름 (수정)</span><span>사용중</span>
+          </div>
+          {(locs||[]).map(l => {
+            const isCustom = customSet.has(l);
+            const useCount = usage[l] || 0;
+            const renamedTo = renames[l];
+            const willRename = renamedTo != null && renamedTo !== l && renamedTo.trim();
+            return (
+              <div key={l} style={{display:"grid",gridTemplateColumns:"32px 50px 1fr 1fr 60px",gap:8,padding:8,borderBottom:"1px solid #f1f5f9",alignItems:"center",opacity:deletes.has(l)?0.5:1,background:willRename?"#fffbeb":"transparent"}}>
+                <input type="checkbox" checked={deletes.has(l)} onChange={()=>toggleDel(l)} title="삭제 체크"/>
+                <span style={{fontSize:9,padding:"2px 5px",background:isCustom?"#dbeafe":"#f1f5f9",color:isCustom?"#1e40af":"#64748b",borderRadius:4,fontWeight:700,textAlign:"center"}}>
+                  {isCustom?"커스텀":"기본"}
+                </span>
+                <div style={{fontSize:12,fontWeight:800,color:"#0f172a"}}>{l}</div>
+                <input className="inp" value={renames[l] ?? l} onChange={e=>setRenames(r=>({...r,[l]:e.target.value}))}
+                  style={{fontSize:12,padding:"6px 8px",border:`1px solid ${willRename?"#fbbf24":"#e5e7eb"}`,borderRadius:5}}
+                  placeholder={l}/>
+                <span style={{fontSize:11,fontWeight:800,textAlign:"center",color:useCount>0?"#10b981":"#94a3b8"}}>
+                  {useCount}건
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* 안내 */}
+        <div style={{padding:10,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:6,fontSize:10,color:"#92400e",lineHeight:1.5}}>
+          ⚠️ <strong>주의:</strong> 위치 이름을 바꾸면 해당 위치의 <strong>모든 재고</strong>가 자동으로 새 이름으로 옮겨집니다.
+          삭제 체크 시 해당 위치 재고는 <strong>'미지정'</strong>으로 이동되고 필터 목록에서 숨겨집니다 (기본 위치는 hide만 됨).
+        </div>
+
+        {/* 액션 */}
+        <div style={{display:"flex",gap:6,justifyContent:"space-between",alignItems:"center",paddingTop:10,borderTop:"1px solid #e5e7eb"}}>
+          <button onClick={()=>setTab("guide")} style={{padding:"6px 10px",fontSize:11,background:"transparent",border:"1px solid #cbd5e1",borderRadius:6,color:"#475569",cursor:"pointer"}}>📖 사용법 보기</button>
+          <div style={{display:"flex",gap:6}}>
+            <button className="btn bs" onClick={onClose}>취소</button>
+            <button className="btn bp" disabled={!dirty}
+              style={{opacity:dirty?1:0.5}}
+              onClick={()=>onSave({add,renames,deletes:Array.from(deletes)})}>
+              💾 변경 저장 {dirty && `(${(add.trim()?1:0)+Object.keys(renames).filter(k=>renames[k]!==k && renames[k]?.trim()).length+deletes.size}건)`}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {tab === "guide" && <LocationCategoryGuide kind="location"/>}
   </Modal>;
 }
 
 function CategoryManagerModal({cats,customCats,onSave,onDelete,onClose}){
+  const [tab,setTab]=useState("manage");
   const [add,setAdd]=useState("");
   const [renames,setRenames]=useState({});
   const [deletes,setDeletes]=useState(new Set());
   const toggleDel=(v)=>setDeletes(prev=>{const n=new Set(prev);n.has(v)?n.delete(v):n.add(v);return n;});
-  return <Modal title="카테고리 추가 및 수정" onClose={onClose} w={540}>
-    <div style={{display:"grid",gap:10}}>
-      <div style={{display:"flex",gap:6}}><input className="inp" value={add} onChange={e=>setAdd(e.target.value)} placeholder="새 카테고리명 예: 조명/전기, 청소용품"/><button className="btn bp" onClick={()=>{if(add.trim())onSave({add,renames});}}>추가 저장</button></div>
-      <div style={{maxHeight:360,overflow:"auto",border:"1px solid #e5e7eb",borderRadius:8}}>
-        {(cats||[]).map(c=><div key={c} style={{display:"grid",gridTemplateColumns:"28px 120px 1fr",gap:8,padding:8,borderBottom:"1px solid #f1f5f9",alignItems:"center",opacity:deletes.has(c) ? .6 : 1}}><input type="checkbox" checked={deletes.has(c)} onChange={()=>toggleDel(c)} title="삭제"/><div style={{fontSize:12,fontWeight:900,color:"#334155"}}>{c}</div><input className="inp" value={renames[c] ?? c} onChange={e=>setRenames(r=>({...r,[c]:e.target.value}))} style={{fontSize:12,padding:7}}/></div>)}
-      </div>
-      <div style={{fontSize:11,color:"#64748b"}}>이름을 바꾸면 기존 재고도 같이 변경됩니다. 삭제 체크 시 해당 재고는 `기타`로 변경됩니다.</div>
-      <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}><button className="btn bs" onClick={onClose}>취소</button>{deletes.size>0&&<button className="btn bd" onClick={()=>onDelete?.(Array.from(deletes))}>삭제 적용</button>}<button className="btn bp" onClick={()=>onSave({add,renames})}>변경 저장</button></div>
+
+  const usage = useMemo(() => {
+    const u = {};
+    try {
+      const prods = JSON.parse(localStorage.getItem("jamsa_inv_prods") || "[]");
+      for (const p of prods) if (p.cat) u[p.cat] = (u[p.cat]||0) + 1;
+    } catch (e) {}
+    return u;
+  }, []);
+
+  const customSet = new Set(customCats || []);
+  const dirty = !!add.trim() || Object.keys(renames).length > 0;
+
+  return <Modal title="🏷️ 카테고리 관리 — 추가 · 수정 · 삭제" onClose={onClose} w={680}>
+    <div style={{display:"flex",gap:4,borderBottom:"2px solid #e5e7eb",marginBottom:12}}>
+      {[["manage","🛠 카테고리 관리"],["guide","📖 사용법"]].map(([k,l]) => (
+        <button key={k} onClick={()=>setTab(k)}
+          style={{padding:"8px 14px",border:"none",background:tab===k?"#3b5bdb":"transparent",color:tab===k?"#fff":"#475569",fontWeight:700,fontSize:12,borderRadius:"8px 8px 0 0",cursor:"pointer"}}>{l}</button>
+      ))}
     </div>
+
+    {tab === "manage" && (
+      <div style={{display:"grid",gap:10}}>
+        <div style={{padding:10,background:"#fefce8",border:"1px solid #fde68a",borderRadius:8}}>
+          <div style={{fontSize:11,fontWeight:800,color:"#854d0e",marginBottom:6}}>➕ 새 카테고리 추가</div>
+          <div style={{display:"flex",gap:6}}>
+            <input className="inp" value={add} onChange={e=>setAdd(e.target.value)}
+              placeholder="예: 조명/전기, 청소용품, 안전장비, 의약품"
+              style={{flex:1,padding:"8px 12px",fontSize:13,border:"1px solid #fcd34d",borderRadius:6}}/>
+            <button className="btn bp" disabled={!add.trim()}
+              onClick={()=>{ if(add.trim()) onSave({add: add.trim(), renames}); }}
+              style={{opacity:add.trim()?1:0.5}}>＋ 추가</button>
+          </div>
+        </div>
+
+        <div style={{fontSize:11,fontWeight:700,color:"#475569",display:"flex",justifyContent:"space-between"}}>
+          <span>📋 전체 카테고리 ({(cats||[]).length}개)</span>
+          {deletes.size > 0 && <span style={{color:"#dc2626",fontWeight:800}}>🗑️ 삭제 예정 {deletes.size}개</span>}
+        </div>
+        <div style={{maxHeight:340,overflow:"auto",border:"1px solid #e5e7eb",borderRadius:8}}>
+          <div style={{display:"grid",gridTemplateColumns:"32px 50px 1fr 1fr 60px",gap:8,padding:"6px 10px",background:"#f8fafc",borderBottom:"1px solid #e5e7eb",fontSize:10,fontWeight:700,color:"#64748b"}}>
+            <span></span><span>유형</span><span>현재 이름</span><span>새 이름</span><span>사용중</span>
+          </div>
+          {(cats||[]).map(c => {
+            const isCustom = customSet.has(c);
+            const useCount = usage[c] || 0;
+            const renamedTo = renames[c];
+            const willRename = renamedTo != null && renamedTo !== c && renamedTo.trim();
+            return (
+              <div key={c} style={{display:"grid",gridTemplateColumns:"32px 50px 1fr 1fr 60px",gap:8,padding:8,borderBottom:"1px solid #f1f5f9",alignItems:"center",opacity:deletes.has(c)?0.5:1,background:willRename?"#fffbeb":"transparent"}}>
+                <input type="checkbox" checked={deletes.has(c)} onChange={()=>toggleDel(c)} title="삭제"/>
+                <span style={{fontSize:9,padding:"2px 5px",background:isCustom?"#fef3c7":"#f1f5f9",color:isCustom?"#854d0e":"#64748b",borderRadius:4,fontWeight:700,textAlign:"center"}}>
+                  {isCustom?"커스텀":"기본"}
+                </span>
+                <div style={{fontSize:12,fontWeight:800,color:"#0f172a"}}>{c}</div>
+                <input className="inp" value={renames[c] ?? c} onChange={e=>setRenames(r=>({...r,[c]:e.target.value}))}
+                  style={{fontSize:12,padding:"6px 8px",border:`1px solid ${willRename?"#fbbf24":"#e5e7eb"}`,borderRadius:5}}/>
+                <span style={{fontSize:11,fontWeight:800,textAlign:"center",color:useCount>0?"#10b981":"#94a3b8"}}>
+                  {useCount}건
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={{padding:10,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:6,fontSize:10,color:"#92400e",lineHeight:1.5}}>
+          ⚠️ <strong>이름 변경:</strong> 해당 카테고리의 모든 재고가 자동으로 새 이름으로 변경됩니다.<br/>
+          🗑️ <strong>삭제:</strong> 체크 후 "삭제 적용" 클릭. 해당 재고는 <strong>'기타'</strong> 카테고리로 이동됩니다.
+        </div>
+
+        <div style={{display:"flex",gap:6,justifyContent:"space-between",alignItems:"center",paddingTop:10,borderTop:"1px solid #e5e7eb"}}>
+          <button onClick={()=>setTab("guide")} style={{padding:"6px 10px",fontSize:11,background:"transparent",border:"1px solid #cbd5e1",borderRadius:6,color:"#475569",cursor:"pointer"}}>📖 사용법 보기</button>
+          <div style={{display:"flex",gap:6}}>
+            <button className="btn bs" onClick={onClose}>취소</button>
+            {deletes.size>0 && <button className="btn bd" style={{background:"#dc2626",color:"#fff"}}
+              onClick={()=>onDelete?.(Array.from(deletes))}>🗑️ 삭제 적용 ({deletes.size})</button>}
+            <button className="btn bp" disabled={!dirty} style={{opacity:dirty?1:0.5}}
+              onClick={()=>onSave({add,renames})}>
+              💾 변경 저장 {dirty && `(${(add.trim()?1:0)+Object.keys(renames).filter(k=>renames[k]!==k && renames[k]?.trim()).length}건)`}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {tab === "guide" && <LocationCategoryGuide kind="category"/>}
   </Modal>;
+}
+
+// ─── 사용법 가이드 (위치/카테고리 공통) ──────────────────────────
+function LocationCategoryGuide({ kind }) {
+  const isLoc = kind === "location";
+  const term = isLoc ? "위치" : "카테고리";
+  const examples = isLoc
+    ? ["수장고 A-1", "수장고 B-2", "본관 1층 사무실 책장", "매점 카운터", "체험관 도구함", "양떼정원 사료창고"]
+    : ["조명/전기", "청소용품", "안전장비", "의약품/응급", "사무용품", "농기구", "체험키트"];
+  return (
+    <div style={{display:"grid",gap:14,fontSize:12,color:"#334155",lineHeight:1.6}}>
+      <Section icon="🎯" title={`${term} 관리란?`} body={
+        isLoc
+          ? "박물관 전체에 흩어진 재고의 **보관 위치**를 체계적으로 관리합니다. 구역별 사진/평면도와 연동되어 어디에 무엇이 있는지 한눈에 파악할 수 있습니다."
+          : "재고를 **종류별로 분류**합니다. 카테고리는 검색·필터·통계·예산 분석에 모두 활용됩니다."
+      }/>
+
+      <Section icon="➕" title={`${term} 추가`} body={
+        <>
+          <ol style={{paddingLeft:18,margin:0}}>
+            <li>상단 입력란에 새 {term}명 입력</li>
+            <li><strong>＋ 추가</strong> 버튼 클릭 (또는 하단 💾 변경 저장)</li>
+            <li>즉시 모든 재고 등록/수정 폼에서 선택 가능</li>
+          </ol>
+          <div style={{marginTop:6,padding:8,background:"#f1f5f9",borderRadius:6,fontSize:11}}>
+            <strong>좋은 이름 예시:</strong>
+            <div style={{marginTop:4,display:"flex",gap:4,flexWrap:"wrap"}}>
+              {examples.map(e => <span key={e} style={{padding:"3px 8px",background:"#fff",border:"1px solid #cbd5e1",borderRadius:4,fontSize:10,fontWeight:600}}>{e}</span>)}
+            </div>
+          </div>
+        </>
+      }/>
+
+      <Section icon="✏️" title={`${term} 수정 (이름 변경)`} body={
+        <>
+          <ol style={{paddingLeft:18,margin:0}}>
+            <li>목록에서 해당 {term} 행의 <strong>"새 이름"</strong> 칸 수정</li>
+            <li>변경된 행은 <span style={{background:"#fffbeb",padding:"1px 5px",borderRadius:3,fontSize:10}}>노란색</span>으로 강조됩니다</li>
+            <li>하단 <strong>💾 변경 저장</strong> 클릭</li>
+            <li>해당 {term}을 사용 중인 모든 재고가 자동으로 새 이름으로 갱신됩니다</li>
+          </ol>
+          <div style={{marginTop:6,padding:8,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:6,fontSize:11,color:"#92400e"}}>
+            ⚠️ 영향: "{term} 이름" 뿐 아니라 <strong>그 {term}을 가진 모든 제품의 정보</strong>가 한 번에 갱신됩니다. 신중히 진행하세요.
+          </div>
+        </>
+      }/>
+
+      <Section icon="🗑️" title={`${term} 삭제`} body={
+        <>
+          <ol style={{paddingLeft:18,margin:0}}>
+            <li>목록에서 삭제할 {term} 좌측 <strong>체크박스</strong> 클릭</li>
+            <li>여러 개 동시 선택 가능</li>
+            <li>{isLoc ? <>하단 <strong>💾 변경 저장</strong> 클릭</> : <>하단 <strong>🗑️ 삭제 적용</strong> 클릭</>}</li>
+            <li>{isLoc
+              ? <>해당 {term}의 재고는 <strong>'미지정'</strong>으로 이동, 필터에서 숨김</>
+              : <>해당 {term}의 재고는 <strong>'기타'</strong>로 변경</>}</li>
+          </ol>
+          <div style={{marginTop:6,padding:8,background:"#fee2e2",border:"1px solid #fecaca",borderRadius:6,fontSize:11,color:"#991b1b"}}>
+            ⚠️ 기본 {term}은 영구 삭제되지 않고 <strong>숨김 처리</strong>만 됩니다 (재표시 가능). 커스텀 {term}은 완전 삭제됩니다.
+          </div>
+        </>
+      }/>
+
+      <Section icon="🔍" title="유형(기본/커스텀) 차이" body={
+        <ul style={{paddingLeft:18,margin:0}}>
+          <li><strong>기본</strong>: 시스템 사전 정의 {term}. 삭제 시 숨김 처리만 (재고 안전)</li>
+          <li><strong>커스텀</strong>: 사용자가 직접 추가한 {term}. 삭제 시 완전 제거</li>
+        </ul>
+      }/>
+
+      <Section icon="📊" title="사용중 컬럼" body={
+        <>현재 그 {term}을 사용하는 <strong>제품 개수</strong>를 표시합니다.
+        삭제 전에 영향 범위를 미리 확인할 수 있습니다.</>
+      }/>
+
+      {isLoc && (
+        <Section icon="🗺️" title="구역(zone)과의 차이" body={
+          <ul style={{paddingLeft:18,margin:0}}>
+            <li><strong>구역 (zone)</strong>: 위성지도에 표시되는 큰 영역 (예: 수장고, 본관, 매점)</li>
+            <li><strong>위치 (location)</strong>: 구역 내부의 세부 보관 지점 (예: 수장고 A-1, 본관 책장 3번)</li>
+            <li>두 개념이 다른 곳에서 관리되며, 구역 추가는 통합지도 → 구역 그리기로 합니다</li>
+          </ul>
+        }/>
+      )}
+
+      {!isLoc && (
+        <Section icon="💡" title="카테고리 활용 팁" body={
+          <ul style={{paddingLeft:18,margin:0}}>
+            <li><strong>예산 분석</strong>: 카테고리별로 발주 금액 집계 가능</li>
+            <li><strong>적정재고 알림</strong>: 카테고리별로 재고 부족 알림 받기</li>
+            <li><strong>품의서 그룹핑</strong>: 같은 카테고리는 한 품의서로 묶어 신청 가능</li>
+            <li>너무 세분화하면 관리가 복잡해집니다. <strong>10~20개 정도</strong>가 적정</li>
+          </ul>
+        }/>
+      )}
+    </div>
+  );
+}
+
+function Section({ icon, title, body }) {
+  return (
+    <div style={{padding:12,background:"#fff",border:"1px solid #e5e7eb",borderRadius:8}}>
+      <div style={{fontSize:13,fontWeight:800,color:"#0f172a",marginBottom:6,display:"flex",alignItems:"center",gap:6}}>
+        <span style={{fontSize:18}}>{icon}</span>
+        <span>{title}</span>
+      </div>
+      <div style={{fontSize:12,color:"#475569"}}>{body}</div>
+    </div>
+  );
 }
 
 function BatchAddModal({cats,locs,storageSections,onAdd,onClose}){
