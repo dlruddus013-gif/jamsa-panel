@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { PanoramaAddonPage, draftObjectsToMarkers } from "./panorama-addon.jsx";
+import { useAutoSafetyHazards, useAutoHazardNotifications, SOURCE_META, SEVERITY_META } from "./safety-auto-detect.jsx";
 // 자동 초기화: cctv.thejamsa.com을 기본 백엔드로 설정
 try {
   if (typeof window !== 'undefined' && window.localStorage) {
@@ -5706,6 +5707,17 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
     return [...officialAlerts, ...derived];
   }, [weather]);
   const affectedZoneIds = useMemo(() => alertAffectedZones(weatherAlerts, ZONES.map(z=>z.id)), [weatherAlerts]);
+
+  // 다른 모듈(SafetyModule)이 읽을 수 있게 window에 노출
+  useEffect(() => {
+    window.__jamsa_weather = {
+      weather, weatherAlerts, affectedZoneIds: Array.from(affectedZoneIds || []),
+      fetchedAt: weather?.fetchedAt || null,
+    };
+    window.dispatchEvent(new CustomEvent("jamsa-weather-update", {
+      detail: window.__jamsa_weather,
+    }));
+  }, [weather, weatherAlerts, affectedZoneIds]);
   const [rfidTags,setRfidTags]=useState({});
   const [rfidScans,setRfidScans]=useState([]);
   const mapWrap=useRef(null);
@@ -14267,12 +14279,172 @@ function MonthlyReportCard({ report, setReport, generating, setGenerating, hazar
   );
 }
 
-function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction }) {
+// ========== 🚨 자동 감지 패널 (날씨/CCTV/업무일지 통합) ==========
+function AutoDetectionPanel({ activeHazards, allHazards, facilities, onCreateAction }) {
+  const [expanded, setExpanded] = useState(true);
+  const recentClosed = allHazards.filter(h => h.status === "closed").slice(0, 3);
+  const sevCounts = activeHazards.reduce((acc, h) => {
+    acc[h.severity] = (acc[h.severity] || 0) + 1; return acc;
+  }, {});
+  const sourceCounts = activeHazards.reduce((acc, h) => {
+    acc[h.source] = (acc[h.source] || 0) + 1; return acc;
+  }, {});
+
+  if (activeHazards.length === 0 && recentClosed.length === 0) {
+    return (
+      <div style={{padding:14,background:"linear-gradient(135deg,#f0fdf4,#dcfce7)",border:"1px solid #86efac",borderRadius:12}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:22}}>✅</span>
+          <div style={{flex:1}}>
+            <div style={{fontSize:13,fontWeight:800,color:"#065f46"}}>🤖 자동 감지 시스템 — 정상</div>
+            <div style={{fontSize:11,color:"#047857",marginTop:2}}>날씨 · CCTV · 업무일지에서 위험 신호 없음. 시스템이 백그라운드에서 계속 모니터링 중입니다.</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{background:"#fff",border:"2px solid "+(activeHazards.length>0?"#fca5a5":"#bbf7d0"),borderRadius:12,overflow:"hidden"}}>
+      {/* 헤더 */}
+      <div style={{padding:"12px 16px",background:activeHazards.length>0?"linear-gradient(135deg,#fee2e2,#fef3c7)":"#f0fdf4",borderBottom:"1px solid #e5e7eb",display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer"}}
+        onClick={()=>setExpanded(v=>!v)}>
+        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <span style={{fontSize:22}}>🚨</span>
+          <div>
+            <div style={{fontSize:14,fontWeight:900,color:"#0f172a"}}>
+              자동 감지 시스템 — 활성 {activeHazards.length}건
+            </div>
+            <div style={{fontSize:10,color:"#475569",marginTop:2,display:"flex",gap:8,flexWrap:"wrap"}}>
+              {Object.entries(sourceCounts).map(([s,n]) => (
+                <span key={s} style={{padding:"1px 6px",background:SOURCE_META[s]?.color+"22",color:SOURCE_META[s]?.color,borderRadius:4,fontWeight:700}}>
+                  {SOURCE_META[s]?.icon} {SOURCE_META[s]?.label} {n}
+                </span>
+              ))}
+              {Object.entries(sevCounts).map(([sev,n]) => (
+                <span key={sev} style={{padding:"1px 6px",background:SEVERITY_META[sev]?.bg,color:SEVERITY_META[sev]?.color,borderRadius:4,fontWeight:700}}>
+                  {SEVERITY_META[sev]?.label} {n}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+        <button style={{background:"none",border:"none",fontSize:18,color:"#64748b",cursor:"pointer"}}>{expanded?"▼":"▶"}</button>
+      </div>
+
+      {expanded && (
+        <div style={{padding:"10px 14px"}}>
+          {/* 활성 위험 */}
+          {activeHazards.length > 0 && (
+            <div style={{marginBottom:recentClosed.length>0?12:0}}>
+              <div style={{fontSize:11,fontWeight:800,color:"#475569",marginBottom:6}}>🔴 활성 위험 ({activeHazards.length})</div>
+              <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:300,overflowY:"auto"}}>
+                {activeHazards.map(h => {
+                  const fac = facilities.find(f => f.id === h.facId);
+                  const sm = SOURCE_META[h.source] || SOURCE_META.manual;
+                  const sev = SEVERITY_META[h.severity] || SEVERITY_META.MEDIUM;
+                  return (
+                    <div key={h.id} style={{padding:10,background:sev.bg,borderLeft:`4px solid ${sev.color}`,borderRadius:6}}>
+                      <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
+                        <span style={{fontSize:16}}>{sm.icon}</span>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:12,fontWeight:800,color:sev.color}}>
+                            {h.title}
+                            <span style={{marginLeft:6,padding:"1px 5px",background:"#fff",borderRadius:4,fontSize:9,fontWeight:700,color:sev.color}}>{sev.label}</span>
+                            {fac && <span style={{marginLeft:6,padding:"1px 5px",background:"#fff",borderRadius:4,fontSize:9,fontWeight:600,color:"#475569"}}>📍 {fac.name}</span>}
+                          </div>
+                          <div style={{fontSize:10,color:"#64748b",marginTop:3}}>{h.desc}</div>
+                          {h.recommendedActions?.length > 0 && (
+                            <div style={{marginTop:4,padding:6,background:"#fff",borderRadius:4,fontSize:10}}>
+                              <div style={{fontWeight:700,color:"#475569",marginBottom:2}}>💡 권장 조치:</div>
+                              <ul style={{margin:0,paddingLeft:16,color:"#475569"}}>
+                                {h.recommendedActions.map((a,i) => <li key={i}>{a}</li>)}
+                              </ul>
+                            </div>
+                          )}
+                          <div style={{fontSize:9,color:"#94a3b8",marginTop:4}}>{new Date(h.detectedAt).toLocaleString("ko-KR")} 감지</div>
+                        </div>
+                        {onCreateAction && (
+                          <button onClick={()=>onCreateAction(h)}
+                            style={{padding:"5px 10px",fontSize:10,background:sev.color,color:"#fff",border:"none",borderRadius:5,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
+                            보완조치 등록
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* 최근 자동 해소 */}
+          {recentClosed.length > 0 && (
+            <div>
+              <div style={{fontSize:11,fontWeight:800,color:"#475569",marginBottom:6}}>✅ 최근 자동 해소</div>
+              <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                {recentClosed.map(h => {
+                  const sm = SOURCE_META[h.source] || SOURCE_META.manual;
+                  return (
+                    <div key={h.id} style={{padding:"6px 10px",background:"#f0fdf4",borderRadius:5,fontSize:11,color:"#047857",display:"flex",alignItems:"center",gap:6}}>
+                      <span>{sm.icon}</span>
+                      <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{h.title}</span>
+                      <span style={{fontSize:9,color:"#065f46",fontWeight:700}}>{h.closedReason}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div style={{marginTop:10,padding:8,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:6,fontSize:10,color:"#1e40af"}}>
+            💡 <strong>자동 감지 동작 방식:</strong> 날씨 경보·CCTV AI 분석·업무일지 키워드를 실시간 모니터링하여 위험을 자동 감지합니다. 조건이 해소되면 자동으로 closed 처리됩니다.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction, worklogs = [] }) {
   const user = userCtx;
   const [page, setPage] = useState("dashboard");
   const [trainings, setTrainings] = useState(FAC_INIT_SAFE_TRAININGS);
   const [inspections, setInspections] = useState(FAC_INIT_SAFE_INSPECTIONS);
   const [aiLog, setAiLog] = useState([]); // registered AI diagnoses
+
+  // 🌦️ 다른 모듈(InventoryModule)이 노출한 날씨 상태를 구독
+  const [externalWeather, setExternalWeather] = useState(() => window.__jamsa_weather || { weatherAlerts:[], affectedZoneIds:[] });
+  useEffect(() => {
+    const handler = (e) => setExternalWeather(e.detail);
+    window.addEventListener("jamsa-weather-update", handler);
+    // 마운트 시 최신 값 반영
+    if (window.__jamsa_weather) setExternalWeather(window.__jamsa_weather);
+    return () => window.removeEventListener("jamsa-weather-update", handler);
+  }, []);
+
+  // 📹 CCTV 감지 결과 (window.__jamsa_cctv_detections — cctv 모듈에서 push)
+  const [cctvDetections, setCctvDetections] = useState(() => window.__jamsa_cctv_detections || []);
+  useEffect(() => {
+    const handler = (e) => setCctvDetections(e.detail || []);
+    window.addEventListener("jamsa-cctv-detection", handler);
+    return () => window.removeEventListener("jamsa-cctv-detection", handler);
+  }, []);
+
+  // 🚨 통합 자동감지된 위험
+  const autoHazards = useAutoSafetyHazards({
+    weatherAlerts: externalWeather.weatherAlerts || [],
+    weatherAffectedFacIds: externalWeather.affectedZoneIds || [],
+    cctvDetections,
+    workLogs: worklogs,
+    facilities,
+  });
+  const activeAutoHazards = useMemo(() => autoHazards.filter(h => h.status === "active"), [autoHazards]);
+
+  // 새 자동감지 시 알림 (history 추가는 InventoryModule이 함 — 여기는 토스트만)
+  useAutoHazardNotifications(autoHazards, (act, target, det) => {
+    if (window.__addHistory) window.__addHistory(act, target, det, 0);
+  });
   const [sigs, setSigs] = useState({ assessor: null, safeMgr: null, approver: null });
   const [showTrainingModal, setShowTrainingModal] = useState(false);
 
@@ -14443,6 +14615,21 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction }) {
 
         {page === "dashboard" && (
           <div className="space-y-6">
+            {/* 🚨 자동 감지 패널 (날씨/CCTV/업무일지) */}
+            <AutoDetectionPanel activeHazards={activeAutoHazards} allHazards={autoHazards}
+              facilities={facilities}
+              onCreateAction={(h) => {
+                if (!onAddFacAction) return;
+                onAddFacAction({
+                  title: `[자동감지·${SOURCE_META[h.source]?.label}] ${h.title}`,
+                  facId: h.facId,
+                  priority: h.severity === "URGENT" ? "high" : h.severity === "HIGH" ? "high" : "medium",
+                  source: `auto_${h.source}`,
+                  createdBy: user?.name || "자동감지",
+                  memo: h.desc + "\n권장 조치: " + (h.recommendedActions||[]).join(", "),
+                });
+                alert(`✅ 보완조치 등록: ${h.title}`);
+              }}/>
             {/* 월간 리포트 자동 생성 */}
             <MonthlyReportCard
               report={monthlyReport}
@@ -14572,18 +14759,21 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction }) {
               🗺️ <strong>구역별 위험지도</strong> — 시설 전체를 구역별로 나누고 위험도를 색상으로 표시합니다.
             </div>
             {(() => {
-              // AI 위험성 평가 로그 기반 구역별 위험도 집계
+              // AI 위험성 평가 로그 + 자동감지된 위험 기반 구역별 위험도 집계
               const zoneRisks = {};
-              aiLog.forEach(log => {
-                const facId = log.facId || "etc";
+              const zoneSources = {}; // facId → Set of sources
+              const addRisk = (facId, sev, source) => {
                 if (!zoneRisks[facId]) zoneRisks[facId] = { count: 0, urgent: 0, high: 0, medium: 0, low: 0 };
+                if (!zoneSources[facId]) zoneSources[facId] = new Set();
                 zoneRisks[facId].count++;
-                const sev = log.result?.severity;
                 if (sev === "URGENT") zoneRisks[facId].urgent++;
                 else if (sev === "HIGH") zoneRisks[facId].high++;
                 else if (sev === "MEDIUM") zoneRisks[facId].medium++;
                 else zoneRisks[facId].low++;
-              });
+                if (source) zoneSources[facId].add(source);
+              };
+              aiLog.forEach(log => addRisk(log.facId || "etc", log.result?.severity, "manual"));
+              activeAutoHazards.forEach(h => addRisk(h.facId, h.severity, h.source));
               return (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                   {facilities.map(f => {
@@ -14609,6 +14799,15 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction }) {
                           {r.medium > 0 && <div>🟡 보통 {r.medium}건</div>}
                           {r.low > 0 && <div>🟢 낮음 {r.low}건</div>}
                         </div>
+                        {zoneSources[f.id] && zoneSources[f.id].size > 0 && (
+                          <div className="flex gap-1 mt-2 flex-wrap">
+                            {[...zoneSources[f.id]].filter(s=>s!=="manual").map(src => (
+                              <span key={src} style={{fontSize:9,padding:"1px 5px",background:SOURCE_META[src]?.color+"22",color:SOURCE_META[src]?.color,borderRadius:4,fontWeight:700}}>
+                                {SOURCE_META[src]?.icon} 자동
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -22311,7 +22510,7 @@ function AppInner() {
         {module === "home"      && <IntegratedHomeDashboard userCtx={facUser} facActions={facActions} worklogs={worklogs} auditLog={auditLog} onNavigate={(m)=>setModule(m)} onAddFacAction={addFacAction} />}
         {module === "facility"  && <FacilityModule  userCtx={facUser} onLogout={logout} inspections={facInspections} setInspections={setFacInspections} actions={facActions} setActions={setFacActions} addAudit={addAudit} updateFacAction={updateFacAction} />}
         {module === "inventory" && <InventoryModule userCtx={invUser} onLogout={logout} onAddFacAction={addFacAction} switchToFacility={() => setModule("facility")} facActions={facActions} addAudit={addAudit} />}
-        {module === "safety"    && <SafetyModule userCtx={facUser} onLogout={logout} facilities={FAC_FACILITIES} onAddFacAction={addFacAction} addAudit={addAudit} />}
+        {module === "safety"    && <SafetyModule userCtx={facUser} onLogout={logout} facilities={FAC_FACILITIES} onAddFacAction={addFacAction} addAudit={addAudit} worklogs={worklogs} />}
       </div>
       {showAuditLog && <AuditLogModal log={auditLog} onClose={() => setShowAuditLog(false)} />}
       {showWorklog && <WorklogPage onClose={() => setShowWorklog(false)} addAudit={addAudit} facActions={facActions} worklogs={worklogs} setWorklogs={setWorklogs} currentUser={currentUser} />}
