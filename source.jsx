@@ -6959,7 +6959,22 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
       {modal?.type==="in"&&<SMdl type="in" p={modal.p} locs={invLocs} onSubmit={doIn} onClose={()=>setModal(null)}/>}
       {modal?.type==="out"&&<SMdl type="out" p={modal.p} locs={invLocs} onSubmit={doOut} onClose={()=>setModal(null)}/>}
       {modal?.type==="adj"&&<SMdl type="adj" p={modal.p} locs={invLocs} onSubmit={doAdj} onClose={()=>setModal(null)}/>}
-      {modal?.type==="edit"&&<EMdl p={modal.p} cats={invCats} locs={invLocs} storageSections={storageSections} onSave={d=>{setProds(pr=>pr.map(x=>{if(x.id!==d.id)return x;const moved=x.loc!==d.loc;let locs={...(x.locs||{})};if(moved){const q=x.qty||0;delete locs[x.loc];locs[d.loc]=q;}return{...x,...d,locs};}));addH("수정",d.name,"수정",0);setModal(null);}} onClose={()=>setModal(null)}/>}
+      {modal?.type==="edit"&&<EMdl p={modal.p} cats={invCats} locs={invLocs} storageSections={storageSections} onSave={d=>{
+        setProds(pr=>pr.map(x=>{
+          if (x.id !== d.id) return x;
+          // 🔧 위치 변경 시 locs 분포 맵도 함께 마이그레이션 (zone 필터 버그 해결)
+          let newLocs = {...(x.locs || {})};
+          if (d.loc && d.loc !== x.loc) {
+            const movingQty = newLocs[x.loc] != null ? newLocs[x.loc] : (x.qty || 0);
+            delete newLocs[x.loc];
+            newLocs[d.loc] = (newLocs[d.loc] || 0) + movingQty;
+            addH("위치이동", d.name, `${x.loc} → ${d.loc} (${movingQty}${x.unit||"개"})`, movingQty);
+          }
+          return { ...x, ...d, locs: newLocs };
+        }));
+        addH("수정",d.name,"수정",0);
+        setModal(null);
+      }} onClose={()=>setModal(null)}/>}
       {modal?.type==="qr"&&<QRModal p={modal.p} onClose={()=>setModal(null)}/>}
       {modal?.type==="qrBatch"&&<QRBatchPrintModal prods={modal.prods} onClose={()=>setModal(null)}/>}
       {modal?.type==="reqPayments"&&<ReqPaymentsModal
@@ -15649,9 +15664,22 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction, worklogs 
           {page === "annual" && "📈 연간 안전 통계"}
         </div>
 
-        {page === "calendar" && (
-          <SafetyCalendarPage facilities={facilities} curUser={user} weatherAlerts={externalWeather.weatherAlerts || []}/>
-        )}
+        {page === "calendar" && (() => {
+          let _prods = [];
+          let _zonePhotos = {};
+          try {
+            _prods = JSON.parse(localStorage.getItem("jamsa_inv_prods") || "[]");
+            _zonePhotos = JSON.parse(localStorage.getItem("jamsa_zone_photos") || "{}");
+          } catch (e) {}
+          return <SafetyCalendarPage
+            facilities={facilities} curUser={user}
+            weatherAlerts={externalWeather.weatherAlerts || []}
+            weatherHourly={externalWeather.weather?.hourly || []}
+            prods={_prods}
+            worklogs={worklogs}
+            cctvDetections={cctvDetections}
+            zonePhotos={_zonePhotos}/>;
+        })()}
 
         {page === "insurance" && (
           <InsuranceManagementPage incidents={incidents} facilities={facilities} curUser={user}/>
