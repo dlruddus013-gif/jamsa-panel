@@ -10518,8 +10518,10 @@ function WarehouseModelingModal({ zoneStatus, onClose }) {
   const zoneId = zone.id || "warehouse";
   const inventory = zoneStatus?.zoneInv || [];
   const saved = loadWarehouseModels()[zoneId] || {};
-  const [photo, setPhoto] = useState(saved.photo || "");
+  const initialPhotos = Array.isArray(saved.photos) ? saved.photos : (saved.photo ? [{ id: "legacy-photo", name: "기존 사진", src: saved.photo }] : []);
+  const [photos, setPhotos] = useState(initialPhotos);
   const [tab, setTab] = useState("image");
+  const [viewStyle, setViewStyle] = useState(saved.viewStyle || "floor");
   const [layout, setLayout] = useState(saved.layout || { width: 12, depth: 8, height: 3.2, racks: 4, levels: 3, aisle: 1.4, mode: "FIFO", memo: "" });
   const [placements, setPlacements] = useState(saved.placements || inventory.slice(0, 24).map((p, i) => ({
     id: p.id || `${p.name}-${i}`,
@@ -10530,21 +10532,48 @@ function WarehouseModelingModal({ zoneStatus, onClose }) {
     y: 15 + Math.floor(i / 6) * 18,
     shelf: `R${(i % 4) + 1}-${(i % 3) + 1}`,
   })));
+  const [selectedPlacementId, setSelectedPlacementId] = useState(String((saved.placements || [])[0]?.id || placements[0]?.id || ""));
+  const photo = photos[0]?.src || "";
+  const selectedPlacement = placements.find(p => String(p.id) === String(selectedPlacementId)) || placements[0] || null;
   const totalQty = inventory.reduce((s, p) => s + Number(p.qty || 0), 0);
   const lowStock = inventory.filter(p => Number(p.qty || 0) > 0 && Number(p.qty || 0) < 5);
   const density = Math.min(99, Math.round((inventory.length / Math.max(1, Number(layout.racks || 1) * Number(layout.levels || 1) * 2)) * 100));
   const status = lowStock.length ? "보충 필요" : density > 80 ? "과밀" : "정상";
+  const styleOptions = [
+    ["floor", "종합 평면도", "출입구, 통로, 선반 기준으로 위치를 가장 정확히 찍습니다."],
+    ["panorama", "파노라마", "좌/중/우 사진을 이어 붙여 긴 벽면과 선반 라인을 봅니다."],
+    ["board", "사진 보드", "여러 각도 사진을 한 화면에 모아 증빙용으로 정리합니다."],
+    ["photo", "단일 사진", "대표 사진 1장 위에 바로 물건 위치를 표시합니다."],
+  ];
   const patchLayout = (key, value) => setLayout(prev => ({ ...prev, [key]: value }));
-  const pickPhoto = (file) => {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => setPhoto(String(reader.result || ""));
-    reader.readAsDataURL(file);
+  const clampPct = value => Math.min(97, Math.max(3, Number(value) || 0));
+  const pickPhotos = (fileList) => {
+    const files = Array.from(fileList || []).filter(file => file.type.startsWith("image/"));
+    files.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = () => setPhotos(prev => [...prev, { id: `photo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, name: file.name, src: String(reader.result || "") }]);
+      reader.readAsDataURL(file);
+    });
+  };
+  const removePhoto = (id) => setPhotos(prev => prev.filter(p => p.id !== id));
+  const updatePlacement = (id, patch) => setPlacements(prev => prev.map(p => String(p.id) === String(id) ? { ...p, ...patch } : p));
+  const selectPlacement = (id) => setSelectedPlacementId(String(id));
+  const placeSelectedFromClick = (e) => {
+    if (!selectedPlacement) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    updatePlacement(selectedPlacement.id, {
+      x: clampPct(((e.clientX - rect.left) / Math.max(1, rect.width)) * 100),
+      y: clampPct(((e.clientY - rect.top) / Math.max(1, rect.height)) * 100),
+    });
+  };
+  const nudgeSelected = (dx, dy) => {
+    if (!selectedPlacement) return;
+    updatePlacement(selectedPlacement.id, { x: clampPct(Number(selectedPlacement.x || 0) + dx), y: clampPct(Number(selectedPlacement.y || 0) + dy) });
   };
   const autoPlace = () => {
     const racks = Math.max(1, Number(layout.racks || 1));
     const levels = Math.max(1, Number(layout.levels || 1));
-    setPlacements(inventory.slice(0, 36).map((p, i) => ({
+    const next = inventory.slice(0, 36).map((p, i) => ({
       id: p.id || `${p.name}-${i}`,
       name: p.name,
       qty: Number(p.qty || 0),
@@ -10552,46 +10581,71 @@ function WarehouseModelingModal({ zoneStatus, onClose }) {
       x: 7 + (i % 6) * 14,
       y: 13 + Math.floor(i / 6) * 14,
       shelf: `R${(i % racks) + 1}-${(Math.floor(i / racks) % levels) + 1}`,
-    })));
+    }));
+    setPlacements(next);
+    setSelectedPlacementId(String(next[0]?.id || ""));
   };
   const saveModel = () => {
     const all = loadWarehouseModels();
-    all[zoneId] = { zoneId, zoneName: zone.name, photo, layout, placements, savedAt: new Date().toISOString() };
+    all[zoneId] = { zoneId, zoneName: zone.name, photo, photos, viewStyle, layout, placements, savedAt: new Date().toISOString() };
     saveWarehouseModels(all);
     alert("창고 이미지/3D 모델링이 저장되었습니다.");
+  };
+  const drawPhotoBackdrop = async (ctx, x, y, w, h) => {
+    const load = (src) => new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = src;
+    });
+    const imgs = (await Promise.all(photos.slice(0, 6).map(p => load(p.src)))).filter(Boolean);
+    if (!imgs.length) return;
+    ctx.save();
+    ctx.globalAlpha = .36;
+    if (viewStyle === "panorama") {
+      imgs.forEach((img, i) => {
+        const cellW = w / imgs.length;
+        const s = Math.max(cellW / img.width, h / img.height);
+        ctx.drawImage(img, x + i * cellW + (cellW - img.width * s) / 2, y + (h - img.height * s) / 2, img.width * s, img.height * s);
+      });
+    } else if (viewStyle === "board") {
+      const cols = imgs.length > 2 ? 3 : imgs.length;
+      const rows = Math.ceil(imgs.length / cols);
+      imgs.forEach((img, i) => {
+        const cellW = w / cols, cellH = h / rows;
+        const cx = x + (i % cols) * cellW, cy = y + Math.floor(i / cols) * cellH;
+        const s = Math.max(cellW / img.width, cellH / img.height);
+        ctx.drawImage(img, cx + (cellW - img.width * s) / 2, cy + (cellH - img.height * s) / 2, img.width * s, img.height * s);
+      });
+    } else {
+      const img = imgs[0];
+      const s = Math.max(w / img.width, h / img.height);
+      ctx.drawImage(img, x + (w - img.width * s) / 2, y + (h - img.height * s) / 2, img.width * s, img.height * s);
+    }
+    ctx.restore();
   };
   const exportPng = async () => {
     const canvas = document.createElement("canvas");
     canvas.width = 1200; canvas.height = 800;
     const ctx = canvas.getContext("2d");
     ctx.fillStyle = "#f8fafc"; ctx.fillRect(0, 0, 1200, 800);
-    if (photo) await new Promise(resolve => {
-      const img = new Image();
-      img.onload = () => {
-        const s = Math.max(1200 / img.width, 800 / img.height);
-        ctx.globalAlpha = .34;
-        ctx.drawImage(img, (1200 - img.width * s) / 2, (800 - img.height * s) / 2, img.width * s, img.height * s);
-        ctx.globalAlpha = 1;
-        resolve();
-      };
-      img.onerror = resolve;
-      img.src = photo;
-    });
-    ctx.fillStyle = "rgba(255,255,255,.9)"; ctx.fillRect(40, 40, 1120, 720);
+    ctx.fillStyle = "rgba(255,255,255,.96)"; ctx.fillRect(40, 40, 1120, 720);
     ctx.strokeStyle = "#0f172a"; ctx.lineWidth = 3; ctx.strokeRect(40, 40, 1120, 720);
     ctx.fillStyle = "#0f172a"; ctx.font = "bold 34px sans-serif"; ctx.fillText(`${zone.name || "창고"} 재고 배치 상세 이미지`, 72, 92);
-    ctx.font = "18px sans-serif"; ctx.fillStyle = "#475569"; ctx.fillText(`${layout.width}m x ${layout.depth}m x ${layout.height}m · 선반 ${layout.racks}열/${layout.levels}단 · ${layout.mode}`, 72, 124);
+    ctx.font = "18px sans-serif"; ctx.fillStyle = "#475569"; ctx.fillText(`${layout.width}m x ${layout.depth}m x ${layout.height}m · 선반 ${layout.racks}열/${layout.levels}단 · ${layout.mode} · ${styleOptions.find(s => s[0] === viewStyle)?.[1] || "평면도"}`, 72, 124);
     const x = 72, y = 160, w = 780, h = 520;
-    ctx.fillStyle = "#e2e8f0"; ctx.fillRect(x, y, w, h); ctx.strokeStyle = "#94a3b8"; ctx.strokeRect(x, y, w, h);
+    ctx.fillStyle = "#e2e8f0"; ctx.fillRect(x, y, w, h);
+    await drawPhotoBackdrop(ctx, x, y, w, h);
+    ctx.strokeStyle = "#94a3b8"; ctx.strokeRect(x, y, w, h);
     for (let r = 0; r < Number(layout.racks || 1); r++) {
       const rw = w / Math.max(1, Number(layout.racks || 1));
-      ctx.fillStyle = r % 2 ? "#cbd5e1" : "#dbeafe";
+      ctx.fillStyle = r % 2 ? "rgba(203,213,225,.82)" : "rgba(191,219,254,.82)";
       ctx.fillRect(x + r * rw + 12, y + 28, rw - 24, h - 56);
       ctx.fillStyle = "#334155"; ctx.font = "bold 15px sans-serif"; ctx.fillText(`R${r + 1}`, x + r * rw + 18, y + 50);
     }
     placements.forEach((p, i) => {
-      const px = x + (Math.min(96, Math.max(2, p.x)) / 100) * w;
-      const py = y + (Math.min(94, Math.max(2, p.y)) / 100) * h;
+      const px = x + (clampPct(p.x) / 100) * w;
+      const py = y + (clampPct(p.y) / 100) * h;
       ctx.fillStyle = Number(p.qty) <= 0 ? "#ef4444" : Number(p.qty) < 5 ? "#f59e0b" : "#10b981";
       ctx.fillRect(px - 20, py - 14, 40, 28);
       ctx.fillStyle = "#fff"; ctx.font = "bold 12px sans-serif"; ctx.fillText(String(i + 1), px - 5, py + 4);
@@ -10609,18 +10663,30 @@ function WarehouseModelingModal({ zoneStatus, onClose }) {
     a.download = `jamsa-${zoneId}-warehouse-model.png`;
     a.click();
   };
+  const renderBackdrop = () => {
+    if (viewStyle === "panorama" && photos.length) return photos.map((p, i) => <img key={p.id} src={p.src} alt="" style={{ position:"absolute", left:`${i * (100 / photos.length)}%`, top:0, width:`${100 / photos.length}%`, height:"100%", objectFit:"cover", opacity:.52 }} />);
+    if (viewStyle === "board" && photos.length) return <div style={{ position:"absolute", inset:0, display:"grid", gridTemplateColumns:`repeat(${photos.length > 2 ? 3 : Math.max(1, photos.length)}, 1fr)`, gap:4, opacity:.56 }}>{photos.slice(0, 6).map(p => <img key={p.id} src={p.src} alt="" style={{ width:"100%", height:"100%", objectFit:"cover", minHeight:0 }} />)}</div>;
+    if (photo && viewStyle !== "floor") return <img src={photo} alt="" style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"cover", opacity:.55 }} />;
+    return null;
+  };
 
   return (
     <div onClick={onClose} style={{ position:"fixed", inset:0, zIndex:10400, background:"rgba(15,23,42,.72)", display:"flex", alignItems:"center", justifyContent:"center", padding:18 }}>
-      <div onClick={e=>e.stopPropagation()} style={{ width:1120, maxWidth:"96vw", maxHeight:"92vh", overflow:"auto", background:"#fff", borderRadius:12, boxShadow:"0 24px 80px rgba(0,0,0,.35)" }}>
+      <div onClick={e=>e.stopPropagation()} style={{ width:1180, maxWidth:"96vw", maxHeight:"92vh", overflow:"auto", background:"#fff", borderRadius:12, boxShadow:"0 24px 80px rgba(0,0,0,.35)" }}>
         <div style={{ padding:"16px 20px", borderBottom:"1px solid #e5e7eb", display:"flex", justifyContent:"space-between", gap:12, alignItems:"center" }}>
-          <div><div style={{ fontSize:18, fontWeight:900, color:"#0f172a" }}>{zone.name || "창고"} 실제 이미지/3D 재고 모델링</div><div style={{ fontSize:12, color:"#64748b", marginTop:3 }}>현장 사진 위 재고 배치, 3D 선반 시뮬레이션, 저장용 PNG 생성을 지원합니다.</div></div>
+          <div><div style={{ fontSize:18, fontWeight:900, color:"#0f172a" }}>{zone.name || "창고"} 실제 이미지/3D 재고 모델링</div><div style={{ fontSize:12, color:"#64748b", marginTop:3 }}>여러 사진 구성, 평면도식 정밀 배치, 3D 선반 시뮬레이션, 저장용 PNG 생성을 지원합니다.</div></div>
           <button onClick={onClose} style={{ border:"1px solid #cbd5e1", background:"#fff", borderRadius:8, padding:"8px 12px", cursor:"pointer", fontWeight:800 }}>닫기</button>
         </div>
-        <div style={{ display:"grid", gridTemplateColumns:"300px minmax(0,1fr)" }}>
+        <div style={{ display:"grid", gridTemplateColumns:"320px minmax(0,1fr)" }}>
           <aside style={{ padding:16, borderRight:"1px solid #e5e7eb", background:"#f8fafc", display:"grid", gap:12, alignContent:"start" }}>
-            <label style={{ display:"grid", gap:6, fontSize:12, fontWeight:800, color:"#334155" }}>실제 창고 이미지<input type="file" accept="image/*" onChange={e=>pickPhoto(e.target.files?.[0])} style={{ fontSize:12 }} /></label>
-            {photo ? <img src={photo} alt="" style={{ width:"100%", aspectRatio:"4/3", objectFit:"cover", borderRadius:8, border:"1px solid #cbd5e1" }} /> : <div style={{ aspectRatio:"4/3", border:"1px dashed #94a3b8", borderRadius:8, display:"grid", placeItems:"center", color:"#64748b", fontSize:12, background:"#fff" }}>사진 업로드</div>}
+            <label style={{ display:"grid", gap:6, fontSize:12, fontWeight:800, color:"#334155" }}>창고 사진 여러 장<input type="file" multiple accept="image/*" onChange={e=>pickPhotos(e.target.files)} style={{ fontSize:12 }} /></label>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:6 }}>
+              {photos.length ? photos.slice(0, 8).map(p => <button key={p.id} onClick={()=>removePhoto(p.id)} title="클릭하면 제거" style={{ padding:0, border:"1px solid #cbd5e1", borderRadius:7, background:"#fff", overflow:"hidden", cursor:"pointer", position:"relative" }}><img src={p.src} alt="" style={{ width:"100%", aspectRatio:"1/1", objectFit:"cover", display:"block" }} /><span style={{ position:"absolute", right:3, top:2, background:"rgba(15,23,42,.75)", color:"#fff", borderRadius:5, fontSize:9, padding:"1px 4px" }}>삭제</span></button>) : <div style={{ gridColumn:"1/-1", aspectRatio:"4/2", border:"1px dashed #94a3b8", borderRadius:8, display:"grid", placeItems:"center", color:"#64748b", fontSize:12, background:"#fff" }}>좌/중/우, 출입구, 선반별 사진을 올리세요</div>}
+            </div>
+            <div style={{ display:"grid", gap:6 }}>
+              <div style={{ fontSize:12, fontWeight:900, color:"#334155" }}>구성 스타일</div>
+              {styleOptions.map(([k, label, desc]) => <button key={k} onClick={()=>setViewStyle(k)} style={{ textAlign:"left", padding:"8px 10px", borderRadius:8, border:`1px solid ${viewStyle===k ? "#2563eb" : "#cbd5e1"}`, background:viewStyle===k ? "#eff6ff" : "#fff", cursor:"pointer" }}><div style={{ fontSize:12, fontWeight:900, color:viewStyle===k ? "#1d4ed8" : "#0f172a" }}>{label}</div><div style={{ fontSize:10, color:"#64748b", marginTop:2 }}>{desc}</div></button>)}
+            </div>
             <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6 }}>{[["width","가로"],["depth","세로"],["height","높이"]].map(([k,l]) => <label key={k} style={{ fontSize:10, color:"#64748b", fontWeight:800 }}>{l}<input type="number" step="0.1" value={layout[k]} onChange={e=>patchLayout(k, Number(e.target.value || 0))} style={{ width:"100%", marginTop:3, padding:7, border:"1px solid #cbd5e1", borderRadius:6, fontSize:12 }} /></label>)}</div>
             <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6 }}>{[["racks","선반열"],["levels","단수"],["aisle","통로"]].map(([k,l]) => <label key={k} style={{ fontSize:10, color:"#64748b", fontWeight:800 }}>{l}<input type="number" step={k==="aisle" ? "0.1" : "1"} value={layout[k]} onChange={e=>patchLayout(k, Number(e.target.value || 0))} style={{ width:"100%", marginTop:3, padding:7, border:"1px solid #cbd5e1", borderRadius:6, fontSize:12 }} /></label>)}</div>
             <select value={layout.mode} onChange={e=>patchLayout("mode", e.target.value)} style={{ padding:9, border:"1px solid #cbd5e1", borderRadius:8, background:"#fff", fontSize:12 }}><option>FIFO</option><option>카테고리별</option><option>빈도순</option><option>위험물 분리</option></select>
@@ -10631,12 +10697,49 @@ function WarehouseModelingModal({ zoneStatus, onClose }) {
           </aside>
           <main style={{ padding:16 }}>
             <div style={{ display:"flex", gap:8, marginBottom:12, alignItems:"center" }}>
-              {[["image","상세 이미지"],["model","3D 모델"],["table","배치표"]].map(([k,l]) => <button key={k} onClick={()=>setTab(k)} style={{ padding:"8px 12px", borderRadius:8, border:`1px solid ${tab===k ? "#2563eb" : "#cbd5e1"}`, background:tab===k ? "#eff6ff" : "#fff", color:tab===k ? "#1d4ed8" : "#475569", fontSize:12, fontWeight:900, cursor:"pointer" }}>{l}</button>)}
+              {[["image","정밀 배치"],["model","3D 모델"],["table","배치표"]].map(([k,l]) => <button key={k} onClick={()=>setTab(k)} style={{ padding:"8px 12px", borderRadius:8, border:`1px solid ${tab===k ? "#2563eb" : "#cbd5e1"}`, background:tab===k ? "#eff6ff" : "#fff", color:tab===k ? "#1d4ed8" : "#475569", fontSize:12, fontWeight:900, cursor:"pointer" }}>{l}</button>)}
               <div style={{ marginLeft:"auto", fontSize:12, fontWeight:900, color:status==="정상" ? "#059669" : "#dc2626" }}>상태 {status} · 밀도 {density}% · 총 {totalQty.toLocaleString()}개</div>
             </div>
-            {tab === "image" && <div style={{ position:"relative", height:560, border:"1px solid #cbd5e1", borderRadius:10, overflow:"hidden", background:"#e2e8f0" }}>{photo && <img src={photo} alt="" style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"cover", opacity:.55 }} />}<div style={{ position:"absolute", inset:24, background:"rgba(255,255,255,.78)", border:"2px solid #0f172a" }}>{Array.from({ length: Math.max(1, Number(layout.racks || 1)) }).map((_, r) => <div key={r} style={{ position:"absolute", left:`${(r / Math.max(1, layout.racks)) * 100 + 1.2}%`, top:"8%", width:`${Math.max(6, 92 / Math.max(1, layout.racks) - 2)}%`, height:"84%", background:r%2 ? "rgba(148,163,184,.35)" : "rgba(37,99,235,.14)", border:"1px solid rgba(71,85,105,.35)", borderRadius:6 }}><div style={{ padding:6, fontSize:11, fontWeight:900, color:"#334155" }}>R{r+1}</div></div>)}{placements.map((p, i) => <div key={p.id} title={`${p.name} · ${p.qty}개 · ${p.shelf}`} style={{ position:"absolute", left:`${p.x}%`, top:`${p.y}%`, transform:"translate(-50%,-50%)", minWidth:72, maxWidth:120, padding:"5px 7px", borderRadius:6, background:Number(p.qty)<=0 ? "#ef4444" : Number(p.qty)<5 ? "#f59e0b" : "#10b981", color:"#fff", boxShadow:"0 8px 18px rgba(15,23,42,.2)", fontSize:10, fontWeight:900, textAlign:"center" }}><div style={{ whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{i+1}. {p.name}</div><div style={{ fontSize:9, opacity:.86 }}>{p.qty}개 · {p.shelf}</div></div>)}</div></div>}
+            {tab === "image" && <div style={{ display:"grid", gridTemplateColumns:"minmax(0,1fr) 250px", gap:12 }}>
+              <div onClick={placeSelectedFromClick} style={{ position:"relative", height:560, border:"1px solid #cbd5e1", borderRadius:10, overflow:"hidden", background:"#e2e8f0", cursor:selectedPlacement ? "crosshair" : "default" }}>
+                {renderBackdrop()}
+                <div style={{ position:"absolute", inset:24, background:viewStyle==="floor" ? "rgba(255,255,255,.92)" : "rgba(255,255,255,.74)", border:"2px solid #0f172a" }}>
+                  <div style={{ position:"absolute", left:10, top:8, padding:"4px 8px", borderRadius:999, background:"#0f172a", color:"#fff", fontSize:10, fontWeight:900 }}>입구</div>
+                  {Array.from({ length: Math.max(1, Number(layout.racks || 1)) }).map((_, r) => <div key={r} style={{ position:"absolute", left:`${(r / Math.max(1, layout.racks)) * 100 + 1.2}%`, top:"8%", width:`${Math.max(6, 92 / Math.max(1, layout.racks) - 2)}%`, height:"84%", background:r%2 ? "rgba(148,163,184,.35)" : "rgba(37,99,235,.14)", border:"1px solid rgba(71,85,105,.35)", borderRadius:6 }}><div style={{ padding:6, fontSize:11, fontWeight:900, color:"#334155" }}>R{r+1}</div></div>)}
+                  {placements.map((p, i) => {
+                    const selected = String(p.id) === String(selectedPlacement?.id);
+                    return <div key={p.id} onClick={e => { e.stopPropagation(); selectPlacement(p.id); }} title={`${p.name} · ${p.qty}개 · ${p.shelf}`} style={{ position:"absolute", left:`${p.x}%`, top:`${p.y}%`, transform:"translate(-50%,-50%)", minWidth:72, maxWidth:126, padding:"5px 7px", borderRadius:6, border:selected ? "3px solid #111827" : "1px solid rgba(255,255,255,.8)", background:Number(p.qty)<=0 ? "#ef4444" : Number(p.qty)<5 ? "#f59e0b" : "#10b981", color:"#fff", boxShadow:selected ? "0 0 0 4px rgba(37,99,235,.28), 0 8px 18px rgba(15,23,42,.24)" : "0 8px 18px rgba(15,23,42,.2)", fontSize:10, fontWeight:900, textAlign:"center", cursor:"pointer" }}><div style={{ whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{i+1}. {p.name}</div><div style={{ fontSize:9, opacity:.86 }}>{p.qty}개 · {p.shelf}</div></div>;
+                  })}
+                </div>
+              </div>
+              <div style={{ display:"grid", gap:10, alignContent:"start" }}>
+                <div style={{ padding:12, border:"1px solid #cbd5e1", borderRadius:10, background:"#f8fafc" }}>
+                  <div style={{ fontSize:12, fontWeight:900, color:"#0f172a", marginBottom:8 }}>물건 위치 쉽게 설정</div>
+                  <select value={selectedPlacement?.id || ""} onChange={e=>selectPlacement(e.target.value)} style={{ width:"100%", padding:8, border:"1px solid #cbd5e1", borderRadius:8, fontSize:12, background:"#fff" }}>{placements.map((p, i) => <option key={p.id} value={p.id}>{i+1}. {p.name}</option>)}</select>
+                  <div style={{ fontSize:11, color:"#64748b", marginTop:8 }}>품목 선택 후 왼쪽 평면도/사진에서 실제 위치를 클릭하세요.</div>
+                  {selectedPlacement && <div style={{ display:"grid", gap:8, marginTop:10 }}>
+                    <input value={selectedPlacement.shelf || ""} onChange={e=>updatePlacement(selectedPlacement.id, { shelf:e.target.value })} placeholder="예: R2-3, 냉장고 좌측" style={{ padding:8, border:"1px solid #cbd5e1", borderRadius:8, fontSize:12 }} />
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6 }}>
+                      <label style={{ fontSize:10, color:"#64748b", fontWeight:800 }}>X 위치%<input type="number" value={Math.round(selectedPlacement.x || 0)} onChange={e=>updatePlacement(selectedPlacement.id, { x:clampPct(e.target.value) })} style={{ width:"100%", marginTop:3, padding:7, border:"1px solid #cbd5e1", borderRadius:6 }} /></label>
+                      <label style={{ fontSize:10, color:"#64748b", fontWeight:800 }}>Y 위치%<input type="number" value={Math.round(selectedPlacement.y || 0)} onChange={e=>updatePlacement(selectedPlacement.id, { y:clampPct(e.target.value) })} style={{ width:"100%", marginTop:3, padding:7, border:"1px solid #cbd5e1", borderRadius:6 }} /></label>
+                    </div>
+                    <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:5 }}>
+                      <span />
+                      <button onClick={()=>nudgeSelected(0,-1)} style={{ padding:7, border:"1px solid #cbd5e1", borderRadius:7, background:"#fff", cursor:"pointer" }}>↑</button>
+                      <span />
+                      <button onClick={()=>nudgeSelected(-1,0)} style={{ padding:7, border:"1px solid #cbd5e1", borderRadius:7, background:"#fff", cursor:"pointer" }}>←</button>
+                      <button onClick={()=>nudgeSelected(0,1)} style={{ padding:7, border:"1px solid #cbd5e1", borderRadius:7, background:"#fff", cursor:"pointer" }}>↓</button>
+                      <button onClick={()=>nudgeSelected(1,0)} style={{ padding:7, border:"1px solid #cbd5e1", borderRadius:7, background:"#fff", cursor:"pointer" }}>→</button>
+                    </div>
+                  </div>}
+                </div>
+                <div style={{ maxHeight:315, overflow:"auto", display:"grid", gap:6 }}>
+                  {placements.map((p, i) => <button key={p.id} onClick={()=>selectPlacement(p.id)} style={{ textAlign:"left", padding:8, borderRadius:8, border:`1px solid ${String(p.id)===String(selectedPlacement?.id) ? "#2563eb" : "#e5e7eb"}`, background:String(p.id)===String(selectedPlacement?.id) ? "#eff6ff" : "#fff", cursor:"pointer" }}><div style={{ fontSize:12, fontWeight:900, color:"#0f172a", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{i+1}. {p.name}</div><div style={{ fontSize:10, color:"#64748b", marginTop:2 }}>{p.qty}개 · {p.shelf} · X{Math.round(p.x)} / Y{Math.round(p.y)}</div></button>)}
+                </div>
+              </div>
+            </div>}
             {tab === "model" && <div style={{ height:560, border:"1px solid #cbd5e1", borderRadius:10, background:"linear-gradient(#f8fafc,#e2e8f0)", overflow:"hidden", perspective:900, display:"flex", alignItems:"center", justifyContent:"center" }}><div style={{ width:"78%", height:"64%", transform:"rotateX(58deg) rotateZ(-34deg)", transformStyle:"preserve-3d", position:"relative" }}><div style={{ position:"absolute", inset:0, background:"#cbd5e1", border:"3px solid #475569", boxShadow:"30px 30px 35px rgba(15,23,42,.22)" }} />{Array.from({ length: Math.max(1, Number(layout.racks || 1)) }).map((_, r) => <div key={r} style={{ position:"absolute", left:`${8 + r * (82 / Math.max(1, layout.racks))}%`, top:"13%", width:`${Math.max(8, 68 / Math.max(1, layout.racks))}%`, height:"70%", transform:"translateZ(34px)", transformStyle:"preserve-3d" }}>{Array.from({ length: Math.max(1, Number(layout.levels || 1)) }).map((_, l) => <div key={l} style={{ position:"absolute", left:0, right:0, bottom:`${l * 28}px`, height:18, background:"#334155", borderRadius:3, boxShadow:"0 8px 0 #94a3b8" }} />)}{placements.filter((_, i)=>i % Math.max(1, layout.racks) === r).slice(0, 8).map((p, i) => <div key={p.id} style={{ position:"absolute", left:`${8 + (i%3)*27}%`, bottom:`${18 + (i%Math.max(1, layout.levels))*28}px`, width:34, height:26, background:Number(p.qty)<5 ? "#f59e0b" : "#2563eb", border:"2px solid #fff", transform:"translateZ(18px)", boxShadow:"6px 6px 0 rgba(15,23,42,.25)" }} />)}</div>)}</div></div>}
-            {tab === "table" && <div style={{ border:"1px solid #e5e7eb", borderRadius:10, overflow:"hidden" }}><table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}><thead style={{ background:"#f8fafc", color:"#475569" }}><tr>{["번호","품목","수량","분류","배치 선반","상태"].map(h=><th key={h} style={{ padding:10, textAlign:"left", borderBottom:"1px solid #e5e7eb" }}>{h}</th>)}</tr></thead><tbody>{placements.map((p, i) => <tr key={p.id}><td style={{ padding:9, borderBottom:"1px solid #f1f5f9", fontWeight:900 }}>{i+1}</td><td style={{ padding:9, borderBottom:"1px solid #f1f5f9", fontWeight:800 }}>{p.name}</td><td style={{ padding:9, borderBottom:"1px solid #f1f5f9" }}>{p.qty}</td><td style={{ padding:9, borderBottom:"1px solid #f1f5f9" }}>{p.cat}</td><td style={{ padding:9, borderBottom:"1px solid #f1f5f9" }}>{p.shelf}</td><td style={{ padding:9, borderBottom:"1px solid #f1f5f9", color:Number(p.qty)<=0 ? "#dc2626" : Number(p.qty)<5 ? "#d97706" : "#059669", fontWeight:900 }}>{Number(p.qty)<=0 ? "품절" : Number(p.qty)<5 ? "저재고" : "정상"}</td></tr>)}</tbody></table></div>}
+            {tab === "table" && <div style={{ border:"1px solid #e5e7eb", borderRadius:10, overflow:"hidden" }}><table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}><thead style={{ background:"#f8fafc", color:"#475569" }}><tr>{["번호","품목","수량","분류","배치 선반","X/Y","상태"].map(h=><th key={h} style={{ padding:10, textAlign:"left", borderBottom:"1px solid #e5e7eb" }}>{h}</th>)}</tr></thead><tbody>{placements.map((p, i) => <tr key={p.id}><td style={{ padding:9, borderBottom:"1px solid #f1f5f9", fontWeight:900 }}>{i+1}</td><td style={{ padding:9, borderBottom:"1px solid #f1f5f9", fontWeight:800 }}>{p.name}</td><td style={{ padding:9, borderBottom:"1px solid #f1f5f9" }}>{p.qty}</td><td style={{ padding:9, borderBottom:"1px solid #f1f5f9" }}>{p.cat}</td><td style={{ padding:9, borderBottom:"1px solid #f1f5f9" }}>{p.shelf}</td><td style={{ padding:9, borderBottom:"1px solid #f1f5f9" }}>X{Math.round(p.x)} / Y{Math.round(p.y)}</td><td style={{ padding:9, borderBottom:"1px solid #f1f5f9", color:Number(p.qty)<=0 ? "#dc2626" : Number(p.qty)<5 ? "#d97706" : "#059669", fontWeight:900 }}>{Number(p.qty)<=0 ? "품절" : Number(p.qty)<5 ? "저재고" : "정상"}</td></tr>)}</tbody></table></div>}
           </main>
         </div>
       </div>
