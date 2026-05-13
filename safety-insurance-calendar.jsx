@@ -562,7 +562,7 @@ export const EVENT_TYPES = {
   other:         { label:"기타", color:"#64748b", icon:"📌" },
 };
 
-export function SafetyCalendarPage({ facilities = [], curUser, weatherAlerts = [] }) {
+export function SafetyCalendarPage({ facilities = [], curUser, weatherAlerts = [], prods = [], worklogs = [], weatherHourly = [], cctvDetections = [], zonePhotos = {} }) {
   const [events, setEvents] = useState(load(STORAGE.calendar));
   useEffect(() => save(STORAGE.calendar, events), [events]);
 
@@ -571,6 +571,7 @@ export function SafetyCalendarPage({ facilities = [], curUser, weatherAlerts = [
   });
   const [showForm, setShowForm] = useState(null); // null | {date} | id
   const [selectedDay, setSelectedDay] = useState(today());
+  const [showAiPanel, setShowAiPanel] = useState(false);
 
   const monthEvents = useMemo(() => {
     const m = String(viewMonth.month + 1).padStart(2, "0");
@@ -640,9 +641,32 @@ export function SafetyCalendarPage({ facilities = [], curUser, weatherAlerts = [
           <button onClick={()=>{ const d=new Date(); setViewMonth({year:d.getFullYear(),month:d.getMonth()}); setSelectedDay(today()); }}
             className="px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-300 rounded text-xs font-bold">오늘</button>
         </div>
-        <button onClick={()=>setShowForm({mode:"new", date:selectedDay})}
-          className="px-4 py-2 bg-emerald-600 text-white text-xs font-bold rounded-lg">＋ 일정 추가</button>
+        <div className="flex gap-2">
+          <button onClick={()=>setShowAiPanel(true)}
+            className="px-4 py-2 bg-gradient-to-r from-purple-600 to-blue-600 text-white text-xs font-bold rounded-lg shadow">🤖 AI 자동 일정 생성</button>
+          <button onClick={()=>setShowForm({mode:"new", date:selectedDay})}
+            className="px-4 py-2 bg-emerald-600 text-white text-xs font-bold rounded-lg">＋ 일정 추가</button>
+        </div>
       </div>
+
+      {showAiPanel && (
+        <AiSchedulePanel
+          existingEvents={events}
+          facilities={facilities}
+          prods={prods}
+          worklogs={worklogs}
+          weatherAlerts={weatherAlerts}
+          weatherHourly={weatherHourly}
+          cctvDetections={cctvDetections}
+          zonePhotos={zonePhotos}
+          curUser={curUser}
+          onAccept={(items)=>{
+            items.forEach(it => upsertEvent({...it, id: undefined}));
+            setShowAiPanel(false);
+            alert(`✅ ${items.length}건의 일정이 캘린더에 추가되었습니다.`);
+          }}
+          onClose={()=>setShowAiPanel(false)}/>
+      )}
 
       {/* 캘린더 그리드 */}
       <div className="bg-white border-2 border-gray-200 rounded-xl overflow-hidden">
@@ -738,6 +762,278 @@ export function SafetyCalendarPage({ facilities = [], curUser, weatherAlerts = [
           onSave={(data)=>{ upsertEvent({...data, id: typeof showForm === "string" ? showForm : undefined}); setShowForm(null); }}
           onClose={()=>setShowForm(null)}/>
       )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// 🤖 AI 자동 일정 생성기
+// 5개 소스 분석 → 일정 제안 → 사용자 승인 흐름
+// 소스: 재고(prods) / 업무일지(worklogs) / 날씨예보(weatherHourly) / CCTV(cctvDetections) / 사진(zonePhotos)
+// ═══════════════════════════════════════════════════════════════════════
+function AiSchedulePanel({ existingEvents, facilities, prods, worklogs, weatherAlerts, weatherHourly, cctvDetections, zonePhotos, curUser, onAccept, onClose }) {
+  // 다음 14일 안에 이미 같은 제목+날짜로 등록된 게 있는지
+  const isDuplicate = (date, title) => existingEvents.some(e => e.date === date && e.title === title);
+
+  const suggestions = useMemo(() => {
+    const out = [];
+    const addDays = (n) => { const d = new Date(); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); };
+
+    // ─── 1) 재고 기반 ──────────────────────────────────────────────
+    // 부족 재고 → 발주/입고 점검 일정
+    for (const p of (prods || [])) {
+      const qty = p.qty || 0;
+      const minQty = parseInt(p.minQty) || 0;
+      if (minQty > 0 && qty < minQty) {
+        out.push({
+          source: "inventory", reason: `재고 부족 (${qty}/${minQty})`,
+          date: addDays(2), time: "10:00", duration: 30,
+          type: "inspection",
+          title: `재고 보충 점검: ${p.name}`,
+          description: `현재 ${qty}${p.unit||"개"}, 적정 ${minQty}${p.unit||"개"} — 발주 또는 보충 필요`,
+          facId: "", priority: qty === 0 ? "high" : "medium",
+          confidence: qty === 0 ? 95 : 80,
+        });
+      }
+      // 사용량 많은 품목 정기 점검
+      if (p.stockSchedule && p.stockSchedule.match(/(주|월|분기)/)) {
+        // skip — 일정만 보고 자동 일정으로 만들지는 않음 (스케줄 키워드 있으면 사용자가 직접 등록)
+      }
+    }
+
+    // ─── 2) 업무일지 기반 ──────────────────────────────────────────
+    // "재점검", "다음주", "보완 필요" 키워드 발견 → 재점검 일정
+    for (const w of (worklogs || []).slice(0, 30)) {
+      const text = `${w.title || ""} ${w.content || w.memo || ""}`.toLowerCase();
+      const fac = facilities.find(f => text.includes((f.name||"").toLowerCase()));
+      if (/재점검|재확인|다시 점검/.test(text)) {
+        out.push({
+          source: "worklog", reason: "업무일지 '재점검' 키워드",
+          date: addDays(3), time: "14:00", duration: 60, type: "inspection",
+          title: `재점검: ${(fac?.name || w.title || "업무일지 항목").slice(0,30)}`,
+          description: (w.content || w.memo || "").slice(0, 150),
+          facId: fac?.id || "", confidence: 75,
+        });
+      }
+      if (/다음주|차주|일주일 후/.test(text)) {
+        out.push({
+          source: "worklog", reason: "업무일지 '다음주' 언급",
+          date: addDays(7), time: "10:00", duration: 30, type: "inspection",
+          title: `후속 점검: ${(fac?.name || w.title || "업무일지").slice(0,30)}`,
+          description: (w.content || w.memo || "").slice(0, 150),
+          facId: fac?.id || "", confidence: 60,
+        });
+      }
+      if (/보완 필요|보강 필요|수리 필요|교체 필요/.test(text)) {
+        out.push({
+          source: "worklog", reason: "업무일지 '보완/교체' 언급",
+          date: addDays(2), time: "10:00", duration: 90, type: "maintenance",
+          title: `보완 작업: ${(fac?.name || w.title || "").slice(0,30)}`,
+          description: (w.content || w.memo || "").slice(0, 150),
+          facId: fac?.id || "", priority: "high", confidence: 80,
+        });
+      }
+    }
+
+    // ─── 3) 날씨 기반 (다음 24-48h 예보) ────────────────────────────
+    // 강풍/호우 예보 → 사전 점검 일정
+    for (let i = 0; i < (weatherHourly || []).length && i < 48; i++) {
+      const h = weatherHourly[i];
+      if (!h || !h.time) continue;
+      const hDate = new Date(h.time);
+      const dateStr = hDate.toISOString().slice(0,10);
+      const hourStr = `${String(hDate.getHours()).padStart(2,"0")}:00`;
+      const prevHour = new Date(hDate.getTime() - 2*3600000);
+      const prevDateStr = prevHour.toISOString().slice(0,10);
+      const prevHourStr = `${String(prevHour.getHours()).padStart(2,"0")}:00`;
+      // 강풍 (순간풍속 ≥ 14m/s)
+      if (h.windGust >= 14) {
+        out.push({
+          source: "weather", reason: `강풍 예보 (순간 ${h.windGust.toFixed(1)}m/s @ ${hourStr})`,
+          date: prevDateStr, time: prevHourStr, duration: 60, type: "inspection",
+          title: `강풍 대비 천막·간판 결속 점검`,
+          description: `${dateStr} ${hourStr} 강풍 예보. 2시간 전 검정비닐천막·간판·차양 사전 결속.`,
+          facId: "", priority: "high", confidence: 90,
+        });
+        break; // 첫 강풍만
+      }
+      // 호우 (시간당 강수 ≥ 10mm)
+      if (h.precip >= 10) {
+        out.push({
+          source: "weather", reason: `호우 예보 (${h.precip}mm/h @ ${hourStr})`,
+          date: prevDateStr, time: prevHourStr, duration: 30, type: "inspection",
+          title: `호우 대비 배수로 점검`,
+          description: `${dateStr} ${hourStr} 호우 예보. 배수로 청소 + 통로 미끄럼 대응.`,
+          facId: "", priority: "high", confidence: 90,
+        });
+        break;
+      }
+      // 폭염 (기온 ≥ 33°C)
+      if (h.temp >= 33 && hDate.getHours() >= 11 && hDate.getHours() <= 16) {
+        out.push({
+          source: "weather", reason: `폭염 예보 (${h.temp.toFixed(0)}°C @ ${hourStr})`,
+          date: dateStr, time: "09:00", duration: 30, type: "inspection",
+          title: `폭염 대비 음수대·그늘막 점검`,
+          description: `${dateStr} 오후 ${h.temp.toFixed(0)}°C 예보. 오전 중 음수대·그늘막 작동 확인.`,
+          facId: "", priority: "medium", confidence: 85,
+        });
+        break;
+      }
+    }
+
+    // ─── 4) CCTV 기반 (반복 감지 구역) ──────────────────────────────
+    const cctvByZone = {};
+    for (const d of (cctvDetections || [])) {
+      if (!d.zone) continue;
+      cctvByZone[d.zone] = (cctvByZone[d.zone] || 0) + 1;
+    }
+    for (const [zoneKey, count] of Object.entries(cctvByZone)) {
+      if (count >= 3) {
+        const fac = facilities.find(f => f.zone === zoneKey || f.id === zoneKey);
+        out.push({
+          source: "cctv", reason: `CCTV 감지 반복 (${count}건)`,
+          date: addDays(1), time: "15:00", duration: 45, type: "inspection",
+          title: `CCTV 다발 구역 정밀 점검: ${fac?.name || zoneKey}`,
+          description: `최근 ${count}건의 CCTV AI 감지 알림. 현장 정밀 점검 필요.`,
+          facId: fac?.id || "", priority: "high", confidence: 85,
+        });
+      }
+    }
+
+    // ─── 5) 사진 기반 (최근 추가된 zone 사진) ───────────────────────
+    const recentPhotoZones = [];
+    for (const [zid, photos] of Object.entries(zonePhotos || {})) {
+      if (!Array.isArray(photos) || photos.length === 0) continue;
+      const lastPhoto = photos[photos.length - 1];
+      if (!lastPhoto?.date) continue;
+      const dayDiff = (Date.now() - new Date(lastPhoto.date).getTime()) / 86400000;
+      if (dayDiff < 3 && photos.length === 1) {
+        // 처음 사진이 등록된 구역 → 후속 정기 점검 일정 제안
+        recentPhotoZones.push({ zid, photoDate: lastPhoto.date });
+      }
+    }
+    for (const { zid } of recentPhotoZones.slice(0, 3)) {
+      const fac = facilities.find(f => f.zone === zid || f.id === zid);
+      out.push({
+        source: "photo", reason: "새 구역 사진 등록 (최초)",
+        date: addDays(14), time: "10:00", duration: 30, type: "inspection",
+        title: `정기 사진 갱신: ${fac?.name || zid}`,
+        description: `최근 사진이 등록된 구역. 2주 후 변화 비교를 위한 사진 재촬영 권장.`,
+        facId: fac?.id || "", priority: "low", confidence: 50,
+      });
+    }
+
+    // 중복 제거 + 기존 일정과 중복 제거
+    const seen = new Set();
+    const unique = [];
+    for (const s of out) {
+      const k = `${s.date}_${s.title}`;
+      if (seen.has(k) || isDuplicate(s.date, s.title)) continue;
+      seen.add(k);
+      unique.push(s);
+    }
+    return unique.sort((a,b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+  }, [prods, worklogs, weatherHourly, cctvDetections, zonePhotos, facilities, existingEvents]);
+
+  const [selected, setSelected] = useState(new Set(suggestions.map((_,i)=>i)));
+  const toggle = (i) => {
+    const next = new Set(selected);
+    if (next.has(i)) next.delete(i); else next.add(i);
+    setSelected(next);
+  };
+
+  const sourceMeta = {
+    inventory: { icon:"📦", label:"재고", color:"#f59e0b" },
+    worklog:   { icon:"📒", label:"업무일지", color:"#10b981" },
+    weather:   { icon:"🌦️", label:"날씨", color:"#0ea5e9" },
+    cctv:      { icon:"📹", label:"CCTV", color:"#a855f7" },
+    photo:     { icon:"📷", label:"사진", color:"#ec4899" },
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.55)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:14}}>
+      <div style={{background:"#fff",borderRadius:14,maxWidth:760,width:"100%",maxHeight:"90vh",overflow:"hidden",display:"flex",flexDirection:"column",boxShadow:"0 25px 60px rgba(0,0,0,0.3)"}}>
+        <div className="p-4 bg-gradient-to-r from-purple-600 to-blue-600 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-base font-black">🤖 AI 자동 일정 제안</div>
+              <div className="text-xs opacity-90 mt-1">재고·업무일지·날씨·CCTV·사진을 분석해 {suggestions.length}건의 일정을 제안합니다.</div>
+            </div>
+            <button onClick={onClose} className="text-white/80 hover:text-white text-xl">✕</button>
+          </div>
+        </div>
+
+        <div className="p-4 overflow-y-auto flex-1">
+          {suggestions.length === 0 ? (
+            <div className="text-center py-12">
+              <div className="text-5xl mb-3">🎉</div>
+              <div className="text-sm font-bold text-gray-700">현재 추가 권장할 일정이 없습니다</div>
+              <div className="text-xs text-gray-500 mt-2 max-w-md mx-auto">
+                재고 적정, 업무일지에 후속 키워드 없음, 날씨 평온, CCTV 정상,
+                사진 정기 갱신 모두 만족. 새 데이터가 쌓이면 다시 시도하세요.
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex justify-between items-center text-xs mb-2">
+                <span className="font-bold">{selected.size}건 선택됨 / {suggestions.length}건</span>
+                <div className="flex gap-2">
+                  <button onClick={()=>setSelected(new Set(suggestions.map((_,i)=>i)))} className="px-2 py-0.5 bg-gray-100 rounded font-bold">전체 선택</button>
+                  <button onClick={()=>setSelected(new Set())} className="px-2 py-0.5 bg-gray-100 rounded font-bold">전체 해제</button>
+                </div>
+              </div>
+
+              {suggestions.map((s, i) => {
+                const sm = sourceMeta[s.source];
+                const checked = selected.has(i);
+                return (
+                  <label key={i} className={`flex items-start gap-3 p-3 border-2 rounded-lg cursor-pointer transition ${checked?"border-purple-400 bg-purple-50":"border-gray-200 bg-white"}`}>
+                    <input type="checkbox" checked={checked} onChange={()=>toggle(i)} className="mt-1"/>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-base">{sm.icon}</span>
+                        <span className="text-sm font-black text-gray-900 flex-1">{s.title}</span>
+                        <span className="px-2 py-0.5 rounded text-[9px] font-bold text-white" style={{background:sm.color}}>{sm.label}</span>
+                        {s.priority === "high" && <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-red-600 text-white">높음</span>}
+                        <span className="text-[10px] text-gray-500">신뢰도 {s.confidence}%</span>
+                      </div>
+                      <div className="text-[10px] text-gray-600 mt-1">
+                        📅 {s.date} {s.time} · ⏱️ {s.duration}분 · 💡 {s.reason}
+                      </div>
+                      <div className="text-[11px] text-gray-700 mt-1.5">{s.description}</div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="p-3 border-t bg-gray-50 flex justify-between items-center">
+          <div className="text-[10px] text-gray-500">
+            ⚠️ 룰 기반 추출 — 정확도 보장 아님. 검토 후 추가하세요.
+          </div>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="px-4 py-2 text-xs bg-white border rounded font-bold">취소</button>
+            <button
+              disabled={selected.size===0}
+              onClick={()=>{
+                const items = Array.from(selected).map(i => ({
+                  ...suggestions[i],
+                  assignee: curUser?.name || "",
+                  status: "scheduled",
+                  recurring: "none",
+                  reminder: 60,
+                  metadata: { source: "ai_auto", reason: suggestions[i].reason, confidence: suggestions[i].confidence },
+                }));
+                onAccept(items);
+              }}
+              className="px-4 py-2 text-xs bg-purple-600 text-white rounded font-bold disabled:opacity-50">
+              ✅ 선택 {selected.size}건 캘린더에 추가
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
