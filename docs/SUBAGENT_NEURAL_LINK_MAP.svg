@@ -1,0 +1,169 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="2200" viewBox="0 0 1800 2200">
+  <defs>
+    <linearGradient id="navy" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#061537"/>
+      <stop offset="1" stop-color="#123f8c"/>
+    </linearGradient>
+    <linearGradient id="hub" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1d4ed8"/>
+      <stop offset="0.52" stop-color="#7c3aed"/>
+      <stop offset="1" stop-color="#059669"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#0f172a" flood-opacity="0.18"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#315da8"/>
+    </marker>
+    <style>
+      .title { font-family: Pretendard, "Noto Sans KR", Arial, sans-serif; font-size: 60px; font-weight: 900; fill: #fff; letter-spacing: 0; }
+      .subtitle { font-family: Pretendard, "Noto Sans KR", Arial, sans-serif; font-size: 25px; font-weight: 800; fill: #dbeafe; letter-spacing: 0; }
+      .section { font-family: Pretendard, "Noto Sans KR", Arial, sans-serif; font-size: 30px; font-weight: 900; fill: #0f172a; letter-spacing: 0; }
+      .cardTitle { font-family: Pretendard, "Noto Sans KR", Arial, sans-serif; font-size: 24px; font-weight: 900; fill: #0f172a; letter-spacing: 0; }
+      .text { font-family: Pretendard, "Noto Sans KR", Arial, sans-serif; font-size: 17px; font-weight: 700; fill: #475569; letter-spacing: 0; }
+      .tiny { font-family: Pretendard, "Noto Sans KR", Arial, sans-serif; font-size: 14px; font-weight: 700; fill: #64748b; letter-spacing: 0; }
+      .white { font-family: Pretendard, "Noto Sans KR", Arial, sans-serif; font-size: 21px; font-weight: 900; fill: #fff; letter-spacing: 0; }
+      .whiteSmall { font-family: Pretendard, "Noto Sans KR", Arial, sans-serif; font-size: 16px; font-weight: 800; fill: #e0f2fe; letter-spacing: 0; }
+      .bg { fill: #f8fafc; }
+      .card { fill: #ffffff; stroke: #dbe4f0; stroke-width: 2; filter: url(#shadow); }
+      .softBlue { fill: #eff6ff; stroke: #93c5fd; stroke-width: 2; }
+      .softGreen { fill: #ecfdf5; stroke: #86efac; stroke-width: 2; }
+      .softRed { fill: #fef2f2; stroke: #fca5a5; stroke-width: 2; }
+      .softAmber { fill: #fffbeb; stroke: #fcd34d; stroke-width: 2; }
+      .softPurple { fill: #f5f3ff; stroke: #c4b5fd; stroke-width: 2; }
+      .softCyan { fill: #ecfeff; stroke: #67e8f9; stroke-width: 2; }
+      .line { stroke: #315da8; stroke-width: 4; fill: none; marker-end: url(#arrow); }
+      .thinLine { stroke: #94a3b8; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .neural { stroke: #7c3aed; stroke-width: 3; stroke-dasharray: 9 9; fill: none; marker-end: url(#arrow); }
+      .node { fill: #fff; stroke: #1d4ed8; stroke-width: 4; filter: url(#shadow); }
+    </style>
+  </defs>
+
+  <rect width="1800" height="2200" class="bg"/>
+
+  <rect x="70" y="55" width="1660" height="250" rx="34" fill="url(#navy)" filter="url(#shadow)"/>
+  <text x="120" y="150" class="title">대형 운영조직형 서브에이전트 + API 뉴럴링크 설계도</text>
+  <text x="120" y="210" class="subtitle">현장 접점 → AI 운영 허브 → 도메인 에이전트 → API 허브 → 통합 데이터 → 다시 운영 판단</text>
+  <text x="120" y="262" class="whiteSmall">박물관·테마파크·아쿠아리움형 운영 자동화를 기준으로 한 확장형 구조</text>
+
+  <text x="90" y="370" class="section">1. 사용자 / 현장 접점 채널</text>
+  <rect x="90" y="405" width="1620" height="230" rx="24" class="card"/>
+
+  <g>
+    <rect x="125" y="445" width="180" height="65" rx="14" class="softBlue"/>
+    <text x="155" y="485" class="text">고객 웹/앱</text>
+    <rect x="325" y="445" width="180" height="65" rx="14" class="softBlue"/>
+    <text x="357" y="485" class="text">현장 키오스크</text>
+    <rect x="525" y="445" width="180" height="65" rx="14" class="softBlue"/>
+    <text x="565" y="485" class="text">티켓/게이트</text>
+    <rect x="725" y="445" width="180" height="65" rx="14" class="softBlue"/>
+    <text x="758" y="485" class="text">QR 라벨/점검</text>
+    <rect x="925" y="445" width="180" height="65" rx="14" class="softBlue"/>
+    <text x="972" y="485" class="text">전화/문자</text>
+    <rect x="1125" y="445" width="180" height="65" rx="14" class="softBlue"/>
+    <text x="1168" y="485" class="text">운영자 대시보드</text>
+    <rect x="1325" y="445" width="180" height="65" rx="14" class="softBlue"/>
+    <text x="1370" y="485" class="text">대표 리포트</text>
+
+    <rect x="225" y="540" width="230" height="65" rx="14" class="softBlue"/>
+    <text x="273" y="580" class="text">CCTV / 센서</text>
+    <rect x="485" y="540" width="230" height="65" rx="14" class="softBlue"/>
+    <text x="532" y="580" class="text">POS / 매장</text>
+    <rect x="745" y="540" width="230" height="65" rx="14" class="softBlue"/>
+    <text x="792" y="580" class="text">교육 / 체험 접수</text>
+    <rect x="1005" y="540" width="230" height="65" rx="14" class="softBlue"/>
+    <text x="1050" y="580" class="text">스마트오더</text>
+    <rect x="1265" y="540" width="230" height="65" rx="14" class="softBlue"/>
+    <text x="1315" y="580" class="text">카카오 / 알림</text>
+  </g>
+
+  <path d="M900 635 L900 720" class="line"/>
+
+  <text x="90" y="720" class="section">2. 중앙 오케스트레이터</text>
+  <rect x="360" y="755" width="1080" height="150" rx="28" fill="url(#hub)" filter="url(#shadow)"/>
+  <text x="632" y="820" class="title" style="font-size:42px;">AI 운영 허브 / Orchestrator</text>
+  <text x="443" y="872" class="whiteSmall">라우팅 · 권한 체크 · 워크플로우 실행 · 로그 기록 · 알림 발송 · KPI 집계</text>
+
+  <path d="M900 905 L900 980" class="line"/>
+
+  <text x="90" y="980" class="section">3. 도메인별 서브에이전트</text>
+
+  <rect x="90" y="1030" width="500" height="295" rx="24" class="softRed" filter="url(#shadow)"/>
+  <text x="125" y="1080" class="cardTitle">A. 고객 · 마케팅 에이전트</text>
+  <text x="125" y="1125" class="text">고객상담 / 리뷰 / CRM 세그먼트</text>
+  <text x="125" y="1160" class="text">캠페인 자동발송 / SNS 콘텐츠</text>
+  <text x="125" y="1205" class="tiny">채널: 홈페이지 · 카카오 · 문자 · SNS</text>
+  <text x="125" y="1245" class="tiny">신호: 반복 민원, 리뷰 악화, 캠페인 필요</text>
+
+  <rect x="650" y="1030" width="500" height="295" rx="24" class="softAmber" filter="url(#shadow)"/>
+  <text x="685" y="1080" class="cardTitle">B. 영업 · 예약 · 정산 에이전트</text>
+  <text x="685" y="1125" class="text">온라인예약 / 단체예약 / 티켓 검증</text>
+  <text x="685" y="1160" class="text">결제·환불 / 매출정산 / 업셀링</text>
+  <text x="685" y="1205" class="tiny">채널: 예약 · 티켓 · POS · 결제</text>
+  <text x="685" y="1245" class="tiny">신호: 예약 급증, 환불 증가, 정산 누락</text>
+
+  <rect x="1210" y="1030" width="500" height="295" rx="24" class="softGreen" filter="url(#shadow)"/>
+  <text x="1245" y="1080" class="cardTitle">C. 현장운영 · CS 에이전트</text>
+  <text x="1245" y="1125" class="text">운영일정 / 혼잡도 / 대기시간</text>
+  <text x="1245" y="1160" class="text">오픈·마감 체크 / 업무 배정 / 민원</text>
+  <text x="1245" y="1205" class="tiny">채널: 운영 대시보드 · 현장 태블릿</text>
+  <text x="1245" y="1245" class="tiny">신호: 혼잡, 인력 부족, 민원 지연</text>
+
+  <rect x="90" y="1370" width="500" height="295" rx="24" class="softBlue" filter="url(#shadow)"/>
+  <text x="125" y="1420" class="cardTitle">D. 안전 · 시설 · 보안 에이전트</text>
+  <text x="125" y="1465" class="text">CCTV 이벤트 / 사고 대응 / 점검</text>
+  <text x="125" y="1500" class="text">설비 이상 / 출입통제 / 비상알림</text>
+  <text x="125" y="1545" class="tiny">현재 앱 핵심: 보완과제 · 사고 · 점검</text>
+  <text x="125" y="1585" class="tiny">신호: 긴급, 기한초과, 사고 후속조치</text>
+
+  <rect x="650" y="1370" width="500" height="295" rx="24" class="softPurple" filter="url(#shadow)"/>
+  <text x="685" y="1420" class="cardTitle">E. 콘텐츠 · 공연 · 교육 에이전트</text>
+  <text x="685" y="1465" class="text">행사기획 / 교육운영 / 공연 스케줄</text>
+  <text x="685" y="1500" class="text">MD 기획 / 스토리 / 학습 콘텐츠</text>
+  <text x="685" y="1545" class="tiny">채널: 교육예약 · 현장체험 · SNS</text>
+  <text x="685" y="1585" class="tiny">신호: 준비물 부족, 교육자료 필요</text>
+
+  <rect x="1210" y="1370" width="500" height="295" rx="24" class="softCyan" filter="url(#shadow)"/>
+  <text x="1245" y="1420" class="cardTitle">F. 생물 · 수질 · 특수운영 에이전트</text>
+  <text x="1245" y="1465" class="text">사육일지 / 급이 / 수질 모니터링</text>
+  <text x="1245" y="1500" class="text">건강·검역 / 전시해설 / 연구 데이터</text>
+  <text x="1245" y="1545" class="tiny">확장형: 아쿠아리움·생태시설 특화</text>
+  <text x="1245" y="1585" class="tiny">신호: 수질 이상, 급이 누락, 검역 필요</text>
+
+  <path d="M900 905 C450 935 340 970 340 1030" class="thinLine"/>
+  <path d="M900 905 C850 945 900 970 900 1030" class="thinLine"/>
+  <path d="M900 905 C1350 935 1460 970 1460 1030" class="thinLine"/>
+  <path d="M900 905 C430 1030 340 1240 340 1370" class="thinLine"/>
+  <path d="M900 905 C890 1070 900 1230 900 1370" class="thinLine"/>
+  <path d="M900 905 C1370 1030 1460 1240 1460 1370" class="thinLine"/>
+
+  <path d="M340 1325 C410 1365 500 1395 650 1470" class="neural"/>
+  <path d="M1150 1175 C1240 1160 1210 1430 1210 1480" class="neural"/>
+  <path d="M1460 1325 C1290 1340 1180 1400 1150 1460" class="neural"/>
+  <path d="M590 1175 C690 1260 640 1340 590 1440" class="neural"/>
+  <path d="M1150 1510 C1210 1510 1210 1510 1210 1510" class="neural"/>
+
+  <text x="90" y="1745" class="section">4. API / Integration Hub</text>
+  <rect x="90" y="1780" width="1620" height="245" rx="26" class="card"/>
+
+  <rect x="130" y="1825" width="480" height="155" rx="18" class="softBlue"/>
+  <text x="165" y="1870" class="cardTitle">① 내부 시스템 API</text>
+  <text x="165" y="1915" class="text">홈페이지 · 예약 · 티켓 · POS · CRM</text>
+  <text x="165" y="1950" class="text">그룹웨어 · 재고 · CCTV · IoT/MQTT</text>
+
+  <rect x="660" y="1825" width="480" height="155" rx="18" class="softGreen"/>
+  <text x="695" y="1870" class="cardTitle">② 외부 플랫폼 API</text>
+  <text x="695" y="1915" class="text">네이버 지도 · 카카오 알림톡 · SMS</text>
+  <text x="695" y="1950" class="text">이메일 · 결제 PG · 지도/위치 · 분석</text>
+
+  <rect x="1190" y="1825" width="480" height="155" rx="18" class="softPurple"/>
+  <text x="1225" y="1870" class="cardTitle">③ AI/업무 자동화 API</text>
+  <text x="1225" y="1915" class="text">OpenAI · Claude · STT/TTS · OCR</text>
+  <text x="1225" y="1950" class="text">벡터DB · Webhook · BI 리포트</text>
+
+  <path d="M900 1665 L900 1780" class="line"/>
+
+  <text x="90" y="2080" class="section">뉴럴링크 옵션: 한 에이전트의 신호가 관련 에이전트로 전파되고, 실행 결과가 KPI와 업무일지로 되돌아갑니다.</text>
+  <rect x="90" y="2115" width="1620" height="55" rx="18" fill="#0f172a"/>
+  <text x="130" y="2152" class="whiteSmall">예: 안전 사고 감지 → 시설 보완과제 생성 → 업무일지 기록 요청 → KPI 사고 건수 반영 → 관리자 긴급 추천 표시</text>
+</svg>
