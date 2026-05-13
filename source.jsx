@@ -6038,6 +6038,9 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
   const [requisitions,setRequisitions]=useLocalStorage("jamsa_requisitions", []);
   const [payments,setPayments]=useLocalStorage("jamsa_payments", []);
   const [customCats,setCustomCats]=useLocalStorage("jamsa_inv_categories", []);
+  const [customLocs,setCustomLocs]=useLocalStorage("jamsa_inv_locations", []);
+  const [hiddenCats,setHiddenCats]=useLocalStorage("jamsa_inv_hidden_categories", []);
+  const [hiddenLocs,setHiddenLocs]=useLocalStorage("jamsa_inv_hidden_locations", []);
   const [storageSections,setStorageSections]=useLocalStorage("jamsa_storage_sections", [
     "수장고 1번 선반", "수장고 2번 선반", "수장고 3번 선반", "수장고 4번 선반",
     "수장고 A-1", "수장고 A-2", "수장고 B-1", "수장고 B-2"
@@ -6207,8 +6210,15 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
   const mapWrap=useRef(null);
 
   const can=(perm)=>curUser&&ROLES[curUser.role]?.perms?.includes(perm);
-  const invCats = useMemo(() => Array.from(new Set([...CATS, ...customCats, ...prods.map(p=>p.cat).filter(Boolean)])).sort(), [customCats, prods]);
-  const invLocs = useMemo(() => Array.from(new Set([...LOCS, ...storageSections, ...prods.map(p=>p.loc).filter(Boolean)])).sort(), [storageSections, prods]);
+  const invCats = useMemo(() => Array.from(new Set([...CATS, ...customCats, ...prods.map(p=>p.cat).filter(Boolean)])).filter(c=>!hiddenCats.includes(c)).sort(), [customCats, hiddenCats, prods]);
+  const invLocs = useMemo(() => Array.from(new Set([
+    ...LOCS,
+    ...storageSections,
+    ...customLocs,
+    ...prods.map(p=>p.loc).filter(Boolean),
+    ...prods.map(p=>p.subLoc).filter(Boolean),
+    ...prods.flatMap(p=>Object.keys(p.locs||{})),
+  ])).filter(l=>!hiddenLocs.includes(l)).sort(), [storageSections, customLocs, hiddenLocs, prods]);
   const makeProductId = () => Math.max(nextId(), ...prods.map(p => Number(p.id) || 0)) + 1;
 
   const addH=(a,n,d,q)=>{
@@ -6481,6 +6491,47 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
     addH("카테고리관리","카테고리","추가/수정 저장",0);
     setModal(null);
   };
+  const saveCategoryDelete=(catsToDelete)=>{
+    const del=new Set(catsToDelete||[]);
+    if(!del.size)return;
+    if(!confirm(`${del.size}개 카테고리를 삭제 처리할까요?\n해당 카테고리 재고는 '기타'로 변경됩니다.`))return;
+    setHiddenCats(arr=>Array.from(new Set([...arr,...del])));
+    setCustomCats(arr=>arr.filter(c=>!del.has(c)));
+    setProds(ps=>ps.map(p=>del.has(p.cat)?{...p,cat:"기타"}:p));
+    addH("카테고리삭제","카테고리",`${del.size}개 삭제`,del.size);
+    setModal(null);
+  };
+  const saveLocationManager=({add,renames,deletes})=>{
+    let nextLocs=Array.from(new Set([...customLocs]));
+    if(add?.trim())nextLocs.push(add.trim());
+    Object.entries(renames||{}).forEach(([from,to])=>{
+      const clean=String(to||"").trim();
+      if(!clean||from===clean)return;
+      nextLocs=nextLocs.map(l=>l===from?clean:l);
+      setStorageSections(arr=>arr.map(l=>l===from?clean:l));
+      setProds(ps=>ps.map(p=>{
+        const locs={};
+        Object.entries(p.locs||{}).forEach(([k,v])=>{locs[k===from?clean:k]=v;});
+        return {...p,loc:p.loc===from?clean:p.loc,subLoc:p.subLoc===from?clean:p.subLoc,locs};
+      }));
+    });
+    const del=new Set(deletes||[]);
+    if(del.size){
+      setHiddenLocs(arr=>Array.from(new Set([...arr,...del])));
+      nextLocs=nextLocs.filter(l=>!del.has(l));
+      setStorageSections(arr=>arr.filter(l=>!del.has(l)));
+      setProds(ps=>ps.map(p=>{
+        if(!del.has(p.loc)&&!del.has(p.subLoc)&&!Object.keys(p.locs||{}).some(k=>del.has(k)))return p;
+        const locs={};
+        Object.entries(p.locs||{}).forEach(([k,v])=>{if(!del.has(k))locs[k]=v;});
+        if(Object.keys(locs).length===0)locs["미지정"]=p.qty||0;
+        return {...p,loc:del.has(p.loc)?"미지정":p.loc,subLoc:del.has(p.subLoc)?"":p.subLoc,locs};
+      }));
+    }
+    setCustomLocs(Array.from(new Set(nextLocs.filter(Boolean))).sort());
+    addH("위치관리","위치",`추가/수정${del.size?`/삭제 ${del.size}개`:""} 저장`,del.size);
+    setModal(null);
+  };
   const saveStorageSections=(sections)=>{
     const next=Array.from(new Set((sections||[]).map(s=>String(s||"").trim()).filter(Boolean)));
     setStorageSections(next);
@@ -6545,7 +6596,15 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
   };
 
   const totalQ=prods.reduce((s,p)=>s+p.qty,0);
-  const filtered=prods.filter(p=>{if(search&&!p.name.toLowerCase().includes(search.toLowerCase()))return false;if(fLoc!=="all"&&p.loc!==fLoc)return false;if(fCat!=="all"&&p.cat!==fCat)return false;return true;});
+  const filtered=prods.filter(p=>{
+    const q=(search||"").trim().toLowerCase();
+    const locKeys=Object.keys(p.locs||{});
+    const locText=[p.loc,p.subLoc,...locKeys].filter(Boolean).join(" ").toLowerCase();
+    if(q&&!`${p.name||""} ${p.code||""} ${p.cat||""} ${locText}`.toLowerCase().includes(q))return false;
+    if(fLoc!=="all"&&!(p.loc===fLoc||p.subLoc===fLoc||locKeys.includes(fLoc)))return false;
+    if(fCat!=="all"&&p.cat!==fCat)return false;
+    return true;
+  });
 
   const menus=[
     {id:"map",label:"시설 맵",icon:<IC.Map/>,perm:"view"},
@@ -6667,6 +6726,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
             {can("export")&&<button className="btn bs" onClick={csv} style={{fontSize:12}}><IC.DL/>CSV</button>}
             {can("export")&&<button className="btn bs" onClick={()=>setModal({type:"qrBatch",prods:filtered.length?filtered:prods})} style={{fontSize:12}} title="QR 라벨 일괄 인쇄"><IC.QR/>QR 일괄인쇄</button>}
             {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"storageSections"})} style={{fontSize:12,background:"#ecfeff",color:"#0e7490",border:"1px solid #a5f3fc"}}>수장고 선반</button>}
+            {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"locationManager"})} style={{fontSize:12,background:"#eef2ff",color:"#3730a3",border:"1px solid #c7d2fe"}}>위치관리</button>}
             {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"categoryManager"})} style={{fontSize:12,background:"#fefce8",color:"#854d0e",border:"1px solid #fde68a"}}>카테고리</button>}
             {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"batchAdd"})} style={{fontSize:12,background:"#f0fdf4",color:"#047857",border:"1px solid #bbf7d0"}}>일괄등록</button>}
             <button className="btn bs" onClick={()=>setModal({type:"reqPayments"})} style={{fontSize:12,background:"#fef3c7",color:"#92400e",border:"1px solid #fcd34d"}} title="품의·카드결제·이체 통합 관리">📋 품의/결제{requisitions.filter(r=>!["received","cancelled","rejected"].includes(r.status)).length>0&&<span style={{marginLeft:4,padding:"1px 5px",background:"#dc2626",color:"#fff",borderRadius:8,fontSize:9}}>{requisitions.filter(r=>!["received","cancelled","rejected"].includes(r.status)).length}</span>}</button>
@@ -6893,7 +6953,8 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
         setModal(null);
       }} onClose={()=>setModal(null)} defaultLoc={modal.zone.name} zoneInfo={modal.zone} cats={invCats} locs={invLocs} storageSections={storageSections}/>}
       {modal?.type==="batchAdd"&&<BatchAddModal cats={invCats} locs={invLocs} storageSections={storageSections} onAdd={doBatchAdd} onClose={()=>setModal(null)}/>}
-      {modal?.type==="categoryManager"&&<CategoryManagerModal cats={invCats} customCats={customCats} onSave={saveCategoryManager} onClose={()=>setModal(null)}/>}
+      {modal?.type==="categoryManager"&&<CategoryManagerModal cats={invCats} customCats={customCats} onSave={saveCategoryManager} onDelete={saveCategoryDelete} onClose={()=>setModal(null)}/>}
+      {modal?.type==="locationManager"&&<LocationManagerModal locs={invLocs} customLocs={customLocs} onSave={saveLocationManager} onClose={()=>setModal(null)}/>}
       {modal?.type==="storageSections"&&<StorageSectionModal sections={storageSections} onSave={saveStorageSections} onClose={()=>setModal(null)}/>}
       {modal?.type==="in"&&<SMdl type="in" p={modal.p} locs={invLocs} onSubmit={doIn} onClose={()=>setModal(null)}/>}
       {modal?.type==="out"&&<SMdl type="out" p={modal.p} locs={invLocs} onSubmit={doOut} onClose={()=>setModal(null)}/>}
@@ -12993,17 +13054,40 @@ function StorageSectionModal({sections,onSave,onClose}){
   </Modal>;
 }
 
-function CategoryManagerModal({cats,customCats,onSave,onClose}){
+function LocationManagerModal({locs,customLocs,onSave,onClose}){
   const [add,setAdd]=useState("");
   const [renames,setRenames]=useState({});
+  const [deletes,setDeletes]=useState(new Set());
+  const toggleDel=(v)=>setDeletes(prev=>{const n=new Set(prev);n.has(v)?n.delete(v):n.add(v);return n;});
+  return <Modal title="모든 위치 추가 · 수정 · 삭제" onClose={onClose} w={560}>
+    <div style={{display:"grid",gap:10}}>
+      <div style={{display:"flex",gap:6}}><input className="inp" value={add} onChange={e=>setAdd(e.target.value)} placeholder="새 위치명 예: 수장고 B-2, 수장고 3번 선반"/><button className="btn bp" onClick={()=>onSave({add,renames,deletes:Array.from(deletes)})}>저장</button></div>
+      <div style={{maxHeight:380,overflow:"auto",border:"1px solid #e5e7eb",borderRadius:8}}>
+        {(locs||[]).map(l=><div key={l} style={{display:"grid",gridTemplateColumns:"28px 130px 1fr",gap:8,padding:8,borderBottom:"1px solid #f1f5f9",alignItems:"center",opacity:deletes.has(l) ? .6 : 1}}>
+          <input type="checkbox" checked={deletes.has(l)} onChange={()=>toggleDel(l)} title="삭제"/>
+          <div style={{fontSize:12,fontWeight:900,color:"#334155"}}>{l}</div>
+          <input className="inp" value={renames[l] ?? l} onChange={e=>setRenames(r=>({...r,[l]:e.target.value}))} style={{fontSize:12,padding:7}}/>
+        </div>)}
+      </div>
+      <div style={{fontSize:11,color:"#64748b"}}>삭제 체크 후 저장하면 해당 위치 재고는 `미지정`으로 옮겨지고 필터 목록에서 숨겨집니다.</div>
+      <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}><button className="btn bs" onClick={onClose}>취소</button><button className="btn bp" onClick={()=>onSave({add,renames,deletes:Array.from(deletes)})}>변경 저장</button></div>
+    </div>
+  </Modal>;
+}
+
+function CategoryManagerModal({cats,customCats,onSave,onDelete,onClose}){
+  const [add,setAdd]=useState("");
+  const [renames,setRenames]=useState({});
+  const [deletes,setDeletes]=useState(new Set());
+  const toggleDel=(v)=>setDeletes(prev=>{const n=new Set(prev);n.has(v)?n.delete(v):n.add(v);return n;});
   return <Modal title="카테고리 추가 및 수정" onClose={onClose} w={540}>
     <div style={{display:"grid",gap:10}}>
       <div style={{display:"flex",gap:6}}><input className="inp" value={add} onChange={e=>setAdd(e.target.value)} placeholder="새 카테고리명 예: 조명/전기, 청소용품"/><button className="btn bp" onClick={()=>{if(add.trim())onSave({add,renames});}}>추가 저장</button></div>
       <div style={{maxHeight:360,overflow:"auto",border:"1px solid #e5e7eb",borderRadius:8}}>
-        {(cats||[]).map(c=><div key={c} style={{display:"grid",gridTemplateColumns:"120px 1fr",gap:8,padding:8,borderBottom:"1px solid #f1f5f9",alignItems:"center"}}><div style={{fontSize:12,fontWeight:900,color:"#334155"}}>{c}</div><input className="inp" value={renames[c] ?? c} onChange={e=>setRenames(r=>({...r,[c]:e.target.value}))} style={{fontSize:12,padding:7}}/></div>)}
+        {(cats||[]).map(c=><div key={c} style={{display:"grid",gridTemplateColumns:"28px 120px 1fr",gap:8,padding:8,borderBottom:"1px solid #f1f5f9",alignItems:"center",opacity:deletes.has(c) ? .6 : 1}}><input type="checkbox" checked={deletes.has(c)} onChange={()=>toggleDel(c)} title="삭제"/><div style={{fontSize:12,fontWeight:900,color:"#334155"}}>{c}</div><input className="inp" value={renames[c] ?? c} onChange={e=>setRenames(r=>({...r,[c]:e.target.value}))} style={{fontSize:12,padding:7}}/></div>)}
       </div>
-      <div style={{fontSize:11,color:"#64748b"}}>이름을 바꾸고 저장하면 기존 재고의 카테고리도 같이 변경됩니다.</div>
-      <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}><button className="btn bs" onClick={onClose}>취소</button><button className="btn bp" onClick={()=>onSave({add,renames})}>변경 저장</button></div>
+      <div style={{fontSize:11,color:"#64748b"}}>이름을 바꾸면 기존 재고도 같이 변경됩니다. 삭제 체크 시 해당 재고는 `기타`로 변경됩니다.</div>
+      <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}><button className="btn bs" onClick={onClose}>취소</button>{deletes.size>0&&<button className="btn bd" onClick={()=>onDelete?.(Array.from(deletes))}>삭제 적용</button>}<button className="btn bp" onClick={()=>onSave({add,renames})}>변경 저장</button></div>
     </div>
   </Modal>;
 }
