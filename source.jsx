@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import { PanoramaAddonPage, draftObjectsToMarkers } from "./panorama-addon.jsx";
 import { useAutoSafetyHazards, useAutoHazardNotifications, SOURCE_META, SEVERITY_META } from "./safety-auto-detect.jsx";
 import { InsuranceManagementPage, SafetyCalendarPage } from "./safety-insurance-calendar.jsx";
+import { ReportsNotificationsPage } from "./safety-reports-notifications.jsx";
 
 const DEFAULT_CCTV_SERVER_URL = "https://cctv.thejamsa.com";
 
@@ -15234,7 +15235,7 @@ function AutoDetectionPanel({ activeHazards, allHazards, facilities, onCreateAct
   );
 }
 
-function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction, worklogs = [] }) {
+function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction, worklogs = [], facActions = [], auditLog = [] }) {
   const user = userCtx;
   const [page, setPage] = useState("dashboard");
   const [trainings, setTrainings] = useState(FAC_INIT_SAFE_TRAININGS);
@@ -15403,6 +15404,7 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction, worklogs 
           {[
             { id: "dashboard", label: "안전 대시보드", icon: "🛡️" },
             { id: "calendar", label: "안전관리 캘린더", icon: "📅" },
+            { id: "reports", label: "종합 보고/알림", icon: "📊" },
             { id: "hazard", label: "AI 위험성 평가", icon: "🤖" },
             { id: "tasks", label: "보완조치 관리", icon: "🔧" },
             { id: "incident", label: "사고/아차사고 기록", icon: "🚨" },
@@ -15435,6 +15437,7 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction, worklogs 
         <div className="text-xl font-black mb-6 text-gray-900 flex items-center gap-2">
           {page === "dashboard" && "🛡️ 종합 안전 대시보드"}
           {page === "calendar" && "📅 안전관리 캘린더"}
+          {page === "reports" && "📊 종합 보고서 + 알림 채널"}
           {page === "education" && "📚 법정 의무 및 직무 안전 교육 일지"}
           {page === "hazard" && "🤖 시설 작업 환경 AI 위험성 평가"}
           {page === "tasks" && "🔧 보완조치 관리"}
@@ -15451,6 +15454,17 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction, worklogs 
 
         {page === "insurance" && (
           <InsuranceManagementPage incidents={incidents} facilities={facilities} curUser={user}/>
+        )}
+
+        {page === "reports" && (
+          <ReportsNotificationsPage
+            hist={[]}
+            audit={auditLog}
+            incidents={incidents}
+            facActions={facActions}
+            autoHazards={autoHazards}
+            dailyChecks={dailyChecks}
+            curUser={user}/>
         )}
 
         {page === "dashboard" && (
@@ -23396,7 +23410,7 @@ function AppInner() {
         {module === "home"      && <IntegratedHomeDashboard userCtx={facUser} facActions={facActions} worklogs={worklogs} auditLog={auditLog} onNavigate={(m)=>setModule(m)} onAddFacAction={addFacAction} />}
         {module === "facility"  && <FacilityModule  userCtx={facUser} onLogout={logout} inspections={facInspections} setInspections={setFacInspections} actions={facActions} setActions={setFacActions} addAudit={addAudit} updateFacAction={updateFacAction} />}
         {module === "inventory" && <InventoryModule userCtx={invUser} onLogout={logout} onAddFacAction={addFacAction} switchToFacility={() => setModule("facility")} facActions={facActions} addAudit={addAudit} />}
-        {module === "safety"    && <SafetyModule userCtx={facUser} onLogout={logout} facilities={FAC_FACILITIES} onAddFacAction={addFacAction} addAudit={addAudit} worklogs={worklogs} />}
+        {module === "safety"    && <SafetyModule userCtx={facUser} onLogout={logout} facilities={FAC_FACILITIES} onAddFacAction={addFacAction} addAudit={addAudit} worklogs={worklogs} facActions={facActions} auditLog={auditLog} />}
         {module === "subagents" && <AutoSubAgentPage
           report={autoAgentReport}
           enabled={autoAgentEnabled}
