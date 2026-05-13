@@ -254,12 +254,24 @@
           });
           const data = await r.json();
           const ans = (data.answer || '응답 없음').replace(/</g, '&lt;');
-          const src = data.source === 'claude' ? '<span style="background:#dbeafe;color:#1e40af;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:bold">📡 Claude AI</span>' : '<span style="background:#f1f5f9;color:#475569;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:bold">📋 룰 기반</span>';
-          let html = '<div class="sr-header" style="display:flex;justify-content:space-between"><span>🤖 챗봇 응답</span>' + src + '</div>';
+          let src;
+          if (data.source === 'claude') {
+            const modelLabel = (data.model || 'claude').replace(/^claude-/, '').replace(/-\d{8}$/, '');
+            src = '<span style="background:linear-gradient(90deg,#9333ea,#2563eb);color:#fff;padding:2px 8px;border-radius:4px;font-size:9px;font-weight:bold">✨ Claude ' + modelLabel + '</span>';
+          } else {
+            src = '<span style="background:#f1f5f9;color:#475569;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:bold">📋 룰 기반</span>';
+          }
+          let html = '<div class="sr-header" style="display:flex;justify-content:space-between;align-items:center"><span>🤖 챗봇 응답</span>' + src + '</div>';
           html += '<div class="sr-row" style="flex-direction:column;align-items:flex-start;gap:6px;padding:12px">';
           html += '<div style="font-size:11px;color:#94a3b8">질문: ' + question.replace(/</g, '&lt;') + '</div>';
           html += '<div style="font-size:13px;color:#0f172a;line-height:1.6;white-space:pre-wrap">' + ans + '</div>';
           html += '</div>';
+          if (data.setup_hint) {
+            html += '<div style="margin:6px 8px;padding:8px 10px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;font-size:10px;color:#92400e;line-height:1.5">' + data.setup_hint.replace(/</g, '&lt;') + '</div>';
+          }
+          if (data.usage) {
+            html += '<div style="padding:4px 12px;font-size:9px;color:#94a3b8;text-align:right">tokens: 입력 ' + (data.usage.input_tokens||0) + ' · 출력 ' + (data.usage.output_tokens||0) + '</div>';
+          }
           html += '<div class="sr-row" style="cursor:pointer;justify-content:center" onclick="document.getElementById(\'searchInput\').value=\'\';document.getElementById(\'searchInput\').focus();">';
           html += '<span style="color:#3b82f6;font-size:11px;font-weight:bold">➕ 새로운 질문하기</span></div>';
           results.innerHTML = html;
