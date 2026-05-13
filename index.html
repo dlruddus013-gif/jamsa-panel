@@ -292,6 +292,7 @@
       };
       input.addEventListener('input', e => { clearTimeout(timer); timer = setTimeout(() => search(e.target.value.trim()), 200); });
       input.addEventListener('focus', () => { if (!input.value.trim()) renderEmpty(); });
+      input.addEventListener('click', () => { if (!input.value.trim()) renderEmpty(); });
       input.addEventListener('keydown', e => {
         if (e.key === 'Escape') { input.value = ''; results.classList.remove('active'); input.blur(); }
         // 엔터: 챗봇 모드인 경우 즉시 검색

@@ -163,20 +163,130 @@
       setInterval(check, 15000);
     }, 2000);
 
-    // 글로벌 검색
+    // 글로벌 검색 (확장: 챗봇 + Claude + 최근 검색 로그)
     (function() {
       const input = document.getElementById('searchInput');
       const results = document.getElementById('searchResults');
       let timer = null;
+      const HIST_KEY = 'jamsa_search_history';
+      const MAX_HIST = 20;
       const LABELS = {
         'jamsa_inv_prods': '📦 재고', 'jamsa_inv_hist': '📜 이력',
         'jamsa_custom_zones': '📍 구역', 'jamsa_fac_inspections': '🛠 점검',
         'jamsa_fac_actions': '✓ 조치', 'jamsa_audit_log': '📋 활동',
         'jamsa_worklogs': '📒 일지',
       };
+
+      const loadHistory = () => { try { return JSON.parse(localStorage.getItem(HIST_KEY) || '[]'); } catch (e) { return []; } };
+      const saveHistory = (q) => {
+        if (!q || q.length < 2 || q.startsWith('?') || q.startsWith('/')) return;
+        const cur = loadHistory().filter(x => x.q !== q);
+        cur.unshift({ q, at: Date.now() });
+        try { localStorage.setItem(HIST_KEY, JSON.stringify(cur.slice(0, MAX_HIST))); } catch (e) {}
+      };
+      const clearHistory = () => {
+        if (!confirm('최근 검색 기록을 모두 삭제할까요?')) return;
+        try { localStorage.removeItem(HIST_KEY); renderEmpty(); } catch (e) {}
+      };
+      window.__clearSearchHistory = clearHistory;
+
+      const renderEmpty = () => {
+        const hist = loadHistory();
+        let html = '<div class="sr-header">🚀 빠른 작업</div>';
+        html += '<div class="sr-row" style="cursor:pointer" onclick="window.__askChatbot()">';
+        html += '<span class="sr-coll" style="background:linear-gradient(90deg,#9333ea,#2563eb);color:#fff;font-weight:700">🤖 챗봇</span>';
+        html += '<span class="sr-preview">시스템 사용법을 AI에게 물어보세요. <strong style="color:#9333ea">?</strong> 또는 <strong>/</strong>로 시작하면 챗봇 모드</span>';
+        html += '</div>';
+        html += '<div class="sr-row" style="cursor:pointer" onclick="document.getElementById(\'searchInput\').value=\'?\';document.getElementById(\'searchInput\').focus();">';
+        html += '<span class="sr-coll" style="background:#fef3c7;color:#92400e">💡 예시 질문</span>';
+        html += '<span class="sr-preview">"?재고 추가 방법", "?캘린더 AI 어떻게 써?", "?텔레그램 알림 설정"</span>';
+        html += '</div>';
+        if (hist.length > 0) {
+          html += '<div class="sr-header" style="display:flex;justify-content:space-between;align-items:center">';
+          html += '<span>📜 최근 검색 (' + hist.length + ')</span>';
+          html += '<span style="cursor:pointer;color:#dc2626;font-size:10px;font-weight:bold" onclick="window.__clearSearchHistory()">🗑️ 전체삭제</span>';
+          html += '</div>';
+          hist.forEach(h => {
+            const safe = h.q.replace(/</g, '&lt;').replace(/'/g, '&#39;');
+            const ago = timeAgo(h.at);
+            html += '<div class="sr-row" style="cursor:pointer" onclick="window.__rerun(\'' + safe + '\')">';
+            html += '<span class="sr-coll" style="background:#f1f5f9;color:#475569">📜</span>';
+            html += '<span class="sr-preview">' + safe + ' <span style="color:#94a3b8;font-size:10px">· ' + ago + '</span></span>';
+            html += '</div>';
+          });
+        } else {
+          html += '<div class="sr-empty" style="opacity:0.6;font-size:11px">검색 기록이 아직 없습니다</div>';
+        }
+        results.innerHTML = html;
+        results.classList.add('active');
+      };
+
+      const timeAgo = (ts) => {
+        const s = Math.floor((Date.now() - ts) / 1000);
+        if (s < 60) return s + '초 전';
+        if (s < 3600) return Math.floor(s/60) + '분 전';
+        if (s < 86400) return Math.floor(s/3600) + '시간 전';
+        return Math.floor(s/86400) + '일 전';
+      };
+
+      window.__rerun = (q) => { input.value = q; input.focus(); search(q); };
+
+      window.__askChatbot = () => {
+        if (input.value && !input.value.startsWith('?') && !input.value.startsWith('/')) {
+          input.value = '?' + input.value;
+        } else if (!input.value) {
+          input.value = '?';
+        }
+        input.focus();
+        const p = input.value.length;
+        input.setSelectionRange(p, p);
+      };
+
+      const askChatbot = async (question) => {
+        results.innerHTML = '<div class="sr-header">🤖 챗봇 응답</div><div class="sr-empty" style="padding:20px;text-align:center;color:#6366f1">⏳ AI가 답변 중...</div>';
+        results.classList.add('active');
+        try {
+          const fetcher = window.authFetch || ((p,o)=>fetch(p,o));
+          const r = await fetcher('/api/chatbot', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question }),
+          });
+          const data = await r.json();
+          const ans = (data.answer || '응답 없음').replace(/</g, '&lt;');
+          const src = data.source === 'claude' ? '<span style="background:#dbeafe;color:#1e40af;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:bold">📡 Claude AI</span>' : '<span style="background:#f1f5f9;color:#475569;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:bold">📋 룰 기반</span>';
+          let html = '<div class="sr-header" style="display:flex;justify-content:space-between"><span>🤖 챗봇 응답</span>' + src + '</div>';
+          html += '<div class="sr-row" style="flex-direction:column;align-items:flex-start;gap:6px;padding:12px">';
+          html += '<div style="font-size:11px;color:#94a3b8">질문: ' + question.replace(/</g, '&lt;') + '</div>';
+          html += '<div style="font-size:13px;color:#0f172a;line-height:1.6;white-space:pre-wrap">' + ans + '</div>';
+          html += '</div>';
+          html += '<div class="sr-row" style="cursor:pointer;justify-content:center" onclick="document.getElementById(\'searchInput\').value=\'\';document.getElementById(\'searchInput\').focus();">';
+          html += '<span style="color:#3b82f6;font-size:11px;font-weight:bold">➕ 새로운 질문하기</span></div>';
+          results.innerHTML = html;
+        } catch (e) {
+          results.innerHTML = '<div class="sr-empty">❌ 챗봇 호출 실패: ' + e.message + '</div>';
+        }
+      };
+
       const search = async (q) => {
-        if (!q) { results.classList.remove('active'); return; }
-        if (!window.authFetch) { return; }
+        if (!q) { renderEmpty(); return; }
+
+        if (q.startsWith('?') || q.startsWith('/')) {
+          const question = q.slice(1).trim();
+          if (!question) {
+            results.innerHTML = '<div class="sr-empty">물음표 뒤에 질문을 입력하세요. 예: <strong>?재고 추가</strong></div>';
+            results.classList.add('active');
+            return;
+          }
+          askChatbot(question);
+          return;
+        }
+
+        if (!window.authFetch) {
+          results.innerHTML = '<div class="sr-empty">로그인 필요</div>';
+          results.classList.add('active');
+          return;
+        }
         try {
           const res = await window.authFetch('/api/search?q=' + encodeURIComponent(q) + '&limit=30');
           if (!res.ok) {
@@ -186,12 +296,15 @@
           const data = await res.json();
           const matches = data.matches || [];
           if (matches.length === 0) {
-            results.innerHTML = '<div class="sr-empty">"' + q + '" 결과 없음</div>';
-            results.classList.add('active'); return;
+            results.innerHTML = '<div class="sr-empty">"' + q + '" 결과 없음 · 💡 챗봇에게 물어보려면 <strong style="color:#9333ea">?' + q + '</strong> 입력</div>';
+            results.classList.add('active');
+            saveHistory(q);
+            return;
           }
+          saveHistory(q);
           const grouped = {};
           matches.forEach(m => { (grouped[m.collection] = grouped[m.collection] || []).push(m); });
-          let html = '<div class="sr-header">' + matches.length + '건</div>';
+          let html = '<div class="sr-header" style="display:flex;justify-content:space-between"><span>' + matches.length + '건</span><span style="color:#9333ea;font-size:10px;cursor:pointer;font-weight:bold" onclick="window.__askChatbot()">🤖 챗봇에게 물어보기</span></div>';
           for (const [coll, items] of Object.entries(grouped)) {
             const label = LABELS[coll] || coll.replace('jamsa_', '');
             items.slice(0, 6).forEach(m => {
@@ -216,7 +329,12 @@
         } catch (e) { alert(e.message); }
       };
       input.addEventListener('input', e => { clearTimeout(timer); timer = setTimeout(() => search(e.target.value.trim()), 200); });
-      input.addEventListener('keydown', e => { if (e.key === 'Escape') { input.value = ''; results.classList.remove('active'); input.blur(); } });
+      input.addEventListener('focus', () => { if (!input.value.trim()) renderEmpty(); });
+      input.addEventListener('click', () => { if (!input.value.trim()) renderEmpty(); });
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Escape') { input.value = ''; results.classList.remove('active'); input.blur(); }
+        if (e.key === 'Enter') { clearTimeout(timer); search(input.value.trim()); }
+      });
       document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); input.focus(); input.select(); } });
       document.addEventListener('click', e => { if (!e.target.closest('#globalSearch') && !e.target.closest('#searchResults')) results.classList.remove('active'); });
     })();
