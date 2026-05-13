@@ -8623,16 +8623,55 @@ function CctvLiveOverlay({ zones, cctvMap, onAlert, onOpenChannel, snapServerUrl
   const [snapshots, setSnapshots] = useState({}); // {ch: {url, ts}}
   const [analyses, setAnalyses] = useState({});   // {ch: {level, score, summary, ...}}
   const [analyzing, setAnalyzing] = useState({}); // {ch: true/false}
-  const [enabled, setEnabled] = useState(() => {
+  // 🔴 항시작동 모드 — 토글 비활성화 + 자동 재연결 + AI 자동 활성화
+  const [alwaysOn, setAlwaysOn] = useState(() => {
+    try { return window.localStorage?.getItem("jamsa_cctv_always_on") === "1"; }
+    catch (e) { return false; }
+  });
+  const [enabled, setEnabledRaw] = useState(() => {
     try { return window.localStorage?.getItem("jamsa_cctv_overlay_on") !== "0"; }
     catch (e) { return true; }
   });
-  const [aiEnabled, setAiEnabled] = useState(() => {
+  const [aiEnabled, setAiEnabledRaw] = useState(() => {
     try { return window.localStorage?.getItem("jamsa_cctv_ai_on") === "1"; }
     catch (e) { return false; }
   });
+  // 항시작동 시 enabled/aiEnabled 강제 ON
+  const setEnabled = (v) => {
+    if (alwaysOn && !v) { alert("🔴 항시작동 모드가 켜져 있습니다. 먼저 항시작동을 해제하세요."); return; }
+    setEnabledRaw(v);
+    try { window.localStorage?.setItem("jamsa_cctv_overlay_on", v ? "1" : "0"); } catch (e) {}
+  };
+  const setAiEnabled = (v) => {
+    if (alwaysOn && !v) { alert("🔴 항시작동 모드가 켜져 있습니다. 먼저 항시작동을 해제하세요."); return; }
+    setAiEnabledRaw(v);
+    try { window.localStorage?.setItem("jamsa_cctv_ai_on", v ? "1" : "0"); } catch (e) {}
+  };
+  const toggleAlwaysOn = () => {
+    const next = !alwaysOn;
+    setAlwaysOn(next);
+    try { window.localStorage?.setItem("jamsa_cctv_always_on", next ? "1" : "0"); } catch (e) {}
+    if (next) {
+      // 항시작동 ON → 스냅샷 + AI 모두 자동 활성화
+      setEnabledRaw(true);
+      setAiEnabledRaw(true);
+      try {
+        window.localStorage?.setItem("jamsa_cctv_overlay_on", "1");
+        window.localStorage?.setItem("jamsa_cctv_ai_on", "1");
+      } catch (e) {}
+    }
+  };
+  // 항시작동 활성 시 강제로 ON 유지 (다른 코드가 setEnabledRaw(false)해도 복구)
+  useEffect(() => {
+    if (alwaysOn) {
+      if (!enabled) setEnabledRaw(true);
+      if (!aiEnabled) setAiEnabledRaw(true);
+    }
+  }, [alwaysOn, enabled, aiEnabled]);
   const [snapInterval, setSnapInterval] = useState(5000); // 5초
   const [aiInterval, setAiInterval] = useState(60000);    // 60초 (AI는 비용 절감)
+  // 백엔드 연결 끊김 자동 재연결 추적
+  const reconnectRef = useRef({ errorCount: 0, lastOkAt: Date.now(), backoffMs: 5000 });
   const [lastAlert, setLastAlert] = useState(null);
   const aiCooldownRef = useRef({}); // {ch: lastAnalyzedAt}
 
@@ -8672,10 +8711,21 @@ function CctvLiveOverlay({ zones, cctvMap, onAlert, onOpenChannel, snapServerUrl
           if (!snapshots[ch]) {
             setSnapshots(s => ({ ...s, [ch]: { url: null, ts: Date.now(), error: true } }));
           }
+          // 🔴 항시작동: 에러 카운트 증가, exponential backoff (최대 30초)
+          if (alwaysOn) {
+            reconnectRef.current.errorCount++;
+            reconnectRef.current.backoffMs = Math.min(30000, 5000 * Math.pow(1.5, Math.min(reconnectRef.current.errorCount, 5)));
+          }
           return;
         }
         if (activeBase && activeBase !== normalizeCctvServerUrl(snapServerUrl)) {
           try { window.localStorage?.setItem("jamsa_cctv_snap_server", activeBase); } catch (e) {}
+        }
+        // 🔴 항시작동: 성공 시 reconnect 상태 초기화
+        if (alwaysOn) {
+          reconnectRef.current.errorCount = 0;
+          reconnectRef.current.lastOkAt = Date.now();
+          reconnectRef.current.backoffMs = 5000;
         }
         const blob = await res.blob();
         if (stopped) return;
@@ -8687,6 +8737,7 @@ function CctvLiveOverlay({ zones, cctvMap, onAlert, onOpenChannel, snapServerUrl
         });
       } catch (e) {
         // 네트워크 에러는 placeholder
+        if (alwaysOn) reconnectRef.current.errorCount++;
       }
     };
 
@@ -8825,26 +8876,43 @@ function CctvLiveOverlay({ zones, cctvMap, onAlert, onOpenChannel, snapServerUrl
   return (
     <>
       {/* 컨트롤 패널 */}
-      <div style={{position:"absolute",top:12,right:12,zIndex:500,background:"rgba(15,23,42,0.92)",color:"#fff",padding:"8px 12px",borderRadius:10,fontSize:11,backdropFilter:"blur(8px)",display:"flex",flexDirection:"column",gap:6,minWidth:180}}>
+      <div style={{position:"absolute",top:12,right:12,zIndex:500,background:"rgba(15,23,42,0.92)",color:"#fff",padding:"8px 12px",borderRadius:10,fontSize:11,backdropFilter:"blur(8px)",display:"flex",flexDirection:"column",gap:6,minWidth:200,border:alwaysOn?"2px solid #dc2626":"none"}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,paddingBottom:6,borderBottom:"1px solid rgba(255,255,255,0.15)"}}>
           <span style={{fontWeight:700,display:"flex",alignItems:"center",gap:6}}>
-            <span style={{width:8,height:8,background:"#22c55e",borderRadius:"50%",animation:"naverPulse 2s infinite"}}></span>
-            CCTV 라이브
+            <span style={{width:8,height:8,background:alwaysOn?"#dc2626":"#22c55e",borderRadius:"50%",animation:"naverPulse 2s infinite"}}></span>
+            CCTV 라이브 {alwaysOn && <span style={{fontSize:9,padding:"1px 5px",background:"#dc2626",borderRadius:4,fontWeight:900,letterSpacing:0.5}}>🔴 ALWAYS ON</span>}
           </span>
-          <button onClick={()=>setEnabled(false)} style={{background:"none",border:"none",color:"rgba(255,255,255,0.6)",cursor:"pointer",fontSize:14,padding:0,lineHeight:1}}>×</button>
+          <button onClick={()=>setEnabled(false)} disabled={alwaysOn}
+            title={alwaysOn?"항시작동 모드에서는 닫을 수 없습니다":"닫기"}
+            style={{background:"none",border:"none",color:"rgba(255,255,255,0.6)",cursor:alwaysOn?"not-allowed":"pointer",fontSize:14,padding:0,lineHeight:1,opacity:alwaysOn?0.3:1}}>×</button>
         </div>
         <div style={{fontSize:10,color:"rgba(255,255,255,0.7)"}}>
           {activeChannels.length}대 라이브 · {Math.round(snapInterval/1000)}초 갱신
+          {alwaysOn && reconnectRef.current.errorCount > 0 && (
+            <span style={{marginLeft:6,color:"#fcd34d"}}>🔄 재연결 시도 {reconnectRef.current.errorCount}회</span>
+          )}
         </div>
         <div style={{display:"flex",gap:6,fontSize:10}}>
           {dangerCount > 0 && <span style={{color:"#fca5a5"}}>🔴 위험 {dangerCount}</span>}
           {warningCount > 0 && <span style={{color:"#fcd34d"}}>🟡 주의 {warningCount}</span>}
           <span style={{color:"#86efac"}}>🟢 정상 {safeCount}</span>
         </div>
-        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:10,color:"rgba(255,255,255,0.85)",cursor:"pointer"}}>
-          <input type="checkbox" checked={aiEnabled} onChange={e=>setAiEnabled(e.target.checked)} style={{width:12,height:12}}/>
-          🤖 Claude AI 위험 분석 {aiEnabled && <span style={{color:"#fcd34d"}}>(과금 발생)</span>}
+        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:10,color:"rgba(255,255,255,0.85)",cursor:alwaysOn?"not-allowed":"pointer",opacity:alwaysOn?0.7:1}}>
+          <input type="checkbox" checked={aiEnabled} onChange={e=>setAiEnabled(e.target.checked)} disabled={alwaysOn} style={{width:12,height:12}}/>
+          🤖 Claude AI 위험 분석 {aiEnabled && <span style={{color:"#fcd34d"}}>(과금)</span>}
         </label>
+        {/* 🔴 항시작동 토글 */}
+        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:10,color:alwaysOn?"#fca5a5":"rgba(255,255,255,0.9)",cursor:"pointer",padding:"4px 6px",margin:"2px -6px -2px",background:alwaysOn?"rgba(220,38,38,0.2)":"rgba(255,255,255,0.05)",borderRadius:6,fontWeight:alwaysOn?900:600}}>
+          <input type="checkbox" checked={alwaysOn} onChange={toggleAlwaysOn} style={{width:12,height:12,accentColor:"#dc2626"}}/>
+          🔴 항시작동 (Always On) {alwaysOn && "✓"}
+        </label>
+        {alwaysOn && (
+          <div style={{fontSize:9,color:"rgba(252,165,165,0.85)",lineHeight:1.4,padding:"4px 6px",margin:"-2px -6px",background:"rgba(220,38,38,0.1)",borderRadius:4}}>
+            • 자동 재연결 (백오프 최대 30초)<br/>
+            • AI 분석 자동 활성화<br/>
+            • 끄기 비활성화 (해제하려면 우측 체크박스 다시 클릭)
+          </div>
+        )}
       </div>
 
       {/* 위험 알림 배너 */}
