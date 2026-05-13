@@ -4,8 +4,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
 
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const bundlePath = path.join(root, "public", "app.bundle.js");
 if (!fs.existsSync(bundlePath)) { console.error("bundle not found:", bundlePath); process.exit(1); }
 const hash = crypto.createHash("md5").update(fs.readFileSync(bundlePath)).digest("hex").slice(0, 8);

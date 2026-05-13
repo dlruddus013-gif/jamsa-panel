@@ -1,14 +1,12 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { PanoramaAddonPage, draftObjectsToMarkers } from "./panorama-addon.jsx";
 import { useAutoSafetyHazards, useAutoHazardNotifications, SOURCE_META, SEVERITY_META } from "./safety-auto-detect.jsx";
-// 자동 초기화: cctv.thejamsa.com을 기본 백엔드로 설정
+const DEFAULT_CCTV_SERVER_URL = "https://cctv.thejamsa.com";
+
+// CCTV backend bootstrap: use one default cloud endpoint everywhere.
 try {
   if (typeof window !== 'undefined' && window.localStorage) {
-    const _saved = window.localStorage.getItem("jamsa_cctv_snap_server");
-    const _isStale = !_saved || _saved.includes("localhost") || _saved.includes("trycloudflare.com") || _saved.includes("bufing-istanbul");
-    if (_isStale) {
-      window.localStorage.setItem("jamsa_cctv_snap_server", "https://cctv.thejamsa.com");
-    }
+    window.localStorage.setItem("jamsa_cctv_snap_server", DEFAULT_CCTV_SERVER_URL);
   }
 } catch(e) {}
 /* ─── LOCAL STORAGE PERSISTENCE HOOK ───
@@ -369,7 +367,6 @@ function aiStepsForType(type, severity) {
       { n: 3, title: "헹굼 및 건조", desc: "깨끗한 물로 적신 천으로 세제 잔여물을 완전히 제거하고 마른 천으로 물기를 닦아냅니다. 30분 자연 건조.", duration: "30분", tip: "💡 햇빛 직사 건조는 얼룩 원인. 그늘진 곳에서 말리세요." },
       { n: 4, title: "보호 코팅 재도포", desc: "스프레이형 보호 코팅제를 30cm 거리에서 얇게 분사. 1회 도포로 충분합니다.", duration: "10분", tip: "💡 바람 불지 않는 날·실내 작업 권장." },
     ],
-    "안전장치 교체": [], // placeholder duplicate safety
   };
   const arr = stepLib[type] || stepLib["시설물 보수"];
   return arr;
@@ -731,6 +728,448 @@ function AuditLogModal({ log, onClose }) {
 }
 
 /* ─── ACTION COMPLETION MODAL (AI 완료 확인) ─── */
+function readJamsaLS(key, fallback) {
+  try {
+    const raw = window.localStorage?.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (e) {
+    return fallback;
+  }
+}
+
+function buildAutoSubAgentReport({ facActions = [], worklogs = [], auditLog = [] }) {
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  const prods = readJamsaLS("jamsa_inv_prods", []);
+  const requisitions = readJamsaLS("jamsa_requisitions", []);
+  const incidents = readJamsaLS("jamsa_incidents", []);
+  const dailyChecks = readJamsaLS("jamsa_daily_checks", []);
+  const openActions = facActions.filter(a => a.status !== "DONE");
+  const overdueActions = openActions.filter(a => a.due && new Date(a.due) < now);
+  const urgentActions = openActions.filter(a => a.sev === "URGENT");
+  const lowStock = prods.filter(p => {
+    const qty = Number(p.qty || 0);
+    const min = Number(p.minQty || p.safeQty || p.reorderPoint || 0);
+    return qty <= 0 || (min > 0 && qty <= min);
+  });
+  const activeReqs = requisitions.filter(r => !["received", "cancelled", "rejected"].includes(r.status));
+  const todayWorklog = worklogs.some(w => String(w.date || w.createdAt || "").startsWith(today));
+  const todayDailyChecks = dailyChecks.filter(c => c.date === today);
+  const recentIncidents = incidents.filter(i => {
+    const d = new Date(i.time || i.recordedAt || i.createdAt || 0);
+    return Number.isFinite(d.getTime()) && (now - d) <= 7 * 86400000;
+  });
+  const recentAi = auditLog.filter(e => e.action === "ai_analyze").slice(0, 20);
+  const due = (days) => {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    return d.toISOString();
+  };
+  const agents = [
+    {
+      id: "facility", name: "시설 보완 에이전트", icon: "🛠",
+      status: overdueActions.length || urgentActions.length ? "critical" : openActions.length ? "watch" : "ok",
+      summary: overdueActions.length ? `기한 초과 보완과제 ${overdueActions.length}건` : urgentActions.length ? `긴급 보완과제 ${urgentActions.length}건` : openActions.length ? `진행중 보완과제 ${openActions.length}건 추적` : "시설 보완과제 안정",
+      checks: [`진행중 ${openActions.length}건`, `긴급 ${urgentActions.length}건`, `기한초과 ${overdueActions.length}건`],
+      recommendations: [
+        ...overdueActions.slice(0, 3).map(a => ({ id: `fac-overdue-${a.id}`, title: `기한 초과: ${a.title}`, desc: `${a.rec || a.desc || "조치 내역 확인"} · 담당 ${a.assignee || "미지정"}`, module: "facility", severity: a.sev || "HIGH", action: null })),
+        ...urgentActions.slice(0, 2).map(a => ({ id: `fac-urgent-${a.id}`, title: `긴급 과제 점검 요청: ${a.title}`, desc: a.desc || a.rec || "긴급 과제 상태를 확인하세요.", module: "facility", severity: "URGENT", action: null })),
+      ],
+    },
+    {
+      id: "inventory", name: "재고/품의 에이전트", icon: "📦",
+      status: lowStock.length ? "critical" : activeReqs.length ? "watch" : "ok",
+      summary: lowStock.length ? `부족/소진 재고 ${lowStock.length}개` : activeReqs.length ? `진행중 품의 ${activeReqs.length}건` : "재고 흐름 안정",
+      checks: [`부족 재고 ${lowStock.length}개`, `진행중 품의 ${activeReqs.length}건`, `등록 제품 ${prods.length}개`],
+      recommendations: lowStock.slice(0, 5).map(p => ({
+        id: `inv-low-${p.id}`,
+        title: `재고 부족: ${p.name}`,
+        desc: `${p.code || ""} · 현재 ${p.qty || 0}${p.unit || "개"} · 위치 ${p.loc || "-"}`,
+        module: "inventory",
+        severity: Number(p.qty || 0) <= 0 ? "URGENT" : "HIGH",
+        action: { source: "inventory", title: `[자동 서브에이전트] ${p.name} 재고 보충`, type: "재고", desc: `${p.name} 재고가 기준 이하입니다. 발주/입고 필요 여부를 확인하세요.`, sev: Number(p.qty || 0) <= 0 ? "URGENT" : "HIGH", due: due(Number(p.qty || 0) <= 0 ? 1 : 3), rec: "품의/결제 등록 후 입고 완료까지 추적" },
+      })),
+    },
+    {
+      id: "safety", name: "안전 리스크 에이전트", icon: "🛡️",
+      status: recentIncidents.length ? "critical" : todayDailyChecks.length < 2 ? "watch" : "ok",
+      summary: recentIncidents.length ? `최근 7일 사고/아차사고 ${recentIncidents.length}건` : todayDailyChecks.length < 2 ? `오늘 안전 체크 ${todayDailyChecks.length}/3회` : "안전 점검 흐름 안정",
+      checks: [`최근 사고 ${recentIncidents.length}건`, `오늘 체크 ${todayDailyChecks.length}/3회`, `최근 AI 분석 ${recentAi.length}건`],
+      recommendations: [
+        ...recentIncidents.slice(0, 3).map(i => ({ id: `safe-inc-${i.id}`, title: `사고 후속 점검: ${i.type || "사고 기록"}`, desc: i.description || i.location || "사고/아차사고 기록을 확인하세요.", module: "safety", severity: "HIGH", action: { source: "safety", title: "[자동 서브에이전트] 사고 후속 점검", type: "안전", desc: i.description || "사고/아차사고 후속 조치 확인", sev: "HIGH", due: due(2), rec: "현장 재점검 및 재발 방지 조치 기록" } })),
+        ...(todayDailyChecks.length < 2 ? [{ id: "safe-daily-check", title: "일일 시설점검 미완료 가능성", desc: "개장/점심/마감 체크 중 누락된 시간이 있는지 확인하세요.", module: "safety", severity: "MEDIUM", action: null }] : []),
+      ],
+    },
+    {
+      id: "worklog", name: "업무일지 에이전트", icon: "📒",
+      status: todayWorklog ? "ok" : "watch",
+      summary: todayWorklog ? "오늘 업무일지 기록 확인" : "오늘 업무일지 미작성",
+      checks: [`업무일지 총 ${worklogs.length}건`, `오늘 기록 ${todayWorklog ? "있음" : "없음"}`, `감사 로그 ${auditLog.length}건`],
+      recommendations: todayWorklog ? [] : [{ id: "worklog-today", title: "오늘 업무일지 작성 필요", desc: "일간 점검표를 저장해 운영 기록을 남기세요.", module: "worklog", severity: "MEDIUM", action: null }],
+    },
+  ];
+  const recommendations = agents.flatMap(a => a.recommendations.map(r => ({ ...r, agentName: a.name })));
+  return {
+    generatedAt: now.toISOString(),
+    agents,
+    recommendations,
+    criticalCount: agents.filter(a => a.status === "critical").length,
+    watchCount: agents.filter(a => a.status === "watch").length,
+    signature: agents.map(a => `${a.id}:${a.status}:${a.recommendations.length}`).join("|"),
+  };
+}
+
+function AutoSubAgentModal({ report, enabled, setEnabled, onClose, onNavigate, onAddFacAction, addAudit }) {
+  const [created, setCreated] = useState({});
+  const statusMeta = {
+    ok: { label: "정상", color: "#059669", bg: "#ecfdf5" },
+    watch: { label: "관찰", color: "#ca8a04", bg: "#fffbeb" },
+    critical: { label: "긴급", color: "#dc2626", bg: "#fef2f2" },
+  };
+  const createAction = (rec) => {
+    if (!rec.action || !onAddFacAction) return;
+    onAddFacAction({ ...rec.action, id: "auto" + Date.now() + Math.random(), status: "TODO", createdAt: new Date().toISOString(), ai: { agent: rec.agentName, recommendation: rec.title } });
+    setCreated(prev => ({ ...prev, [rec.id]: true }));
+    addAudit?.({ module: rec.module === "inventory" ? "inventory" : rec.module === "safety" ? "safety" : "facility", action: "action_create", targetLabel: rec.action.title, severity: rec.action.sev, summary: `자동 서브에이전트 추천으로 보완과제 생성 · ${rec.agentName}` });
+  };
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,zIndex:10500,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.62)",backdropFilter:"blur(3px)",padding:16}}>
+      <div onClick={e=>e.stopPropagation()} style={{width:860,maxWidth:"96vw",maxHeight:"90vh",overflow:"hidden",background:"#fff",borderRadius:14,boxShadow:"0 24px 70px rgba(0,0,0,.34)",display:"flex",flexDirection:"column"}}>
+        <div style={{padding:"16px 20px",background:"linear-gradient(135deg,#111827,#1e293b)",color:"#fff",display:"flex",justifyContent:"space-between",gap:12,alignItems:"center"}}>
+          <div><div style={{fontSize:11,opacity:.75,fontWeight:700}}>자동 운영 서브에이전트</div><div style={{fontSize:18,fontWeight:900}}>🤖 서브에이전트 관제센터</div></div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <label style={{fontSize:11,fontWeight:800,display:"flex",alignItems:"center",gap:6,cursor:"pointer",background:"rgba(255,255,255,.12)",padding:"7px 10px",borderRadius:8}}>
+              <input type="checkbox" checked={!!enabled} onChange={e=>setEnabled(e.target.checked)} /> 자동 감시
+            </label>
+            <button onClick={onClose} style={{background:"rgba(255,255,255,.14)",border:"none",color:"#fff",fontSize:22,cursor:"pointer",width:32,height:32,borderRadius:"50%",lineHeight:1}}>×</button>
+          </div>
+        </div>
+        <div style={{padding:16,overflow:"auto"}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:8,marginBottom:14}}>
+            {report.agents.map(agent => {
+              const m = statusMeta[agent.status];
+              return (
+                <div key={agent.id} style={{border:"1px solid #e5e7eb",borderRadius:10,padding:12,background:m.bg}}>
+                  <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",marginBottom:8}}>
+                    <div style={{fontSize:18}}>{agent.icon}</div>
+                    <span style={{fontSize:10,fontWeight:900,color:m.color,border:`1px solid ${m.color}33`,background:"#fff",borderRadius:999,padding:"2px 7px"}}>{m.label}</span>
+                  </div>
+                  <div style={{fontSize:12,fontWeight:900,color:"#111827",marginBottom:4}}>{agent.name}</div>
+                  <div style={{fontSize:11,color:"#475569",lineHeight:1.4,minHeight:32}}>{agent.summary}</div>
+                  <div style={{marginTop:8,display:"grid",gap:3}}>{agent.checks.map(c => <div key={c} style={{fontSize:10,color:"#64748b"}}>• {c}</div>)}</div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",margin:"8px 0"}}>
+            <div style={{fontSize:13,fontWeight:900,color:"#111827"}}>추천 조치 {report.recommendations.length}건</div>
+            <div style={{fontSize:11,color:"#64748b"}}>최근 스캔: {new Date(report.generatedAt).toLocaleString("ko-KR")}</div>
+          </div>
+          <div style={{border:"1px solid #e5e7eb",borderRadius:10,overflow:"hidden"}}>
+            {report.recommendations.length === 0 ? (
+              <div style={{padding:30,textAlign:"center",fontSize:13,color:"#64748b"}}>현재 자동 조치가 필요한 항목이 없습니다.</div>
+            ) : report.recommendations.map(rec => (
+              <div key={rec.id} style={{padding:12,borderBottom:"1px solid #f1f5f9",display:"flex",gap:10,alignItems:"center"}}>
+                <div style={{width:8,height:40,borderRadius:999,background:rec.severity==="URGENT"?"#dc2626":rec.severity==="HIGH"?"#ea580c":"#ca8a04",flexShrink:0}} />
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:12,fontWeight:900,color:"#111827"}}>{rec.title}</div>
+                  <div style={{fontSize:11,color:"#64748b",marginTop:3}}>{rec.desc}</div>
+                  <div style={{fontSize:10,color:"#94a3b8",marginTop:3}}>{rec.agentName} · {rec.module}</div>
+                </div>
+                <button onClick={()=>onNavigate?.(rec.module === "inventory" ? "inventory" : rec.module === "safety" ? "safety" : rec.module === "worklog" ? "worklog" : "facility")} style={{padding:"7px 10px",borderRadius:7,border:"1px solid #cbd5e1",background:"#fff",fontSize:11,fontWeight:800,cursor:"pointer",whiteSpace:"nowrap"}}>이동</button>
+                {rec.action && <button onClick={()=>createAction(rec)} disabled={created[rec.id]} style={{padding:"7px 10px",borderRadius:7,border:"none",background:created[rec.id]?"#94a3b8":"#2563eb",color:"#fff",fontSize:11,fontWeight:800,cursor:created[rec.id]?"default":"pointer",whiteSpace:"nowrap"}}>{created[rec.id] ? "등록됨" : "과제 등록"}</button>}
+              </div>
+            ))}
+          </div>
+          <div style={{marginTop:12,padding:10,borderRadius:8,background:"#eff6ff",color:"#1e40af",fontSize:11,lineHeight:1.6}}>
+            자동 감시는 데이터를 읽어 위험 신호를 계산합니다. 실제 보완과제 생성은 담당자가 `과제 등록`을 눌렀을 때만 실행됩니다.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AutoSubAgentPage({ report, enabled, setEnabled, onNavigate, onAddFacAction, addAudit, snapshotData = {} }) {
+  const [activeTab, setActiveTab] = useState("control");
+  const [created, setCreated] = useState({});
+  const [liveAnalysis, setLiveAnalysis] = useState(() => readJamsaLS("jamsa_agent_live_analysis", null));
+  const [liveLoading, setLiveLoading] = useState(false);
+  const [liveError, setLiveError] = useState("");
+  const [apiHealth, setApiHealth] = useState([]);
+  const statusMeta = {
+    ok: { label: "정상", color: "#059669", bg: "#ecfdf5" },
+    watch: { label: "관찰", color: "#ca8a04", bg: "#fffbeb" },
+    critical: { label: "긴급", color: "#dc2626", bg: "#fef2f2" },
+  };
+  const extendedAgents = [
+    { id: "customer", name: "고객·마케팅 에이전트", icon: "💬", tag: "확장", color: "#dc2626", checks: ["문의·민원 분류", "리뷰/만족도 분석", "CRM 세그먼트", "캠페인 자동발송"], signals: "반복 불만, 리뷰 악화, 홍보 필요" },
+    { id: "sales", name: "영업·예약·정산 에이전트", icon: "🎫", tag: "확장", color: "#d97706", checks: ["온라인/단체 예약", "티켓 검증", "결제·환불", "매출 정산"], signals: "예약 급증, 환불 지연, 정산 누락" },
+    { id: "field", name: "현장운영·CS 에이전트", icon: "👥", tag: "확장", color: "#059669", checks: ["혼잡도", "대기시간", "오픈/마감 체크", "민원 처리"], signals: "현장 병목, 인력 부족, 민원 지연" },
+    { id: "contents", name: "콘텐츠·공연·교육 에이전트", icon: "🎓", tag: "확장", color: "#7c3aed", checks: ["행사 준비", "체험교육", "전시 해설", "교육자료"], signals: "준비물 부족, 안내문 필요, 교육 일정 충돌" },
+    { id: "special", name: "생물·수질·특수운영 에이전트", icon: "💧", tag: "옵션", color: "#0891b2", checks: ["사육일지", "급이 스케줄", "수질 모니터링", "검역 기록"], signals: "수질 이상, 급이 누락, 건강 기록 필요" },
+    { id: "kpi", name: "KPI·리포트 에이전트", icon: "📊", tag: "확장", color: "#334155", checks: ["방문객", "사고 건수", "매출/객단가", "미완료 과제"], signals: "대표/관리자용 핵심 지표 요약" },
+  ];
+  const neuralLinks = [
+    ["안전 사고 감지", "시설 보완과제 생성", "업무일지 기록 요청", "KPI 사고 건수 반영", "관리자 긴급 추천"],
+    ["단체 예약 증가", "재고 부족 확인", "현장 혼잡 예측", "교육 안내문 준비", "예상 매출 반영"],
+    ["재고 기준 이하", "발주/품의 확인", "관련 업무 영향 확인", "조치 내역 기록", "재고 KPI 갱신"],
+  ];
+  const collectLiveSnapshot = useCallback(() => ({
+    generatedAt: new Date().toISOString(),
+    facActions: snapshotData.facActions || readJamsaLS("jamsa_fac_actions", []),
+    worklogs: snapshotData.worklogs || readJamsaLS("jamsa_worklogs", []),
+    auditLog: snapshotData.auditLog || readJamsaLS("jamsa_audit_log", []),
+    inventory: readJamsaLS("jamsa_inv_prods", []),
+    requisitions: readJamsaLS("jamsa_requisitions", []),
+    incidents: readJamsaLS("jamsa_incidents", []),
+    dailyChecks: readJamsaLS("jamsa_daily_checks", []),
+    localReport: report,
+  }), [snapshotData.facActions, snapshotData.worklogs, snapshotData.auditLog, report]);
+  const runLiveAnalysis = useCallback(async ({ silent = false } = {}) => {
+    const fetcher = window.authFetch || ((path, opts) => fetch(path, opts));
+    if (!silent) setLiveLoading(true);
+    setLiveError("");
+    try {
+      const healthTargets = [
+        { id: "agent", label: "실시간 분석 API", url: "/api/agent-realtime-analysis" },
+        { id: "operation", label: "운영 통계 API", url: "/api/operation-stats?range=today" },
+        { id: "forecast", label: "KPI 예측 API", url: "/api/forecast-kpi" },
+        { id: "alerts", label: "자동 알림 API", url: "/api/auto-alerts?range=today&limit=5" },
+      ];
+      const health = await Promise.all(healthTargets.map(async target => {
+        const started = performance.now();
+        try {
+          const res = await fetcher(target.url, { cache: "no-store", signal: AbortSignal.timeout?.(6000) });
+          return { ...target, ok: res.ok, status: res.status, ms: Math.round(performance.now() - started) };
+        } catch (e) {
+          return { ...target, ok: false, status: "ERR", ms: Math.round(performance.now() - started), error: e.message };
+        }
+      }));
+      setApiHealth(health);
+
+      const res = await fetcher("/api/agent-realtime-analysis", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({ snapshot: collectLiveSnapshot() }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.message || data.error || `API ${res.status}`);
+      setLiveAnalysis(data);
+      try {
+        window.localStorage?.setItem("jamsa_agent_live_analysis", JSON.stringify(data));
+        window.dispatchEvent(new CustomEvent("jamsa-agent-analysis-shared", { detail: data }));
+      } catch (e) {}
+      if (!silent) addAudit?.({ module: "subagents", action: "api_analyze", targetLabel: "실시간 에이전트 분석", severity: data.analysis?.status === "CRITICAL" ? "HIGH" : null, summary: `실시간 API 분석 공유 · 위험점수 ${data.analysis?.riskScore ?? 0}` });
+      return data;
+    } catch (e) {
+      setLiveError(e.message || "실시간 분석 실패");
+      return null;
+    } finally {
+      if (!silent) setLiveLoading(false);
+    }
+  }, [collectLiveSnapshot, addAudit]);
+  useEffect(() => {
+    if (activeTab !== "live") return;
+    runLiveAnalysis({ silent: false });
+    if (!enabled) return;
+    const id = setInterval(() => runLiveAnalysis({ silent: true }), 30000);
+    return () => clearInterval(id);
+  }, [activeTab, enabled, runLiveAnalysis]);
+  const createAction = (rec) => {
+    if (!rec.action || !onAddFacAction) return;
+    onAddFacAction({ ...rec.action, id: "auto" + Date.now() + Math.random(), status: "TODO", createdAt: new Date().toISOString(), ai: { agent: rec.agentName, recommendation: rec.title } });
+    setCreated(prev => ({ ...prev, [rec.id]: true }));
+    addAudit?.({ module: rec.module === "inventory" ? "inventory" : rec.module === "safety" ? "safety" : "facility", action: "action_create", targetLabel: rec.action.title, severity: rec.action.sev, summary: `서브에이전트 탭에서 보완과제 생성 · ${rec.agentName}` });
+  };
+  const go = (m) => onNavigate?.(m === "worklog" ? "worklog" : m);
+  return (
+    <div style={{height:"100%",overflow:"auto",background:"#f8fafc",padding:18}}>
+      <div style={{background:"linear-gradient(135deg,#0f172a,#1d4ed8,#059669)",borderRadius:16,padding:"18px 22px",color:"#fff",boxShadow:"0 10px 30px rgba(15,23,42,.18)",marginBottom:14,display:"flex",justifyContent:"space-between",gap:16,alignItems:"center"}}>
+        <div>
+          <div style={{fontSize:11,fontWeight:800,opacity:.75}}>AI 운영 허브 / Orchestrator</div>
+          <div style={{fontSize:24,fontWeight:950,marginTop:3}}>🤖 서브에이전트 관제 탭</div>
+          <div style={{fontSize:12,opacity:.82,marginTop:6}}>시설 · 재고 · 안전 · 업무일지 상태를 자동 분석하고, 확장 에이전트와 뉴럴링크 흐름까지 관리합니다.</div>
+        </div>
+        <label style={{fontSize:12,fontWeight:900,display:"flex",alignItems:"center",gap:8,background:"rgba(255,255,255,.14)",border:"1px solid rgba(255,255,255,.2)",borderRadius:10,padding:"9px 12px",cursor:"pointer",whiteSpace:"nowrap"}}>
+          <input type="checkbox" checked={!!enabled} onChange={e=>setEnabled(e.target.checked)} /> 자동 감시 {enabled ? "ON" : "OFF"}
+        </label>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:10,marginBottom:14}}>
+        {[
+          ["추천 조치", report.recommendations.length, "#2563eb"],
+          ["긴급", report.criticalCount, "#dc2626"],
+          ["관찰", report.watchCount, "#d97706"],
+          ["연동 에이전트", report.agents.length + extendedAgents.length, "#059669"],
+        ].map(([label,value,color]) => (
+          <div key={label} style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:12,padding:14,boxShadow:"0 6px 18px rgba(15,23,42,.06)"}}>
+            <div style={{fontSize:11,fontWeight:900,color:"#64748b"}}>{label}</div>
+            <div style={{fontSize:26,fontWeight:950,color,marginTop:3}}>{value}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:"flex",gap:6,background:"#e2e8f0",borderRadius:12,padding:4,marginBottom:14}}>
+        {[
+          ["control","관제센터"],
+          ["live","실시간 분석"],
+          ["agents","에이전트 상세"],
+          ["neural","뉴럴링크"],
+          ["api","API 연동"],
+        ].map(([id,label]) => (
+          <button key={id} onClick={()=>setActiveTab(id)} style={{flex:1,padding:"10px 12px",border:"none",borderRadius:9,background:activeTab===id?"#0f172a":"transparent",color:activeTab===id?"#fff":"#475569",fontSize:12,fontWeight:900,cursor:"pointer"}}>{label}</button>
+        ))}
+      </div>
+
+      {activeTab === "control" && <>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:10,marginBottom:14}}>
+          {report.agents.map(agent => {
+            const m = statusMeta[agent.status];
+            return <div key={agent.id} style={{background:m.bg,border:"1px solid #e5e7eb",borderRadius:12,padding:14}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}><span style={{fontSize:22}}>{agent.icon}</span><span style={{fontSize:10,fontWeight:950,color:m.color,background:"#fff",borderRadius:999,padding:"3px 8px"}}>{m.label}</span></div>
+              <div style={{fontSize:13,fontWeight:950,color:"#0f172a"}}>{agent.name}</div>
+              <div style={{fontSize:11,color:"#475569",lineHeight:1.45,marginTop:5}}>{agent.summary}</div>
+              <div style={{marginTop:8,display:"grid",gap:4}}>{agent.checks.map(c => <div key={c} style={{fontSize:10,color:"#64748b"}}>• {c}</div>)}</div>
+            </div>
+          })}
+        </div>
+        <div style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:12,overflow:"hidden"}}>
+          <div style={{padding:13,borderBottom:"1px solid #e5e7eb",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={{fontSize:14,fontWeight:950,color:"#0f172a"}}>추천 조치 {report.recommendations.length}건</div>
+            <div style={{fontSize:11,color:"#64748b"}}>최근 스캔: {new Date(report.generatedAt).toLocaleString("ko-KR")}</div>
+          </div>
+          {report.recommendations.length === 0 ? <div style={{padding:34,textAlign:"center",fontSize:13,color:"#64748b"}}>현재 자동 조치가 필요한 항목이 없습니다.</div> : report.recommendations.map(rec => (
+            <div key={rec.id} style={{padding:13,borderBottom:"1px solid #f1f5f9",display:"flex",gap:10,alignItems:"center"}}>
+              <div style={{width:8,height:42,borderRadius:999,background:rec.severity==="URGENT"?"#dc2626":rec.severity==="HIGH"?"#ea580c":"#ca8a04",flexShrink:0}} />
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:950,color:"#0f172a"}}>{rec.title}</div>
+                <div style={{fontSize:11,color:"#64748b",marginTop:3}}>{rec.desc}</div>
+                <div style={{fontSize:10,color:"#94a3b8",marginTop:3}}>{rec.agentName} · {rec.module}</div>
+              </div>
+              <button onClick={()=>go(rec.module === "inventory" ? "inventory" : rec.module === "safety" ? "safety" : rec.module === "worklog" ? "worklog" : "facility")} style={{padding:"8px 12px",borderRadius:8,border:"1px solid #cbd5e1",background:"#fff",fontSize:11,fontWeight:900,cursor:"pointer"}}>이동</button>
+              {rec.action && <button onClick={()=>createAction(rec)} disabled={created[rec.id]} style={{padding:"8px 12px",borderRadius:8,border:"none",background:created[rec.id]?"#94a3b8":"#2563eb",color:"#fff",fontSize:11,fontWeight:900,cursor:created[rec.id]?"default":"pointer"}}>{created[rec.id] ? "등록됨" : "과제 등록"}</button>}
+            </div>
+          ))}
+        </div>
+      </>}
+
+      {activeTab === "live" && <div style={{display:"grid",gap:12}}>
+        <div style={{display:"grid",gridTemplateColumns:"1.2fr .8fr",gap:12}}>
+          <div style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:12,padding:16,boxShadow:"0 6px 18px rgba(15,23,42,.05)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,marginBottom:12}}>
+              <div>
+                <div style={{fontSize:15,fontWeight:950,color:"#0f172a"}}>실시간 API 실제 분석</div>
+                <div style={{fontSize:11,color:"#64748b",marginTop:3}}>브라우저의 운영 데이터 스냅샷을 `/api/agent-realtime-analysis`로 보내 서버 분석 결과를 공유합니다.</div>
+              </div>
+              <button onClick={()=>runLiveAnalysis({ silent:false })} disabled={liveLoading} style={{padding:"9px 13px",borderRadius:9,border:"none",background:liveLoading?"#94a3b8":"#2563eb",color:"#fff",fontSize:12,fontWeight:900,cursor:liveLoading?"default":"pointer",whiteSpace:"nowrap"}}>
+                {liveLoading ? "분석 중..." : "지금 분석"}
+              </button>
+            </div>
+            {liveError && <div style={{padding:10,borderRadius:8,background:"#fef2f2",border:"1px solid #fecaca",color:"#991b1b",fontSize:12,fontWeight:800,marginBottom:10}}>API 분석 오류: {liveError}</div>}
+            {!liveAnalysis ? (
+              <div style={{padding:32,textAlign:"center",color:"#64748b",fontSize:13,background:"#f8fafc",borderRadius:10}}>아직 공유된 실시간 분석 결과가 없습니다. `지금 분석`을 눌러 API 분석을 실행하세요.</div>
+            ) : (
+              <div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:8,marginBottom:12}}>
+                  {[
+                    ["상태", liveAnalysis.analysis?.status || "-", liveAnalysis.analysis?.status === "CRITICAL" ? "#dc2626" : liveAnalysis.analysis?.status === "WATCH" ? "#d97706" : "#059669"],
+                    ["위험점수", liveAnalysis.analysis?.riskScore ?? 0, "#2563eb"],
+                    ["발견사항", liveAnalysis.analysis?.findings?.length || 0, "#7c3aed"],
+                    ["공유시각", liveAnalysis.generatedAt ? new Date(liveAnalysis.generatedAt).toLocaleTimeString("ko-KR") : "-", "#334155"],
+                  ].map(([label,value,color]) => <div key={label} style={{border:"1px solid #e5e7eb",borderRadius:10,padding:11,background:"#f8fafc"}}>
+                    <div style={{fontSize:10,fontWeight:900,color:"#64748b"}}>{label}</div>
+                    <div style={{fontSize:20,fontWeight:950,color,marginTop:4}}>{value}</div>
+                  </div>)}
+                </div>
+                <div style={{padding:12,borderRadius:10,background:"#eff6ff",border:"1px solid #bfdbfe",color:"#1e40af",fontSize:12,fontWeight:900,lineHeight:1.55,marginBottom:12}}>
+                  {liveAnalysis.analysis?.summary}
+                </div>
+                <div style={{display:"grid",gap:8}}>
+                  {(liveAnalysis.analysis?.findings || []).slice(0, 8).map((f, idx) => (
+                    <div key={idx} style={{display:"flex",gap:10,alignItems:"flex-start",border:"1px solid #e5e7eb",borderRadius:10,padding:11}}>
+                      <div style={{width:8,height:46,borderRadius:999,background:f.severity==="CRITICAL"?"#dc2626":f.severity==="HIGH"?"#ea580c":f.severity==="MEDIUM"?"#d97706":"#64748b",flexShrink:0}} />
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:12,fontWeight:950,color:"#0f172a"}}>{f.title} <span style={{fontSize:10,color:"#94a3b8"}}>· {f.area} · {f.severity}</span></div>
+                        <div style={{fontSize:11,color:"#64748b",marginTop:3}}>{f.detail}</div>
+                        <div style={{fontSize:11,color:"#2563eb",marginTop:4,fontWeight:800}}>추천: {f.action}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <div style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:12,padding:16,boxShadow:"0 6px 18px rgba(15,23,42,.05)"}}>
+            <div style={{fontSize:15,fontWeight:950,color:"#0f172a",marginBottom:10}}>API 작동 유무</div>
+            <div style={{display:"grid",gap:8}}>
+              {(apiHealth.length ? apiHealth : [
+                { label:"실시간 분석 API", ok:false, status:"대기", ms:"-" },
+                { label:"운영 통계 API", ok:false, status:"대기", ms:"-" },
+                { label:"KPI 예측 API", ok:false, status:"대기", ms:"-" },
+                { label:"자동 알림 API", ok:false, status:"대기", ms:"-" },
+              ]).map(api => (
+                <div key={api.id || api.label} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"10px 11px",borderRadius:9,border:"1px solid #e5e7eb",background:api.ok?"#ecfdf5":"#f8fafc"}}>
+                  <div>
+                    <div style={{fontSize:12,fontWeight:900,color:"#0f172a"}}>{api.label}</div>
+                    <div style={{fontSize:10,color:"#64748b",marginTop:2}}>HTTP {api.status} · {api.ms}ms</div>
+                  </div>
+                  <span style={{fontSize:10,fontWeight:950,borderRadius:999,padding:"3px 8px",background:api.ok?"#dcfce7":"#fee2e2",color:api.ok?"#166534":"#991b1b"}}>{api.ok ? "작동" : "확인필요"}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{marginTop:12,padding:10,borderRadius:9,background:"#f5f3ff",border:"1px solid #ddd6fe",color:"#5b21b6",fontSize:11,lineHeight:1.55,fontWeight:800}}>
+              분석 결과는 `jamsa_agent_live_analysis`에 저장되어 같은 프로그램 안의 공유 분석 피드로 재사용됩니다.
+            </div>
+          </div>
+        </div>
+      </div>}
+
+      {activeTab === "agents" && <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:12}}>
+        {[...report.agents.map(a => ({...a, tag:"실제 연결", color: statusMeta[a.status].color, checks:a.checks, signals:a.summary})), ...extendedAgents].map(agent => (
+          <div key={agent.id} style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:12,padding:15,boxShadow:"0 6px 18px rgba(15,23,42,.05)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+              <div style={{fontSize:24}}>{agent.icon}</div>
+              <span style={{fontSize:10,fontWeight:950,borderRadius:999,padding:"3px 8px",background:`${agent.color}18`,color:agent.color}}>{agent.tag}</span>
+            </div>
+            <div style={{fontSize:14,fontWeight:950,color:"#0f172a",marginBottom:8}}>{agent.name}</div>
+            <div style={{display:"grid",gap:5,marginBottom:10}}>{agent.checks.map(c => <div key={c} style={{fontSize:11,color:"#475569"}}>• {c}</div>)}</div>
+            <div style={{fontSize:11,lineHeight:1.5,color:"#64748b",background:"#f8fafc",borderRadius:8,padding:9}}>신호: {agent.signals}</div>
+          </div>
+        ))}
+      </div>}
+
+      {activeTab === "neural" && <div style={{display:"grid",gap:12}}>
+        {neuralLinks.map((flow, idx) => (
+          <div key={idx} style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:12,padding:16}}>
+            <div style={{fontSize:13,fontWeight:950,color:"#0f172a",marginBottom:12}}>뉴럴링크 시나리오 {idx + 1}</div>
+            <div style={{display:"grid",gridTemplateColumns:`repeat(${flow.length},minmax(0,1fr))`,gap:8,alignItems:"center"}}>
+              {flow.map((step, i) => <div key={step} style={{position:"relative",background:i===0?"#eff6ff":i===flow.length-1?"#ecfdf5":"#f8fafc",border:"1px solid #e5e7eb",borderRadius:10,padding:12,minHeight:68}}>
+                <div style={{fontSize:10,fontWeight:950,color:"#64748b",marginBottom:5}}>STEP {i + 1}</div>
+                <div style={{fontSize:12,fontWeight:900,color:"#0f172a",lineHeight:1.35}}>{step}</div>
+                {i < flow.length - 1 && <div style={{position:"absolute",right:-10,top:"50%",transform:"translateY(-50%)",fontSize:18,color:"#64748b",zIndex:2}}>→</div>}
+              </div>)}
+            </div>
+          </div>
+        ))}
+        <div style={{padding:12,borderRadius:10,background:"#f5f3ff",border:"1px solid #ddd6fe",color:"#5b21b6",fontSize:12,lineHeight:1.6,fontWeight:800}}>
+          뉴럴링크는 한 에이전트의 위험 신호를 관련 에이전트로 전파하되, 실제 과제 생성·알림·보고는 사용자가 승인했을 때만 실행하는 구조입니다.
+        </div>
+      </div>}
+
+      {activeTab === "api" && <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:12}}>
+        {[
+          ["내부 시스템 API", "#2563eb", ["홈페이지/CMS", "예약 시스템", "티켓/게이트", "POS/매출", "재고/창고", "CCTV/VMS", "IoT/센서"]],
+          ["외부 플랫폼 API", "#059669", ["네이버 지도", "카카오 알림톡", "SMS/이메일", "결제 PG", "분석/태그", "지도/위치"]],
+          ["AI/업무 자동화 API", "#7c3aed", ["OpenAI", "Claude", "STT/TTS", "OCR/문서해석", "검색/벡터 DB", "Webhook", "BI/리포트"]],
+        ].map(([name,color,items]) => <div key={name} style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:12,padding:16}}>
+          <div style={{fontSize:15,fontWeight:950,color,marginBottom:12}}>{name}</div>
+          <div style={{display:"grid",gap:8}}>{items.map(item => <div key={item} style={{padding:"9px 10px",borderRadius:8,background:"#f8fafc",border:"1px solid #eef2f7",fontSize:12,fontWeight:800,color:"#475569"}}>{item}</div>)}</div>
+        </div>)}
+      </div>}
+    </div>
+  );
+}
+
 function ActionCompletionModal({ action, onClose, onConfirm, addAudit }) {
   const [afterPhotos, setAfterPhotos] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -1992,31 +2431,42 @@ function FacNewActionForm({ onSubmit, onCancel }) {
    4) Simulated feed (fallback)
 */
 function CctvLiveFeed({ ch, camName, severity, streamUrl, snapServerUrl, size = "small", showControls = false }) {
-  snapServerUrl = snapServerUrl || "https://cctv.thejamsa.com"; // 자동 폴백 - cctv.thejamsa.com (Cloudflare Named Tunnel)
+  snapServerUrl = snapServerUrl || DEFAULT_CCTV_SERVER_URL;
   const [tick, setTick] = useState(0);
   const [streamErr, setStreamErr] = useState(false);
   const [imgTick, setImgTick] = useState(Date.now());
+  const [serverIdx, setServerIdx] = useState(0);
+  const serverCandidates = getCctvServerCandidates(snapServerUrl);
+  const activeSnapServerUrl = serverCandidates[serverIdx] || snapServerUrl;
 
   useEffect(() => {
     const t = setInterval(() => setTick(v => v + 1), 1000);
     return () => clearInterval(t);
   }, []);
 
+  useEffect(() => {
+    setStreamErr(false);
+    setServerIdx(0);
+  }, [snapServerUrl]);
+
   // cctv.py 스냅샷 서버 폴링 모드 - 1.5초마다 새 이미지 요청
   useEffect(() => {
-    if (!snapServerUrl || streamErr) return;
+    if (!activeSnapServerUrl || streamErr) return;
     const t = setInterval(() => setImgTick(Date.now()), 1500);
     return () => clearInterval(t);
-  }, [snapServerUrl, streamErr]);
+  }, [activeSnapServerUrl, streamErr]);
 
   // [MODE 3] cctv.py 스냅샷 서버 폴링 모드 (최우선)
-  if (snapServerUrl && !streamErr) {
-    const url = `${snapServerUrl.replace(/\/+$/, "")}/api/snap/${ch}?_t=${imgTick}`;
+  if (activeSnapServerUrl && !streamErr) {
+    const url = `${activeSnapServerUrl.replace(/\/+$/, "")}/api/snap/${ch}?_t=${imgTick}`;
     return (
       <div style={{ position: "absolute", inset: 0, background: "#000", overflow: "hidden" }}>
         <img src={url} alt={camName}
           style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-          onError={() => setStreamErr(true)} />
+          onError={() => {
+            if (serverIdx < serverCandidates.length - 1) setServerIdx(i => i + 1);
+            else setStreamErr(true);
+          }} />
         <div style={{ position: "absolute", top: 4, left: 4, padding: "2px 6px", borderRadius: 3, background: "rgba(0,0,0,0.7)", color: "#fff", fontSize: 9, fontWeight: 700, pointerEvents: "none" }}>
           CH{ch} · LIVE
         </div>
@@ -2359,6 +2809,36 @@ const fetchCctvSnapshotAsBase64 = async (snapServerUrl, ch) => {
   }
 };
 
+const normalizeCctvServerUrl = (url) => String(url || "").trim().replace(/\/+$/, "");
+
+const getCctvServerCandidates = (primary) => {
+  const list = [
+    primary,
+    (typeof window !== "undefined" ? window.BACKEND_URL : ""),
+    DEFAULT_CCTV_SERVER_URL,
+  ].map(normalizeCctvServerUrl).filter(Boolean);
+  return Array.from(new Set(list));
+};
+
+const checkCctvServerHealth = async (baseUrl, timeoutMs = 5000) => {
+  const clean = normalizeCctvServerUrl(baseUrl);
+  if (!clean) return { ok: false, error: "missing_url" };
+  const endpoints = ["/api/status", "/api/health"];
+  let lastError = "";
+  for (const endpoint of endpoints) {
+    try {
+      const res = await fetch(`${clean}${endpoint}`, { cache: "no-store", signal: AbortSignal.timeout?.(timeoutMs) });
+      let data = null;
+      try { data = await res.clone().json(); } catch (e) {}
+      if (res.ok) return { ok: true, endpoint, status: res.status, data };
+      lastError = `HTTP ${res.status} (${endpoint})`;
+    } catch (e) {
+      lastError = `${endpoint}: ${e.message}`;
+    }
+  }
+  return { ok: false, error: lastError || "connection_failed" };
+};
+
 // Call Anthropic API via cctv.py proxy (bypasses CORS)
 const callAnthropicVision = async (apiKey, base64Image, camName, zone, snapServerUrl) => {
   const model = (() => {
@@ -2619,7 +3099,7 @@ function FacCctvPage({ go, setActions, addAudit, user }) {
   const [streamUrls, setStreamUrls] = useLocalStorage("jamsa_cctv_streams", {}); // {ch: "url"}
   const [showStreamCfg, setShowStreamCfg] = useState(false);
   // cctv.py 스냅샷 서버 URL (Dahua NVR RTSP → JPEG 폴링 서버)
-  const [snapServerUrl, setSnapServerUrl] = useLocalStorage("jamsa_cctv_snap_server", "");
+  const [snapServerUrl, setSnapServerUrl] = useLocalStorage("jamsa_cctv_snap_server", DEFAULT_CCTV_SERVER_URL);
   const [snapServerStatus, setSnapServerStatus] = useState(null); // null | "ok" | "error"
   const [showSnapCfg, setShowSnapCfg] = useState(false);
   // Anthropic AI API key for real vision analysis
@@ -2631,12 +3111,8 @@ function FacCctvPage({ go, setActions, addAudit, user }) {
     if (!snapServerUrl) { setSnapServerStatus(null); return; }
     let cancelled = false;
     const check = async () => {
-      try {
-        const res = await fetch(`${snapServerUrl.replace(/\/+$/, "")}/api/status`, { signal: AbortSignal.timeout?.(3000) });
-        if (!cancelled) setSnapServerStatus(res.ok ? "ok" : "error");
-      } catch (e) {
-        if (!cancelled) setSnapServerStatus("error");
-      }
+      const result = await checkCctvServerHealth(snapServerUrl, 3000);
+      if (!cancelled) setSnapServerStatus(result.ok ? "ok" : "error");
     };
     check();
     const iv = setInterval(check, 30000);
@@ -3585,7 +4061,7 @@ function CctvStreamConfigModal({ cameras, streamUrls, setStreamUrls, onClose }) 
    cctv.py 로컬 서버 연동 안내 + URL 입력 + 연결 테스트
    참조: cctv-v11-motion (FFmpeg 기반 Dahua NVR → JPEG 폴링 서버) */
 function SnapServerConfigModal({ currentUrl, onSave, onClose }) {
-  const [url, setUrl] = useState(currentUrl || "http://localhost:5555");
+  const [url, setUrl] = useState(currentUrl || DEFAULT_CCTV_SERVER_URL);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null); // null | "ok" | "fail"
   const [testDetail, setTestDetail] = useState("");
@@ -3596,15 +4072,14 @@ function SnapServerConfigModal({ currentUrl, onSave, onClose }) {
     setTestResult(null);
     setTestDetail("연결 시도 중...");
     try {
-      const clean = url.replace(/\/+$/, "");
-      const res = await fetch(`${clean}/api/status`, { signal: AbortSignal.timeout?.(5000) });
-      if (!res.ok) {
+      const result = await checkCctvServerHealth(url, 5000);
+      if (!result.ok) {
         setTestResult("fail");
-        setTestDetail(`HTTP ${res.status}: 서버 응답 오류`);
+        setTestDetail(`연결 실패: ${result.error}`);
       } else {
-        const data = await res.json();
+        const data = result.data || {};
         setTestResult("ok");
-        setTestDetail(`✓ 연결 성공 · 총 ${data.total}개 채널 · 라이브 ${data.live}개 · 온라인 ${data.online}개`);
+        setTestDetail(`✓ 연결 성공 · 총 ${data.total ?? "?"}개 채널 · 라이브 ${data.live ?? data.online ?? 0}개 · ${result.endpoint}`);
       }
     } catch (e) {
       setTestResult("fail");
@@ -3660,12 +4135,12 @@ function SnapServerConfigModal({ currentUrl, onSave, onClose }) {
             <div style={{ marginBottom: 8, paddingLeft: 10 }}>
               <code style={{ background: "#e2e8f0", padding: "1px 4px", borderRadius: 3 }}>START_CCTV.bat</code> 더블클릭 (또는 <code style={{ background: "#e2e8f0", padding: "1px 4px", borderRadius: 3 }}>python cctv.py</code>)<br/>
               → 최초 실행 시 FFmpeg 자동 다운로드 (2-3분 소요)<br/>
-              → "http://localhost:5555" 자동 열림
+              → 기본 CCTV 주소: "https://cctv.thejamsa.com"
             </div>
 
             <div style={{ fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>5. 이 화면에 URL 입력</div>
             <div style={{ paddingLeft: 10 }}>
-              아래 입력란에 <code style={{ background: "#e2e8f0", padding: "1px 4px", borderRadius: 3 }}>http://localhost:5555</code> 입력 후 저장
+              아래 입력란에 <code style={{ background: "#e2e8f0", padding: "1px 4px", borderRadius: 3 }}>https://cctv.thejamsa.com</code> 입력 후 저장
             </div>
           </div>
 
@@ -3673,7 +4148,7 @@ function SnapServerConfigModal({ currentUrl, onSave, onClose }) {
           <div style={{ fontSize: 12, fontWeight: 800, color: "#0f172a", marginBottom: 6 }}>🌐 스냅샷 서버 URL</div>
           <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
             <input type="text" value={url} onChange={e => setUrl(e.target.value)}
-              placeholder="http://localhost:5555"
+              placeholder="https://cctv.thejamsa.com"
               style={{ flex: 1, padding: "10px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13, fontFamily: "monospace" }} />
             <button onClick={testConnection} disabled={testing || !url}
               style={{ padding: "10px 16px", borderRadius: 6, background: testing ? "#cbd5e1" : "#0f172a", color: "#fff", border: "none", fontSize: 12, fontWeight: 700, cursor: testing ? "wait" : "pointer", whiteSpace: "nowrap" }}>
@@ -3870,7 +4345,7 @@ function AiApiKeyConfigModal({ currentKey, onSave, onClose }) {
               log.push("【1단계】 NVR 서버 URL 확인");
               if (!snapUrl) {
                 log.push("  ❌ NVR 서버 URL이 설정되지 않음");
-                log.push("     → 'NVR 서버 설정' 버튼에서 http://localhost:5555 입력 필요");
+                log.push("     → 'NVR 서버 설정' 버튼에서 https://cctv.thejamsa.com 입력 필요");
                 setTestResult("fail");
                 setTestMsg(log.join("\n"));
                 setTesting(false);
@@ -6553,6 +7028,78 @@ function printBatchQR(prods) {
   openPrintWindow(`QR 라벨 일괄 인쇄 (${prods.length}건)`, sheet);
 }
 
+const LABEL_PRINTER_CSS = `
+  @page { size: 50mm 30mm; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #fff; color: #0f172a; font-family: 'Pretendard','Noto Sans KR',-apple-system,BlinkMacSystemFont,sans-serif; }
+  .toolbar { position: fixed; left: 8px; right: 8px; top: 8px; display: flex; gap: 6px; align-items: center; padding: 8px; border: 1px solid #e5e7eb; border-radius: 8px; background: rgba(255,255,255,.96); box-shadow: 0 6px 20px rgba(15,23,42,.14); z-index: 10; }
+  .toolbar strong { flex: 1; font-size: 12px; }
+  .toolbar button { border: 0; border-radius: 7px; padding: 7px 10px; font-weight: 800; font-size: 12px; cursor: pointer; }
+  .toolbar .print { background: #10b981; color: #fff; }
+  .toolbar .close { background: #f1f5f9; color: #334155; }
+  .labels { width: 50mm; }
+  .label-page { width: 50mm; height: 30mm; page-break-after: always; break-after: page; overflow: hidden; background: #fff; display: grid; grid-template-columns: 27mm 1fr; column-gap: 1.5mm; align-items: center; padding: 2.2mm 2.2mm 2mm 2.4mm; }
+  .qr { width: 25mm; height: 25mm; display: flex; align-items: center; justify-content: center; }
+  .qr svg { width: 25mm; height: 25mm; display: block; }
+  .txt { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; line-height: 1.12; }
+  .org { font-size: 5.2px; color: #64748b; font-weight: 700; margin-bottom: 1.3mm; white-space: nowrap; }
+  .code { font-size: 12px; color: #0f172a; font-weight: 900; letter-spacing: .2px; white-space: nowrap; }
+  .name { margin-top: .7mm; font-size: 7.2px; color: #111827; font-weight: 800; max-height: 8.2mm; overflow: hidden; word-break: keep-all; overflow-wrap: anywhere; }
+  .meta { margin-top: .8mm; font-size: 5.8px; color: #64748b; max-height: 6mm; overflow: hidden; overflow-wrap: anywhere; }
+  .hint { display: none; }
+  @media screen {
+    body { background: #eef2f7; padding-top: 58px; }
+    .labels { margin: 0 auto 20px; box-shadow: 0 8px 24px rgba(15,23,42,.12); }
+    .label-page { border-bottom: 1px dashed #cbd5e1; }
+    .hint { display: block; width: min(50mm, calc(100vw - 24px)); margin: 8px auto 14px; padding: 8px 10px; border-radius: 8px; background: #fff7ed; color: #9a3412; font-size: 11px; line-height: 1.5; }
+  }
+  @media print {
+    .toolbar, .hint { display: none; }
+    .labels { width: 50mm; margin: 0; box-shadow: none; }
+    .label-page { border: 0; }
+  }
+`;
+
+function buildLabelPrinterHTML(p) {
+  const safe = (v) => String(v == null ? "" : v).replace(/[<>&"]/g, (c) => ({"<":"&lt;",">":"&gt;","&":"&amp;","\"":"&quot;"}[c]));
+  const meta = [p.cat, p.loc].filter(Boolean).join(" · ");
+  return `<section class="label-page">
+    <div class="qr">${qrSVGString(p.code || "", 220)}</div>
+    <div class="txt">
+      <div class="org">한국잠사박물관</div>
+      <div class="code">${safe(p.code)}</div>
+      <div class="name">${safe(p.name)}</div>
+      <div class="meta">${safe(meta)}</div>
+    </div>
+  </section>`;
+}
+
+function openLabelPrinterWindow(title, prods, autoPrint = true) {
+  if (!prods || prods.length === 0) { alert("라벨 프린터로 인쇄할 항목을 선택해주세요."); return; }
+  const w = window.open("", "_blank", "width=430,height=680");
+  if (!w) { alert("팝업이 차단되었습니다. 브라우저 설정에서 팝업을 허용해주세요."); return; }
+  const pages = prods.map(buildLabelPrinterHTML).join("");
+  w.document.write(`<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>${LABEL_PRINTER_CSS}</style></head><body>
+    <div class="toolbar">
+      <strong>${title}</strong>
+      <button class="print" onclick="window.print()">라벨 인쇄</button>
+      <button class="close" onclick="window.close()">닫기</button>
+    </div>
+    <div class="hint">용지 크기는 50×30mm 가로 라벨 기준입니다. 인쇄창에서 배율 100%, 여백 없음, 방향 가로를 선택하면 AbleMark에서 다시 회전하지 않아도 됩니다.</div>
+    <main class="labels">${pages}</main>
+    <script>${autoPrint ? "window.addEventListener('load',()=>setTimeout(()=>window.print(),350));" : ""}</script>
+  </body></html>`);
+  w.document.close();
+}
+
+function printSingleLabelPrinter(p) {
+  openLabelPrinterWindow(`라벨 프린터 인쇄 - ${p.name || p.code}`, [p]);
+}
+
+function printBatchLabelPrinter(prods) {
+  openLabelPrinterWindow(`라벨 프린터 인쇄 (${prods.length}건)`, prods);
+}
+
 // ── QR을 PNG Blob으로 변환 (모바일 라벨프린터 앱 공유용) ──
 // 라벨 전체(상호 + QR + 코드 + 제품명 + 위치)를 한 장의 PNG 이미지로 합성.
 // AbleMark / NIIMBOT / Phomemo 등 라벨프린터 앱은 PNG/JPG 이미지를
@@ -6677,11 +7224,16 @@ function QRModal({p,onClose}){
         <div style={{fontSize:12,color:"#94a3b8",marginBottom:14}}>{p.cat} · {p.loc} · 재고: <strong style={{color:p.qty===0?"#ef4444":"#3b5bdb"}}>{p.qty}</strong></div>
 
         <div style={{display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap"}}>
+          <button className="btn" onClick={()=>printSingleLabelPrinter(p)}
+            style={{fontSize:13,background:"#10b981",color:"#fff"}}
+            title="50×30mm 라벨 용지에 맞춰 바로 인쇄">
+            <IC.Print/>라벨 바로 인쇄
+          </button>
           <button className="btn bp" onClick={()=>printSingleQR(p)} style={{fontSize:13}} title="브라우저 인쇄">
             <IC.Print/>인쇄 (PC/A4)
           </button>
           <button className="btn" onClick={()=>shareQRtoLabelApp(p)}
-            style={{fontSize:13,background:"#10b981",color:"#fff"}}
+            style={{fontSize:13,background:"#64748b",color:"#fff"}}
             title="AbleMark 등 라벨프린터 앱으로 보내기">
             📱 라벨프린터(에이블마크)
           </button>
@@ -6757,6 +7309,10 @@ function QRBatchPrintModal({prods, onClose}){
     if (chosen.length === 0) { alert("최소 1개 이상 선택해주세요."); return; }
     printBatchQR(chosen);
   };
+  const doLabelPrint = () => {
+    if (chosen.length === 0) { alert("최소 1개 이상 선택해주세요."); return; }
+    printBatchLabelPrinter(chosen);
+  };
   const doShareToApp = async () => {
     if (chosen.length === 0) { alert("최소 1개 이상 선택해주세요."); return; }
     if (chosen.length > 10 && !confirm(`${chosen.length}장의 PNG 라벨을 공유합니다. 시간이 걸릴 수 있습니다. 계속할까요?`)) return;
@@ -6820,7 +7376,7 @@ function QRBatchPrintModal({prods, onClose}){
             </button>
           )}
         </div>
-        <div style={{fontSize:11,color:"#64748b"}}>A4 한 장당 약 25개 (5×5)</div>
+        <div style={{fontSize:11,color:"#64748b"}}>라벨: 50×30mm 1장씩 · A4: 한 장당 약 25개</div>
       </div>
 
       {/* 목록 */}
@@ -6846,8 +7402,13 @@ function QRBatchPrintModal({prods, onClose}){
       </div>
       <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14,flexWrap:"wrap"}}>
         <button className="btn bs" onClick={onClose}>취소</button>
-        <button className="btn" onClick={doShareToApp}
+        <button className="btn" onClick={doLabelPrint}
           style={{fontSize:13,background:"#10b981",color:"#fff"}}
+          title="50×30mm 라벨 용지에 맞춰 바로 인쇄">
+          <IC.Print/>{sel.size}건 라벨 바로 인쇄
+        </button>
+        <button className="btn" onClick={doShareToApp}
+          style={{fontSize:13,background:"#64748b",color:"#fff"}}
           title="AbleMark 등 라벨프린터 앱으로 PNG 공유">
           📱 라벨프린터로 보내기
         </button>
@@ -7920,8 +8481,8 @@ function CctvLiveOverlay({ zones, cctvMap, onAlert, onOpenChannel, snapServerUrl
   const snapServerUrl = useMemo(() => {
     if (propUrl) return propUrl;
     try {
-      return window.localStorage?.getItem("jamsa_cctv_snap_server") || "http://localhost:5555";
-    } catch (e) { return "http://localhost:5555"; }
+      return window.localStorage?.getItem("jamsa_cctv_snap_server") || DEFAULT_CCTV_SERVER_URL;
+    } catch (e) { return DEFAULT_CCTV_SERVER_URL; }
   }, [propUrl]);
   const [snapshots, setSnapshots] = useState({}); // {ch: {url, ts}}
   const [analyses, setAnalyses] = useState({});   // {ch: {level, score, summary, ...}}
@@ -7963,14 +8524,22 @@ function CctvLiveOverlay({ zones, cctvMap, onAlert, onOpenChannel, snapServerUrl
 
     const fetchSnapshot = async (ch) => {
       try {
-        const url = `${snapServerUrl}/api/snap/${ch}?t=${Date.now()}`;
-        const res = await fetch(url, { method: "GET", mode: "cors" }).catch(() => null);
+        let res = null;
+        let activeBase = "";
+        for (const base of getCctvServerCandidates(snapServerUrl)) {
+          const url = `${base}/api/snap/${ch}?t=${Date.now()}`;
+          res = await fetch(url, { method: "GET", mode: "cors", cache: "no-store" }).catch(() => null);
+          if (res?.ok) { activeBase = base; break; }
+        }
         if (!res || !res.ok) {
           // 백엔드 미가동 시 placeholder 유지
           if (!snapshots[ch]) {
             setSnapshots(s => ({ ...s, [ch]: { url: null, ts: Date.now(), error: true } }));
           }
           return;
+        }
+        if (activeBase && activeBase !== normalizeCctvServerUrl(snapServerUrl)) {
+          try { window.localStorage?.setItem("jamsa_cctv_snap_server", activeBase); } catch (e) {}
         }
         const blob = await res.blob();
         if (stopped) return;
@@ -9929,6 +10498,152 @@ const recommendZoneTasks = (zone, inventory, facActions, hour) => {
 };
 
 /* ─── ZONE DASHBOARD MODAL ─── All-in-one dashboard: inventory + facility + worklog */
+function isWarehouseZone(zone) {
+  const id = String(zone?.id || "").toLowerCase();
+  const name = String(zone?.name || "");
+  return ["storage", "basic", "gh", "field"].includes(id) || /창고|수장|천막|보관|warehouse|storage/i.test(name);
+}
+
+function loadWarehouseModels() {
+  try { return JSON.parse(window.localStorage?.getItem("jamsa_warehouse_models") || "{}"); }
+  catch (e) { return {}; }
+}
+
+function saveWarehouseModels(models) {
+  try { window.localStorage?.setItem("jamsa_warehouse_models", JSON.stringify(models)); } catch (e) {}
+}
+
+function WarehouseModelingModal({ zoneStatus, onClose }) {
+  const zone = zoneStatus?.zone || {};
+  const zoneId = zone.id || "warehouse";
+  const inventory = zoneStatus?.zoneInv || [];
+  const saved = loadWarehouseModels()[zoneId] || {};
+  const [photo, setPhoto] = useState(saved.photo || "");
+  const [tab, setTab] = useState("image");
+  const [layout, setLayout] = useState(saved.layout || { width: 12, depth: 8, height: 3.2, racks: 4, levels: 3, aisle: 1.4, mode: "FIFO", memo: "" });
+  const [placements, setPlacements] = useState(saved.placements || inventory.slice(0, 24).map((p, i) => ({
+    id: p.id || `${p.name}-${i}`,
+    name: p.name,
+    qty: Number(p.qty || 0),
+    cat: p.cat || "기타",
+    x: 8 + (i % 6) * 14,
+    y: 15 + Math.floor(i / 6) * 18,
+    shelf: `R${(i % 4) + 1}-${(i % 3) + 1}`,
+  })));
+  const totalQty = inventory.reduce((s, p) => s + Number(p.qty || 0), 0);
+  const lowStock = inventory.filter(p => Number(p.qty || 0) > 0 && Number(p.qty || 0) < 5);
+  const density = Math.min(99, Math.round((inventory.length / Math.max(1, Number(layout.racks || 1) * Number(layout.levels || 1) * 2)) * 100));
+  const status = lowStock.length ? "보충 필요" : density > 80 ? "과밀" : "정상";
+  const patchLayout = (key, value) => setLayout(prev => ({ ...prev, [key]: value }));
+  const pickPhoto = (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setPhoto(String(reader.result || ""));
+    reader.readAsDataURL(file);
+  };
+  const autoPlace = () => {
+    const racks = Math.max(1, Number(layout.racks || 1));
+    const levels = Math.max(1, Number(layout.levels || 1));
+    setPlacements(inventory.slice(0, 36).map((p, i) => ({
+      id: p.id || `${p.name}-${i}`,
+      name: p.name,
+      qty: Number(p.qty || 0),
+      cat: p.cat || "기타",
+      x: 7 + (i % 6) * 14,
+      y: 13 + Math.floor(i / 6) * 14,
+      shelf: `R${(i % racks) + 1}-${(Math.floor(i / racks) % levels) + 1}`,
+    })));
+  };
+  const saveModel = () => {
+    const all = loadWarehouseModels();
+    all[zoneId] = { zoneId, zoneName: zone.name, photo, layout, placements, savedAt: new Date().toISOString() };
+    saveWarehouseModels(all);
+    alert("창고 이미지/3D 모델링이 저장되었습니다.");
+  };
+  const exportPng = async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1200; canvas.height = 800;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#f8fafc"; ctx.fillRect(0, 0, 1200, 800);
+    if (photo) await new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => {
+        const s = Math.max(1200 / img.width, 800 / img.height);
+        ctx.globalAlpha = .34;
+        ctx.drawImage(img, (1200 - img.width * s) / 2, (800 - img.height * s) / 2, img.width * s, img.height * s);
+        ctx.globalAlpha = 1;
+        resolve();
+      };
+      img.onerror = resolve;
+      img.src = photo;
+    });
+    ctx.fillStyle = "rgba(255,255,255,.9)"; ctx.fillRect(40, 40, 1120, 720);
+    ctx.strokeStyle = "#0f172a"; ctx.lineWidth = 3; ctx.strokeRect(40, 40, 1120, 720);
+    ctx.fillStyle = "#0f172a"; ctx.font = "bold 34px sans-serif"; ctx.fillText(`${zone.name || "창고"} 재고 배치 상세 이미지`, 72, 92);
+    ctx.font = "18px sans-serif"; ctx.fillStyle = "#475569"; ctx.fillText(`${layout.width}m x ${layout.depth}m x ${layout.height}m · 선반 ${layout.racks}열/${layout.levels}단 · ${layout.mode}`, 72, 124);
+    const x = 72, y = 160, w = 780, h = 520;
+    ctx.fillStyle = "#e2e8f0"; ctx.fillRect(x, y, w, h); ctx.strokeStyle = "#94a3b8"; ctx.strokeRect(x, y, w, h);
+    for (let r = 0; r < Number(layout.racks || 1); r++) {
+      const rw = w / Math.max(1, Number(layout.racks || 1));
+      ctx.fillStyle = r % 2 ? "#cbd5e1" : "#dbeafe";
+      ctx.fillRect(x + r * rw + 12, y + 28, rw - 24, h - 56);
+      ctx.fillStyle = "#334155"; ctx.font = "bold 15px sans-serif"; ctx.fillText(`R${r + 1}`, x + r * rw + 18, y + 50);
+    }
+    placements.forEach((p, i) => {
+      const px = x + (Math.min(96, Math.max(2, p.x)) / 100) * w;
+      const py = y + (Math.min(94, Math.max(2, p.y)) / 100) * h;
+      ctx.fillStyle = Number(p.qty) <= 0 ? "#ef4444" : Number(p.qty) < 5 ? "#f59e0b" : "#10b981";
+      ctx.fillRect(px - 20, py - 14, 40, 28);
+      ctx.fillStyle = "#fff"; ctx.font = "bold 12px sans-serif"; ctx.fillText(String(i + 1), px - 5, py + 4);
+    });
+    ctx.fillStyle = "#fff"; ctx.fillRect(880, 160, 250, 520); ctx.strokeStyle = "#cbd5e1"; ctx.strokeRect(880, 160, 250, 520);
+    ctx.fillStyle = "#0f172a"; ctx.font = "bold 20px sans-serif"; ctx.fillText("재고 목록", 905, 198);
+    ctx.font = "14px sans-serif";
+    placements.slice(0, 18).forEach((p, i) => {
+      ctx.fillStyle = "#334155"; ctx.fillText(`${i + 1}. ${p.name}`.slice(0, 23), 905, 230 + i * 22);
+      ctx.fillStyle = "#64748b"; ctx.fillText(`${p.qty}개 · ${p.shelf}`, 1040, 230 + i * 22);
+    });
+    ctx.fillStyle = "#0f172a"; ctx.font = "bold 18px sans-serif"; ctx.fillText(`상태 ${status} · 총 ${totalQty.toLocaleString()}개 · ${inventory.length}품목`, 72, 724);
+    const a = document.createElement("a");
+    a.href = canvas.toDataURL("image/png");
+    a.download = `jamsa-${zoneId}-warehouse-model.png`;
+    a.click();
+  };
+
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, zIndex:10400, background:"rgba(15,23,42,.72)", display:"flex", alignItems:"center", justifyContent:"center", padding:18 }}>
+      <div onClick={e=>e.stopPropagation()} style={{ width:1120, maxWidth:"96vw", maxHeight:"92vh", overflow:"auto", background:"#fff", borderRadius:12, boxShadow:"0 24px 80px rgba(0,0,0,.35)" }}>
+        <div style={{ padding:"16px 20px", borderBottom:"1px solid #e5e7eb", display:"flex", justifyContent:"space-between", gap:12, alignItems:"center" }}>
+          <div><div style={{ fontSize:18, fontWeight:900, color:"#0f172a" }}>{zone.name || "창고"} 실제 이미지/3D 재고 모델링</div><div style={{ fontSize:12, color:"#64748b", marginTop:3 }}>현장 사진 위 재고 배치, 3D 선반 시뮬레이션, 저장용 PNG 생성을 지원합니다.</div></div>
+          <button onClick={onClose} style={{ border:"1px solid #cbd5e1", background:"#fff", borderRadius:8, padding:"8px 12px", cursor:"pointer", fontWeight:800 }}>닫기</button>
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"300px minmax(0,1fr)" }}>
+          <aside style={{ padding:16, borderRight:"1px solid #e5e7eb", background:"#f8fafc", display:"grid", gap:12, alignContent:"start" }}>
+            <label style={{ display:"grid", gap:6, fontSize:12, fontWeight:800, color:"#334155" }}>실제 창고 이미지<input type="file" accept="image/*" onChange={e=>pickPhoto(e.target.files?.[0])} style={{ fontSize:12 }} /></label>
+            {photo ? <img src={photo} alt="" style={{ width:"100%", aspectRatio:"4/3", objectFit:"cover", borderRadius:8, border:"1px solid #cbd5e1" }} /> : <div style={{ aspectRatio:"4/3", border:"1px dashed #94a3b8", borderRadius:8, display:"grid", placeItems:"center", color:"#64748b", fontSize:12, background:"#fff" }}>사진 업로드</div>}
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6 }}>{[["width","가로"],["depth","세로"],["height","높이"]].map(([k,l]) => <label key={k} style={{ fontSize:10, color:"#64748b", fontWeight:800 }}>{l}<input type="number" step="0.1" value={layout[k]} onChange={e=>patchLayout(k, Number(e.target.value || 0))} style={{ width:"100%", marginTop:3, padding:7, border:"1px solid #cbd5e1", borderRadius:6, fontSize:12 }} /></label>)}</div>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6 }}>{[["racks","선반열"],["levels","단수"],["aisle","통로"]].map(([k,l]) => <label key={k} style={{ fontSize:10, color:"#64748b", fontWeight:800 }}>{l}<input type="number" step={k==="aisle" ? "0.1" : "1"} value={layout[k]} onChange={e=>patchLayout(k, Number(e.target.value || 0))} style={{ width:"100%", marginTop:3, padding:7, border:"1px solid #cbd5e1", borderRadius:6, fontSize:12 }} /></label>)}</div>
+            <select value={layout.mode} onChange={e=>patchLayout("mode", e.target.value)} style={{ padding:9, border:"1px solid #cbd5e1", borderRadius:8, background:"#fff", fontSize:12 }}><option>FIFO</option><option>카테고리별</option><option>빈도순</option><option>위험물 분리</option></select>
+            <textarea value={layout.memo} onChange={e=>patchLayout("memo", e.target.value)} placeholder="배치 메모" style={{ minHeight:62, border:"1px solid #cbd5e1", borderRadius:8, padding:9, fontSize:12 }} />
+            <button onClick={autoPlace} style={{ padding:"10px 12px", border:0, borderRadius:8, background:"#2563eb", color:"#fff", fontSize:12, fontWeight:900, cursor:"pointer" }}>재고 자동 배치</button>
+            <button onClick={saveModel} style={{ padding:"10px 12px", border:0, borderRadius:8, background:"#059669", color:"#fff", fontSize:12, fontWeight:900, cursor:"pointer" }}>모델 저장</button>
+            <button onClick={exportPng} style={{ padding:"10px 12px", border:"1px solid #7c3aed", borderRadius:8, background:"#f5f3ff", color:"#5b21b6", fontSize:12, fontWeight:900, cursor:"pointer" }}>PNG 이미지 저장</button>
+          </aside>
+          <main style={{ padding:16 }}>
+            <div style={{ display:"flex", gap:8, marginBottom:12, alignItems:"center" }}>
+              {[["image","상세 이미지"],["model","3D 모델"],["table","배치표"]].map(([k,l]) => <button key={k} onClick={()=>setTab(k)} style={{ padding:"8px 12px", borderRadius:8, border:`1px solid ${tab===k ? "#2563eb" : "#cbd5e1"}`, background:tab===k ? "#eff6ff" : "#fff", color:tab===k ? "#1d4ed8" : "#475569", fontSize:12, fontWeight:900, cursor:"pointer" }}>{l}</button>)}
+              <div style={{ marginLeft:"auto", fontSize:12, fontWeight:900, color:status==="정상" ? "#059669" : "#dc2626" }}>상태 {status} · 밀도 {density}% · 총 {totalQty.toLocaleString()}개</div>
+            </div>
+            {tab === "image" && <div style={{ position:"relative", height:560, border:"1px solid #cbd5e1", borderRadius:10, overflow:"hidden", background:"#e2e8f0" }}>{photo && <img src={photo} alt="" style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"cover", opacity:.55 }} />}<div style={{ position:"absolute", inset:24, background:"rgba(255,255,255,.78)", border:"2px solid #0f172a" }}>{Array.from({ length: Math.max(1, Number(layout.racks || 1)) }).map((_, r) => <div key={r} style={{ position:"absolute", left:`${(r / Math.max(1, layout.racks)) * 100 + 1.2}%`, top:"8%", width:`${Math.max(6, 92 / Math.max(1, layout.racks) - 2)}%`, height:"84%", background:r%2 ? "rgba(148,163,184,.35)" : "rgba(37,99,235,.14)", border:"1px solid rgba(71,85,105,.35)", borderRadius:6 }}><div style={{ padding:6, fontSize:11, fontWeight:900, color:"#334155" }}>R{r+1}</div></div>)}{placements.map((p, i) => <div key={p.id} title={`${p.name} · ${p.qty}개 · ${p.shelf}`} style={{ position:"absolute", left:`${p.x}%`, top:`${p.y}%`, transform:"translate(-50%,-50%)", minWidth:72, maxWidth:120, padding:"5px 7px", borderRadius:6, background:Number(p.qty)<=0 ? "#ef4444" : Number(p.qty)<5 ? "#f59e0b" : "#10b981", color:"#fff", boxShadow:"0 8px 18px rgba(15,23,42,.2)", fontSize:10, fontWeight:900, textAlign:"center" }}><div style={{ whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{i+1}. {p.name}</div><div style={{ fontSize:9, opacity:.86 }}>{p.qty}개 · {p.shelf}</div></div>)}</div></div>}
+            {tab === "model" && <div style={{ height:560, border:"1px solid #cbd5e1", borderRadius:10, background:"linear-gradient(#f8fafc,#e2e8f0)", overflow:"hidden", perspective:900, display:"flex", alignItems:"center", justifyContent:"center" }}><div style={{ width:"78%", height:"64%", transform:"rotateX(58deg) rotateZ(-34deg)", transformStyle:"preserve-3d", position:"relative" }}><div style={{ position:"absolute", inset:0, background:"#cbd5e1", border:"3px solid #475569", boxShadow:"30px 30px 35px rgba(15,23,42,.22)" }} />{Array.from({ length: Math.max(1, Number(layout.racks || 1)) }).map((_, r) => <div key={r} style={{ position:"absolute", left:`${8 + r * (82 / Math.max(1, layout.racks))}%`, top:"13%", width:`${Math.max(8, 68 / Math.max(1, layout.racks))}%`, height:"70%", transform:"translateZ(34px)", transformStyle:"preserve-3d" }}>{Array.from({ length: Math.max(1, Number(layout.levels || 1)) }).map((_, l) => <div key={l} style={{ position:"absolute", left:0, right:0, bottom:`${l * 28}px`, height:18, background:"#334155", borderRadius:3, boxShadow:"0 8px 0 #94a3b8" }} />)}{placements.filter((_, i)=>i % Math.max(1, layout.racks) === r).slice(0, 8).map((p, i) => <div key={p.id} style={{ position:"absolute", left:`${8 + (i%3)*27}%`, bottom:`${18 + (i%Math.max(1, layout.levels))*28}px`, width:34, height:26, background:Number(p.qty)<5 ? "#f59e0b" : "#2563eb", border:"2px solid #fff", transform:"translateZ(18px)", boxShadow:"6px 6px 0 rgba(15,23,42,.25)" }} />)}</div>)}</div></div>}
+            {tab === "table" && <div style={{ border:"1px solid #e5e7eb", borderRadius:10, overflow:"hidden" }}><table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}><thead style={{ background:"#f8fafc", color:"#475569" }}><tr>{["번호","품목","수량","분류","배치 선반","상태"].map(h=><th key={h} style={{ padding:10, textAlign:"left", borderBottom:"1px solid #e5e7eb" }}>{h}</th>)}</tr></thead><tbody>{placements.map((p, i) => <tr key={p.id}><td style={{ padding:9, borderBottom:"1px solid #f1f5f9", fontWeight:900 }}>{i+1}</td><td style={{ padding:9, borderBottom:"1px solid #f1f5f9", fontWeight:800 }}>{p.name}</td><td style={{ padding:9, borderBottom:"1px solid #f1f5f9" }}>{p.qty}</td><td style={{ padding:9, borderBottom:"1px solid #f1f5f9" }}>{p.cat}</td><td style={{ padding:9, borderBottom:"1px solid #f1f5f9" }}>{p.shelf}</td><td style={{ padding:9, borderBottom:"1px solid #f1f5f9", color:Number(p.qty)<=0 ? "#dc2626" : Number(p.qty)<5 ? "#d97706" : "#059669", fontWeight:900 }}>{Number(p.qty)<=0 ? "품절" : Number(p.qty)<5 ? "저재고" : "정상"}</td></tr>)}</tbody></table></div>}
+          </main>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function GpsZoneModal({ zone, userLoc, dist, onClose, onGoInventory, onDeleteCustom, onAddInventory, facActions = [], zoneInventory = [], onCreateFacAction, switchToFacility }) {
   const [tab, setTab] = useState("overview");
   const [generating, setGenerating] = useState(false);
@@ -17561,6 +18276,7 @@ function StatCard({ label, value, unit = "", trend = "", color = "#0f172a" }) {
 
 function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], auditLog = [], onNavigate, onAddFacAction }) {
   const [selectedZone, setSelectedZone] = useState(null);
+  const [warehouseModelZone, setWarehouseModelZone] = useState(null);
   const [filterMode, setFilterMode] = useState("all"); // all | urgent | stock | facility
   const [viewMode, setViewMode] = useState(() => {
     // 사용자 마지막 뷰 모드 기억 (단, 'map'이 아닌 값이면 일단 map으로 시작)
@@ -18388,22 +19104,17 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   useEffect(() => {
     let cancelled = false;
     const checkServer = async () => {
-      const url = (typeof window !== "undefined" ? (window.BACKEND_URL || window.localStorage?.getItem("jamsa_cctv_snap_server") || "http://localhost:5555") : "http://localhost:5555");
-      try {
-        const ctrl = new AbortController();
-        const tid = setTimeout(() => ctrl.abort(), 3000);
-        const res = await fetch(url.replace(/\/+$/, "") + "/api/health", { signal: ctrl.signal });
-        clearTimeout(tid);
-        if (cancelled) return;
-        if (res.ok) {
-          setCctvServerStatus({ status: "online", checkedAt: Date.now() });
-        } else {
-          setCctvServerStatus({ status: "offline", checkedAt: Date.now() });
+      const url = (typeof window !== "undefined" ? (window.BACKEND_URL || window.localStorage?.getItem("jamsa_cctv_snap_server") || DEFAULT_CCTV_SERVER_URL) : DEFAULT_CCTV_SERVER_URL);
+      let result = { ok: false, error: "not_checked" };
+      for (const candidate of getCctvServerCandidates(url)) {
+        result = await checkCctvServerHealth(candidate, 3000);
+        if (result.ok) {
+          try { window.localStorage?.setItem("jamsa_cctv_snap_server", candidate); } catch (e) {}
+          break;
         }
-      } catch (e) {
-        if (cancelled) return;
-        setCctvServerStatus({ status: "offline", checkedAt: Date.now() });
       }
+      if (cancelled) return;
+      setCctvServerStatus({ status: result.ok ? "online" : "offline", checkedAt: Date.now(), detail: result });
     };
     checkServer();
     const tid = setInterval(checkServer, 15000);
@@ -18953,6 +19664,13 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                 boxShadow: cctvEditMode ? "0 0 0 3px rgba(245,158,11,0.3)" : "none" }}>
               {cctvEditMode ? "✓ CCTV 편집 종료" : "📹 CCTV 편집"}
             </button>
+            <button onClick={() => {
+              const target = zoneStatus.find(s => isWarehouseZone(s.zone)) || zoneStatus[0];
+              if (target) setWarehouseModelZone(target);
+            }} title="창고 실제 이미지 기반 재고 배치와 3D 모델링"
+              style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: "linear-gradient(135deg,#0f766e,#2563eb)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 800 }}>
+              창고 3D
+            </button>
           </>
         )}
 
@@ -19029,6 +19747,13 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                   <div style={{ fontSize: 10, fontWeight: 400, marginTop: 4 }}>
                     {totalMapped}개 채널 매핑됨. 박물관 PC에서 CCTV 5555 서버를 켜야 영상이 표시됩니다.
                     <br />좌하단 "🔴 미로그인" 표시 = 서버 미가동
+                  </div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                    <button onClick={() => {
+                      try { window.localStorage.setItem("jamsa_cctv_snap_server", DEFAULT_CCTV_SERVER_URL); location.reload(); } catch(e) {}
+                    }} style={{ padding: "5px 8px", background: "#fff7ed", color: "#78350f", border: "1px solid #fed7aa", borderRadius: 5, fontSize: 10, fontWeight: 800, cursor: "pointer" }}>
+                      기본 CCTV로 재연결
+                    </button>
                   </div>
                 </div>
               );
@@ -19584,7 +20309,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                               <button onClick={async () => {
                                 // localhost 5555로 영상 보기 시도
                                 if (selectedTapoDevice.ip) {
-                                  window.open(`http://localhost:5555/?ip=${selectedTapoDevice.ip}`, '_blank');
+                                  window.open(`${DEFAULT_CCTV_SERVER_URL}/?ip=${encodeURIComponent(selectedTapoDevice.ip)}`, '_blank');
                                 }
                               }}
                                 style={{ padding: "5px 12px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
@@ -21358,7 +22083,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                   <div style={{ padding: 12, background: "#f1f5f9", borderRadius: 8, fontSize: 11, color: "#475569" }}>
                     <div style={{ fontWeight: 700, marginBottom: 4 }}>🔍 진단 정보</div>
                     <div>• 마지막 확인: {cctvServerStatus.checkedAt ? new Date(cctvServerStatus.checkedAt).toLocaleTimeString() : "-"}</div>
-                    <div>• 백엔드 URL: <code style={{ background: "#e2e8f0", padding: "1px 4px", borderRadius: 3 }}>{(typeof window !== "undefined" ? (window.BACKEND_URL || "http://localhost:5555") : "http://localhost:5555")}</code></div>
+                    <div>• 백엔드 URL: <code style={{ background: "#e2e8f0", padding: "1px 4px", borderRadius: 3 }}>{(typeof window !== "undefined" ? (window.BACKEND_URL || window.localStorage?.getItem("jamsa_cctv_snap_server") || DEFAULT_CCTV_SERVER_URL) : DEFAULT_CCTV_SERVER_URL)}</code></div>
                     <div>• 매핑된 채널: {Object.values(cctvMap || {}).reduce((s, a) => s + (Array.isArray(a) ? a.length : 0), 0)}개</div>
                   </div>
                 </>
@@ -21546,6 +22271,13 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                 </button>
               </div>
 
+              {isWarehouseZone(selectedZone.zone) && (
+                <button onClick={() => { setWarehouseModelZone(selectedZone); setSelectedZone(null); }}
+                  style={{ width: "100%", padding: "12px 10px", borderRadius: 8, background: "linear-gradient(135deg,#0f766e,#2563eb)", color: "#fff", border: "none", fontSize: 12, fontWeight: 900, cursor: "pointer", marginBottom: 14 }}>
+                  창고 실제 이미지/3D 재고 모델링 열기
+                </button>
+              )}
+
               {/* Quick task creation */}
               <div style={{ fontSize: 11, fontWeight: 800, color: "#475569", marginBottom: 8 }}>⚡ 빠른 과제 생성</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6, marginBottom: 14 }}>
@@ -21628,6 +22360,9 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
             </div>
           </div>
         </div>
+      )}
+      {warehouseModelZone && (
+        <WarehouseModelingModal zoneStatus={warehouseModelZone} onClose={() => setWarehouseModelZone(null)} />
       )}
       <style>{`@keyframes homePinPulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.15);opacity:0.85}}`}</style>
     </div>
@@ -22437,6 +23172,8 @@ function AppInner() {
   const [worklogs, setWorklogs] = useLocalStorage("jamsa_worklogs", []);
   const [showWorklog, setShowWorklog] = useState(false);
   const [showBackup, setShowBackup] = useState(false);
+  const [showAutoAgent, setShowAutoAgent] = useState(false);
+  const [autoAgentEnabled, setAutoAgentEnabled] = useLocalStorage("jamsa_auto_subagents_enabled", true);
   const addAudit = (entry) => setAuditLog(prev => [{
     id: "log" + Date.now() + Math.random(),
     at: new Date().toISOString(),
@@ -22444,6 +23181,8 @@ function AppInner() {
     userName: currentUser?.name || "알 수 없음",
     ...entry,
   }, ...prev].slice(0, 500)); // cap at 500 entries
+  const autoAgentReport = useMemo(() => buildAutoSubAgentReport({ facActions, worklogs, auditLog }), [facActions, worklogs, auditLog, module, showAutoAgent]);
+  const autoAgentAlertCount = autoAgentEnabled ? (autoAgentReport.criticalCount + autoAgentReport.watchCount) : 0;
 
   if (!currentUser) return <UnifiedLogin users={MERGED_USERS} onLogin={setCurrentUser} />;
 
@@ -22484,6 +23223,12 @@ function AppInner() {
                 color: module === "safety" ? "#fff" : "rgba(255,255,255,0.6)" }}>
               🛡️ 안전관리
             </button>
+            <button onClick={() => setModule("subagents")}
+              style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 800,
+                background: module === "subagents" ? "linear-gradient(135deg,#7c3aed,#2563eb)" : "transparent",
+                color: module === "subagents" ? "#fff" : "rgba(255,255,255,0.6)" }}>
+              🤖 서브에이전트
+            </button>
             <button onClick={() => {
               const url = localStorage.getItem("jamsa_cctv_guard_url") || "";
               if (!url) {
@@ -22503,6 +23248,10 @@ function AppInner() {
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button onClick={() => setModule("subagents")} title="자동 서브에이전트 관제"
+            style={{ padding: "5px 10px", borderRadius: 6, background: autoAgentAlertCount > 0 ? "rgba(220,38,38,0.18)" : "rgba(124,58,237,0.18)", border: autoAgentAlertCount > 0 ? "1px solid rgba(248,113,113,0.45)" : "1px solid rgba(167,139,250,0.35)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 800, display: "flex", alignItems: "center", gap: 4 }}>
+            🤖 서브에이전트 <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 10, background: autoAgentAlertCount > 0 ? "rgba(248,113,113,0.28)" : "rgba(167,139,250,0.25)", color: autoAgentAlertCount > 0 ? "#fecaca" : "#ddd6fe" }}>{autoAgentEnabled ? autoAgentReport.recommendations.length : "OFF"}</span>
+          </button>
           <button onClick={() => setShowWorklog(true)}
             style={{ padding: "5px 10px", borderRadius: 6, background: "rgba(37,99,235,0.15)", border: "1px solid rgba(37,99,235,0.3)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
             📒 업무일지 <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 10, background: "rgba(5,150,105,0.3)", color: "#6ee7b7" }}>{worklogs.length}</span>
@@ -22531,10 +23280,42 @@ function AppInner() {
         {module === "facility"  && <FacilityModule  userCtx={facUser} onLogout={logout} inspections={facInspections} setInspections={setFacInspections} actions={facActions} setActions={setFacActions} addAudit={addAudit} updateFacAction={updateFacAction} />}
         {module === "inventory" && <InventoryModule userCtx={invUser} onLogout={logout} onAddFacAction={addFacAction} switchToFacility={() => setModule("facility")} facActions={facActions} addAudit={addAudit} />}
         {module === "safety"    && <SafetyModule userCtx={facUser} onLogout={logout} facilities={FAC_FACILITIES} onAddFacAction={addFacAction} addAudit={addAudit} worklogs={worklogs} />}
+        {module === "subagents" && <AutoSubAgentPage
+          report={autoAgentReport}
+          enabled={autoAgentEnabled}
+          setEnabled={setAutoAgentEnabled}
+          onNavigate={(targetModule) => {
+            if (targetModule === "worklog") {
+              setShowWorklog(true);
+              return;
+            }
+            setModule(targetModule);
+          }}
+          onAddFacAction={addFacAction}
+          addAudit={addAudit}
+          snapshotData={{ facActions, worklogs, auditLog }}
+        />}
       </div>
       {showAuditLog && <AuditLogModal log={auditLog} onClose={() => setShowAuditLog(false)} />}
       {showWorklog && <WorklogPage onClose={() => setShowWorklog(false)} addAudit={addAudit} facActions={facActions} worklogs={worklogs} setWorklogs={setWorklogs} currentUser={currentUser} />}
       {showBackup && <BackupRestoreModal onClose={() => setShowBackup(false)} />}
+      {showAutoAgent && <AutoSubAgentModal
+        report={autoAgentReport}
+        enabled={autoAgentEnabled}
+        setEnabled={setAutoAgentEnabled}
+        onClose={() => setShowAutoAgent(false)}
+        onNavigate={(targetModule) => {
+          if (targetModule === "worklog") {
+            setShowWorklog(true);
+            setShowAutoAgent(false);
+            return;
+          }
+          setModule(targetModule);
+          setShowAutoAgent(false);
+        }}
+        onAddFacAction={addFacAction}
+        addAudit={addAudit}
+      />}
     </div>
   );
 }
