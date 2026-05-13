@@ -227,20 +227,84 @@ export async function sendNotification({ channel, config, message }) {
   }
 }
 
+// ─── 데모 데이터 ──────────────────────────────────────────────────
+// "🎬 데모 데이터 보기" 버튼으로 즉시 활성화. 실제 localStorage는 건드리지 않음.
+function buildDemoData() {
+  const now = Date.now();
+  const at = (offset) => new Date(now - offset * 3600000).toISOString();
+  return {
+    hist: [
+      { at: at(0.5), act:"재고출고",  pn:"절연장갑",        det:"전기실 출고", user:"관리자" },
+      { at: at(1),   act:"사진추가",  pn:"누에과학관",       det:"현장 사진 1장 추가", user:"이경연" },
+      { at: at(2),   act:"품의등록",  pn:"비상조명등",       det:"교체용 발주 2건", user:"김효진" },
+      { at: at(3.5), act:"제품수정",  pn:"안전모",          det:"보관 위치 변경", user:"이경연" },
+      { at: at(5),   act:"입고",      pn:"소독액",          det:"100ea 입고", user:"전원기" },
+      { at: at(7),   act:"재고출고",  pn:"방진마스크",       det:"50ea 출고", user:"김효진" },
+      { at: at(10),  act:"사진추가",  pn:"매점",            det:"청결 점검 사진", user:"이경연" },
+      { at: at(14),  act:"품의승인",  pn:"안전난간 수리",    det:"승인 완료", user:"이경연" },
+      { at: at(18),  act:"제품추가",  pn:"AED 패드",        det:"신규 등록 1ea", user:"전원기" },
+      { at: at(22),  act:"입고",      pn:"우비",            det:"20ea 입고", user:"김효진" },
+    ],
+    audit: [
+      { at: at(1), action:"AI 분석", targetLabel:"누에과학관", summary:"위험성 평가 등록 (LOW)" },
+      { at: at(4), action:"보완조치 완료", targetLabel:"썰매장", summary:"안전 펜스 보강 완료" },
+      { at: at(8), action:"권한 변경", targetLabel:"김효진", summary:"MANAGER → ADMIN 승격" },
+    ],
+    incidents: [
+      { id:"inc_1", date: at(4).slice(0,10), at: at(4), title:"방문객 넘어짐 (누에과학관 입구)", severity:"MAJOR",
+        description:"단체 관람객 5명 중 1명이 미끄러져 무릎 찰과상. 즉시 응급조치 후 보호자 인계." },
+    ],
+    facActions: [
+      // 동일 시설(f8 전기실)에서 3건 → 반복 패턴 감지 발동
+      { id:"a1", createdAt: at(4),  title:"[자동·CCTV] 방문객 넘어짐 즉시 출동",   facId:"f3", priority:"high", sev:"URGENT", desc:"누에과학관" },
+      { id:"a2", createdAt: at(6),  title:"전기실 수전설비 발열 점검 (1차)",         facId:"f8", priority:"high", sev:"HIGH",   desc:"이상발열 감지" },
+      { id:"a3", createdAt: at(8),  title:"전기실 배전반 차단기 교체",             facId:"f8", priority:"high", sev:"HIGH",   desc:"발열 원인 차단기로 추정" },
+      { id:"a4", createdAt: at(10), title:"전기실 절연저항 측정 (재발 방지)",       facId:"f8", priority:"medium", sev:"MEDIUM", desc:"교체 후 측정" },
+      { id:"a5", createdAt: at(2),  title:"[자동·날씨] 검정비닐천막 결속 강화",     facId:"f9", priority:"high", sev:"HIGH",   desc:"강풍주의보 발효" },
+      { id:"a6", createdAt: at(12), title:"매점 냉장고 온도 점검",                  facId:"f6", priority:"medium", sev:"MEDIUM", desc:"폭염 대비" },
+      { id:"a7", createdAt: at(15), title:"누에과학관 환기시설 청소",               facId:"f3", priority:"low",    sev:"LOW",    desc:"정기 점검" },
+      { id:"a8", createdAt: at(20), title:"양떼정원 울타리 점검",                   facId:"f5", priority:"low",    sev:"LOW",    desc:"느슨한 부위 확인" },
+    ],
+    autoHazards: [
+      { id:"h1", source:"weather", severity:"HIGH",   status:"active", title:"💨 강풍주의보", desc:"순간풍속 16m/s · 충청북도", detectedAt: at(2),
+        facId:"f9", recommendedActions:["⛺ 검정비닐천막·텐트·차양 결속 강화","🪧 입간판 임시 철거","🌳 노후 수목 점검","🛝 야외 놀이기구 운영 일시중단"] },
+      { id:"h2", source:"weather", severity:"HIGH",   status:"active", title:"🔥 폭염주의보", desc:"체감 34°C · 습도 38%",   detectedAt: at(3),
+        facId:"f6", recommendedActions:["🥤 음수대·그늘막 확인","🍳 매점/식당 냉장고 온도 확인","🚸 야외 체험 일시 중단 안내"] },
+      { id:"h3", source:"cctv",    severity:"URGENT", status:"active", title:"📹 CCTV 감지: 방문객 넘어짐", desc:"누에과학관 입구 CH-4", detectedAt: at(4),
+        facId:"f3", recommendedActions:["📹 영상 확인","👮 현장 출동","📋 사고기록 작성"] },
+      { id:"h4", source:"worklog", severity:"HIGH",   status:"active", title:"📒 업무일지에서 위험 키워드 감지: \"이상발열\"", desc:"전기실 수전설비 작업자 안전구 점검", detectedAt: at(6),
+        facId:"f8", recommendedActions:["🔍 24시간 내 현장 점검","📋 보완조치 계획 수립"] },
+      { id:"h5", source:"weather", severity:"MEDIUM", status:"closed", title:"❄️ 결빙주의 (해소)", desc:"기온 상승으로 해제", detectedAt: at(72),
+        closedAt: at(24), closedReason:"🌦️ 기상 경보 해제됨", facId:"all", recommendedActions:[] },
+    ],
+    dailyChecks: [], // 빈 채로 두면 "오늘 일일 점검 미수행" 감지 발동
+  };
+}
+
 // ─── 메인 UI ───────────────────────────────────────────────────────
 export function ReportsNotificationsPage({ hist = [], audit = [], incidents = [], facActions = [], autoHazards = [], dailyChecks = [], curUser }) {
   const [tab, setTab] = useState("report"); // report | channels | history
+  const [demoMode, setDemoMode] = useState(false);
   const [config, setConfig] = useState(load(NOTIF_CONFIG_KEY, DEFAULT_CONFIG));
   const [history, setHistory] = useState(load(NOTIF_HISTORY_KEY, []));
   useEffect(() => save(NOTIF_CONFIG_KEY, config), [config]);
   useEffect(() => save(NOTIF_HISTORY_KEY, history), [history]);
 
-  const [rangeHours, setRangeHours] = useState(24);
-  const report = useMemo(() => generateTimeReport({ hist, audit, incidents, facActions, autoHazards, dailyChecks, rangeHours }), [hist, audit, incidents, facActions, autoHazards, dailyChecks, rangeHours]);
-  const since = new Date(Date.now() - rangeHours * 3600000).toISOString();
-  const anomalies = useMemo(() => detectAnomalies({ hist, audit, incidents, facActions, autoHazards, dailyChecks }, since), [hist, audit, incidents, facActions, autoHazards, dailyChecks, since]);
+  // 데모 모드: 가짜 데이터로 props 오버라이드 (실제 localStorage 무손상)
+  const demo = useMemo(() => demoMode ? buildDemoData() : null, [demoMode]);
+  const _hist        = demo ? demo.hist        : hist;
+  const _audit       = demo ? demo.audit       : audit;
+  const _incidents   = demo ? demo.incidents   : incidents;
+  const _facActions  = demo ? demo.facActions  : facActions;
+  const _autoHazards = demo ? demo.autoHazards : autoHazards;
+  const _dailyChecks = demo ? demo.dailyChecks : dailyChecks;
 
-  const formattedMessage = useMemo(() => formatReportMessage({ anomalies, report, label: `${rangeHours}시간 종합 보고` }), [anomalies, report, rangeHours]);
+  const [rangeHours, setRangeHours] = useState(24);
+  const report = useMemo(() => generateTimeReport({ hist:_hist, audit:_audit, incidents:_incidents, facActions:_facActions, autoHazards:_autoHazards, dailyChecks:_dailyChecks, rangeHours }), [_hist, _audit, _incidents, _facActions, _autoHazards, _dailyChecks, rangeHours]);
+  const since = new Date(Date.now() - rangeHours * 3600000).toISOString();
+  const anomalies = useMemo(() => detectAnomalies({ hist:_hist, audit:_audit, incidents:_incidents, facActions:_facActions, autoHazards:_autoHazards, dailyChecks:_dailyChecks }, since), [_hist, _audit, _incidents, _facActions, _autoHazards, _dailyChecks, since]);
+
+  const formattedMessage = useMemo(() => formatReportMessage({ anomalies, report, label: `${rangeHours}시간 종합 보고${demoMode ? " (데모)" : ""}` }), [anomalies, report, rangeHours, demoMode]);
 
   // 발송 핸들러
   const [sending, setSending] = useState(false);
@@ -275,7 +339,17 @@ export function ReportsNotificationsPage({ hist = [], audit = [], incidents = []
             <h2 className="text-base font-black text-purple-900">📊 종합 보고서 + 🔔 알림 채널</h2>
             <div className="text-xs text-purple-700 mt-1">전체 발생로그에서 특이사항을 추출해 시간대별 보고서를 만들고, 텔레그램·SMS·이메일·웹훅으로 자동 전송합니다.</div>
           </div>
+          <button onClick={()=>setDemoMode(v=>!v)}
+            className={`px-4 py-2 text-xs font-bold rounded-lg border-2 transition ${demoMode?"bg-amber-500 text-white border-amber-500":"bg-white text-amber-700 border-amber-300 hover:bg-amber-50"}`}>
+            {demoMode ? "🎬 데모 모드 ON (클릭하여 끄기)" : "🎬 데모 데이터로 보기"}
+          </button>
         </div>
+        {demoMode && (
+          <div className="mt-3 px-3 py-2 bg-amber-50 border border-amber-300 rounded text-xs text-amber-900">
+            ⚠️ <strong>데모 모드:</strong> 가상 데이터로 UI 동작을 보여드립니다. 실제 데이터는 영향받지 않습니다.
+            특이사항 4건(폭염·강풍·CCTV 넘어짐·전기실 발열) + 반복 패턴 + 일일점검 누락 자동 감지가 시연됩니다.
+          </div>
+        )}
       </div>
 
       <div className="flex gap-1 border-b-2 border-gray-200">
