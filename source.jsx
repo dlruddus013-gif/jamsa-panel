@@ -6037,6 +6037,11 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
   // 품의/결제 — 재고와 동시 연동되는 발주 워크플로
   const [requisitions,setRequisitions]=useLocalStorage("jamsa_requisitions", []);
   const [payments,setPayments]=useLocalStorage("jamsa_payments", []);
+  const [customCats,setCustomCats]=useLocalStorage("jamsa_inv_categories", []);
+  const [storageSections,setStorageSections]=useLocalStorage("jamsa_storage_sections", [
+    "수장고 1번 선반", "수장고 2번 선반", "수장고 3번 선반", "수장고 4번 선반",
+    "수장고 A-1", "수장고 A-2", "수장고 B-1", "수장고 B-2"
+  ]);
   const [snapshots,setSnapshots]=useState([]); // for undo: [{id,prods}]
   // Custom user-defined zones (drawn on satellite map) — persisted
   const [customZones, setCustomZones] = useLocalStorage("jamsa_custom_zones", []);
@@ -6202,6 +6207,9 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
   const mapWrap=useRef(null);
 
   const can=(perm)=>curUser&&ROLES[curUser.role]?.perms?.includes(perm);
+  const invCats = useMemo(() => Array.from(new Set([...CATS, ...customCats, ...prods.map(p=>p.cat).filter(Boolean)])).sort(), [customCats, prods]);
+  const invLocs = useMemo(() => Array.from(new Set([...LOCS, ...storageSections, ...prods.map(p=>p.loc).filter(Boolean)])).sort(), [storageSections, prods]);
+  const makeProductId = () => Math.max(nextId(), ...prods.map(p => Number(p.id) || 0)) + 1;
 
   const addH=(a,n,d,q)=>{
     setSnapshots(s=>[{id:Date.now(),prods:JSON.parse(JSON.stringify(prods))},...s].slice(0,50));
@@ -6401,7 +6409,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
   const doOut=(pid,loc,qty,memo)=>{setProds(p=>p.map(x=>{if(x.id!==pid)return x;const l={...x.locs};const a=l[loc]||0;const m=Math.min(qty,a);l[loc]=a-m;return{...x,qty:Math.max(0,x.qty-m),locs:l};}));addH("출고",prods.find(x=>x.id===pid)?.name,`${loc}에서 ${qty}개 출고${memo?` - ${memo}`:""}`,qty);setModal(null);};
   const doAdj=(pid,loc,nq,memo)=>{setProds(p=>p.map(x=>{if(x.id!==pid)return x;const l={...x.locs};const d=nq-(l[loc]||0);l[loc]=nq;return{...x,qty:x.qty+d,locs:l};}));addH("조정",prods.find(x=>x.id===pid)?.name,`${loc} → ${nq}개${memo?` - ${memo}`:""}`,nq);setModal(null);};
   const doAdd=d=>{
-    const id=nextId();
+    const id=makeProductId();
     const code=genCode(id);
     const qty=parseInt(d.qty)||0;
     const minQty=parseInt(d.minQty)||0; // 적정재고 (이하면 알림)
@@ -6437,6 +6445,47 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
     // Close current modal first, then show QR after state updates
     setModal(null);
     setTimeout(()=>setModal({type:"qr",p:np}),100);
+  };
+  const doBatchAdd=(rows)=>{
+    const valid=(rows||[]).filter(r=>(r.name||"").trim());
+    if(!valid.length)return alert("등록할 품목이 없습니다.");
+    const baseId=Math.max(nextId(),...prods.map(p=>Number(p.id)||0))+1;
+    const next=valid.map((d,idx)=>{
+      const id=baseId+idx;
+      const qty=parseInt(d.qty)||0;
+      const loc=d.loc||storageSections[0]||"수장고";
+      const cat=d.cat||"기타";
+      return {
+        id,name:d.name.trim(),cat,loc,qty,locs:{[loc]:qty},memo:d.memo||"",code:genCode(id),
+        photos:[],usage:"",careGuide:"",stockSchedule:"",supplier:"",
+        minQty:parseInt(d.minQty)||0,unit:d.unit||"개",
+        subLoc:d.subLoc||"",subPosMarkerId:null,
+        createdAt:new Date().toISOString(),createdBy:curUser?.name||"시스템"
+      };
+    });
+    setProds(p=>[...p,...next]);
+    addH("일괄등록","수장고 선반",`${next.length}개 품목 일괄 등록`,next.length);
+    setModal(null);
+    setTimeout(()=>setModal({type:"qrBatch",prods:next}),100);
+  };
+  const saveCategoryManager=({add,renames})=>{
+    let nextCats=Array.from(new Set([...customCats]));
+    if(add?.trim())nextCats.push(add.trim());
+    Object.entries(renames||{}).forEach(([from,to])=>{
+      const clean=String(to||"").trim();
+      if(!clean||from===clean)return;
+      nextCats=nextCats.map(c=>c===from?clean:c);
+      setProds(ps=>ps.map(p=>p.cat===from?{...p,cat:clean}:p));
+    });
+    setCustomCats(Array.from(new Set(nextCats.filter(Boolean))).sort());
+    addH("카테고리관리","카테고리","추가/수정 저장",0);
+    setModal(null);
+  };
+  const saveStorageSections=(sections)=>{
+    const next=Array.from(new Set((sections||[]).map(s=>String(s||"").trim()).filter(Boolean)));
+    setStorageSections(next);
+    addH("수장고섹션","수장고",`${next.length}개 선반 섹션 저장`,next.length);
+    setModal(null);
   };
   const doDel=id=>{const p=prods.find(x=>x.id===id);if(p&&confirm(`"${p.name}" 삭제?`)){setProds(pr=>pr.filter(x=>x.id!==id));addH("삭제",p.name,"삭제",0);setSelP(null);}};
 
@@ -6617,6 +6666,9 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
           <div style={{display:"flex",gap:6}}>
             {can("export")&&<button className="btn bs" onClick={csv} style={{fontSize:12}}><IC.DL/>CSV</button>}
             {can("export")&&<button className="btn bs" onClick={()=>setModal({type:"qrBatch",prods:filtered.length?filtered:prods})} style={{fontSize:12}} title="QR 라벨 일괄 인쇄"><IC.QR/>QR 일괄인쇄</button>}
+            {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"storageSections"})} style={{fontSize:12,background:"#ecfeff",color:"#0e7490",border:"1px solid #a5f3fc"}}>수장고 선반</button>}
+            {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"categoryManager"})} style={{fontSize:12,background:"#fefce8",color:"#854d0e",border:"1px solid #fde68a"}}>카테고리</button>}
+            {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"batchAdd"})} style={{fontSize:12,background:"#f0fdf4",color:"#047857",border:"1px solid #bbf7d0"}}>일괄등록</button>}
             <button className="btn bs" onClick={()=>setModal({type:"reqPayments"})} style={{fontSize:12,background:"#fef3c7",color:"#92400e",border:"1px solid #fcd34d"}} title="품의·카드결제·이체 통합 관리">📋 품의/결제{requisitions.filter(r=>!["received","cancelled","rejected"].includes(r.status)).length>0&&<span style={{marginLeft:4,padding:"1px 5px",background:"#dc2626",color:"#fff",borderRadius:8,fontSize:9}}>{requisitions.filter(r=>!["received","cancelled","rejected"].includes(r.status)).length}</span>}</button>
             {can("add")&&<button className="btn bp" onClick={()=>setModal({type:"add"})} style={{fontSize:12}}><IC.Plus/>제품 추가</button>}
           </div>
@@ -6658,6 +6710,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
                       style={{fontSize:13,padding:"8px 12px",background:"#f0f7ff",color:"#3b5bdb",border:"1px solid #bfdbfe"}}><IC.Cam/>스캔</button>
                     {can("export")&&<button className="btn bs" onClick={csv} style={{fontSize:12,padding:"8px 10px"}} title="CSV 내보내기"><IC.DL/></button>}
                     {can("export")&&<button className="btn bs" onClick={()=>setModal({type:"qrBatch",prods:filtered.length?filtered:prods})} style={{fontSize:12,padding:"8px 10px"}} title="QR 라벨 일괄 인쇄"><IC.QR/></button>}
+                    {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"batchAdd"})} style={{fontSize:12,padding:"8px 10px",background:"#f0fdf4",color:"#047857",border:"1px solid #bbf7d0"}} title="수장고 일괄등록">일괄</button>}
                     <button className="btn bs" onClick={()=>setModal({type:"reqPayments"})} style={{fontSize:12,padding:"8px 10px",background:"#fef3c7",color:"#92400e",border:"1px solid #fcd34d"}} title="품의·결제 통합">📋</button>
                     {can("add")&&<button className="btn bp" onClick={()=>setModal({type:"add"})} style={{fontSize:12,padding:"8px 10px"}}><IC.Plus/></button>}
                   </div>
@@ -6804,10 +6857,10 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
             </div>
           )}
 
-          {page==="products"&&<PList prods={filtered} totalQ={totalQ} search={search} setSearch={setSearch} fLoc={fLoc} setFLoc={setFLoc} fCat={fCat} setFCat={setFCat}
+          {page==="products"&&<PList prods={filtered} totalQ={totalQ} search={search} setSearch={setSearch} fLoc={fLoc} setFLoc={setFLoc} fCat={fCat} setFCat={setFCat} cats={invCats} locs={invLocs}
             selP={selP} setSelP={setSelP} onIn={p=>setModal({type:"in",p})} onOut={p=>setModal({type:"out",p})} onAdj={p=>setModal({type:"adj",p})} onEdit={p=>setModal({type:"edit",p})} onDel={doDel} onShowQR={p=>setModal({type:"qr",p})}/>}
 
-          {(page==="stockin"||page==="stockout"||page==="adjust")&&<SPg type={page==="stockin"?"in":page==="stockout"?"out":"adj"} prods={prods} onIn={doIn} onOut={doOut} onAdj={doAdj}/>}
+          {(page==="stockin"||page==="stockout"||page==="adjust")&&<SPg type={page==="stockin"?"in":page==="stockout"?"out":"adj"} prods={prods} locs={invLocs} onIn={doIn} onOut={doOut} onAdj={doAdj}/>}
           {page==="history"&&<HPg hist={hist} prods={prods}/>}
           {page==="rfid"&&<RfidPg prods={prods} rfidTags={rfidTags} rfidScans={rfidScans} zones={ZONES} assignRfid={assignRfid} removeRfid={removeRfid} doRfidScan={doRfidScan} genRfidTag={genRfidTag}/>}
           {page==="analysis"&&<APg prods={prods} hist={hist} zones={ZONES} onAddFacAction={onAddFacAction}/>}
@@ -6830,7 +6883,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
       </div>
 
       {/* Modals */}
-      {modal?.type==="add"&&<AddMdl onAdd={doAdd} onClose={()=>setModal(null)}/>}
+      {modal?.type==="add"&&<AddMdl onAdd={doAdd} onClose={()=>setModal(null)} cats={invCats} locs={invLocs} storageSections={storageSections}/>}
       {modal?.type==="addInZone"&&<AddMdl onAdd={(data)=>{
         // Inject zone-based location
         const zoneLoc = modal.zone.name;
@@ -6838,11 +6891,14 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
         // Also register the zone's name as a valid location for this custom zone
         addH("재고추가", data.name, `사용자 구역 "${zoneLoc}"에 등록`, data.qty);
         setModal(null);
-      }} onClose={()=>setModal(null)} defaultLoc={modal.zone.name} zoneInfo={modal.zone}/>}
-      {modal?.type==="in"&&<SMdl type="in" p={modal.p} onSubmit={doIn} onClose={()=>setModal(null)}/>}
-      {modal?.type==="out"&&<SMdl type="out" p={modal.p} onSubmit={doOut} onClose={()=>setModal(null)}/>}
-      {modal?.type==="adj"&&<SMdl type="adj" p={modal.p} onSubmit={doAdj} onClose={()=>setModal(null)}/>}
-      {modal?.type==="edit"&&<EMdl p={modal.p} onSave={d=>{setProds(pr=>pr.map(x=>x.id===d.id?{...x,...d}:x));addH("수정",d.name,"수정",0);setModal(null);}} onClose={()=>setModal(null)}/>}
+      }} onClose={()=>setModal(null)} defaultLoc={modal.zone.name} zoneInfo={modal.zone} cats={invCats} locs={invLocs} storageSections={storageSections}/>}
+      {modal?.type==="batchAdd"&&<BatchAddModal cats={invCats} locs={invLocs} storageSections={storageSections} onAdd={doBatchAdd} onClose={()=>setModal(null)}/>}
+      {modal?.type==="categoryManager"&&<CategoryManagerModal cats={invCats} customCats={customCats} onSave={saveCategoryManager} onClose={()=>setModal(null)}/>}
+      {modal?.type==="storageSections"&&<StorageSectionModal sections={storageSections} onSave={saveStorageSections} onClose={()=>setModal(null)}/>}
+      {modal?.type==="in"&&<SMdl type="in" p={modal.p} locs={invLocs} onSubmit={doIn} onClose={()=>setModal(null)}/>}
+      {modal?.type==="out"&&<SMdl type="out" p={modal.p} locs={invLocs} onSubmit={doOut} onClose={()=>setModal(null)}/>}
+      {modal?.type==="adj"&&<SMdl type="adj" p={modal.p} locs={invLocs} onSubmit={doAdj} onClose={()=>setModal(null)}/>}
+      {modal?.type==="edit"&&<EMdl p={modal.p} cats={invCats} locs={invLocs} storageSections={storageSections} onSave={d=>{setProds(pr=>pr.map(x=>{if(x.id!==d.id)return x;const moved=x.loc!==d.loc;let locs={...(x.locs||{})};if(moved){const q=x.qty||0;delete locs[x.loc];locs[d.loc]=q;}return{...x,...d,locs};}));addH("수정",d.name,"수정",0);setModal(null);}} onClose={()=>setModal(null)}/>}
       {modal?.type==="qr"&&<QRModal p={modal.p} onClose={()=>setModal(null)}/>}
       {modal?.type==="qrBatch"&&<QRBatchPrintModal prods={modal.prods} onClose={()=>setModal(null)}/>}
       {modal?.type==="reqPayments"&&<ReqPaymentsModal
@@ -12104,7 +12160,7 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
 }
 
 // ========== PRODUCTS LIST ==========
-function PList({prods,totalQ,search,setSearch,fLoc,setFLoc,fCat,setFCat,selP,setSelP,onIn,onOut,onAdj,onEdit,onDel,onShowQR}){
+function PList({prods,totalQ,search,setSearch,fLoc,setFLoc,fCat,setFCat,cats= CATS,locs= LOCS,selP,setSelP,onIn,onOut,onAdj,onEdit,onDel,onShowQR}){
   const sp=selP?prods.find(p=>p.id===selP.id)||selP:null;
   return(
     <div style={{display:"flex",height:"100%"}}>
@@ -12114,8 +12170,8 @@ function PList({prods,totalQ,search,setSearch,fLoc,setFLoc,fCat,setFCat,selP,set
             <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:"#adb5bd"}}><IC.Srch/></span>
             <input className="inp" style={{paddingLeft:32}} placeholder="검색..." value={search} onChange={e=>setSearch(e.target.value)}/>
           </div>
-          <select className="sel" style={{width:"auto",minWidth:120}} value={fLoc} onChange={e=>setFLoc(e.target.value)}><option value="all">모든 위치</option>{LOCS.map(l=><option key={l}>{l}</option>)}</select>
-          <select className="sel" style={{width:"auto",minWidth:110}} value={fCat} onChange={e=>setFCat(e.target.value)}><option value="all">모든 카테고리</option>{CATS.map(c=><option key={c}>{c}</option>)}</select>
+          <select className="sel" style={{width:"auto",minWidth:120}} value={fLoc} onChange={e=>setFLoc(e.target.value)}><option value="all">모든 위치</option>{locs.map(l=><option key={l}>{l}</option>)}</select>
+          <select className="sel" style={{width:"auto",minWidth:110}} value={fCat} onChange={e=>setFCat(e.target.value)}><option value="all">모든 카테고리</option>{cats.map(c=><option key={c}>{c}</option>)}</select>
         </div>
         <div style={{padding:"7px 16px",display:"flex",justifyContent:"space-between",fontSize:11,color:"#94a3b8",fontWeight:600,borderBottom:"1px solid #f1f3f5",background:"#fafbfc"}}>
           <span>{prods.length}개</span><span style={{color:"#3b5bdb",fontWeight:700}}>총 {totalQ.toLocaleString()}</span>
@@ -12169,7 +12225,7 @@ function DPan({p,onIn,onOut,onAdj,onEdit,onDel,onShowQR,onClose}){
 }
 
 // ========== STOCK PAGE ==========
-function SPg({type,prods,onIn,onOut,onAdj}){
+function SPg({type,prods,locs=LOCS,onIn,onOut,onAdj}){
   const [pid,sPid]=useState("");const [loc,sLoc]=useState("");const [qty,sQty]=useState("");const [memo,sMemo]=useState("");const [sr,sSr]=useState("");
   const lb=type==="in"?"입고":type==="out"?"출고":"조정";const co=type==="in"?"#22c55e":type==="out"?"#ef4444":"#8b5cf6";
   const fl=prods.filter(p=>!sr||p.name.includes(sr)||p.code?.includes(sr.toUpperCase()));const sp=prods.find(p=>p.id===Number(pid));
@@ -12186,7 +12242,7 @@ function SPg({type,prods,onIn,onOut,onAdj}){
           <input className="inp" placeholder="검색..." value={sr} onChange={e=>sSr(e.target.value)} style={{marginBottom:5}}/>
           <select className="sel" value={pid} onChange={e=>sPid(e.target.value)}><option value="">-- 선택 --</option>{fl.map(p=><option key={p.id} value={p.id}>[{p.code}] {p.name} ({p.qty})</option>)}</select></div>
         {sp&&<div style={{background:"#f8f9fa",borderRadius:7,padding:"8px 12px",fontSize:12}}><strong>{sp.name}</strong> [{sp.code}] — 재고: <strong style={{color:co}}>{sp.qty}</strong></div>}
-        <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>위치</label><select className="sel" value={loc} onChange={e=>sLoc(e.target.value)}><option value="">-- 선택 --</option>{LOCS.map(l=><option key={l}>{l}</option>)}</select></div>
+        <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>위치</label><select className="sel" value={loc} onChange={e=>sLoc(e.target.value)}><option value="">-- 선택 --</option>{locs.map(l=><option key={l}>{l}</option>)}</select></div>
         <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>수량</label><input className="inp" type="number" min="0" value={qty} onChange={e=>sQty(e.target.value)}/></div>
         <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>메모</label><textarea className="inp" rows={2} value={memo} onChange={e=>sMemo(e.target.value)}/></div>
         <button className="btn bp" onClick={go} style={{justifyContent:"center",padding:"10px",background:co}}>{lb}</button>
@@ -12919,10 +12975,62 @@ function APg({prods, hist, zones, onAddFacAction}){
 }
 
 // ========== MODALS ==========
-function AddMdl({onAdd,onClose,defaultLoc,zoneInfo}){
-  const [n,sN]=useState("");const [c,sC]=useState(CATS[0]);
+function StorageSectionModal({sections,onSave,onClose}){
+  const [text,setText]=useState((sections||[]).join("\n"));
+  const addTemplate=()=>{
+    const base=["수장고 1번 선반","수장고 2번 선반","수장고 3번 선반","수장고 4번 선반","수장고 5번 선반","수장고 6번 선반"];
+    setText(prev=>Array.from(new Set([...(prev||"").split(/\n+/).map(s=>s.trim()).filter(Boolean),...base])).join("\n"));
+  };
+  return <Modal title="수장고 선반 섹션 관리" onClose={onClose} w={520}>
+    <div style={{display:"grid",gap:10}}>
+      <div style={{padding:10,background:"#ecfeff",border:"1px solid #a5f3fc",borderRadius:8,fontSize:12,color:"#0e7490",lineHeight:1.55}}>오늘 라벨 붙인 선반명을 한 줄에 하나씩 적어두면 재고 등록/수정/입출고 위치 선택에 바로 나타납니다.</div>
+      <textarea className="inp" rows={10} value={text} onChange={e=>setText(e.target.value)} placeholder={"수장고 1번 선반\n수장고 2번 선반\n수장고 3번 선반 / 2칸"}/>
+      <div style={{display:"flex",gap:6,justifyContent:"space-between"}}>
+        <button className="btn bs" onClick={addTemplate}>기본 1~6번 선반 넣기</button>
+        <div style={{display:"flex",gap:6}}><button className="btn bs" onClick={onClose}>취소</button><button className="btn bp" onClick={()=>onSave(text.split(/\n+/))}>저장</button></div>
+      </div>
+    </div>
+  </Modal>;
+}
+
+function CategoryManagerModal({cats,customCats,onSave,onClose}){
+  const [add,setAdd]=useState("");
+  const [renames,setRenames]=useState({});
+  return <Modal title="카테고리 추가 및 수정" onClose={onClose} w={540}>
+    <div style={{display:"grid",gap:10}}>
+      <div style={{display:"flex",gap:6}}><input className="inp" value={add} onChange={e=>setAdd(e.target.value)} placeholder="새 카테고리명 예: 조명/전기, 청소용품"/><button className="btn bp" onClick={()=>{if(add.trim())onSave({add,renames});}}>추가 저장</button></div>
+      <div style={{maxHeight:360,overflow:"auto",border:"1px solid #e5e7eb",borderRadius:8}}>
+        {(cats||[]).map(c=><div key={c} style={{display:"grid",gridTemplateColumns:"120px 1fr",gap:8,padding:8,borderBottom:"1px solid #f1f5f9",alignItems:"center"}}><div style={{fontSize:12,fontWeight:900,color:"#334155"}}>{c}</div><input className="inp" value={renames[c] ?? c} onChange={e=>setRenames(r=>({...r,[c]:e.target.value}))} style={{fontSize:12,padding:7}}/></div>)}
+      </div>
+      <div style={{fontSize:11,color:"#64748b"}}>이름을 바꾸고 저장하면 기존 재고의 카테고리도 같이 변경됩니다.</div>
+      <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}><button className="btn bs" onClick={onClose}>취소</button><button className="btn bp" onClick={()=>onSave({add,renames})}>변경 저장</button></div>
+    </div>
+  </Modal>;
+}
+
+function BatchAddModal({cats,locs,storageSections,onAdd,onClose}){
+  const [cat,setCat]=useState(cats[0]||"기타");
+  const [loc,setLoc]=useState(storageSections[0]||locs[0]||"수장고");
+  const [text,setText]=useState("");
+  const parseRows=()=>text.split(/\n+/).map(line=>line.trim()).filter(Boolean).map(line=>{const parts=line.split(/\t|,|\|/).map(x=>x.trim());return{name:parts[0]||"",qty:parts[1]||"1",cat:parts[2]||cat,loc:parts[3]||loc,subLoc:parts[4]||"",memo:parts[5]||""};}).filter(r=>r.name);
+  const rows=parseRows();
+  return <Modal title="수장고 선반 재고 일괄 등록" onClose={onClose} w={760}>
+    <div style={{display:"grid",gap:10}}>
+      <div style={{padding:10,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8,fontSize:12,color:"#047857",lineHeight:1.55}}>한 줄에 <strong>품목명, 수량, 카테고리, 위치, 세부위치, 메모</strong> 순서로 붙여넣으세요. 품목명만 적으면 기본 카테고리/선반으로 등록됩니다.</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}><label style={{fontSize:11,fontWeight:800,color:"#64748b"}}>기본 카테고리<select className="sel" value={cat} onChange={e=>setCat(e.target.value)} style={{marginTop:4}}>{cats.map(c=><option key={c}>{c}</option>)}</select></label><label style={{fontSize:11,fontWeight:800,color:"#64748b"}}>기본 위치/선반<select className="sel" value={loc} onChange={e=>setLoc(e.target.value)} style={{marginTop:4}}>{locs.map(l=><option key={l}>{l}</option>)}</select></label></div>
+      {storageSections.length>0&&<div style={{display:"flex",gap:5,flexWrap:"wrap"}}>{storageSections.slice(0,12).map(s=><button key={s} className="btn bs" onClick={()=>setLoc(s)} style={{fontSize:10,padding:"4px 7px",background:loc===s?"#e0f2fe":"#fff"}}>{s}</button>)}</div>}
+      <textarea className="inp" rows={10} value={text} onChange={e=>setText(e.target.value)} placeholder={"실버온열워터 900ml,1,체험,수장고 2번 선반,라벨 1칸\n조화화분,1,전시용,수장고 2번 선반,라벨 2칸\nLED 원형 전구,3,조명/전기,수장고 3번 선반"}/>
+      <div style={{fontSize:12,color:"#64748b"}}>미리보기: {rows.length}개 품목</div>
+      {rows.length>0&&<div style={{maxHeight:160,overflow:"auto",border:"1px solid #e5e7eb",borderRadius:8}}>{rows.slice(0,20).map((r,i)=><div key={i} style={{display:"grid",gridTemplateColumns:"1fr 50px 90px 130px 1fr",gap:6,padding:7,borderBottom:"1px solid #f1f5f9",fontSize:11}}><strong>{r.name}</strong><span>{r.qty}</span><span>{r.cat}</span><span>{r.loc}</span><span>{r.subLoc}</span></div>)}</div>}
+      <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}><button className="btn bs" onClick={onClose}>취소</button><button className="btn bp" onClick={()=>onAdd(rows)}>일괄 등록 + QR 생성</button></div>
+    </div>
+  </Modal>;
+}
+
+function AddMdl({onAdd,onClose,defaultLoc,zoneInfo,cats=CATS,locs=LOCS,storageSections=[]}){
+  const [n,sN]=useState("");const [c,sC]=useState(cats[0] || CATS[0]);
   // When zone is provided, default the location to zone's name (which may not be in LOCS)
-  const effectiveLocs = zoneInfo ? [zoneInfo.name, ...LOCS.filter(x => x !== zoneInfo.name)] : LOCS;
+  const effectiveLocs = zoneInfo ? [zoneInfo.name, ...locs.filter(x => x !== zoneInfo.name)] : locs;
   const [l,sL]=useState(defaultLoc || effectiveLocs[0]);
   const [q,sQ]=useState("0");const [m,sM]=useState("");
   const [sub,setSub]=useState("");
@@ -12940,7 +13048,7 @@ function AddMdl({onAdd,onClose,defaultLoc,zoneInfo}){
       )}
       <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>제품명 *</label><input className="inp" value={n} onChange={e=>sN(e.target.value)} autoFocus/></div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-        <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>카테고리</label><select className="sel" value={c} onChange={e=>sC(e.target.value)}>{CATS.map(x=><option key={x}>{x}</option>)}</select></div>
+        <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>카테고리</label><select className="sel" value={c} onChange={e=>sC(e.target.value)}>{cats.map(x=><option key={x}>{x}</option>)}</select></div>
         <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>위치</label><select className="sel" value={l} onChange={e=>sL(e.target.value)} disabled={!!zoneInfo}>{effectiveLocs.map(x=><option key={x}>{x}</option>)}</select></div>
       </div>
       <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>수량</label><input className="inp" type="number" min="0" value={q} onChange={e=>sQ(e.target.value)}/></div>
@@ -12948,6 +13056,12 @@ function AddMdl({onAdd,onClose,defaultLoc,zoneInfo}){
         <label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>📍 세부위치 <span style={{fontWeight:400,color:"#94a3b8"}}>(선택, 예: 3번 선반)</span></label>
         <input className="inp" value={sub} onChange={e=>setSub(e.target.value)} placeholder="예: 3번 선반 / 2칸"/>
       </div>
+      {storageSections.length>0&&<div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+        {storageSections.slice(0,10).map(sec=><button key={sec} type="button" onClick={()=>{sL(sec);setSub("");}} style={{fontSize:10,padding:"4px 7px",borderRadius:999,border:"1px solid #bae6fd",background:l===sec?"#0ea5e9":"#f0f9ff",color:l===sec?"#fff":"#0369a1",cursor:"pointer",fontWeight:800}}>{sec}</button>)}
+      </div>}
+      {storageSections.length>0&&<div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+        {storageSections.slice(0,10).map(sec=><button key={sec} type="button" onClick={()=>sL(sec)} style={{fontSize:10,padding:"4px 7px",borderRadius:999,border:"1px solid #bae6fd",background:l===sec?"#0ea5e9":"#f0f9ff",color:l===sec?"#fff":"#0369a1",cursor:"pointer",fontWeight:800}}>{sec}</button>)}
+      </div>}
       <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>메모</label><textarea className="inp" rows={2} value={m} onChange={e=>sM(e.target.value)}/></div>
       <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
         <button className="btn bs" onClick={onClose}>취소</button>
@@ -13751,7 +13865,7 @@ function ZoneLayoutModal({zone, layout, allProds, focusProdId, onSave, onAssignP
   );
 }
 
-function EMdl({p,onSave,onClose}){
+function EMdl({p,onSave,onClose,cats=CATS,locs=LOCS,storageSections=[]}){
   const [n,sN]=useState(p.name);const [c,sC]=useState(p.cat);const [l,sL]=useState(p.loc);
   const [sub,setSub]=useState(p.subLoc||"");
   const [m,sM]=useState(p.memo||"");
@@ -13759,8 +13873,8 @@ function EMdl({p,onSave,onClose}){
     <div style={{display:"flex",flexDirection:"column",gap:12}}>
       <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>제품명</label><input className="inp" value={n} onChange={e=>sN(e.target.value)}/></div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-        <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>위치(구역)</label><select className="sel" value={l} onChange={e=>sL(e.target.value)}>{LOCS.map(x=><option key={x}>{x}</option>)}</select></div>
-        <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>카테고리</label><select className="sel" value={c} onChange={e=>sC(e.target.value)}>{CATS.map(x=><option key={x}>{x}</option>)}</select></div>
+        <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>위치(구역)</label><select className="sel" value={l} onChange={e=>sL(e.target.value)}>{locs.map(x=><option key={x}>{x}</option>)}</select></div>
+        <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>카테고리</label><select className="sel" value={c} onChange={e=>sC(e.target.value)}>{cats.map(x=><option key={x}>{x}</option>)}</select></div>
       </div>
       <div>
         <label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>📍 세부위치 <span style={{fontWeight:400,color:"#94a3b8"}}>(예: 3번 선반 / 2칸, 입구쪽 좌측)</span></label>
@@ -13775,13 +13889,13 @@ function EMdl({p,onSave,onClose}){
   </Modal>);
 }
 
-function SMdl({type,p,onSubmit,onClose}){
-  const [loc,sLoc]=useState(p.loc||LOCS[0]);const [qty,sQty]=useState("");const [memo,sMemo]=useState("");
+function SMdl({type,p,locs=LOCS,onSubmit,onClose}){
+  const [loc,sLoc]=useState(p.loc||locs[0]||LOCS[0]);const [qty,sQty]=useState("");const [memo,sMemo]=useState("");
   const lb=type==="in"?"입고":type==="out"?"출고":"조정";const co=type==="in"?"#22c55e":type==="out"?"#ef4444":"#8b5cf6";
   return(<Modal title={`${p.name} — ${lb}`} onClose={onClose}>
     <div style={{display:"flex",flexDirection:"column",gap:12}}>
       <div style={{background:"#f8f9fa",borderRadius:7,padding:"8px 12px",fontSize:12}}>현재: <strong style={{color:co}}>{p.qty}</strong> · {p.code}</div>
-      <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>위치</label><select className="sel" value={loc} onChange={e=>sLoc(e.target.value)}>{LOCS.map(l=><option key={l} value={l}>{l} ({p.locs?.[l]||0})</option>)}</select></div>
+      <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>위치</label><select className="sel" value={loc} onChange={e=>sLoc(e.target.value)}>{locs.map(l=><option key={l} value={l}>{l} ({p.locs?.[l]||0})</option>)}</select></div>
       <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>수량</label><input className="inp" type="number" min="0" value={qty} onChange={e=>sQty(e.target.value)} autoFocus/></div>
       <div><label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>메모</label><textarea className="inp" rows={2} value={memo} onChange={e=>sMemo(e.target.value)}/></div>
       <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
