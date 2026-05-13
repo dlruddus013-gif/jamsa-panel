@@ -7,7 +7,8 @@
 import { applyCors, checkRateLimit } from '../lib/auth.js';
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514';
+// 최신 모델 기본값: Claude Opus 4.7 (사용자가 ANTHROPIC_MODEL env var로 override 가능)
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-4-7';
 
 const SYSTEM_PROMPT = `당신은 "한국잠사박물관 통합관리 시스템"의 챗봇 도우미입니다.
 이 시스템은 다음 기능을 가진 박물관 운영 관리 웹앱입니다:
@@ -64,16 +65,28 @@ export default async function handler(req, res) {
       }
       const data = await r.json();
       const answer = data?.content?.[0]?.text || '죄송합니다, 답변을 생성하지 못했습니다.';
-      return res.status(200).json({ ok: true, answer, source: 'claude' });
+      return res.status(200).json({
+        ok: true, answer, source: 'claude',
+        model: ANTHROPIC_MODEL,
+        usage: data?.usage || null,
+      });
     } catch (e) {
       console.warn('[chatbot] Claude failed, fallback:', e.message);
       // fallthrough to rule-based
     }
   }
 
-  // 룰 기반 폴백
+  // 룰 기반 폴백 + Claude 설정 안내
   const answer = ruleBasedAnswer(question);
-  return res.status(200).json({ ok: true, answer, source: 'rule_based' });
+  return res.status(200).json({
+    ok: true,
+    answer,
+    source: 'rule_based',
+    setup_hint: ANTHROPIC_API_KEY
+      ? null
+      : '💡 Claude AI 답변을 사용하려면 Vercel 환경변수에 ANTHROPIC_API_KEY를 설정하세요. Anthropic Console (console.anthropic.com)에서 API 키를 발급받을 수 있습니다.',
+    suggested_model: 'claude-opus-4-7',
+  });
 }
 
 function ruleBasedAnswer(q) {
