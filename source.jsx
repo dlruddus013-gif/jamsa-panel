@@ -15321,9 +15321,18 @@ function IncidentFormModal({ facilities, onClose, onSave }) {
 }
 
 // ========== DAILY CHECKLIST (일일 시설점검) ==========
+// 각 점검 항목은 다음 구조로 저장됨:
+//   checked[item] = {
+//     status: "todo" | "in_progress" | "done",
+//     photos: { before: [{id,url,at,by}], during: [...], after: [...] },
+//     memo: "...",
+//     completedAt: ISO
+//   }
+// 구버전 호환: checked[item] === true 면 {status:"done"} 로 간주
 function DailyChecklistPage({ dailyChecks, setDailyChecks, facilities, currentUser }) {
   const today = new Date().toISOString().slice(0,10);
-  const [activePeriod, setActivePeriod] = useState("opening"); // opening|noon|closing
+  const [activePeriod, setActivePeriod] = useState("opening");
+  const [expanded, setExpanded] = useState(null); // 펼쳐진 항목명
 
   const PERIODS = {
     opening: { label: "🌅 개장 전", color: "amber", time: "08:00-09:30" },
@@ -15351,83 +15360,296 @@ function DailyChecklistPage({ dailyChecks, setDailyChecks, facilities, currentUs
   const todayChecks = dailyChecks.filter(c => c.date === today);
   const periodCheck = todayChecks.find(c => c.period === activePeriod);
   const items = CHECK_ITEMS[activePeriod];
-  const checked = periodCheck?.checked || {};
 
-  const toggleItem = (item) => {
-    const newChecked = { ...checked, [item]: !checked[item] };
+  // 항목별 상태 추출 (구버전 호환)
+  const getItemState = (item) => {
+    const raw = periodCheck?.checked?.[item];
+    if (raw === true) return { status:"done", photos:{before:[],during:[],after:[]}, memo:"", completedAt:null };
+    if (raw === false || raw == null) return { status:"todo", photos:{before:[],during:[],after:[]}, memo:"", completedAt:null };
+    return {
+      status: raw.status || "todo",
+      photos: raw.photos || { before:[], during:[], after:[] },
+      memo: raw.memo || "",
+      completedAt: raw.completedAt || null,
+    };
+  };
+
+  // 항목별 완료율 (4단계 × 25%)
+  const itemCompletion = (item) => {
+    const s = getItemState(item);
+    let pct = 0;
+    if (s.photos.before?.length > 0) pct += 25;
+    if (s.photos.during?.length > 0) pct += 25;
+    if (s.photos.after?.length > 0) pct += 25;
+    if (s.status === "done") pct += 25;
+    return pct;
+  };
+
+  const setItemState = (item, patch) => {
+    const curr = getItemState(item);
+    const next = { ...curr, ...patch };
     if (periodCheck) {
-      setDailyChecks(prev => prev.map(c => c.id === periodCheck.id ? {...c, checked: newChecked, updatedAt: new Date().toISOString()} : c));
+      setDailyChecks(prev => prev.map(c => c.id === periodCheck.id
+        ? { ...c, checked: { ...c.checked, [item]: next }, updatedAt: new Date().toISOString() }
+        : c));
     } else {
       setDailyChecks(prev => [...prev, {
         id: "chk"+Date.now(), date: today, period: activePeriod,
-        checked: newChecked, by: currentUser?.name || "익명",
+        checked: { [item]: next }, by: currentUser?.name || "익명",
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
       }]);
     }
   };
 
-  const completedCount = items.filter(i => checked[i]).length;
-  const completionRate = Math.round((completedCount / items.length) * 100);
+  const addPhoto = (item, phase, file) => {
+    if (!file) return;
+    const r = new FileReader();
+    r.onload = e => {
+      const s = getItemState(item);
+      const newPhoto = { id: "p"+Date.now(), url: e.target.result, at: new Date().toISOString(), by: currentUser?.name || "익명" };
+      const photos = { ...s.photos, [phase]: [...(s.photos[phase]||[]), newPhoto] };
+      // 사진 추가 시 자동으로 in_progress 전환
+      const status = s.status === "todo" ? "in_progress" : s.status;
+      setItemState(item, { photos, status });
+    };
+    r.readAsDataURL(file);
+  };
+
+  const removePhoto = (item, phase, photoId) => {
+    if (!confirm("이 사진을 삭제하시겠습니까?")) return;
+    const s = getItemState(item);
+    setItemState(item, {
+      photos: { ...s.photos, [phase]: (s.photos[phase]||[]).filter(p => p.id !== photoId) },
+    });
+  };
+
+  const toggleDone = (item) => {
+    const s = getItemState(item);
+    const newStatus = s.status === "done" ? "in_progress" : "done";
+    setItemState(item, {
+      status: newStatus,
+      completedAt: newStatus === "done" ? new Date().toISOString() : null,
+    });
+  };
+
+  // 기간 완료율 = 항목별 완료율 평균
+  const completedCount = items.filter(i => getItemState(i).status === "done").length;
+  const completionRate = Math.round(items.reduce((s,i) => s + itemCompletion(i), 0) / items.length);
 
   return (
     <div className="space-y-4">
       <div className="bg-gradient-to-r from-emerald-50 to-blue-50 border border-emerald-200 rounded-xl p-4 text-sm text-emerald-900">
-        📋 <strong>일일 시설점검</strong> — 개장 전·점심·마감 시점에 모바일로 빠르게 체크하세요. 미완료 항목은 자동으로 다음 날까지 누적됩니다.
+        📋 <strong>일일 시설점검</strong> — 항목별 조치 전/진행 중/조치 후 사진을 프레임으로 기록합니다. 미완료 항목은 다음 날까지 누적됩니다.
       </div>
 
+      {/* 시간대 탭 */}
       <div className="flex gap-2">
         {Object.entries(PERIODS).map(([k, p]) => {
           const c = todayChecks.find(c => c.period === k);
           const items_ = CHECK_ITEMS[k];
-          const done = c ? items_.filter(i => c.checked?.[i]).length : 0;
-          const rate = Math.round((done / items_.length) * 100);
+          // 항목별 완료율 평균
+          const getRaw = (item) => c?.checked?.[item];
+          const itemPct = (item) => {
+            const raw = getRaw(item);
+            if (raw === true) return 100;
+            if (!raw || typeof raw !== "object") return 0;
+            let pct = 0;
+            if (raw.photos?.before?.length > 0) pct += 25;
+            if (raw.photos?.during?.length > 0) pct += 25;
+            if (raw.photos?.after?.length > 0) pct += 25;
+            if (raw.status === "done") pct += 25;
+            return pct;
+          };
+          const done = items_.filter(i => {
+            const raw = getRaw(i);
+            return raw === true || raw?.status === "done";
+          }).length;
+          const rate = Math.round(items_.reduce((s,i) => s + itemPct(i), 0) / items_.length);
           return (
             <button key={k} onClick={()=>setActivePeriod(k)}
               className={`flex-1 p-3 rounded-xl border-2 ${activePeriod===k?`bg-${p.color}-100 border-${p.color}-500`:'bg-white border-gray-200'}`}>
               <div className="text-sm font-bold">{p.label}</div>
               <div className="text-[10px] text-gray-500">{p.time}</div>
               <div className="text-xs font-bold mt-1">{done}/{items_.length} ({rate}%)</div>
+              <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden mt-1.5">
+                <div style={{width:`${rate}%`}} className={`h-full bg-${p.color}-500 transition-all`}/>
+              </div>
             </button>
           );
         })}
       </div>
 
+      {/* 활성 기간 점검 항목 */}
       <div className="bg-white rounded-xl border border-gray-200 p-4">
         <div className="flex justify-between items-center mb-3">
           <h3 className="font-bold text-sm">{PERIODS[activePeriod].label} 점검 항목</h3>
-          <span className="text-xs text-gray-500">{completedCount}/{items.length} 완료 · {completionRate}%</span>
+          <span className="text-xs font-bold">완료 {completedCount}/{items.length} · 전체 {completionRate}%</span>
         </div>
         <div className="h-2 bg-gray-200 rounded-full overflow-hidden mb-4">
-          <div style={{width:`${completionRate}%`}} className="h-full bg-emerald-500 transition-all"></div>
+          <div style={{width:`${completionRate}%`}} className="h-full bg-emerald-500 transition-all"/>
         </div>
-        <div className="space-y-1.5">
-          {items.map(item => (
-            <label key={item} className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer ${checked[item]?'bg-emerald-50':'bg-gray-50 hover:bg-gray-100'}`}>
-              <input type="checkbox" checked={!!checked[item]} onChange={()=>toggleItem(item)} className="w-5 h-5"/>
-              <span className={`text-sm ${checked[item]?'text-emerald-700 line-through':'text-gray-800'}`}>{item}</span>
-              {checked[item] && <span className="ml-auto text-[10px] text-emerald-600 font-bold">✓</span>}
-            </label>
-          ))}
+
+        <div className="space-y-2">
+          {items.map(item => {
+            const s = getItemState(item);
+            const pct = itemCompletion(item);
+            const isExpanded = expanded === item;
+            const statusMeta = {
+              todo:        { label:"⏳ 대기",    bg:"bg-gray-50",     border:"border-gray-200",     text:"text-gray-700" },
+              in_progress: { label:"🛠️ 진행중",  bg:"bg-amber-50",    border:"border-amber-300",    text:"text-amber-800" },
+              done:        { label:"✅ 완료",    bg:"bg-emerald-50",  border:"border-emerald-300",  text:"text-emerald-800" },
+            }[s.status];
+            return (
+              <div key={item} className={`border-2 rounded-lg overflow-hidden transition-all ${statusMeta.bg} ${statusMeta.border}`}>
+                {/* 헤더 (클릭 시 펼침) */}
+                <button onClick={()=>setExpanded(isExpanded ? null : item)}
+                  className="w-full p-3 flex items-center gap-3 text-left">
+                  <input type="checkbox" checked={s.status==="done"}
+                    onClick={e=>e.stopPropagation()}
+                    onChange={()=>toggleDone(item)} className="w-5 h-5"/>
+                  <span className={`flex-1 text-sm font-bold ${s.status==="done"?"line-through opacity-70":""} ${statusMeta.text}`}>{item}</span>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${statusMeta.bg} ${statusMeta.text} border ${statusMeta.border}`}>
+                    {statusMeta.label}
+                  </span>
+                  <span className="text-xs font-bold text-gray-700 min-w-12 text-right">{pct}%</span>
+                  <div className="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                    <div style={{width:`${pct}%`}} className={`h-full transition-all ${pct>=100?"bg-emerald-500":pct>=50?"bg-amber-500":pct>0?"bg-blue-500":"bg-gray-300"}`}/>
+                  </div>
+                  <span className="text-gray-400">{isExpanded?"▲":"▼"}</span>
+                </button>
+
+                {/* 펼친 영역 (조치 전/중/후 프레임) */}
+                {isExpanded && (
+                  <div className="border-t border-gray-200 bg-white p-3 space-y-3">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <PhotoFrame phase="before" label="📸 조치 전" color="red" photos={s.photos.before||[]}
+                        onAdd={(f)=>addPhoto(item,"before",f)} onRemove={(id)=>removePhoto(item,"before",id)}/>
+                      <PhotoFrame phase="during" label="🛠️ 진행 중" color="amber" photos={s.photos.during||[]}
+                        onAdd={(f)=>addPhoto(item,"during",f)} onRemove={(id)=>removePhoto(item,"during",id)}/>
+                      <PhotoFrame phase="after" label="✅ 조치 후" color="emerald" photos={s.photos.after||[]}
+                        onAdd={(f)=>addPhoto(item,"after",f)} onRemove={(id)=>removePhoto(item,"after",id)}/>
+                    </div>
+
+                    {/* 메모 */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-500 mb-1">📝 점검 메모 / 조치 내역</label>
+                      <textarea value={s.memo} onChange={e=>setItemState(item, {memo:e.target.value})}
+                        rows={2} placeholder="조치 내역, 발견 사항, 후속 조치 필요 사항 등"
+                        className="w-full px-2 py-1.5 border border-gray-200 rounded text-xs"/>
+                    </div>
+
+                    {/* 액션 + 완료 정보 */}
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div className="text-[10px] text-gray-500">
+                        {s.completedAt && <>✅ {new Date(s.completedAt).toLocaleString("ko-KR")} 완료</>}
+                        {!s.completedAt && s.status === "in_progress" && <>🛠️ 진행 중</>}
+                        {!s.completedAt && s.status === "todo" && <>⏳ 미시작</>}
+                      </div>
+                      <div className="flex gap-2">
+                        {s.status !== "in_progress" && s.status !== "done" && (
+                          <button onClick={()=>setItemState(item,{status:"in_progress"})}
+                            className="px-3 py-1.5 text-xs font-bold bg-amber-500 text-white rounded">🛠️ 작업 시작</button>
+                        )}
+                        <button onClick={()=>toggleDone(item)}
+                          className={`px-3 py-1.5 text-xs font-bold rounded ${s.status==="done"?"bg-gray-200 text-gray-700":"bg-emerald-600 text-white"}`}>
+                          {s.status==="done" ? "↩️ 완료 취소" : "✅ 완료 처리"}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 점수 산정 안내 */}
+                    <div className="text-[9px] text-gray-400 leading-snug">
+                      💡 항목 완료율: 조치 전 사진 25% + 진행 중 25% + 조치 후 25% + 완료 체크 25% = 100%
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 
+      {/* 최근 7일 이력 */}
       {dailyChecks.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 p-4">
           <h3 className="font-bold text-sm mb-3">📊 최근 7일 점검 이력</h3>
           <div className="space-y-1">
             {dailyChecks.slice(-7).reverse().map(c => {
               const items_ = CHECK_ITEMS[c.period];
-              const done = items_.filter(i => c.checked?.[i]).length;
+              const done = items_.filter(i => {
+                const raw = c.checked?.[i];
+                return raw === true || raw?.status === "done";
+              }).length;
+              // 총 사진 수
+              const totalPhotos = items_.reduce((s, i) => {
+                const raw = c.checked?.[i];
+                if (!raw || typeof raw !== "object") return s;
+                return s + (raw.photos?.before?.length||0) + (raw.photos?.during?.length||0) + (raw.photos?.after?.length||0);
+              }, 0);
               return (
                 <div key={c.id} className="flex justify-between items-center text-xs py-2 border-b last:border-0">
                   <div>
                     <strong>{c.date}</strong> · {PERIODS[c.period].label} · {c.by}
+                    {totalPhotos > 0 && <span className="ml-2 text-[10px] text-blue-600">📷 {totalPhotos}장</span>}
                   </div>
                   <span className={`font-bold ${done===items_.length?'text-emerald-600':done>0?'text-amber-600':'text-red-600'}`}>{done}/{items_.length}</span>
                 </div>
               );
             })}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── 사진 프레임 (조치 전/중/후 각각) ───────────────────────────────
+function PhotoFrame({ phase, label, color, photos, onAdd, onRemove }) {
+  const colorClasses = {
+    red:     { ring:"ring-red-200",     border:"border-red-300",     text:"text-red-700",     bg:"bg-red-50" },
+    amber:   { ring:"ring-amber-200",   border:"border-amber-300",   text:"text-amber-700",   bg:"bg-amber-50" },
+    emerald: { ring:"ring-emerald-200", border:"border-emerald-300", text:"text-emerald-700", bg:"bg-emerald-50" },
+  }[color] || { ring:"ring-gray-200", border:"border-gray-300", text:"text-gray-700", bg:"bg-gray-50" };
+
+  return (
+    <div className={`rounded-lg border-2 ${colorClasses.border} ${colorClasses.bg} p-2`}>
+      <div className="flex items-center justify-between mb-2">
+        <span className={`text-xs font-black ${colorClasses.text}`}>{label}</span>
+        <span className="text-[10px] text-gray-500 font-bold">{photos.length}장</span>
+      </div>
+
+      {photos.length === 0 ? (
+        <label className="block">
+          <input type="file" accept="image/*" capture="environment" style={{display:"none"}}
+            onChange={e=>onAdd(e.target.files?.[0])}/>
+          <div className={`cursor-pointer aspect-square flex flex-col items-center justify-center text-${color}-400 ${colorClasses.bg} border-2 border-dashed ${colorClasses.border} rounded-lg hover:opacity-80`}>
+            <div className="text-3xl">📷</div>
+            <div className="text-[10px] mt-1 font-bold">사진 추가</div>
+            <div className="text-[9px] mt-0.5 text-gray-400">탭하여 촬영</div>
+          </div>
+        </label>
+      ) : (
+        <div className="space-y-1.5">
+          <div className="grid grid-cols-2 gap-1">
+            {photos.slice(0, 4).map(p => (
+              <div key={p.id} className="relative aspect-square rounded overflow-hidden bg-gray-100 group">
+                <img src={p.url} alt="" className="w-full h-full object-cover"
+                  onClick={() => { const w = window.open(""); if (w) { w.document.write(`<img src="${p.url}" style="max-width:100%"/>`); } }}/>
+                <button onClick={()=>onRemove(p.id)}
+                  className="absolute top-0.5 right-0.5 w-5 h-5 bg-black/60 text-white rounded text-[10px] opacity-0 group-hover:opacity-100">✕</button>
+                <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-[8px] px-1 py-0.5 truncate">
+                  {new Date(p.at).toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"})}
+                </div>
+              </div>
+            ))}
+          </div>
+          <label className="block">
+            <input type="file" accept="image/*" capture="environment" style={{display:"none"}}
+              onChange={e=>onAdd(e.target.files?.[0])}/>
+            <div className={`cursor-pointer text-center py-1.5 text-[10px] font-bold ${colorClasses.text} border ${colorClasses.border} rounded hover:opacity-80`}>
+              ＋ 사진 추가
+            </div>
+          </label>
         </div>
       )}
     </div>
