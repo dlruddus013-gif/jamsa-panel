@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { PanoramaAddonPage, draftObjectsToMarkers } from "./panorama-addon.jsx";
 import { useAutoSafetyHazards, useAutoHazardNotifications, SOURCE_META, SEVERITY_META } from "./safety-auto-detect.jsx";
+import { InsuranceManagementPage, SafetyCalendarPage } from "./safety-insurance-calendar.jsx";
+
 const DEFAULT_CCTV_SERVER_URL = "https://cctv.thejamsa.com";
 
 // CCTV backend bootstrap: use one default cloud endpoint everywhere.
@@ -15400,9 +15402,11 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction, worklogs 
         <nav className="flex-1 p-2 space-y-0.5">
           {[
             { id: "dashboard", label: "안전 대시보드", icon: "🛡️" },
+            { id: "calendar", label: "안전관리 캘린더", icon: "📅" },
             { id: "hazard", label: "AI 위험성 평가", icon: "🤖" },
             { id: "tasks", label: "보완조치 관리", icon: "🔧" },
             { id: "incident", label: "사고/아차사고 기록", icon: "🚨" },
+            { id: "insurance", label: "보험 종합 관리", icon: "📑" },
             { id: "checklist", label: "일일 시설점검", icon: "📋" },
             { id: "education", label: "직원 안전교육", icon: "📚" },
             { id: "riskmap", label: "구역별 위험지도", icon: "🗺️" },
@@ -15430,14 +15434,24 @@ function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction, worklogs 
       <main className="flex-1 overflow-y-auto p-6">
         <div className="text-xl font-black mb-6 text-gray-900 flex items-center gap-2">
           {page === "dashboard" && "🛡️ 종합 안전 대시보드"}
+          {page === "calendar" && "📅 안전관리 캘린더"}
           {page === "education" && "📚 법정 의무 및 직무 안전 교육 일지"}
           {page === "hazard" && "🤖 시설 작업 환경 AI 위험성 평가"}
           {page === "tasks" && "🔧 보완조치 관리"}
           {page === "incident" && "🚨 사고 / 아차사고 기록"}
+          {page === "insurance" && "📑 보험 종합 관리"}
           {page === "checklist" && "📋 일일 시설점검"}
           {page === "riskmap" && "🗺️ 구역별 위험지도"}
           {page === "annual" && "📈 연간 안전 통계"}
         </div>
+
+        {page === "calendar" && (
+          <SafetyCalendarPage facilities={facilities} curUser={user} weatherAlerts={externalWeather.weatherAlerts || []}/>
+        )}
+
+        {page === "insurance" && (
+          <InsuranceManagementPage incidents={incidents} facilities={facilities} curUser={user}/>
+        )}
 
         {page === "dashboard" && (
           <div className="space-y-6">
