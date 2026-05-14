@@ -61,6 +61,7 @@ const NVR_BRANDS = {
 };
 
 const STORAGE_KEY = "jamsa_cctv_nvr_configs";
+const DEFAULT_BRIDGE = "https://cctv.thejamsa.com";  // 클라우드 브릿지 기본값
 
 function useLS(key, init) {
   const [v, setV] = useState(() => {
@@ -76,13 +77,25 @@ export function CctvNvrConfigPage({ facilities = [] }) {
   const [showSetup, setShowSetup] = useState(false);
   const [testResults, setTestResults] = useState({});
 
-  // 현재 브리지 서버 URL (CctvLiveOverlay가 사용)
+  // 현재 브리지 서버 URL (기본: 클라우드 cctv.thejamsa.com)
   const [bridgeUrl, setBridgeUrl] = useState(() => {
-    try { return localStorage.getItem("jamsa_cctv_snap_server") || ""; } catch (e) { return ""; }
+    try {
+      const saved = localStorage.getItem("jamsa_cctv_snap_server");
+      return saved || DEFAULT_BRIDGE;
+    } catch (e) { return DEFAULT_BRIDGE; }
   });
+  // 초기 마운트 시 localStorage에 기본값이 없으면 자동 저장
+  useEffect(() => {
+    try {
+      if (!localStorage.getItem("jamsa_cctv_snap_server")) {
+        localStorage.setItem("jamsa_cctv_snap_server", DEFAULT_BRIDGE);
+      }
+    } catch (e) {}
+  }, []);
   const saveBridgeUrl = (url) => {
     try { localStorage.setItem("jamsa_cctv_snap_server", url); setBridgeUrl(url); } catch (e) {}
   };
+  const resetToCloud = () => saveBridgeUrl(DEFAULT_BRIDGE);
 
   // 모든 채널 펼치기
   const allChannels = useMemo(() => {
@@ -159,22 +172,37 @@ export function CctvNvrConfigPage({ facilities = [] }) {
       {showSetup && <SetupGuide bridgeUrl={bridgeUrl} saveBridgeUrl={saveBridgeUrl}/>}
 
       {/* 브릿지 서버 상태 */}
-      <div style={{padding:10,background:bridgeUrl?"#dcfce7":"#fef3c7",border:`1px solid ${bridgeUrl?"#86efac":"#fde68a"}`,borderRadius:8,display:"flex",alignItems:"center",gap:8,fontSize:12}}>
-        <span style={{fontSize:20}}>{bridgeUrl?"✅":"⚠️"}</span>
-        <div style={{flex:1}}>
-          <div style={{fontWeight:800,color:bridgeUrl?"#065f46":"#92400e"}}>
-            로컬 브릿지: {bridgeUrl || "미설정"}
+      {(() => {
+        const isCloud = bridgeUrl && /thejamsa\.com|jamsa\.com/.test(bridgeUrl);
+        const isLocal = bridgeUrl && /(localhost|127\.0\.0\.1|192\.168|10\.|172\.)/.test(bridgeUrl);
+        return (
+          <div style={{padding:10,background:isCloud?"#dbeafe":(bridgeUrl?"#dcfce7":"#fef3c7"),border:`1px solid ${isCloud?"#93c5fd":(bridgeUrl?"#86efac":"#fde68a")}`,borderRadius:8,display:"flex",alignItems:"center",gap:8,fontSize:12,flexWrap:"wrap"}}>
+            <span style={{fontSize:20}}>{isCloud?"☁️":(bridgeUrl?"🖥️":"⚠️")}</span>
+            <div style={{flex:1,minWidth:200}}>
+              <div style={{fontWeight:800,color:isCloud?"#1e40af":(bridgeUrl?"#065f46":"#92400e")}}>
+                {isCloud ? "☁️ 클라우드 브릿지" : (isLocal ? "🖥️ 로컬 브릿지" : "브릿지")}: {bridgeUrl || "미설정"}
+              </div>
+              <div style={{fontSize:10,color:isCloud?"#1e3a8a":(bridgeUrl?"#047857":"#a16207"),marginTop:2}}>
+                {isCloud
+                  ? "클라우드 서버 경유로 NVR 스냅샷을 받습니다. 박물관 PC에 별도 설치 불필요. 24/7 안정적."
+                  : (isLocal
+                    ? "박물관 PC의 로컬 브릿지 사용 중. PC가 켜져 있어야 작동."
+                    : "직접 NVR 접속은 CORS/Mixed Content로 차단됨. 브릿지 권장 (위 가이드).")}
+              </div>
+            </div>
+            <input value={bridgeUrl} onChange={e=>saveBridgeUrl(e.target.value)}
+              placeholder={DEFAULT_BRIDGE}
+              style={{padding:"6px 10px",border:"1px solid #cbd5e1",borderRadius:6,fontSize:11,width:240}}/>
+            {!isCloud && (
+              <button onClick={resetToCloud}
+                style={{padding:"6px 10px",background:"#3b82f6",color:"#fff",border:"none",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer"}}
+                title="클라우드 기본값으로 복원">
+                ☁️ 클라우드로
+              </button>
+            )}
           </div>
-          <div style={{fontSize:10,color:bridgeUrl?"#047857":"#a16207",marginTop:2}}>
-            {bridgeUrl
-              ? "브릿지 경유로 NVR 스냅샷을 받습니다. 통합지도의 CCTV 오버레이가 자동으로 사용합니다."
-              : "직접 NVR 접속은 CORS/Mixed Content 차단으로 어려움. 브릿지 서버 권장 (위 가이드 참고)."}
-          </div>
-        </div>
-        <input value={bridgeUrl} onChange={e=>saveBridgeUrl(e.target.value)}
-          placeholder="http://192.168.0.10:5555"
-          style={{padding:"6px 10px",border:"1px solid #cbd5e1",borderRadius:6,fontSize:11,width:220}}/>
-      </div>
+        );
+      })()}
 
       {/* 액션 */}
       <div className="flex justify-between items-center flex-wrap gap-2">
@@ -474,7 +502,21 @@ function NvrEditModal({ config, onSave, onClose }) {
 function SetupGuide({ bridgeUrl, saveBridgeUrl }) {
   return (
     <div style={{padding:14,background:"#fff",border:"2px solid #0ea5e9",borderRadius:10,fontSize:12,lineHeight:1.7}}>
-      <h3 style={{fontSize:14,fontWeight:900,color:"#0c4a6e",marginBottom:8}}>📖 SmartPSS / VMS / NVR 연동 3단계</h3>
+      <h3 style={{fontSize:14,fontWeight:900,color:"#0c4a6e",marginBottom:8}}>📖 SmartPSS / VMS / NVR 연동 가이드</h3>
+
+      {/* 클라우드 권장 안내 */}
+      <div style={{padding:12,background:"linear-gradient(135deg,#dbeafe,#bfdbfe)",border:"2px solid #3b82f6",borderRadius:8,marginBottom:10}}>
+        <div style={{fontSize:13,fontWeight:900,color:"#1e3a8a",marginBottom:4}}>☁️ 권장: 클라우드 브릿지 사용</div>
+        <div style={{fontSize:11,color:"#1e40af",lineHeight:1.6}}>
+          <strong>{DEFAULT_BRIDGE}</strong>이 이미 설정되어 있습니다.
+          박물관 PC에 별도 설치 없이 즉시 사용 가능합니다.
+          NVR이 인터넷에 노출되어 있거나 박물관 네트워크가 VPN/포트포워딩으로 클라우드와 연결되어 있어야 작동합니다.
+        </div>
+        <div style={{marginTop:8,display:"flex",gap:6,alignItems:"center"}}>
+          <span style={{fontSize:10,fontWeight:700,color:"#1e40af"}}>현재 브릿지:</span>
+          <code style={{padding:"3px 8px",background:"#fff",borderRadius:4,fontSize:11,fontWeight:700,color:"#0c4a6e"}}>{bridgeUrl}</code>
+        </div>
+      </div>
 
       <Section icon="1️⃣" title="브라우저는 RTSP를 직접 재생할 수 없습니다" body={
         <>
@@ -489,7 +531,7 @@ function SetupGuide({ bridgeUrl, saveBridgeUrl }) {
         </>
       }/>
 
-      <Section icon="2️⃣" title="로컬 브릿지 서버 설치 (5분)" body={
+      <Section icon="2️⃣" title="(선택) 로컬 브릿지 설치 — 클라우드 사용 불가 시" body={
         <>
           박물관 PC(SmartPSS가 켜진 동일 PC)에서 다음 단계:
           <ol style={{paddingLeft:18,marginTop:4}}>
