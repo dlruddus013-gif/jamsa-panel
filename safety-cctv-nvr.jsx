@@ -177,12 +177,16 @@ export function CctvNvrConfigPage({ facilities = [] }) {
       </div>
 
       {/* 액션 */}
-      <div className="flex justify-between items-center">
+      <div className="flex justify-between items-center flex-wrap gap-2">
         <div style={{fontSize:13,fontWeight:700}}>등록된 NVR/VMS ({configs.length})</div>
-        <button onClick={()=>setEditing({brand:"dahua",port:80,rtspPort:554,channels:[{ch:1,name:"CH1"}]})}
-          style={{padding:"8px 14px",background:"#0ea5e9",color:"#fff",border:"none",borderRadius:8,fontWeight:700,fontSize:12,cursor:"pointer"}}>
-          ＋ NVR 추가
-        </button>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          <AutoImportButton bridgeUrl={bridgeUrl} configs={configs} setConfigs={setConfigs}/>
+          <DiscoverButton bridgeUrl={bridgeUrl} configs={configs} setConfigs={setConfigs} setEditing={setEditing}/>
+          <button onClick={()=>setEditing({brand:"dahua",port:80,rtspPort:554,channels:[{ch:1,name:"CH1"}]})}
+            style={{padding:"8px 14px",background:"#0ea5e9",color:"#fff",border:"none",borderRadius:8,fontWeight:700,fontSize:12,cursor:"pointer"}}>
+            ＋ NVR 추가
+          </button>
+        </div>
       </div>
 
       {/* NVR 목록 */}
@@ -257,6 +261,122 @@ export function CctvNvrConfigPage({ facilities = [] }) {
         <NvrEditModal config={editing} onSave={addOrUpdate} onClose={()=>setEditing(null)}/>
       )}
     </div>
+  );
+}
+
+// ─── 자동 등록: 브릿지 CONFIG에서 import ────────────────────────────
+function AutoImportButton({ bridgeUrl, configs, setConfigs }) {
+  const [busy, setBusy] = useState(false);
+  const run = async () => {
+    if (!bridgeUrl) { alert("⚠️ 먼저 로컬 브릿지 URL을 설정하세요 (위 입력란)."); return; }
+    setBusy(true);
+    try {
+      const r = await fetch(`${bridgeUrl.replace(/\/+$/, "")}/api/config-snapshot`, { cache: "no-store" });
+      const d = await r.json();
+      if (!d.ok || !d.configs?.length) { alert("브릿지에 NVR 설정이 없습니다. jamsa-cctv-bridge.cjs의 CONFIG 섹션에 NVR 정보를 입력하세요."); return; }
+      // 중복 제거 (host:port 기준)
+      const existingKeys = new Set(configs.map(c => `${c.host}:${c.port}`));
+      const toAdd = d.configs.filter(c => !existingKeys.has(`${c.host}:${c.port}`));
+      if (toAdd.length === 0) { alert(`이미 모두 등록되어 있습니다 (${d.configs.length}개). 추가할 새 NVR이 없습니다.`); return; }
+      if (!confirm(`📥 브릿지에서 ${toAdd.length}개 NVR (총 ${toAdd.reduce((s,c)=>s+c.channels.length,0)}개 채널)을 자동 등록할까요?`)) return;
+      setConfigs(prev => [...toAdd, ...prev]);
+      alert(`✅ ${toAdd.length}개 NVR 자동 등록 완료`);
+    } catch (e) {
+      alert(`❌ 자동 등록 실패: ${e.message}\n\n브릿지가 실행 중인지 확인하세요 (node jamsa-cctv-bridge.cjs).`);
+    } finally { setBusy(false); }
+  };
+  return (
+    <button onClick={run} disabled={busy}
+      style={{padding:"8px 14px",background:"#10b981",color:"#fff",border:"none",borderRadius:8,fontWeight:700,fontSize:12,cursor:busy?"wait":"pointer",opacity:busy?0.7:1}}
+      title="박물관 PC 브릿지의 CONFIG 설정을 한 번에 가져옵니다">
+      {busy ? "⏳ 가져오는 중..." : "📥 브릿지 설정 자동 가져오기"}
+    </button>
+  );
+}
+
+// ─── 자동 등록: LAN 자동 스캔 ─────────────────────────────────────
+function DiscoverButton({ bridgeUrl, configs, setConfigs, setEditing }) {
+  const [busy, setBusy] = useState(false);
+  const [found, setFound] = useState(null);
+  const run = async () => {
+    if (!bridgeUrl) { alert("⚠️ 먼저 로컬 브릿지 URL을 설정하세요."); return; }
+    setBusy(true); setFound(null);
+    try {
+      const r = await fetch(`${bridgeUrl.replace(/\/+$/, "")}/api/discover`, { cache: "no-store" });
+      const d = await r.json();
+      if (!d.ok) { alert(`스캔 실패: ${d.error}`); return; }
+      if (!d.devices?.length) { alert(`📡 ${d.subnet}.0/24 스캔 완료. 발견된 NVR 없음.`); return; }
+      setFound(d);
+    } catch (e) {
+      alert(`❌ 스캔 실패: ${e.message}`);
+    } finally { setBusy(false); }
+  };
+  const register = (dev) => {
+    if (configs.some(c => c.host === dev.host && c.port === dev.port)) {
+      alert("이미 등록된 NVR입니다.");
+      return;
+    }
+    // 발견된 정보로 편집 모달 자동 채움
+    setEditing({
+      brand: dev.brand === 'unknown' ? 'dahua' : dev.brand,
+      name: `${dev.brand?.toUpperCase()} NVR (${dev.host})`,
+      host: dev.host,
+      port: dev.port,
+      rtspPort: 554,
+      username: "admin",
+      password: "",
+      channels: [{ch:1,name:"CH1"}],
+    });
+    setFound(null);
+  };
+  return (
+    <>
+      <button onClick={run} disabled={busy}
+        style={{padding:"8px 14px",background:"#8b5cf6",color:"#fff",border:"none",borderRadius:8,fontWeight:700,fontSize:12,cursor:busy?"wait":"pointer",opacity:busy?0.7:1}}
+        title="LAN 전체를 스캔하여 NVR/카메라를 자동 감지">
+        {busy ? "🔍 스캔 중... (1~2분)" : "🔍 LAN 자동 검색"}
+      </button>
+      {found && (
+        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.6)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:14}}>
+          <div style={{background:"#fff",borderRadius:12,maxWidth:600,width:"100%",maxHeight:"80vh",overflowY:"auto",padding:18}}>
+            <div className="flex justify-between items-center mb-3">
+              <h3 style={{fontSize:15,fontWeight:900}}>🔍 LAN 스캔 결과 ({found.devices.length}대 발견)</h3>
+              <button onClick={()=>setFound(null)} style={{background:"none",border:"none",fontSize:20,color:"#94a3b8",cursor:"pointer"}}>✕</button>
+            </div>
+            <div style={{fontSize:11,color:"#64748b",marginBottom:10}}>
+              스캔 대상: {found.subnet}.0/24 ({found.scanned}개 포트). 등록하려면 해당 NVR 클릭.
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {found.devices.map((d, i) => {
+                const isRegistered = configs.some(c => c.host === d.host && c.port === d.port);
+                const brandColor = NVR_BRANDS[d.brand]?.color || "#64748b";
+                return (
+                  <div key={i} style={{padding:10,border:`2px solid ${brandColor}33`,borderRadius:8,display:"flex",alignItems:"center",gap:10}}>
+                    <span style={{fontSize:24}}>{NVR_BRANDS[d.brand]?.icon || "📡"}</span>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontWeight:800,fontSize:12,color:brandColor}}>{NVR_BRANDS[d.brand]?.label || d.brand} {d.suggested && <span style={{fontSize:9,color:"#94a3b8"}}>(추정)</span>}</div>
+                      <div style={{fontSize:10,color:"#475569",fontFamily:"monospace"}}>{d.host}:{d.port} · 신뢰도 {Math.round((d.confidence||0)*100)}%</div>
+                      {d.hint && <div style={{fontSize:9,color:"#94a3b8"}}>{d.hint}</div>}
+                    </div>
+                    {isRegistered ? (
+                      <span style={{padding:"4px 10px",fontSize:10,background:"#dcfce7",color:"#065f46",borderRadius:5,fontWeight:700}}>✓ 등록됨</span>
+                    ) : (
+                      <button onClick={()=>register(d)} style={{padding:"5px 12px",fontSize:11,background:brandColor,color:"#fff",border:"none",borderRadius:5,cursor:"pointer",fontWeight:700}}>
+                        ＋ 등록
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{marginTop:12,padding:8,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:6,fontSize:10,color:"#1e40af"}}>
+              💡 발견된 NVR을 클릭하면 자격증명 입력 모달이 자동으로 열립니다.<br/>
+              SmartPSS/VMS에 사용한 동일한 계정을 입력하세요.
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

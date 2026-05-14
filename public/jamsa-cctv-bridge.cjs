@@ -68,6 +68,84 @@ function buildSnapshotPath(nvr, ch) {
   }
 }
 
+// ─── LAN 자동 검색 ────────────────────────────────────────────────
+const os = require('os');
+
+function autoDetectSubnet() {
+  const ifaces = os.networkInterfaces();
+  for (const name of Object.keys(ifaces)) {
+    for (const ifc of ifaces[name]) {
+      if (ifc.family === 'IPv4' && !ifc.internal) {
+        const parts = ifc.address.split('.');
+        return `${parts[0]}.${parts[1]}.${parts[2]}`; // 예: "192.168.0"
+      }
+    }
+  }
+  return '192.168.0';
+}
+
+function probePort(host, port, timeout) {
+  return new Promise((resolve) => {
+    const net = require('net');
+    const socket = new net.Socket();
+    let done = false;
+    socket.setTimeout(timeout);
+    socket.once('connect', () => { done = true; socket.destroy(); resolve(true); });
+    socket.once('timeout', () => { if (!done) { socket.destroy(); resolve(false); } });
+    socket.once('error', () => { if (!done) { resolve(false); } });
+    socket.connect(port, host);
+  });
+}
+
+function identifyBrand(host, port, timeout) {
+  return new Promise((resolve) => {
+    const req = http.get({ host, port, path: '/', timeout }, (res) => {
+      const server = (res.headers['server'] || '').toLowerCase();
+      const wwwAuth = (res.headers['www-authenticate'] || '').toLowerCase();
+      let chunks = [];
+      res.on('data', c => { if (chunks.length < 5) chunks.push(c); });
+      res.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8', 0, 1000).toLowerCase();
+        if (server.includes('webs') || body.includes('dahua') || body.includes('webservice')) {
+          resolve({ brand: 'dahua', confidence: 0.8, hint: server || 'dahua-like' });
+        } else if (server.includes('hikvision') || body.includes('hikvision') || body.includes('isapi')) {
+          resolve({ brand: 'hikvision', confidence: 0.9, hint: server });
+        } else if (body.includes('onvif')) {
+          resolve({ brand: 'onvif', confidence: 0.6, hint: 'onvif-detected' });
+        } else {
+          resolve({ brand: 'unknown', confidence: 0.2, hint: server || 'http server' });
+        }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+  });
+}
+
+async function discoverNvrs(subnetPrefix, ports, timeout) {
+  const devices = [];
+  const tasks = [];
+  for (let i = 1; i <= 254; i++) {
+    const host = `${subnetPrefix}.${i}`;
+    for (const port of ports) {
+      tasks.push((async () => {
+        const open = await probePort(host, port, timeout);
+        if (!open) return;
+        const id = await identifyBrand(host, port, timeout).catch(() => null);
+        if (id && id.brand !== 'unknown') {
+          devices.push({ host, port, ...id });
+        } else if (id) {
+          // 알 수 없어도 80/8000/9000/37777에서 응답한 호스트는 후보로 표시
+          devices.push({ host, port, brand: id.brand, confidence: id.confidence, hint: id.hint, suggested: true });
+        }
+      })());
+    }
+  }
+  // 병렬 실행 (Promise.all로 한 번에)
+  await Promise.all(tasks);
+  return devices;
+}
+
 // ─── 프록시 서버 ─────────────────────────────────────────────────
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -148,8 +226,40 @@ const server = http.createServer((req, res) => {
     return res.end(JSON.stringify({ ok: true, channels: out }));
   }
 
+  // ─── 자동 등록용: 브릿지의 CONFIG를 jamsa-panel 포맷으로 export ───
+  if (req.url === '/api/config-snapshot') {
+    const configs = CONFIG.nvrs.map((n, idx) => ({
+      id: `bridge_${idx}_${Date.now()}`,
+      name: n.name || `NVR ${idx+1}`,
+      brand: n.brand || 'dahua',
+      host: n.host,
+      port: n.port || 80,
+      rtspPort: n.rtspPort || 554,
+      username: n.username,
+      password: n.password, // 브릿지가 localhost에 있으니 OK
+      channels: Object.entries(n.channels || {}).map(([ch, name]) => ({ ch: Number(ch), name })),
+      source: 'bridge_auto',
+    }));
+    res.setHeader('Content-Type', 'application/json');
+    return res.end(JSON.stringify({ ok: true, configs, exportedAt: new Date().toISOString() }));
+  }
+
+  // ─── LAN 자동 검색 (subnet scan, HEAD /cgi-bin/magicBox.cgi 등) ───
+  if (req.url.startsWith('/api/discover')) {
+    const params = new URLSearchParams(req.url.split('?')[1] || '');
+    const subnet = params.get('subnet') || autoDetectSubnet();
+    const ports = (params.get('ports') || '80,8000,9000,37777').split(',').map(Number);
+    const timeout = parseInt(params.get('timeout') || '1500', 10);
+
+    res.setHeader('Content-Type', 'application/json');
+    discoverNvrs(subnet, ports, timeout)
+      .then(devices => res.end(JSON.stringify({ ok: true, subnet, scanned: 256 * ports.length, devices, scanTime: new Date().toISOString() })))
+      .catch(e => res.end(JSON.stringify({ ok: false, error: e.message })));
+    return;
+  }
+
   res.statusCode = 404;
-  res.end('not found. Endpoints: /api/status, /api/snap/:ch, /api/channels');
+  res.end('not found. Endpoints: /api/status, /api/snap/:ch, /api/channels, /api/config-snapshot, /api/discover');
 });
 
 server.listen(PORT, () => {
