@@ -6087,6 +6087,12 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
     return [...baseWithOverrides, ...customZones];
   }, [customZones, zoneOverrides]);
   const [page,setPage]=useState("map");
+  // AI 작업 도우미 → 페이지 전환 이벤트 수신
+  useEffect(() => {
+    const h = (e) => { if (typeof e.detail === "string") setPage(e.detail); };
+    window.addEventListener("jamsa-set-inv-page", h);
+    return () => window.removeEventListener("jamsa-set-inv-page", h);
+  }, []);
   const [hZone,setHZone]=useState(null);
   const [selZone,setSelZone]=useState(null);
   const [selP,setSelP]=useState(null);
@@ -16042,6 +16048,12 @@ function AutoDetectionPanel({ activeHazards, allHazards, facilities, onCreateAct
 function SafetyModule({ userCtx, onLogout, facilities, onAddFacAction, worklogs = [], facActions = [], auditLog = [] }) {
   const user = userCtx;
   const [page, setPage] = useState("dashboard");
+  // AI 작업 도우미 → 페이지 전환 이벤트 수신
+  useEffect(() => {
+    const h = (e) => { if (typeof e.detail === "string") setPage(e.detail); };
+    window.addEventListener("jamsa-set-safety-page", h);
+    return () => window.removeEventListener("jamsa-set-safety-page", h);
+  }, []);
   const [trainings, setTrainings] = useState(FAC_INIT_SAFE_TRAININGS);
   const [inspections, setInspections] = useState(FAC_INIT_SAFE_INSPECTIONS);
   const [aiLog, setAiLog] = useState([]); // registered AI diagnoses
@@ -24113,6 +24125,35 @@ function AppInner() {
   }, [currentUser]);
 
   const [module, setModule] = useState("home"); // "home" | "facility" | "inventory" | "safety"
+
+  // 🤖 AI 작업 도우미 액션 디스패처 — 검색바 챗봇의 action 버튼이 jamsa-ai-action 이벤트 발행
+  useEffect(() => {
+    const handler = (e) => {
+      const { type, payload = {}, label, requiresConfirmation } = e.detail || {};
+      if (!type) return;
+      if (requiresConfirmation) {
+        if (!confirm(`🤖 AI 작업 도우미\n\n다음 작업을 실행할까요?\n→ ${label}\n${Object.entries(payload).map(([k,v])=>`  · ${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`).join("\n")}`)) return;
+      }
+      const page = payload.page || "";
+      if (["products","stockin","stockout","history","rfid","panoramaAddon","map","required","analysis"].includes(page)) {
+        setModule("inventory");
+        try { window.dispatchEvent(new CustomEvent("jamsa-set-inv-page", { detail: page })); } catch (e) {}
+      } else if (page.startsWith("safety:")) {
+        setModule("safety");
+        try { window.dispatchEvent(new CustomEvent("jamsa-set-safety-page", { detail: page.slice("safety:".length) })); } catch (e) {}
+      } else if (page === "facility" || page.startsWith("facility:")) {
+        setModule("facility");
+      } else if (page === "home" || !page) {
+        setModule("home");
+      }
+      if (payload.modal || payload.tab || payload.trigger) {
+        setTimeout(() => { window.dispatchEvent(new CustomEvent("jamsa-ai-context", { detail: payload })); }, 150);
+      }
+    };
+    window.addEventListener("jamsa-ai-action", handler);
+    return () => window.removeEventListener("jamsa-ai-action", handler);
+  }, []);
+  useEffect(() => { window.__jamsa_current_page = module; }, [module]);
 
   // Lifted state so cross-module features (e.g. Inventory AI → Facility Action) work
   const [facInspections, setFacInspections] = useLocalStorage("jamsa_fac_inspections", FAC_INIT_INSPECTIONS);
