@@ -62,6 +62,7 @@ const NVR_BRANDS = {
 
 const STORAGE_KEY = "jamsa_cctv_nvr_configs";
 const DEFAULT_BRIDGE = "https://cctv.thejamsa.com";  // 클라우드 브릿지 기본값
+const DEFAULT_LOCAL_BRIDGE = "http://localhost:5555"; // 로컬 브릿지 기본 안내값
 
 function useLS(key, init) {
   const [v, setV] = useState(() => {
@@ -77,13 +78,24 @@ export function CctvNvrConfigPage({ facilities = [] }) {
   const [showSetup, setShowSetup] = useState(false);
   const [testResults, setTestResults] = useState({});
 
-  // 현재 브리지 서버 URL (기본: 클라우드 cctv.thejamsa.com)
-  const [bridgeUrl, setBridgeUrl] = useState(() => {
+  // 클라우드 브릿지 (기본 cctv.thejamsa.com)
+  const [cloudBridgeUrl, setCloudBridgeUrl] = useState(() => {
     try {
       const saved = localStorage.getItem("jamsa_cctv_snap_server");
       return saved || DEFAULT_BRIDGE;
     } catch (e) { return DEFAULT_BRIDGE; }
   });
+  // 로컬 브릿지 (선택, 박물관 PC에서 실행)
+  const [localBridgeUrl, setLocalBridgeUrl] = useState(() => {
+    try { return localStorage.getItem("jamsa_cctv_local_bridge") || ""; }
+    catch (e) { return ""; }
+  });
+  // 둘 다 사용 가능. 자동 import / discover에서는 활성 브릿지 우선순위: 로컬 → 클라우드
+  const bridgeUrl = localBridgeUrl || cloudBridgeUrl;
+  // 헬스체크
+  const [cloudHealth, setCloudHealth] = useState({ checking: false, ok: null });
+  const [localHealth, setLocalHealth] = useState({ checking: false, ok: null });
+
   // 초기 마운트 시 localStorage에 기본값이 없으면 자동 저장
   useEffect(() => {
     try {
@@ -92,10 +104,37 @@ export function CctvNvrConfigPage({ facilities = [] }) {
       }
     } catch (e) {}
   }, []);
-  const saveBridgeUrl = (url) => {
-    try { localStorage.setItem("jamsa_cctv_snap_server", url); setBridgeUrl(url); } catch (e) {}
+
+  const saveCloudBridgeUrl = (url) => {
+    try { localStorage.setItem("jamsa_cctv_snap_server", url); setCloudBridgeUrl(url); } catch (e) {}
   };
-  const resetToCloud = () => saveBridgeUrl(DEFAULT_BRIDGE);
+  const saveLocalBridgeUrl = (url) => {
+    try {
+      if (url) localStorage.setItem("jamsa_cctv_local_bridge", url);
+      else localStorage.removeItem("jamsa_cctv_local_bridge");
+      setLocalBridgeUrl(url);
+    } catch (e) {}
+  };
+  const resetCloudToDefault = () => saveCloudBridgeUrl(DEFAULT_BRIDGE);
+
+  const checkHealth = async (url, setter) => {
+    if (!url) { setter({ checking: false, ok: false, error: "미설정" }); return; }
+    setter({ checking: true, ok: null });
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 5000);
+      const r = await fetch(`${url.replace(/\/+$/, "")}/api/status`, { cache: "no-store", signal: ctrl.signal });
+      clearTimeout(t);
+      const data = await r.json().catch(() => null);
+      setter({ checking: false, ok: r.ok, status: r.status, data });
+    } catch (e) {
+      setter({ checking: false, ok: false, error: e.message });
+    }
+  };
+
+  // 마운트/URL 변경 시 자동 체크
+  useEffect(() => { checkHealth(cloudBridgeUrl, setCloudHealth); }, [cloudBridgeUrl]);
+  useEffect(() => { checkHealth(localBridgeUrl, setLocalHealth); }, [localBridgeUrl]);
 
   // 모든 채널 펼치기
   const allChannels = useMemo(() => {
@@ -169,40 +208,49 @@ export function CctvNvrConfigPage({ facilities = [] }) {
         </div>
       </div>
 
-      {showSetup && <SetupGuide bridgeUrl={bridgeUrl} saveBridgeUrl={saveBridgeUrl}/>}
+      {showSetup && <SetupGuide bridgeUrl={localBridgeUrl || cloudBridgeUrl} saveBridgeUrl={saveLocalBridgeUrl}/>}
 
-      {/* 브릿지 서버 상태 */}
-      {(() => {
-        const isCloud = bridgeUrl && /thejamsa\.com|jamsa\.com/.test(bridgeUrl);
-        const isLocal = bridgeUrl && /(localhost|127\.0\.0\.1|192\.168|10\.|172\.)/.test(bridgeUrl);
-        return (
-          <div style={{padding:10,background:isCloud?"#dbeafe":(bridgeUrl?"#dcfce7":"#fef3c7"),border:`1px solid ${isCloud?"#93c5fd":(bridgeUrl?"#86efac":"#fde68a")}`,borderRadius:8,display:"flex",alignItems:"center",gap:8,fontSize:12,flexWrap:"wrap"}}>
-            <span style={{fontSize:20}}>{isCloud?"☁️":(bridgeUrl?"🖥️":"⚠️")}</span>
-            <div style={{flex:1,minWidth:200}}>
-              <div style={{fontWeight:800,color:isCloud?"#1e40af":(bridgeUrl?"#065f46":"#92400e")}}>
-                {isCloud ? "☁️ 클라우드 브릿지" : (isLocal ? "🖥️ 로컬 브릿지" : "브릿지")}: {bridgeUrl || "미설정"}
-              </div>
-              <div style={{fontSize:10,color:isCloud?"#1e3a8a":(bridgeUrl?"#047857":"#a16207"),marginTop:2}}>
-                {isCloud
-                  ? "클라우드 서버 경유로 NVR 스냅샷을 받습니다. 박물관 PC에 별도 설치 불필요. 24/7 안정적."
-                  : (isLocal
-                    ? "박물관 PC의 로컬 브릿지 사용 중. PC가 켜져 있어야 작동."
-                    : "직접 NVR 접속은 CORS/Mixed Content로 차단됨. 브릿지 권장 (위 가이드).")}
-              </div>
-            </div>
-            <input value={bridgeUrl} onChange={e=>saveBridgeUrl(e.target.value)}
-              placeholder={DEFAULT_BRIDGE}
-              style={{padding:"6px 10px",border:"1px solid #cbd5e1",borderRadius:6,fontSize:11,width:240}}/>
-            {!isCloud && (
-              <button onClick={resetToCloud}
-                style={{padding:"6px 10px",background:"#3b82f6",color:"#fff",border:"none",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer"}}
-                title="클라우드 기본값으로 복원">
-                ☁️ 클라우드로
-              </button>
-            )}
-          </div>
-        );
-      })()}
+      {/* 듀얼 브릿지 상태 (클라우드 + 로컬 동시 사용 + 자동 폴백) */}
+      <div style={{padding:10,background:"#f1f5f9",border:"1px solid #cbd5e1",borderRadius:8,fontSize:11,color:"#475569",lineHeight:1.5}}>
+        <div style={{fontWeight:800,color:"#0f172a",marginBottom:4}}>🔁 듀얼 브릿지 자동 폴백</div>
+        클라우드와 로컬 브릿지를 <strong>둘 다</strong> 설정하면, 스냅샷 요청 시 <strong>로컬 → 클라우드</strong> 순서로 자동 시도합니다.
+        박물관 LAN에서는 빠른 로컬 우선, 외부/장애 시 클라우드 폴백.
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(320px,1fr))",gap:8}}>
+        {/* 클라우드 브릿지 카드 */}
+        <BridgeCard
+          icon="☁️"
+          title="클라우드 브릿지"
+          subtitle="박물관 PC 불필요 · 24/7 안정"
+          color="#3b82f6"
+          bgColor="#dbeafe"
+          borderColor="#93c5fd"
+          url={cloudBridgeUrl}
+          onUrlChange={saveCloudBridgeUrl}
+          health={cloudHealth}
+          placeholder={DEFAULT_BRIDGE}
+          onReset={resetCloudToDefault}
+          resetLabel="기본값 복원"
+          onCheck={() => checkHealth(cloudBridgeUrl, setCloudHealth)}
+        />
+        {/* 로컬 브릿지 카드 */}
+        <BridgeCard
+          icon="🖥️"
+          title="로컬 브릿지 (선택)"
+          subtitle="박물관 PC에 node 실행 · 빠른 LAN 응답"
+          color="#10b981"
+          bgColor="#dcfce7"
+          borderColor="#86efac"
+          url={localBridgeUrl}
+          onUrlChange={saveLocalBridgeUrl}
+          health={localHealth}
+          placeholder={DEFAULT_LOCAL_BRIDGE}
+          onReset={() => saveLocalBridgeUrl("")}
+          resetLabel="제거"
+          onCheck={() => checkHealth(localBridgeUrl, setLocalHealth)}
+        />
+      </div>
 
       {/* 액션 */}
       <div className="flex justify-between items-center flex-wrap gap-2">
@@ -287,6 +335,47 @@ export function CctvNvrConfigPage({ facilities = [] }) {
 
       {editing && (
         <NvrEditModal config={editing} onSave={addOrUpdate} onClose={()=>setEditing(null)}/>
+      )}
+    </div>
+  );
+}
+
+// ─── 브릿지 카드 (클라우드/로컬 공용) ───────────────────────────────
+function BridgeCard({ icon, title, subtitle, color, bgColor, borderColor, url, onUrlChange, health, placeholder, onReset, resetLabel, onCheck }) {
+  const statusLabel = health.checking ? "⏳ 확인 중..." : (health.ok === null ? "—" : (health.ok ? "✅ 정상" : "❌ 응답 없음"));
+  const statusColor = health.ok === true ? "#065f46" : (health.ok === false ? "#dc2626" : "#64748b");
+  return (
+    <div style={{padding:12,background:bgColor,border:`2px solid ${borderColor}`,borderRadius:10}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+        <span style={{fontSize:24}}>{icon}</span>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:13,fontWeight:900,color}}>{title}</div>
+          <div style={{fontSize:10,color:"#475569"}}>{subtitle}</div>
+        </div>
+        <span style={{fontSize:10,fontWeight:700,color:statusColor,padding:"3px 8px",background:"#fff",borderRadius:5}}>
+          {statusLabel}
+        </span>
+      </div>
+      <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+        <input value={url} onChange={e=>onUrlChange(e.target.value)}
+          placeholder={placeholder}
+          style={{flex:1,minWidth:160,padding:"6px 10px",border:"1px solid #cbd5e1",borderRadius:6,fontSize:11,fontFamily:"monospace"}}/>
+        <button onClick={onCheck}
+          style={{padding:"6px 10px",background:"#fff",color,border:`1px solid ${color}`,borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer"}}>
+          🔄 확인
+        </button>
+        <button onClick={onReset}
+          style={{padding:"6px 10px",background:"#fff",color:"#64748b",border:"1px solid #cbd5e1",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer"}}>
+          {resetLabel}
+        </button>
+      </div>
+      {health.data?.nvrs !== undefined && (
+        <div style={{marginTop:6,fontSize:10,color:"#475569"}}>
+          📹 NVR {health.data.nvrs}대 · 채널 {health.data.channels ? Object.values(health.data.channels).reduce((s,n)=>s+(n.channels?.length||0),0) : 0}개
+        </div>
+      )}
+      {health.ok === false && health.error && (
+        <div style={{marginTop:6,fontSize:10,color:"#dc2626"}}>⚠️ {health.error}</div>
       )}
     </div>
   );

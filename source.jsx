@@ -2833,6 +2833,11 @@ const getStoredCctvServerUrl = () => {
   catch (e) { return ""; }
 };
 
+const getStoredCctvLocalBridgeUrl = () => {
+  try { return normalizeCctvServerUrl(window.localStorage?.getItem("jamsa_cctv_local_bridge")); }
+  catch (e) { return ""; }
+};
+
 const getEffectiveCctvServerUrl = (...preferred) => {
   const list = [
     ...preferred,
@@ -2843,9 +2848,11 @@ const getEffectiveCctvServerUrl = (...preferred) => {
   return list[0] || DEFAULT_CCTV_SERVER_URL;
 };
 
+// 클라우드 + 로컬 브릿지 둘 다 시도 (자동 폴백)
 const getCctvServerCandidates = (primary) => {
   const list = [
     primary,
+    (typeof window !== "undefined" ? getStoredCctvLocalBridgeUrl() : ""),
     (typeof window !== "undefined" ? window.BACKEND_URL : ""),
     (typeof window !== "undefined" ? getStoredCctvServerUrl() : ""),
     DEFAULT_CCTV_SERVER_URL,
