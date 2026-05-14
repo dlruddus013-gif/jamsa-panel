@@ -363,6 +363,44 @@
           results.innerHTML = '<div class="sr-empty">❌ AI 호출 실패<br/><span style="font-size:10px;opacity:0.7">' + e.message + '</span><br/><br/>💡 네트워크 확인 또는 새로고침</div>';
         }
       };
+      // 클라이언트 측 localStorage 직접 검색 (서버 검색 401 등 폴백용)
+      const SEARCH_KEYS = Object.keys(LABELS);
+      const clientSideSearch = (q, limit = 30) => {
+        const lower = q.toLowerCase();
+        const matches = [];
+        for (const key of SEARCH_KEYS) {
+          let arr;
+          try { arr = JSON.parse(localStorage.getItem(key) || '[]'); } catch (e) { continue; }
+          if (!Array.isArray(arr)) continue;
+          arr.forEach((item, idx) => {
+            const text = JSON.stringify(item).toLowerCase();
+            if (text.includes(lower)) {
+              const preview = JSON.stringify(item).replace(/[{}"]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+              matches.push({ collection: key, index: idx, item, preview });
+            }
+          });
+        }
+        return matches.slice(0, limit);
+      };
+      const renderSearchMatches = (q, matches, mode) => {
+        const grouped = {};
+        matches.forEach(m => { (grouped[m.collection] = grouped[m.collection] || []).push(m); });
+        const modeBadge = mode === 'client'
+          ? '<span style="background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:bold">📱 로컬</span>'
+          : '<span style="background:#dcfce7;color:#15803d;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:bold">☁ 서버</span>';
+        let html = '<div class="sr-header" style="display:flex;justify-content:space-between;align-items:center"><span>' + matches.length + '건 ' + modeBadge + '</span><span style="color:#9333ea;font-size:10px;cursor:pointer;font-weight:bold" onclick="window.__askChatbot()">🤖 AI에게 물어보기</span></div>';
+        for (const [coll, items] of Object.entries(grouped)) {
+          const label = LABELS[coll] || coll.replace('jamsa_', '');
+          items.slice(0, 6).forEach(m => {
+            const e = (m.preview || '').replace(/</g, '&lt;');
+            html += '<div class="sr-row" onclick="window.__openItem(\'' + coll + '\',' + m.index + ')"><span class="sr-coll">' + label + '</span><span class="sr-preview">' + e + '</span></div>';
+          });
+          if (items.length > 6) html += '<div class="sr-row" style="opacity:0.6"><span class="sr-coll">' + label + '</span><span class="sr-preview">...외 ' + (items.length - 6) + '건</span></div>';
+        }
+        results.innerHTML = html;
+        results.classList.add('active');
+      };
+
       const search = async (q) => {
         if (!q) { renderEmpty(); return; }
         if (q.startsWith('?') || q.startsWith('/')) {
@@ -375,49 +413,33 @@
           askChatbot(question);
           return;
         }
-        if (!window.authFetch) {
-          results.innerHTML = '<div class="sr-empty">🔓 로그인 후 검색이 가능합니다.<br/><br/>💡 로그인 없이도 AI 답변은 받을 수 있어요:<br/><strong style="color:#9333ea">?' + q + '</strong> 로 다시 입력해보세요.</div>';
-          results.classList.add('active');
-          return;
-        }
-        try {
-          const res = await window.authFetch('/api/search?q=' + encodeURIComponent(q) + '&limit=30');
-          if (!res.ok) {
-            if (res.status === 401) {
-              results.innerHTML = '<div class="sr-empty">🔓 로그인이 필요한 검색입니다.<br/><br/>💡 AI에게 물어보려면 <strong style="color:#9333ea">?' + q + '</strong></div>';
-            } else if (res.status === 404) {
-              results.innerHTML = '<div class="sr-empty">⚠️ 검색 API 라우트를 찾을 수 없습니다 (404). 잠시 후 다시 시도해주세요.</div>';
-            } else {
-              results.innerHTML = '<div class="sr-empty">검색 실패: HTTP ' + res.status + '<br/><br/>💡 <strong style="color:#9333ea">?' + q + '</strong> 로 AI에게 물어볼 수 있습니다</div>';
+        // 1) 서버 검색 시도 (인증 있을 때) → 실패하면 클라이언트 검색 자동 폴백
+        let serverOk = false;
+        if (window.authFetch) {
+          try {
+            const res = await window.authFetch('/api/search?q=' + encodeURIComponent(q) + '&limit=30');
+            if (res.ok) {
+              const data = await res.json();
+              const matches = data.matches || [];
+              saveHistory(q);
+              if (matches.length === 0) {
+                results.innerHTML = '<div class="sr-empty">"' + q + '" 결과 없음 · 💡 AI에게 물어보려면 <strong style="color:#9333ea">?' + q + '</strong></div>';
+                results.classList.add('active'); return;
+              }
+              renderSearchMatches(q, matches, 'server');
+              serverOk = true;
+              return;
             }
-            results.classList.add('active'); return;
-          }
-          const data = await res.json();
-          const matches = data.matches || [];
-          if (matches.length === 0) {
-            results.innerHTML = '<div class="sr-empty">"' + q + '" 결과 없음 · 💡 AI에게 물어보려면 <strong style="color:#9333ea">?' + q + '</strong></div>';
-            results.classList.add('active');
-            saveHistory(q);
-            return;
-          }
-          saveHistory(q);
-          const grouped = {};
-          matches.forEach(m => { (grouped[m.collection] = grouped[m.collection] || []).push(m); });
-          let html = '<div class="sr-header" style="display:flex;justify-content:space-between"><span>' + matches.length + '건</span><span style="color:#9333ea;font-size:10px;cursor:pointer;font-weight:bold" onclick="window.__askChatbot()">🤖 AI에게 물어보기</span></div>';
-          for (const [coll, items] of Object.entries(grouped)) {
-            const label = LABELS[coll] || coll.replace('jamsa_', '');
-            items.slice(0, 6).forEach(m => {
-              const e = (m.preview || '').replace(/</g, '&lt;');
-              html += '<div class="sr-row" onclick="window.__openItem(\'' + coll + '\',' + m.index + ')"><span class="sr-coll">' + label + '</span><span class="sr-preview">' + e + '</span></div>';
-            });
-            if (items.length > 6) html += '<div class="sr-row" style="opacity:0.6"><span class="sr-coll">' + label + '</span><span class="sr-preview">...외 ' + (items.length - 6) + '건</span></div>';
-          }
-          results.innerHTML = html;
-          results.classList.add('active');
-        } catch (e) {
-          results.innerHTML = '<div class="sr-empty">오류: ' + e.message + '</div>';
-          results.classList.add('active');
+          } catch (e) { /* fallthrough */ }
         }
+        // 2) 클라이언트 측 localStorage 검색 (서버 실패 또는 미인증 시)
+        const matches = clientSideSearch(q, 30);
+        saveHistory(q);
+        if (matches.length === 0) {
+          results.innerHTML = '<div class="sr-empty">"' + q + '" 결과 없음 (📱 로컬 검색)<br/><br/>💡 AI에게 물어보려면 <strong style="color:#9333ea">?' + q + '</strong></div>';
+          results.classList.add('active'); return;
+        }
+        renderSearchMatches(q, matches, 'client');
       };
       window.__openItem = (coll, idx) => {
         results.classList.remove('active'); input.value = '';
