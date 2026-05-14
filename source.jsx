@@ -4,6 +4,7 @@ import { useAutoSafetyHazards, useAutoHazardNotifications, SOURCE_META, SEVERITY
 import { InsuranceManagementPage, SafetyCalendarPage } from "./safety-insurance-calendar.jsx";
 import { ReportsNotificationsPage } from "./safety-reports-notifications.jsx";
 import { SafetyIotControlPage } from "./safety-iot-control.jsx";
+import { ZoneScheduler, ZoneScheduleTodayBanner } from "./inventory-zone-scheduler.jsx";
 
 const DEFAULT_CCTV_SERVER_URL = "https://cctv.thejamsa.com";
 
@@ -6108,6 +6109,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
   const [fCat,setFCat]=useState("all");
   const [sortBy,setSortBy]=useState(()=>{ try{ return localStorage.getItem("jamsa_prod_sort")||"recent_desc"; }catch(e){ return "recent_desc"; } });
   useEffect(()=>{ try{ localStorage.setItem("jamsa_prod_sort",sortBy); }catch(e){} },[sortBy]);
+  const [showZoneScheduler,setShowZoneScheduler]=useState(false);
   const [modal,setModal]=useState(null);
   const [sideOpen,setSideOpen]=useState(false);
   const [tip,setTip]=useState(null);
@@ -6793,6 +6795,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
             {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"storageSections"})} style={{fontSize:12,background:"#ecfeff",color:"#0e7490",border:"1px solid #a5f3fc"}}>수장고 선반</button>}
             {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"locationManager"})} style={{fontSize:12,background:"#eef2ff",color:"#3730a3",border:"1px solid #c7d2fe"}}>위치관리</button>}
             {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"categoryManager"})} style={{fontSize:12,background:"#fefce8",color:"#854d0e",border:"1px solid #fde68a"}}>카테고리</button>}
+            {can("add")&&<button className="btn bs" onClick={()=>setShowZoneScheduler(true)} style={{fontSize:12,background:"linear-gradient(135deg,#dbeafe,#ede9fe)",color:"#5b21b6",border:"1px solid #c4b5fd"}} title="구역별 AI 분석 + 월간 캘린더 + 사진 인증 체크리스트">📅 구역 스케줄러</button>}
             {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"batchAdd"})} style={{fontSize:12,background:"#f0fdf4",color:"#047857",border:"1px solid #bbf7d0"}}>일괄등록</button>}
             <button className="btn bs" onClick={()=>setModal({type:"reqPayments"})} style={{fontSize:12,background:"#fef3c7",color:"#92400e",border:"1px solid #fcd34d"}} title="품의·카드결제·이체 통합 관리">📋 품의/결제{requisitions.filter(r=>!["received","cancelled","rejected"].includes(r.status)).length>0&&<span style={{marginLeft:4,padding:"1px 5px",background:"#dc2626",color:"#fff",borderRadius:8,fontSize:9}}>{requisitions.filter(r=>!["received","cancelled","rejected"].includes(r.status)).length}</span>}</button>
             {can("add")&&<button className="btn bp" onClick={()=>setModal({type:"add"})} style={{fontSize:12}}><IC.Plus/>제품 추가</button>}
@@ -7042,6 +7045,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
       }} onClose={()=>setModal(null)}/>}
       {modal?.type==="qr"&&<QRModal p={modal.p} onClose={()=>setModal(null)}/>}
       {modal?.type==="qrBatch"&&<QRBatchPrintModal prods={modal.prods} onClose={()=>setModal(null)}/>}
+      {showZoneScheduler&&<ZoneScheduler prods={prods} locs={invLocs} zones={ZONES} curUser={curUser} onClose={()=>setShowZoneScheduler(false)}/>}
       {modal?.type==="reqPayments"&&<ReqPaymentsModal
         prods={prods} requisitions={requisitions} payments={payments}
         statusLabel={reqStatusLabel} statusColor={reqStatusColor}
