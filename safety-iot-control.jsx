@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { CctvNvrConfigPage } from "./safety-cctv-nvr.jsx";
 
 const CAT_META = {
   camera: { icon: "📷", label: "카메라", group: "보안", color: "#dc2626" },
@@ -280,7 +281,7 @@ export function SafetyIotControlPage({ facilities = [] }) {
       </div>
 
       <div className="flex flex-wrap gap-1 border-b-2 border-gray-200">
-        {[["devices", "📡 Tapo 기기"], ["robots", "🤖 Roborock 로봇"], ["automations", "⚙️ 자동화 프로그램"], ["emergency", "🚨 긴급 안전제어"]].map(([k, l]) => (
+        {[["devices", "📡 Tapo 기기"], ["robots", "🤖 Roborock 로봇"], ["automations", "⚙️ 자동화 프로그램"], ["nvr", "📹 NVR/VMS/SmartPSS"], ["emergency", "🚨 긴급 안전제어"]].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)} className={`rounded-t-lg px-4 py-2 text-xs font-black ${tab === k ? "bg-cyan-600 text-white" : "text-gray-600 hover:bg-gray-100"}`}>{l}</button>
         ))}
       </div>
@@ -288,6 +289,7 @@ export function SafetyIotControlPage({ facilities = [] }) {
       {tab === "devices" && <DeviceGrid devices={filtered} facilities={facilities} onEdit={d => setModal({ type: "device", device: d })} onDelete={removeDevice} onCommand={runCommand} />}
       {tab === "robots" && <RobotsTab robots={robots} onCommand={runCommand} />}
       {tab === "automations" && <AutomationsTab />}
+      {tab === "nvr" && <CctvNvrConfigPage facilities={facilities} />}
       {tab === "emergency" && <EmergencyTab devices={devices} onCommand={runCommand} />}
 
       {modal === "settings" && <IntegrationModal settings={settings} onSave={v => { setSettings(v); setModal(null); }} onClose={() => setModal(null)} onTest={() => syncBridge(true)} />}
