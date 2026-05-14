@@ -6106,6 +6106,8 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
   const [search,setSearch]=useState("");
   const [fLoc,setFLoc]=useState("all");
   const [fCat,setFCat]=useState("all");
+  const [sortBy,setSortBy]=useState(()=>{ try{ return localStorage.getItem("jamsa_prod_sort")||"recent_desc"; }catch(e){ return "recent_desc"; } });
+  useEffect(()=>{ try{ localStorage.setItem("jamsa_prod_sort",sortBy); }catch(e){} },[sortBy]);
   const [modal,setModal]=useState(null);
   const [sideOpen,setSideOpen]=useState(false);
   const [tip,setTip]=useState(null);
@@ -6638,15 +6640,36 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
   };
 
   const totalQ=prods.reduce((s,p)=>s+p.qty,0);
-  const filtered=prods.filter(p=>{
-    const q=(search||"").trim().toLowerCase();
-    const locKeys=Object.keys(p.locs||{});
-    const locText=[p.loc,p.subLoc,...locKeys].filter(Boolean).join(" ").toLowerCase();
-    if(q&&!`${p.name||""} ${p.code||""} ${p.cat||""} ${locText}`.toLowerCase().includes(q))return false;
-    if(fLoc!=="all"&&!(p.loc===fLoc||p.subLoc===fLoc||locKeys.includes(fLoc)))return false;
-    if(fCat!=="all"&&p.cat!==fCat)return false;
-    return true;
-  });
+  const filtered=(()=>{
+    const list=prods.filter(p=>{
+      const q=(search||"").trim().toLowerCase();
+      const locKeys=Object.keys(p.locs||{});
+      const locText=[p.loc,p.subLoc,...locKeys].filter(Boolean).join(" ").toLowerCase();
+      if(q&&!`${p.name||""} ${p.code||""} ${p.cat||""} ${locText}`.toLowerCase().includes(q))return false;
+      if(fLoc!=="all"&&!(p.loc===fLoc||p.subLoc===fLoc||locKeys.includes(fLoc)))return false;
+      if(fCat!=="all"&&p.cat!==fCat)return false;
+      return true;
+    });
+    const recencyKey=p=>{
+      const t=Date.parse(p.createdAt||"");
+      if(!isNaN(t)) return t;
+      // createdAt이 없으면 코드 번호(JB-XXXX) 또는 id로 등록 순서 추정
+      const m=String(p.code||"").match(/(\d+)/);
+      if(m) return Number(m[1]);
+      return Number(p.id)||0;
+    };
+    const sorted=[...list];
+    switch(sortBy){
+      case "recent_desc": sorted.sort((a,b)=>recencyKey(b)-recencyKey(a)); break;
+      case "recent_asc":  sorted.sort((a,b)=>recencyKey(a)-recencyKey(b)); break;
+      case "name_asc":    sorted.sort((a,b)=>(a.name||"").localeCompare(b.name||"","ko")); break;
+      case "name_desc":   sorted.sort((a,b)=>(b.name||"").localeCompare(a.name||"","ko")); break;
+      case "qty_desc":    sorted.sort((a,b)=>(b.qty||0)-(a.qty||0)); break;
+      case "qty_asc":     sorted.sort((a,b)=>(a.qty||0)-(b.qty||0)); break;
+      default: break;
+    }
+    return sorted;
+  })();
 
   const menus=[
     {id:"map",label:"시설 맵",icon:<IC.Map/>,perm:"view"},
@@ -6959,7 +6982,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
             </div>
           )}
 
-          {page==="products"&&<PList prods={filtered} totalQ={totalQ} search={search} setSearch={setSearch} fLoc={fLoc} setFLoc={setFLoc} fCat={fCat} setFCat={setFCat} cats={invCats} locs={invLocs}
+          {page==="products"&&<PList prods={filtered} totalQ={totalQ} search={search} setSearch={setSearch} fLoc={fLoc} setFLoc={setFLoc} fCat={fCat} setFCat={setFCat} sortBy={sortBy} setSortBy={setSortBy} cats={invCats} locs={invLocs}
             selP={selP} setSelP={setSelP} onIn={p=>setModal({type:"in",p})} onOut={p=>setModal({type:"out",p})} onAdj={p=>setModal({type:"adj",p})} onEdit={p=>setModal({type:"edit",p})} onDel={doDel} onShowQR={p=>setModal({type:"qr",p})}/>}
 
           {(page==="stockin"||page==="stockout"||page==="adjust")&&<SPg type={page==="stockin"?"in":page==="stockout"?"out":"adj"} prods={prods} locs={invLocs} onIn={doIn} onOut={doOut} onAdj={doAdj}/>}
@@ -12346,7 +12369,7 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
 }
 
 // ========== PRODUCTS LIST ==========
-function PList({prods,totalQ,search,setSearch,fLoc,setFLoc,fCat,setFCat,cats= CATS,locs= LOCS,selP,setSelP,onIn,onOut,onAdj,onEdit,onDel,onShowQR}){
+function PList({prods,totalQ,search,setSearch,fLoc,setFLoc,fCat,setFCat,sortBy="recent_desc",setSortBy=()=>{},cats= CATS,locs= LOCS,selP,setSelP,onIn,onOut,onAdj,onEdit,onDel,onShowQR}){
   const sp=selP?prods.find(p=>p.id===selP.id)||selP:null;
   return(
     <div style={{display:"flex",height:"100%"}}>
@@ -12358,6 +12381,14 @@ function PList({prods,totalQ,search,setSearch,fLoc,setFLoc,fCat,setFCat,cats= CA
           </div>
           <select className="sel" style={{width:"auto",minWidth:120}} value={fLoc} onChange={e=>setFLoc(e.target.value)}><option value="all">모든 위치</option>{locs.map(l=><option key={l}>{l}</option>)}</select>
           <select className="sel" style={{width:"auto",minWidth:110}} value={fCat} onChange={e=>setFCat(e.target.value)}><option value="all">모든 카테고리</option>{cats.map(c=><option key={c}>{c}</option>)}</select>
+          <select className="sel" style={{width:"auto",minWidth:140}} value={sortBy} onChange={e=>setSortBy(e.target.value)} title="정렬">
+            <option value="recent_desc">🕒 최근 등록순 (내림차순)</option>
+            <option value="recent_asc">🕒 오래된 순 (오름차순)</option>
+            <option value="name_asc">가나다 (오름차순)</option>
+            <option value="name_desc">가나다 (내림차순)</option>
+            <option value="qty_desc">재고 많은 순</option>
+            <option value="qty_asc">재고 적은 순</option>
+          </select>
         </div>
         <div style={{padding:"7px 16px",display:"flex",justifyContent:"space-between",fontSize:11,color:"#94a3b8",fontWeight:600,borderBottom:"1px solid #f1f3f5",background:"#fafbfc"}}>
           <span>{prods.length}개</span><span style={{color:"#3b5bdb",fontWeight:700}}>총 {totalQ.toLocaleString()}</span>
