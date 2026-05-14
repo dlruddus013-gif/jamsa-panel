@@ -36,8 +36,8 @@
     #globalSearch .icon { width: 14px; height: 14px; opacity: 0.5; margin-right: 8px; }
     #globalSearch .shortcut { font-size: 10px; color: #64748b; padding: 2px 6px; background: rgba(0,0,0,0.05); border-radius: 4px; margin-right: 6px; font-family: ui-monospace, monospace; }
 
-    #searchResults { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); z-index: 8400; width: 540px; max-height: 60vh; overflow: auto; background: white; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.18); display: none; padding: 8px; }
-    #searchResults.active { display: block; }
+    #searchResults { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); z-index: 9500; width: 540px; max-height: 60vh; overflow: auto; background: white; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.18); display: none; padding: 8px; pointer-events: auto; }
+    #searchResults.active { display: block; pointer-events: auto; }
     .sr-row { padding: 10px 12px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; }
     .sr-row:hover { background: #f1f5f9; }
     .sr-coll { font-size: 10px; padding: 2px 8px; border-radius: 4px; background: #dbeafe; color: #1e40af; font-weight: 600; flex-shrink: 0; min-width: 80px; text-align: center; }
@@ -288,7 +288,7 @@
         if (data.usage) {
           html += '<div style="padding:4px 12px;font-size:9px;color:#94a3b8;text-align:right">tokens: 입력 ' + (data.usage.input_tokens||0) + ' · 출력 ' + (data.usage.output_tokens||0) + '</div>';
         }
-        html += '<div class="sr-row" style="cursor:pointer;justify-content:center" onclick="document.getElementById(\'searchInput\').value=\'\';document.getElementById(\'searchInput\').focus();">';
+        html += '<div class="sr-row" style="cursor:pointer;justify-content:center" data-search-action="new-question" onclick="document.getElementById(\'searchInput\').value=\'\';document.getElementById(\'searchInput\').focus();">';
         html += '<span style="color:#3b82f6;font-size:11px;font-weight:bold">➕ 새로운 질문하기</span></div>';
         results.innerHTML = html;
       };
@@ -348,7 +348,7 @@
         const modeBadge = mode === 'client'
           ? '<span style="background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:bold">📱 로컬</span>'
           : '<span style="background:#dcfce7;color:#15803d;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:bold">☁ 서버</span>';
-        let html = '<div class="sr-header" style="display:flex;justify-content:space-between;align-items:center"><span>' + matches.length + '건 ' + modeBadge + '</span><span style="color:#9333ea;font-size:10px;cursor:pointer;font-weight:bold" onclick="window.__askChatbot()">🤖 AI에게 물어보기</span></div>';
+        let html = '<div class="sr-header" style="display:flex;justify-content:space-between;align-items:center"><span>' + matches.length + '건 ' + modeBadge + '</span><span data-search-action="ask-chatbot" style="color:#9333ea;font-size:10px;cursor:pointer;font-weight:bold" onclick="window.__askChatbot()">🤖 AI에게 물어보기</span></div>';
         for (const [coll, items] of Object.entries(grouped)) {
           const label = LABELS[coll] || coll.replace('jamsa_', '');
           items.slice(0, 6).forEach(m => {
@@ -411,6 +411,17 @@
       input.addEventListener('keydown', e => {
         if (e.key === 'Escape') { input.value = ''; results.classList.remove('active'); input.blur(); }
         if (e.key === 'Enter') { clearTimeout(timer); search(input.value.trim()); }
+      });
+      results.addEventListener('pointerdown', e => {
+        const action = e.target.closest('[data-search-action]')?.dataset.searchAction;
+        if (!action) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (action === 'ask-chatbot') window.__askChatbot();
+        if (action === 'new-question') { input.value = ''; input.focus(); renderEmpty(); }
+      });
+      results.addEventListener('click', e => {
+        if (e.target.closest('[data-search-action]')) e.stopPropagation();
       });
       document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); input.focus(); input.select(); } });
       document.addEventListener('click', e => { if (!e.target.closest('#globalSearch') && !e.target.closest('#searchResults')) results.classList.remove('active'); });
