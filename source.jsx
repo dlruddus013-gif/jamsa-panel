@@ -5,6 +5,7 @@ import { InsuranceManagementPage, SafetyCalendarPage } from "./safety-insurance-
 import { ReportsNotificationsPage } from "./safety-reports-notifications.jsx";
 import { SafetyIotControlPage } from "./safety-iot-control.jsx";
 import { ZoneScheduler, ZoneScheduleTodayBanner } from "./inventory-zone-scheduler.jsx";
+import { ProductIntelligenceModal } from "./product-intelligence.jsx";
 
 const DEFAULT_CCTV_SERVER_URL = "https://cctv.thejamsa.com";
 
@@ -6946,6 +6947,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
                 zonePhotos={zonePhotos[selZone]||[]} doAddZonePhoto={doAddZonePhoto} doDelZonePhoto={doDelZonePhoto}
                 allProds={prods} allZonePhotos={zonePhotos} onAddFacAction={onAddFacAction}
                 onOpenReq={p=>setModal({type:"reqPayments",prod:p})}
+                onOpenIntel={p=>setModal({type:"productIntel",p})}
                 onOpenLayout={(prodId)=>setShowZoneLayout({zoneId:selZone, focusProdId:prodId||null})}
                 zoneLayout={zoneLayouts[selZone]||null}
                 can={can}/>}
@@ -7046,6 +7048,23 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
       {modal?.type==="qr"&&<QRModal p={modal.p} onClose={()=>setModal(null)}/>}
       {modal?.type==="qrBatch"&&<QRBatchPrintModal prods={modal.prods} onClose={()=>setModal(null)}/>}
       {showZoneScheduler&&<ZoneScheduler prods={prods} locs={invLocs} zones={ZONES} curUser={curUser} onClose={()=>setShowZoneScheduler(false)}/>}
+      {modal?.type==="productIntel"&&<ProductIntelligenceModal
+        product={modal.p}
+        hist={hist}
+        requisitions={requisitions||[]}
+        payments={payments||[]}
+        curUser={curUser}
+        onClose={()=>setModal(null)}
+        onTriggerAI={async(p)=>{
+          try{
+            const res=await fetch("/api/chatbot",{method:"POST",headers:{"Content-Type":"application/json",...(window.__authToken?{Authorization:"Bearer "+window.__authToken}:{})},body:JSON.stringify({message:`다음 재고 품목에 대해 3가지를 한국어로 분석해줘 (각각 3~5줄):\n1) 최저가 비교 분석 (예상 시세·비교처·할인 가능성)\n2) 관리 요령 (보관·청소·점검)\n3) 원가 분석 (현재 가치·과잉/부족·절감 포인트)\n\n품목명: ${p.name}\n카테고리: ${p.cat}\n위치: ${p.loc}\n수량: ${p.qty}${p.unit||"개"}\n적정재고: ${p.minQty||"미설정"}\n현재 시세: ${p.marketPrice?.avg||"미상"}\n\n각 항목은 "1) 최저가:", "2) 관리:", "3) 원가:" 로 시작하게 구분`})});
+            if(!res.ok) return null;
+            const d=await res.json();
+            const text=d.response||d.message||d.text||"";
+            const parse=(label)=>{const m=text.match(new RegExp(label+"[:：]([\\s\\S]*?)(?=\\d\\)|$)"));return m?m[1].trim():null;};
+            return{lowestPrice:parse("최저가")||text,care:parse("관리"),cost:parse("원가")};
+          }catch(e){return null;}
+        }}/>}
       {modal?.type==="reqPayments"&&<ReqPaymentsModal
         prods={prods} requisitions={requisitions} payments={payments}
         statusLabel={reqStatusLabel} statusColor={reqStatusColor}
@@ -11727,7 +11746,7 @@ function DetailBlock({icon, title, text}) {
   );
 }
 
-function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDel,onShowQR,highlightPid,doAddPhoto,doDelPhoto,zonePhotos,doAddZonePhoto,doDelZonePhoto,allProds,allZonePhotos,onAddFacAction,onOpenReq,onOpenLayout,zoneLayout,can}){
+function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDel,onShowQR,highlightPid,doAddPhoto,doDelPhoto,zonePhotos,doAddZonePhoto,doDelZonePhoto,allProds,allZonePhotos,onAddFacAction,onOpenReq,onOpenIntel,onOpenLayout,zoneLayout,can}){
   const [qPid,setQPid]=useState(null);
   const [qAct,setQAct]=useState(null);
   const [qQty,setQQty]=useState("");
@@ -12343,8 +12362,9 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
                       )}
                     </div>
 
-                    {/* 액션: 품의/QR/삭제 */}
+                    {/* 액션: 인텔리전스/품의/QR/삭제 */}
                     <div style={{display:"flex",gap:6,justifyContent:"flex-end",marginTop:10,flexWrap:"wrap"}}>
+                      {onOpenIntel && <button onClick={()=>onOpenIntel(p)} className="btn bs" style={{fontSize:11,padding:"6px 10px",background:"linear-gradient(135deg,#ede9fe,#dbeafe)",color:"#5b21b6",border:"1px solid #c4b5fd"}} title="최저가/관리/원가 AI · 통화·카톡 · 담당자 · 절감 · 통합 타임라인">🧠 통합 인텔리전스</button>}
                       {onOpenReq && <button onClick={()=>onOpenReq(p)} className="btn bs" style={{fontSize:11,padding:"6px 10px",background:"#fef3c7",color:"#92400e",border:"1px solid #fcd34d"}} title="이 제품에 대한 품의 작성">📝 품의 작성</button>}
                       <button onClick={()=>onShowQR(p)} className="btn bs" style={{fontSize:11,padding:"6px 10px"}}>🏷️ QR 라벨</button>
                       {can&&can("delete")&&<button onClick={()=>doDel(p.id)} className="btn bd" style={{fontSize:11,padding:"6px 10px"}}>🗑️ 삭제</button>}
