@@ -2813,12 +2813,41 @@ const fetchCctvSnapshotAsBase64 = async (snapServerUrl, ch) => {
   }
 };
 
-const normalizeCctvServerUrl = (url) => String(url || "").trim().replace(/\/+$/, "");
+const normalizeCctvServerUrl = (url) => {
+  let raw = String(url ?? "").trim();
+  if (!raw || raw === "null" || raw === "undefined") return "";
+  try {
+    if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+      raw = JSON.parse(raw);
+    }
+  } catch (e) {
+    raw = raw.replace(/^['"]+|['"]+$/g, "");
+  }
+  raw = String(raw ?? "").trim().replace(/^['"]+|['"]+$/g, "");
+  if (!raw || raw === "null" || raw === "undefined") return "";
+  return raw.replace(/\/+$/, "");
+};
+
+const getStoredCctvServerUrl = () => {
+  try { return normalizeCctvServerUrl(window.localStorage?.getItem("jamsa_cctv_snap_server")); }
+  catch (e) { return ""; }
+};
+
+const getEffectiveCctvServerUrl = (...preferred) => {
+  const list = [
+    ...preferred,
+    (typeof window !== "undefined" ? window.BACKEND_URL : ""),
+    (typeof window !== "undefined" ? getStoredCctvServerUrl() : ""),
+    DEFAULT_CCTV_SERVER_URL,
+  ].map(normalizeCctvServerUrl).filter(Boolean);
+  return list[0] || DEFAULT_CCTV_SERVER_URL;
+};
 
 const getCctvServerCandidates = (primary) => {
   const list = [
     primary,
     (typeof window !== "undefined" ? window.BACKEND_URL : ""),
+    (typeof window !== "undefined" ? getStoredCctvServerUrl() : ""),
     DEFAULT_CCTV_SERVER_URL,
   ].map(normalizeCctvServerUrl).filter(Boolean);
   return Array.from(new Set(list));
@@ -4215,7 +4244,7 @@ function AiApiKeyConfigModal({ currentKey, onSave, onClose }) {
 
     // Get NVR server URL for proxy
     let snapServerUrl = "";
-    try { snapServerUrl = window.localStorage?.getItem("jamsa_cctv_snap_server") || ""; } catch(e){}
+    try { snapServerUrl = getEffectiveCctvServerUrl(); } catch(e){ snapServerUrl = DEFAULT_CCTV_SERVER_URL; }
 
     try {
       let res;
@@ -4295,7 +4324,7 @@ function AiApiKeyConfigModal({ currentKey, onSave, onClose }) {
           </div>
 
           {/* Prerequisites warning */}
-          {!window.localStorage?.getItem("jamsa_cctv_snap_server") && (
+          {!getEffectiveCctvServerUrl() && (
             <div style={{ padding: 10, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, marginBottom: 14, fontSize: 11, color: "#991b1b" }}>
               ⚠️ <strong>NVR 서버가 설정되지 않았습니다!</strong> AI 분석을 사용하려면 먼저 "NVR 서버 설정"에서 cctv.py URL을 등록해야 합니다.
             </div>
@@ -4343,7 +4372,7 @@ function AiApiKeyConfigModal({ currentKey, onSave, onClose }) {
               setTestMsg("전체 진단 진행 중...\n");
               const log = [];
               let snapUrl = "";
-              try { snapUrl = window.localStorage?.getItem("jamsa_cctv_snap_server") || ""; } catch(e){}
+              try { snapUrl = getEffectiveCctvServerUrl(); } catch(e){ snapUrl = DEFAULT_CCTV_SERVER_URL; }
 
               // Step 1: Check NVR URL
               log.push("【1단계】 NVR 서버 URL 확인");
@@ -8617,7 +8646,7 @@ function CctvLiveOverlay({ zones, cctvMap, onAlert, onOpenChannel, snapServerUrl
   const snapServerUrl = useMemo(() => {
     if (propUrl) return propUrl;
     try {
-      return window.localStorage?.getItem("jamsa_cctv_snap_server") || DEFAULT_CCTV_SERVER_URL;
+      return getEffectiveCctvServerUrl();
     } catch (e) { return DEFAULT_CCTV_SERVER_URL; }
   }, [propUrl]);
   const [snapshots, setSnapshots] = useState({}); // {ch: {url, ts}}
@@ -20029,7 +20058,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   useEffect(() => {
     let cancelled = false;
     const checkServer = async () => {
-      const url = (typeof window !== "undefined" ? (window.BACKEND_URL || window.localStorage?.getItem("jamsa_cctv_snap_server") || DEFAULT_CCTV_SERVER_URL) : DEFAULT_CCTV_SERVER_URL);
+      const url = getEffectiveCctvServerUrl();
       let result = { ok: false, error: "not_checked" };
       for (const candidate of getCctvServerCandidates(url)) {
         result = await checkCctvServerHealth(candidate, 3000);
@@ -23008,7 +23037,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                   <div style={{ padding: 12, background: "#f1f5f9", borderRadius: 8, fontSize: 11, color: "#475569" }}>
                     <div style={{ fontWeight: 700, marginBottom: 4 }}>🔍 진단 정보</div>
                     <div>• 마지막 확인: {cctvServerStatus.checkedAt ? new Date(cctvServerStatus.checkedAt).toLocaleTimeString() : "-"}</div>
-                    <div>• 백엔드 URL: <code style={{ background: "#e2e8f0", padding: "1px 4px", borderRadius: 3 }}>{(typeof window !== "undefined" ? (window.BACKEND_URL || window.localStorage?.getItem("jamsa_cctv_snap_server") || DEFAULT_CCTV_SERVER_URL) : DEFAULT_CCTV_SERVER_URL)}</code></div>
+                    <div>• 백엔드 URL: <code style={{ background: "#e2e8f0", padding: "1px 4px", borderRadius: 3 }}>{getEffectiveCctvServerUrl()}</code></div>
                     <div>• 매핑된 채널: {Object.values(cctvMap || {}).reduce((s, a) => s + (Array.isArray(a) ? a.length : 0), 0)}개</div>
                   </div>
                 </>
