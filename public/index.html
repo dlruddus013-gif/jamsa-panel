@@ -346,10 +346,21 @@
               currentPage: window.__jamsa_current_page || '',
             }),
           });
+          if (!r.ok) {
+            const txt = await r.text().catch(()=>'');
+            if (r.status === 404) {
+              results.innerHTML = '<div class="sr-empty">⚠️ 챗봇 API 미배포 (404)<br/><br/>잠시 후 다시 시도하거나, 새로고침해주세요.</div>';
+            } else if (r.status === 429) {
+              results.innerHTML = '<div class="sr-empty">⏳ 너무 많은 요청 (429)<br/>1분 후 다시 시도해주세요.</div>';
+            } else {
+              results.innerHTML = '<div class="sr-empty">❌ AI 호출 실패: HTTP ' + r.status + '<br/><span style="font-size:10px;opacity:0.7">' + (txt.slice(0,150) || '서버 응답 없음').replace(/</g,'&lt;') + '</span></div>';
+            }
+            return;
+          }
           const data = await r.json();
           renderChatbotResponse(question, data);
         } catch (e) {
-          results.innerHTML = '<div class="sr-empty">❌ AI 호출 실패: ' + e.message + '</div>';
+          results.innerHTML = '<div class="sr-empty">❌ AI 호출 실패<br/><span style="font-size:10px;opacity:0.7">' + e.message + '</span><br/><br/>💡 네트워크 확인 또는 새로고침</div>';
         }
       };
       const search = async (q) => {
@@ -365,14 +376,20 @@
           return;
         }
         if (!window.authFetch) {
-          results.innerHTML = '<div class="sr-empty">로그인 필요</div>';
+          results.innerHTML = '<div class="sr-empty">🔓 로그인 후 검색이 가능합니다.<br/><br/>💡 로그인 없이도 AI 답변은 받을 수 있어요:<br/><strong style="color:#9333ea">?' + q + '</strong> 로 다시 입력해보세요.</div>';
           results.classList.add('active');
           return;
         }
         try {
           const res = await window.authFetch('/api/search?q=' + encodeURIComponent(q) + '&limit=30');
           if (!res.ok) {
-            results.innerHTML = '<div class="sr-empty">' + (res.status === 401 ? '로그인 필요' : '검색 실패') + '</div>';
+            if (res.status === 401) {
+              results.innerHTML = '<div class="sr-empty">🔓 로그인이 필요한 검색입니다.<br/><br/>💡 AI에게 물어보려면 <strong style="color:#9333ea">?' + q + '</strong></div>';
+            } else if (res.status === 404) {
+              results.innerHTML = '<div class="sr-empty">⚠️ 검색 API 라우트를 찾을 수 없습니다 (404). 잠시 후 다시 시도해주세요.</div>';
+            } else {
+              results.innerHTML = '<div class="sr-empty">검색 실패: HTTP ' + res.status + '<br/><br/>💡 <strong style="color:#9333ea">?' + q + '</strong> 로 AI에게 물어볼 수 있습니다</div>';
+            }
             results.classList.add('active'); return;
           }
           const data = await res.json();
