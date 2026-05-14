@@ -3,6 +3,12 @@
 
 import { supabaseSvc } from '../lib/auth.js';
 
+function isMissingTable(err) {
+  if (!err) return false;
+  const msg = String(err.message || err).toLowerCase();
+  return msg.includes("could not find the table") || msg.includes("schema cache") || (msg.includes("relation") && msg.includes("does not exist"));
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -33,6 +39,7 @@ export default async function handler(req, res) {
         checkpointType: record.checkpoint_type,
       });
     } catch (e) {
+      if (isMissingTable(e)) return res.status(200).json({ ok: true, fallback: true, hint: 'visitor_checkins 테이블 미생성' });
       res.status(500).json({ error: 'internal_error', message: e.message });
     }
     return;
@@ -89,6 +96,9 @@ export default async function handler(req, res) {
           .map(([path, count]) => ({ path, count })),
       });
     } catch (e) {
+      if (isMissingTable(e)) {
+        return res.status(200).json({ ok: true, fallback: true, checkins: [], totalVisitors: 0, transitions: {}, topTransitions: [], hint: 'visitor_checkins 테이블 미생성' });
+      }
       res.status(500).json({ error: 'internal_error', message: e.message });
     }
     return;
