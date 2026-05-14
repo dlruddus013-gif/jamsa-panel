@@ -3,6 +3,13 @@
 
 import { supabaseSvc } from '../lib/auth.js';
 
+// Supabase 테이블 누락 등 "스키마 캐시" 에러 감지 헬퍼
+function isMissingTable(err) {
+  if (!err) return false;
+  const msg = String(err.message || err).toLowerCase();
+  return msg.includes("could not find the table") || msg.includes("schema cache") || msg.includes("relation") && msg.includes("does not exist");
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -31,6 +38,8 @@ export default async function handler(req, res) {
       }
       res.status(200).json({ ok: true });
     } catch (e) {
+      // 테이블 없으면 graceful (POST는 fire-and-forget 성격)
+      if (isMissingTable(e)) return res.status(200).json({ ok: true, fallback: true, hint: 'zone_crowd_stats 테이블 미생성' });
       res.status(500).json({ error: 'internal_error', message: e.message });
     }
     return;
@@ -120,6 +129,10 @@ export default async function handler(req, res) {
       }
     } catch (e) {
       console.error('[crowd-stats GET]', e);
+      // 테이블 없으면 빈 데이터 반환 (UI가 정상 작동하도록)
+      if (isMissingTable(e)) {
+        return res.status(200).json({ ok: true, fallback: true, currentByZone: {}, hourly: [], daily: [], hint: 'zone_crowd_stats 테이블 미생성 - Supabase 마이그레이션 필요' });
+      }
       res.status(500).json({ error: 'internal_error', message: e.message });
     }
     return;
