@@ -18944,12 +18944,24 @@ function WorklogPage({ onClose, addAudit, facActions, worklogs, setWorklogs, cur
   const [cycle, setCycle] = useState("DAILY");
   const [date] = useState(new Date().toISOString().slice(0, 10));
   // itemId -> { checked, assignee, status, note, at, logs: [...], acks: {procedure,labor,accident,laws}? }
-  const [checks, setChecks] = useState({});
+  const [checks, setChecks] = useLocalStorage("jamsa_worklog_active_checks", {});
   const [generalNote, setGeneralNote] = useState("");
   const [signature, setSignature] = useState(null);
   const [guideItem, setGuideItem] = useState(null); // { id, label, catLabel }
   const [checkModalItem, setCheckModalItem] = useState(null); // { id, label, catLabel }
   const [reportLog, setReportLog] = useState(null); // saved worklog to view as report
+  const [staffList, setStaffList] = useLocalStorage("jamsa_worklog_staff", buildDefaultWorklogStaff(currentUser));
+  const [reminderSettings, setReminderSettings] = useLocalStorage("jamsa_worklog_reminder_settings", {
+    enabled: true,
+    app: true,
+    sms: false,
+    slots: WORKLOG_REMINDER_SLOTS,
+    smsConfig: { apiKey: "", apiSecret: "", from: "" },
+  });
+  const [reminderSent, setReminderSent] = useLocalStorage("jamsa_worklog_reminder_sent", {});
+  const [reminderLog, setReminderLog] = useLocalStorage("jamsa_worklog_reminder_log", []);
+  const [calendarDate, setCalendarDate] = useState(todayIso());
+  const [selectedStaffId, setSelectedStaffId] = useState("all");
 
   const tpl = WORKLOG_TEMPLATES[cycle];
   const periodLabel = tpl.periodFmt(new Date(date));
@@ -18971,11 +18983,11 @@ function WorklogPage({ onClose, addAudit, facActions, worklogs, setWorklogs, cur
   // Ensures an item record exists and returns it (immutably seeded)
   const seedItem = (prev, itemId) => {
     if (prev[itemId]) return prev;
-    return { ...prev, [itemId]: { checked: false, assignee: null, status: "TODO", note: "", at: null, logs: [], acks: {} } };
+    return { ...prev, [itemId]: { checked: false, assignee: null, status: "TODO", note: "", dueDate: date, dueTime: "18:00", at: null, logs: [], acks: {} } };
   };
 
   const appendLog = (prev, itemId, entry) => {
-    const cur = prev[itemId] || { checked: false, assignee: null, status: "TODO", note: "", at: null, logs: [], acks: {} };
+    const cur = prev[itemId] || { checked: false, assignee: null, status: "TODO", note: "", dueDate: date, dueTime: "18:00", at: null, logs: [], acks: {} };
     const newEntry = { at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name, ...entry };
     return { ...prev, [itemId]: { ...cur, logs: [...(cur.logs || []), newEntry] } };
   };
@@ -19027,7 +19039,7 @@ function WorklogPage({ onClose, addAudit, facActions, worklogs, setWorklogs, cur
       const seeded = seedItem(prev, itemId);
       const cur = seeded[itemId];
       if (cur.assignee === uid) return seeded;
-      const toName = MERGED_USERS.find(u => u.id === uid)?.name || "(미지정)";
+      const toName = staffList.find(u => u.id === uid)?.name || "(미지정)";
       return { ...seeded, [itemId]: { ...cur, assignee: uid, logs: [...cur.logs, { at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name, action: "assign", to: uid, toName }] } };
     });
   };
@@ -19037,7 +19049,15 @@ function WorklogPage({ onClose, addAudit, facActions, worklogs, setWorklogs, cur
       const seeded = seedItem(prev, itemId);
       const cur = seeded[itemId];
       if (cur.status === st) return seeded;
-      return { ...seeded, [itemId]: { ...cur, status: st, logs: [...cur.logs, { at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name, action: "status", from: cur.status, to: st }] } };
+      return { ...seeded, [itemId]: { ...cur, status: st, checked: st === "DONE" ? true : cur.checked, at: st === "DONE" ? (cur.at || new Date().toISOString()) : cur.at, logs: [...cur.logs, { at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name, action: "status", from: cur.status, to: st }] } };
+    });
+  };
+
+  const setDue = (itemId, patch) => {
+    setChecks(prev => {
+      const seeded = seedItem(prev, itemId);
+      const cur = seeded[itemId];
+      return { ...seeded, [itemId]: { ...cur, ...patch, logs: [...cur.logs, { at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name, action: "due", dueDate: patch.dueDate || cur.dueDate, dueTime: patch.dueTime || cur.dueTime }] } };
     });
   };
 
@@ -19117,6 +19137,108 @@ function WorklogPage({ onClose, addAudit, facActions, worklogs, setWorklogs, cur
   };
   const clearFilter = () => { setFilterFrom(""); setFilterTo(""); };
 
+  const currentTasks = useMemo(() => {
+    const tasks = [];
+    tpl.cats.forEach(cat => cat.items.forEach(item => {
+      const st = checks[item.id] || {};
+      tasks.push({
+        source: "draft",
+        id: item.id,
+        title: item.label,
+        catLabel: cat.catLabel,
+        date,
+        checked: !!st.checked,
+        status: st.status || "TODO",
+        assignee: st.assignee || "",
+        dueDate: st.dueDate || date,
+        dueTime: st.dueTime || "18:00",
+        note: st.note || "",
+      });
+    }));
+    return tasks;
+  }, [tpl, checks, date]);
+
+  const savedTasks = useMemo(() => (worklogs || []).flatMap(log => (log.items || []).map(item => ({
+    source: "saved",
+    id: `${log.id}-${item.id}`,
+    title: item.label || item.id,
+    catLabel: log.periodLabel || log.cycle,
+    date: item.dueDate || log.date,
+    checked: !!item.checked,
+    status: item.status || (item.checked ? "DONE" : "TODO"),
+    assignee: item.assignee || "",
+    dueDate: item.dueDate || log.date,
+    dueTime: item.dueTime || "18:00",
+    note: item.note || "",
+  }))), [worklogs]);
+
+  const calendarTasks = useMemo(() => [...currentTasks, ...savedTasks], [currentTasks, savedTasks]);
+  const activeStaff = useMemo(() => staffList.filter(s => s.active !== false), [staffList]);
+  const overdueTasks = useMemo(() => currentTasks.filter(t => !worklogTaskDone(t) && worklogDueAt(t) <= new Date()), [currentTasks]);
+
+  const pushAppNotification = async (title, body) => {
+    try {
+      if (!("Notification" in window)) return false;
+      let perm = Notification.permission;
+      if (perm === "default") perm = await Notification.requestPermission();
+      if (perm === "granted") {
+        new Notification(title, { body, tag: "jamsa-worklog-overdue" });
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  };
+
+  const sendSmsReminder = async (staff, message) => {
+    const cfg = reminderSettings.smsConfig || {};
+    if (!cfg.apiKey || !cfg.apiSecret || !cfg.from || !staff?.phone) return { ok: false, error: "sms_config_missing" };
+    try {
+      const res = await fetch("/api/notify-send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel: "sms", config: { ...cfg, to: staff.phone }, message }),
+      });
+      return await res.json();
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  };
+
+  const runWorklogReminders = useCallback(async (slot, manual = false) => {
+    const now = new Date();
+    const targetTasks = currentTasks.filter(t => !worklogTaskDone(t) && worklogDueAt(t) <= now);
+    if (!targetTasks.length && manual) return alert("현재 납기 초과 미완료 업무가 없습니다.");
+    const logRows = [];
+    for (const task of targetTasks) {
+      const staff = staffList.find(s => s.id === task.assignee);
+      const sentKey = `${todayIso()}|${slot}|${task.id}|${task.assignee || "unassigned"}`;
+      if (!manual && reminderSent[sentKey]) continue;
+      const title = "업무일지 미완료 알림";
+      const body = `[${staff?.name || "미배정"}] ${task.title} - 납기 ${task.dueDate} ${task.dueTime}`;
+      const message = `${title}\n담당자: ${staff?.name || "미배정"}\n업무: ${task.title}\n구분: ${task.catLabel}\n납기: ${task.dueDate} ${task.dueTime}\n완료 전까지 09/12/15/18시에 반복 알림됩니다.\nhttps://jamsa-panel.vercel.app`;
+      let appOk = false;
+      let smsResult = null;
+      if (reminderSettings.app && (staff?.notifyApp !== false)) appOk = await pushAppNotification(title, body);
+      if (reminderSettings.sms && staff?.notifySms) smsResult = await sendSmsReminder(staff, message);
+      logRows.push({ id: `${Date.now()}-${task.id}`, at: new Date().toISOString(), slot, taskId: task.id, title: task.title, staffName: staff?.name || "미배정", appOk, smsOk: !!smsResult?.ok, smsError: smsResult?.error || "" });
+      setReminderSent(prev => ({ ...prev, [sentKey]: new Date().toISOString() }));
+    }
+    if (logRows.length) setReminderLog(prev => [...logRows, ...(prev || [])].slice(0, 200));
+    if (manual) alert(`미완료 알림 ${logRows.length}건을 처리했습니다.`);
+  }, [currentTasks, staffList, reminderSettings, reminderSent, setReminderSent, setReminderLog]);
+
+  useEffect(() => {
+    if (!reminderSettings.enabled) return;
+    const tick = () => {
+      const now = new Date();
+      const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+      if ((reminderSettings.slots || WORKLOG_REMINDER_SLOTS).includes(hhmm)) runWorklogReminders(hhmm, false);
+    };
+    tick();
+    const timer = setInterval(tick, 30000);
+    return () => clearInterval(timer);
+  }, [reminderSettings.enabled, reminderSettings.slots, runWorklogReminders]);
+
   const CYCLE_TABS = [
     { k: "DAILY", l: "📅 일별" },
     { k: "WEEKLY", l: "📆 주별" },
@@ -19145,6 +19267,14 @@ function WorklogPage({ onClose, addAudit, facActions, worklogs, setWorklogs, cur
         <button onClick={() => setViewMode("browse")}
           style={{ padding: "8px 18px", borderRadius: 6, border: "none", background: viewMode === "browse" ? "#059669" : "rgba(255,255,255,0.08)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
           🔍 기간별 조회 <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 10, background: "rgba(255,255,255,0.2)" }}>{allPastLogs.length}</span>
+        </button>
+        <button onClick={() => setViewMode("calendar")}
+          style={{ padding: "8px 18px", borderRadius: 6, border: "none", background: viewMode === "calendar" ? "#0ea5e9" : "rgba(255,255,255,0.08)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+          📅 직원 캘린더 <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 10, background: "rgba(255,255,255,0.2)" }}>{overdueTasks.length}</span>
+        </button>
+        <button onClick={() => setViewMode("staff")}
+          style={{ padding: "8px 18px", borderRadius: 6, border: "none", background: viewMode === "staff" ? "#f97316" : "rgba(255,255,255,0.08)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+          👥 직원/알림 설정
         </button>
         <button onClick={() => setShowAiGen(true)} title="시스템 데이터를 분석해 AI가 기간별 업무일지를 자동 작성합니다"
           style={{ padding: "8px 18px", borderRadius: 6, border: "none", background: "linear-gradient(135deg,#7c3aed,#db2777)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, marginLeft: "auto", boxShadow: "0 2px 8px rgba(124,58,237,0.4)" }}>
@@ -19179,6 +19309,25 @@ function WorklogPage({ onClose, addAudit, facActions, worklogs, setWorklogs, cur
               setPresetRange={setPresetRange}
               clearFilter={clearFilter}
               setReportLog={setReportLog}
+            />
+          ) : viewMode === "calendar" ? (
+            <WorklogStaffCalendar
+              staffList={activeStaff}
+              tasks={calendarTasks}
+              selectedStaffId={selectedStaffId}
+              setSelectedStaffId={setSelectedStaffId}
+              calendarDate={calendarDate}
+              setCalendarDate={setCalendarDate}
+              onSendNow={() => runWorklogReminders("manual", true)}
+            />
+          ) : viewMode === "staff" ? (
+            <WorklogStaffSettings
+              staffList={staffList}
+              setStaffList={setStaffList}
+              reminderSettings={reminderSettings}
+              setReminderSettings={setReminderSettings}
+              reminderLog={reminderLog}
+              onSendNow={() => runWorklogReminders("manual", true)}
             />
           ) : (<>
           {/* Meta */}
@@ -19220,14 +19369,7 @@ function WorklogPage({ onClose, addAudit, facActions, worklogs, setWorklogs, cur
                     const st = checks[item.id] || { checked: false, assignee: null, status: "TODO", note: "", logs: [], acks: {} };
                     const isChecked = st.checked;
                     const hint = item.hintDyn ? dynHint(item.id) : item.hint;
-                    const STATUS_OPTS = [
-                      { k: "TODO", l: "대기", c: "#64748b", bg: "#f1f5f9" },
-                      { k: "IN_PROGRESS", l: "진행중", c: "#2563eb", bg: "#eff6ff" },
-                      { k: "DONE", l: "완료", c: "#059669", bg: "#f0fdf4" },
-                      { k: "BLOCKED", l: "보류", c: "#ea580c", bg: "#fff7ed" },
-                      { k: "SKIPPED", l: "해당없음", c: "#94a3b8", bg: "#f8fafc" },
-                    ];
-                    const stOpt = STATUS_OPTS.find(o => o.k === st.status) || STATUS_OPTS[0];
+                    const stOpt = statusMeta(st.status);
                     return (
                       <div key={item.id} style={{ padding: "12px 14px", borderBottom: "1px solid #f8fafc" }}>
                         <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
@@ -19260,15 +19402,20 @@ function WorklogPage({ onClose, addAudit, facActions, worklogs, setWorklogs, cur
                           <select value={st.assignee || ""} onChange={e => setAssignee(item.id, e.target.value || null)}
                             style={{ fontSize: 11, padding: "3px 8px", border: "1px solid #e5e7eb", borderRadius: 4, background: "#fff", cursor: "pointer", fontFamily: "inherit" }}>
                             <option value="">미배정</option>
-                            {MERGED_USERS.filter(u => u.role !== "VIEWER").map(u => (
+                            {activeStaff.map(u => (
                               <option key={u.id} value={u.id}>{u.name} ({u.id}) · {u.role}</option>
                             ))}
                           </select>
                           <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700, marginLeft: 6 }}>상태:</span>
                           <select value={st.status} onChange={e => setStatus(item.id, e.target.value)}
                             style={{ fontSize: 11, padding: "3px 8px", border: `1px solid ${stOpt.c}44`, borderRadius: 4, background: stOpt.bg, color: stOpt.c, cursor: "pointer", fontWeight: 700, fontFamily: "inherit" }}>
-                            {STATUS_OPTS.map(o => <option key={o.k} value={o.k}>{o.l}</option>)}
+                            {WORKLOG_STATUS_OPTS.map(o => <option key={o.k} value={o.k}>{o.l}</option>)}
                           </select>
+                          <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700, marginLeft: 6 }}>납기:</span>
+                          <input type="date" value={st.dueDate || date} onChange={e => setDue(item.id, { dueDate: e.target.value })}
+                            style={{ fontSize: 11, padding: "3px 6px", border: "1px solid #e5e7eb", borderRadius: 4, fontFamily: "inherit" }} />
+                          <input type="time" value={st.dueTime || "18:00"} onChange={e => setDue(item.id, { dueTime: e.target.value })}
+                            style={{ fontSize: 11, padding: "3px 6px", border: "1px solid #e5e7eb", borderRadius: 4, fontFamily: "inherit" }} />
                           {isAdmin && Object.keys(st.acks || {}).length > 0 && (
                             <span style={{ fontSize: 10, color: "#059669", fontWeight: 700, marginLeft: "auto" }}>
                               ✓ 숙지 {Object.values(st.acks).filter(Boolean).length}/4
@@ -19388,6 +19535,159 @@ function WorklogPage({ onClose, addAudit, facActions, worklogs, setWorklogs, cur
    Analyzes system data (facActions, inventory, audit log, CCTV events)
    and produces a period-appropriate worklog draft.
    ═════════════════════════════════════════════════════════════════ */
+const WORKLOG_REMINDER_SLOTS = ["09:00", "12:00", "15:00", "18:00"];
+const WORKLOG_STATUS_OPTS = [
+  { k: "TODO", l: "대기", c: "#64748b", bg: "#f1f5f9" },
+  { k: "IN_PROGRESS", l: "진행중", c: "#2563eb", bg: "#eff6ff" },
+  { k: "DONE", l: "완료", c: "#059669", bg: "#f0fdf4" },
+  { k: "BLOCKED", l: "보류", c: "#ea580c", bg: "#fff7ed" },
+  { k: "SKIPPED", l: "해당없음", c: "#94a3b8", bg: "#f8fafc" },
+];
+
+function todayIso() {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 10);
+}
+
+function monthDays(dateText) {
+  const [y, m] = (dateText || todayIso()).split("-").map(Number);
+  const first = new Date(y, m - 1, 1);
+  const last = new Date(y, m, 0);
+  const days = [];
+  for (let pad = 0; pad < first.getDay(); pad++) days.push(null);
+  for (let d = 1; d <= last.getDate(); d++) days.push(`${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
+  return days;
+}
+
+function buildDefaultWorklogStaff(currentUser) {
+  const base = (typeof MERGED_USERS !== "undefined" ? MERGED_USERS : [])
+    .filter(u => u.role !== "VIEWER")
+    .slice(0, 8)
+    .map(u => ({ id: u.id, name: u.name || u.id, role: u.role || "직원", phone: "", active: true, notifySms: false, notifyApp: true }));
+  if (base.length) return base;
+  return [{ id: currentUser?.id || "staff-1", name: currentUser?.name || "이경연", role: currentUser?.role || "ADMIN", phone: "", active: true, notifySms: false, notifyApp: true }];
+}
+
+function worklogTaskDone(task) {
+  return task?.checked || task?.status === "DONE" || task?.status === "SKIPPED";
+}
+
+function worklogDueAt(task) {
+  return new Date(`${task.dueDate || todayIso()}T${task.dueTime || "18:00"}:00`);
+}
+
+function statusMeta(status) {
+  return WORKLOG_STATUS_OPTS.find(o => o.k === status) || WORKLOG_STATUS_OPTS[0];
+}
+
+function WorklogStaffCalendar({ staffList, tasks, selectedStaffId, setSelectedStaffId, calendarDate, setCalendarDate, onSendNow }) {
+  const visibleTasks = tasks.filter(t => (selectedStaffId === "all" || t.assignee === selectedStaffId) && (t.date || t.dueDate) === calendarDate);
+  const monthCells = monthDays(calendarDate);
+  const now = new Date();
+  const countFor = (day, staffId) => tasks.filter(t => day && (t.date || t.dueDate) === day && (staffId === "all" || t.assignee === staffId)).length;
+  const overdueFor = (day, staffId) => tasks.filter(t => day && (t.date || t.dueDate) === day && (staffId === "all" || t.assignee === staffId) && !worklogTaskDone(t) && worklogDueAt(t) <= now).length;
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 16 }}>
+      <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 14, alignSelf: "start" }}>
+        <div style={{ fontSize: 15, fontWeight: 900, color: "#0f172a", marginBottom: 10 }}>직원별 업무</div>
+        <button onClick={() => setSelectedStaffId("all")} style={{ width: "100%", textAlign: "left", padding: 10, borderRadius: 8, border: selectedStaffId === "all" ? "2px solid #0ea5e9" : "1px solid #e5e7eb", background: selectedStaffId === "all" ? "#e0f2fe" : "#fff", fontWeight: 800, cursor: "pointer" }}>전체 직원</button>
+        {staffList.map(s => {
+          const cnt = tasks.filter(t => t.assignee === s.id && (t.date || t.dueDate) === calendarDate).length;
+          const overdue = tasks.filter(t => t.assignee === s.id && !worklogTaskDone(t) && worklogDueAt(t) <= now).length;
+          return <button key={s.id} onClick={() => setSelectedStaffId(s.id)} style={{ width: "100%", textAlign: "left", marginTop: 8, padding: 10, borderRadius: 8, border: selectedStaffId === s.id ? "2px solid #0ea5e9" : "1px solid #e5e7eb", background: selectedStaffId === s.id ? "#e0f2fe" : "#fff", cursor: "pointer" }}>
+            <div style={{ fontWeight: 900, color: "#0f172a" }}>{s.name}</div>
+            <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{s.role} · 오늘 {cnt}건 · 기한초과 {overdue}건</div>
+          </button>;
+        })}
+      </div>
+      <div>
+        <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 14, marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 18, fontWeight: 900, color: "#0f172a" }}>날짜별 업무 캘린더</div>
+            <input type="date" value={calendarDate} onChange={e => setCalendarDate(e.target.value)} style={{ marginLeft: "auto", padding: "8px 10px", border: "1px solid #cbd5e1", borderRadius: 8, fontFamily: "inherit" }} />
+            <button onClick={onSendNow} style={{ padding: "9px 12px", border: "none", borderRadius: 8, background: "#ef4444", color: "#fff", fontWeight: 900, cursor: "pointer" }}>미완료 알림 즉시발송</button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6, marginTop: 14 }}>
+            {["일","월","화","수","목","금","토"].map(d => <div key={d} style={{ fontSize: 11, color: "#64748b", fontWeight: 900, textAlign: "center" }}>{d}</div>)}
+            {monthCells.map((day, idx) => {
+              const cnt = countFor(day, selectedStaffId);
+              const overdue = overdueFor(day, selectedStaffId);
+              const selected = day === calendarDate;
+              return <button key={idx} disabled={!day} onClick={() => day && setCalendarDate(day)} style={{ minHeight: 70, borderRadius: 8, border: selected ? "2px solid #2563eb" : "1px solid #e5e7eb", background: !day ? "#f8fafc" : selected ? "#eff6ff" : "#fff", padding: 8, cursor: day ? "pointer" : "default", textAlign: "left" }}>
+                {day && <><div style={{ fontWeight: 900, color: "#0f172a" }}>{Number(day.slice(-2))}</div><div style={{ marginTop: 10, fontSize: 11, color: cnt ? "#2563eb" : "#94a3b8", fontWeight: 800 }}>{cnt}건</div>{overdue > 0 && <div style={{ marginTop: 3, fontSize: 10, color: "#dc2626", fontWeight: 900 }}>초과 {overdue}</div>}</>}
+              </button>;
+            })}
+          </div>
+        </div>
+        <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
+          <div style={{ padding: "12px 14px", borderBottom: "1px solid #e5e7eb", fontWeight: 900 }}>선택 날짜 업무 {visibleTasks.length}건</div>
+          {visibleTasks.length === 0 ? <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>해당 날짜에 배정된 업무가 없습니다.</div> : visibleTasks.map(t => {
+            const st = statusMeta(t.status);
+            const staff = staffList.find(s => s.id === t.assignee);
+            const overdue = !worklogTaskDone(t) && worklogDueAt(t) <= now;
+            return <div key={t.id} style={{ padding: 14, borderBottom: "1px solid #f1f5f9", display: "grid", gridTemplateColumns: "1fr 120px 120px", gap: 10, alignItems: "center" }}>
+              <div><div style={{ fontWeight: 900, color: "#0f172a" }}>{t.title}</div><div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>{t.catLabel} · {staff?.name || "미배정"} · 납기 {t.dueDate} {t.dueTime}</div></div>
+              <div style={{ color: st.c, background: st.bg, border: `1px solid ${st.c}33`, borderRadius: 999, padding: "5px 8px", fontSize: 11, fontWeight: 900, textAlign: "center" }}>{st.l}</div>
+              <div style={{ color: overdue ? "#dc2626" : "#059669", fontWeight: 900, fontSize: 12, textAlign: "right" }}>{overdue ? "미완료 알림대상" : "정상"}</div>
+            </div>;
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WorklogStaffSettings({ staffList, setStaffList, reminderSettings, setReminderSettings, reminderLog, onSendNow }) {
+  const updateStaff = (id, patch) => setStaffList(prev => prev.map(s => s.id === id ? { ...s, ...patch } : s));
+  const addStaff = () => setStaffList(prev => [...prev, { id: `staff-${Date.now()}`, name: "신규 직원", role: "직원", phone: "", active: true, notifySms: false, notifyApp: true }]);
+  const removeStaff = (id) => setStaffList(prev => prev.filter(s => s.id !== id));
+  const updateSettings = (patch) => setReminderSettings(prev => ({ ...prev, ...patch }));
+  const updateSmsConfig = (patch) => setReminderSettings(prev => ({ ...prev, smsConfig: { ...(prev.smsConfig || {}), ...patch } }));
+  return (
+    <div style={{ display: "grid", gap: 14 }}>
+      <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+          <div><div style={{ fontSize: 18, fontWeight: 900 }}>직원 설정</div><div style={{ fontSize: 12, color: "#64748b" }}>업무 배정, 앱 알림, SMS 수신 여부를 직원별로 관리합니다.</div></div>
+          <button onClick={addStaff} style={{ marginLeft: "auto", padding: "8px 12px", border: "none", borderRadius: 8, background: "#2563eb", color: "#fff", fontWeight: 900, cursor: "pointer" }}>직원 추가</button>
+        </div>
+        <div style={{ display: "grid", gap: 8 }}>
+          {staffList.map(s => <div key={s.id} style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr 80px 80px 80px 70px", gap: 8, alignItems: "center" }}>
+            <input value={s.name} onChange={e => updateStaff(s.id, { name: e.target.value })} style={{ padding: 8, border: "1px solid #cbd5e1", borderRadius: 8 }} />
+            <input value={s.role} onChange={e => updateStaff(s.id, { role: e.target.value })} style={{ padding: 8, border: "1px solid #cbd5e1", borderRadius: 8 }} />
+            <input value={s.phone || ""} onChange={e => updateStaff(s.id, { phone: e.target.value.replace(/[^0-9]/g, "") })} placeholder="010..." style={{ padding: 8, border: "1px solid #cbd5e1", borderRadius: 8 }} />
+            <label style={{ fontSize: 12, fontWeight: 800 }}><input type="checkbox" checked={s.active !== false} onChange={e => updateStaff(s.id, { active: e.target.checked })} /> 사용</label>
+            <label style={{ fontSize: 12, fontWeight: 800 }}><input type="checkbox" checked={s.notifyApp !== false} onChange={e => updateStaff(s.id, { notifyApp: e.target.checked })} /> 앱</label>
+            <label style={{ fontSize: 12, fontWeight: 800 }}><input type="checkbox" checked={!!s.notifySms} onChange={e => updateStaff(s.id, { notifySms: e.target.checked })} /> 문자</label>
+            <button onClick={() => removeStaff(s.id)} style={{ padding: 8, border: "1px solid #fecaca", borderRadius: 8, background: "#fff1f2", color: "#dc2626", fontWeight: 900, cursor: "pointer" }}>삭제</button>
+          </div>)}
+        </div>
+      </div>
+      <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
+        <div style={{ fontSize: 18, fontWeight: 900 }}>미완료 업무 알림</div>
+        <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>납기 시간이 지난 업무가 완료될 때까지 매일 09:00, 12:00, 15:00, 18:00 기준으로 알림을 보냅니다.</div>
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 12 }}>
+          <label style={{ fontWeight: 900 }}><input type="checkbox" checked={!!reminderSettings.enabled} onChange={e => updateSettings({ enabled: e.target.checked })} /> 자동 알림 사용</label>
+          <label style={{ fontWeight: 900 }}><input type="checkbox" checked={!!reminderSettings.app} onChange={e => updateSettings({ app: e.target.checked })} /> 앱 알림</label>
+          <label style={{ fontWeight: 900 }}><input type="checkbox" checked={!!reminderSettings.sms} onChange={e => updateSettings({ sms: e.target.checked })} /> SMS 문자</label>
+          <button onClick={onSendNow} style={{ marginLeft: "auto", padding: "8px 12px", border: "none", borderRadius: 8, background: "#ef4444", color: "#fff", fontWeight: 900, cursor: "pointer" }}>지금 미완료 알림 발송</button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginTop: 12 }}>
+          <input type="password" value={reminderSettings.smsConfig?.apiKey || ""} onChange={e => updateSmsConfig({ apiKey: e.target.value })} placeholder="Solapi API Key" style={{ padding: 9, border: "1px solid #cbd5e1", borderRadius: 8 }} />
+          <input type="password" value={reminderSettings.smsConfig?.apiSecret || ""} onChange={e => updateSmsConfig({ apiSecret: e.target.value })} placeholder="Solapi API Secret" style={{ padding: 9, border: "1px solid #cbd5e1", borderRadius: 8 }} />
+          <input value={reminderSettings.smsConfig?.from || ""} onChange={e => updateSmsConfig({ from: e.target.value.replace(/[^0-9]/g, "") })} placeholder="발신번호" style={{ padding: 9, border: "1px solid #cbd5e1", borderRadius: 8 }} />
+        </div>
+      </div>
+      <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
+        <div style={{ padding: 12, fontWeight: 900, borderBottom: "1px solid #e5e7eb" }}>알림 발송 기록</div>
+        {(reminderLog || []).length === 0 ? <div style={{ padding: 24, color: "#94a3b8", textAlign: "center" }}>아직 발송 기록이 없습니다.</div> : (reminderLog || []).slice(0, 30).map(r => <div key={r.id} style={{ padding: 10, borderBottom: "1px solid #f1f5f9", fontSize: 12 }}>
+          <b>{new Date(r.at).toLocaleString("ko-KR")}</b> · {r.staffName} · {r.title} · 앱 {r.appOk ? "성공" : "미전송"} · SMS {r.smsOk ? "성공" : (r.smsError || "미전송")}
+        </div>)}
+      </div>
+    </div>
+  );
+}
+
 function analyzeSystemForWorklog(cycle, periodStart, periodEnd, facActions, auditLog, inventoryProds) {
   const findings = [];
   const startMs = periodStart.getTime();
