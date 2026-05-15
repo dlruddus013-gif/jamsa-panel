@@ -286,48 +286,6 @@ export async function togglePin(id) {
   saveMeta(list);
   // IndexedDB의 meta도 갱신
   try {
-<<<<<<< HEAD
-    const last = localStorage.getItem(AUTO_BACKUP_KEY);
-    const today = new Date().toISOString().slice(0, 10);
-    if (last === today) return null;
-
-    const snapshot = {
-      version: 1,
-      createdAt: new Date().toISOString(),
-      by: curUserName || "system",
-      data: {},
-    };
-    const keys = [
-      "jamsa_inv_prods", "jamsa_inv_products", "jamsa_inv_hist", "jamsa_payments",
-      "jamsa_requisitions", "jamsa_product_intel", "jamsa_log_photos",
-      "jamsa_zone_schedule_tasks", "jamsa_zonePhotos", "jamsa_zone_photos",
-      "jamsa_facilities", "jamsa_facActions", "jamsa_fac_actions", "jamsa_fac_inspections", "jamsa_zones",
-      "jamsa_categories", "jamsa_locations", "jamsa_storage_sections",
-      "jamsa_worklogs", "jamsa_worklog_active_checks", "jamsa_worklog_staff",
-      "jamsa_incidents", "jamsa_daily_checks", "jamsa_audit_log",
-      "jamsa_warehouse_models", "jamsa_custom_zones",
-    ];
-    keys.forEach(k => {
-      const v = localStorage.getItem(k);
-      if (v) snapshot.data[k] = JSON.parse(v);
-    });
-
-    const json = JSON.stringify(snapshot);
-    const blob = new Blob([json], { type: "application/json" });
-    await logFileEvent({
-      kind: "auto_snapshot",
-      filename: `잠사_자동백업_${today}.json`,
-      blob,
-      summary: `${Object.keys(snapshot.data).length}개 데이터 키 · ${Math.round(blob.size / 1024)}KB`,
-      by: curUserName || "system",
-    });
-    localStorage.setItem(AUTO_BACKUP_KEY, today);
-    return today;
-  } catch (e) {
-    console.warn("[autoBackup] failed:", e);
-    return null;
-  }
-=======
     const rec = await getBlob(id);
     if (rec) {
       const db = await openDB();
@@ -336,7 +294,6 @@ export async function togglePin(id) {
       tx.oncomplete = () => db.close();
     }
   } catch (e) {}
->>>>>>> cd26e23 (feat(backup): granular category-based backup manager with auto policy)
 }
 
 // ─── 자동 보관 정리 (만료 백업 삭제, 핀은 보존) ─────────────────────
