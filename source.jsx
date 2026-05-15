@@ -119,6 +119,34 @@ const saveInventoryAutoBackup = (items, reason = "auto") => {
   }
 };
 
+const decodeInventoryRestorePayload = (raw) => {
+  const text = decodeURIComponent(String(raw || ""));
+  if (!text.startsWith("b64:")) return safeJsonParse(text, null);
+  const bytes = Uint8Array.from(atob(text.slice(4).replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0));
+  return safeJsonParse(new TextDecoder().decode(bytes), null);
+};
+
+const applyInventoryHashRestore = () => {
+  try {
+    if (typeof window === "undefined" || !window.location?.hash) return null;
+    const prefix = "#restoreInventory=";
+    if (!window.location.hash.startsWith(prefix)) return null;
+    const items = decodeInventoryRestorePayload(window.location.hash.slice(prefix.length));
+    if (!Array.isArray(items) || items.length === 0) return null;
+    const current = safeJsonParse(window.localStorage?.getItem(INV_KEY) || "[]", []);
+    saveInventoryAutoBackup(current, "before-hash-restore");
+    window.localStorage?.setItem(INV_KEY, JSON.stringify(items));
+    window.localStorage?.setItem("jamsa_inv_recovered_at", new Date().toISOString());
+    window.sessionStorage?.setItem("jamsa_inv_restore_notice", `${items.length}개 재고 복구 완료`);
+    window.history?.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+    return { items };
+  } catch (e) {
+    console.warn("[inventory restore link] failed:", e.message);
+    return null;
+  }
+};
+applyInventoryHashRestore();
+
 const collectInventoryRecoveryCandidates = () => {
   const candidates = [];
   const addCandidate = (source, label, items, meta = {}) => {
@@ -6234,6 +6262,24 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
     "수장고 1번 선반", "수장고 2번 선반", "수장고 3번 선반", "수장고 4번 선반",
     "수장고 A-1", "수장고 A-2", "수장고 B-1", "수장고 B-2"
   ]);
+  useEffect(() => {
+    const applyRestore = () => {
+      const restored = applyInventoryHashRestore();
+      if (!restored?.items) return;
+      setProds(restored.items);
+      setHist(prev => [{ id: Date.now(), t: new Date().toLocaleString(), type: "재고복구", name: "복구 링크", note: `${restored.items.length}개 품목 복구`, qty: restored.items.length }, ...prev].slice(0, 500));
+      setTimeout(() => {
+        const msg = window.sessionStorage?.getItem("jamsa_inv_restore_notice");
+        if (msg) {
+          window.sessionStorage.removeItem("jamsa_inv_restore_notice");
+          alert(msg);
+        }
+      }, 300);
+    };
+    applyRestore();
+    window.addEventListener("hashchange", applyRestore);
+    return () => window.removeEventListener("hashchange", applyRestore);
+  }, [setProds, setHist]);
   const [snapshots,setSnapshots]=useState([]); // for undo: [{id,prods}]
   // Custom user-defined zones (drawn on satellite map) — persisted
   const [customZones, setCustomZones] = useLocalStorage("jamsa_custom_zones", []);
