@@ -6898,7 +6898,46 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
     if(p)addH("RFID스캔",p.name,zone+"에서 감지",0);
     return sc;
   };
-  const csv=()=>{const r=[["QR코드","제품명","카테고리","위치","세부위치","수량","적정재고","단위","메모"]];prods.forEach(p=>r.push([p.code,p.name,p.cat,p.loc,p.subLoc||"",p.qty,p.minQty||0,p.unit||"개",p.memo||""]));const c="\uFEFF"+r.map(x=>x.map(v=>`"${String(v??"").replace(/"/g,'""')}"`).join(",")).join("\n");const b=new Blob([c],{type:"text/csv;charset=utf-8"});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=`잠사박물관_재고_업데이트양식.csv`;a.click();};
+  const csv=()=>{
+    const r=[["QR코드","제품명","카테고리","위치","세부위치","수량","적정재고","단위","메모"]];
+    prods.forEach(p=>r.push([p.code,p.name,p.cat,p.loc,p.subLoc||"",p.qty,p.minQty||0,p.unit||"개",p.memo||""]));
+    if(prods.length===0){r.push(["JB-0001","예시 — 이 행 삭제 후 사용",invCats[0]||"체험",invLocs[0]||"수장고","2번 선반 1칸",1,0,"개","예시"]);}
+    const c="\uFEFF"+r.map(x=>x.map(v=>`"${String(v??"").replace(/"/g,'""')}"`).join(",")).join("\n");
+    const b=new Blob([c],{type:"text/csv;charset=utf-8"});
+    const url=URL.createObjectURL(b);
+    const a=document.createElement("a");
+    a.href=url;
+    a.download=`잠사박물관_재고_업데이트양식_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{try{document.body.removeChild(a);URL.revokeObjectURL(url);}catch(e){}},200);
+  };
+  const downloadInvXlsx=async()=>{
+    try{
+      const XLSX=await loadXLSX();
+      const header=["QR코드","제품명","카테고리","위치","세부위치","수량","적정재고","단위","메모"];
+      const rows=[header];
+      if(prods.length===0){
+        rows.push(["JB-0001","예시 — 이 행 삭제 후 사용",invCats[0]||"체험",invLocs[0]||"수장고","2번 선반 1칸",1,0,"개","예시"]);
+      }else{
+        prods.forEach(p=>rows.push([p.code,p.name,p.cat,p.loc,p.subLoc||"",p.qty,p.minQty||0,p.unit||"개",p.memo||""]));
+      }
+      const wb=XLSX.utils.book_new();
+      const ws=XLSX.utils.aoa_to_sheet(rows);
+      ws["!cols"]=[{wch:12},{wch:24},{wch:14},{wch:18},{wch:18},{wch:8},{wch:10},{wch:8},{wch:24}];
+      const ws2=XLSX.utils.aoa_to_sheet([
+        ["📋 사용 가능 카테고리"],...invCats.map(c=>[c]),
+        [""],
+        ["📍 사용 가능 위치"],...invLocs.map(l=>[l]),
+      ]);
+      ws2["!cols"]=[{wch:30}];
+      XLSX.utils.book_append_sheet(wb,ws,"재고");
+      XLSX.utils.book_append_sheet(wb,ws2,"참조");
+      XLSX.writeFile(wb,`잠사박물관_재고_업데이트양식_${new Date().toISOString().slice(0,10)}.xlsx`);
+    }catch(e){
+      alert("엑셀 다운로드 실패: "+e.message+"\n\nCSV 양식으로 다시 시도해보세요.");
+    }
+  };
 
   const restoreInventoryProducts = (items, label = "복구") => {
     if (!Array.isArray(items) || items.length === 0) return alert("복구할 재고 데이터가 없습니다.");
@@ -7421,7 +7460,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
         setModal(null);
       }} onClose={()=>setModal(null)} defaultLoc={modal.zone.name} zoneInfo={modal.zone} cats={invCats} locs={invLocs} storageSections={storageSections}/>}
       {modal?.type==="batchAdd"&&<BatchAddModal cats={invCats} locs={invLocs} storageSections={storageSections} onAdd={doBatchAdd} onClose={()=>setModal(null)}/>}
-      {modal?.type==="excelImport"&&<InventoryExcelImportModal onImport={importInventorySheet} onDownloadTemplate={csv} onClose={()=>setModal(null)}/>}
+      {modal?.type==="excelImport"&&<InventoryExcelImportModal onImport={importInventorySheet} onDownloadTemplate={csv} onDownloadXlsx={downloadInvXlsx} onClose={()=>setModal(null)}/>}
       {modal?.type==="inventoryRecovery"&&<InventoryRecoveryModal currentCount={prods.length} onRestore={restoreInventoryProducts} onClose={()=>setModal(null)}/>}
       {modal?.type==="categoryManager"&&<CategoryManagerModal cats={invCats} customCats={customCats} onSave={saveCategoryManager} onDelete={saveCategoryDelete} onClose={()=>setModal(null)}/>}
       {modal?.type==="locationManager"&&<LocationManagerModal locs={invLocs} customLocs={customLocs} onSave={saveLocationManager} onClose={()=>setModal(null)}/>}
@@ -14106,7 +14145,7 @@ function InventoryRecoveryModal({ currentCount, onRestore, onClose }) {
   </Modal>;
 }
 
-function InventoryExcelImportModal({ onImport, onDownloadTemplate, onClose }) {
+function InventoryExcelImportModal({ onImport, onDownloadTemplate, onDownloadXlsx, onClose }) {
   const [mode, setMode] = useState("upsert");
   const [busy, setBusy] = useState(false);
   const [fileName, setFileName] = useState("");
@@ -14130,8 +14169,9 @@ function InventoryExcelImportModal({ onImport, onDownloadTemplate, onClose }) {
         CSV 버튼으로 내려받은 양식에 <strong>QR코드, 제품명, 카테고리, 위치, 세부위치, 수량</strong>을 채운 뒤 업로드하면 됩니다.
         QR코드가 같으면 기존 품목을 수정하고, 없으면 제품명으로 매칭합니다. 둘 다 없으면 신규 품목으로 추가됩니다.
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-        <button className="btn bs" onClick={onDownloadTemplate} style={{justifyContent:"center",padding:12}}>양식 CSV 내려받기</button>
+      <div style={{display:"grid",gridTemplateColumns:onDownloadXlsx?"1fr 1fr 1fr":"1fr 1fr",gap:8}}>
+        {onDownloadXlsx && <button type="button" className="btn bs" onClick={onDownloadXlsx} style={{justifyContent:"center",padding:12,background:"#10b981",color:"#fff",border:"none",fontWeight:700}} title="엑셀 .xlsx 파일로 다운로드 (권장 — 한글·한국어 단위 정확)">📥 엑셀(.xlsx) 양식</button>}
+        <button type="button" className="btn bs" onClick={onDownloadTemplate} style={{justifyContent:"center",padding:12}} title="CSV 형식 다운로드">📄 CSV 양식</button>
         <select className="sel" value={mode} onChange={e=>setMode(e.target.value)}>
           <option value="upsert">추가 + 기존 수정</option>
           <option value="replace">전체 교체</option>
