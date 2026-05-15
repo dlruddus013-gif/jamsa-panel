@@ -84,6 +84,157 @@ const importAllData = (file) => new Promise((resolve, reject) => {
   reader.readAsText(file);
 });
 
+const INV_KEY = "jamsa_inv_prods";
+const INV_AUTO_BACKUP_KEY = "jamsa_inv_prods_auto_backups";
+const INV_EXCEL_BACKUP_PREFIX = "jamsa_inv_prods_before_excel_";
+
+const safeJsonParse = (raw, fallback = null) => {
+  try { return JSON.parse(raw); } catch (e) { return fallback; }
+};
+
+const normalizeInventoryCode = (v) => String(v || "").trim().toUpperCase();
+const normalizeInventoryName = (v) => String(v || "").trim();
+
+const makeInventorySnapshot = (items, reason = "manual") => ({
+  id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+  at: new Date().toISOString(),
+  reason,
+  count: Array.isArray(items) ? items.length : 0,
+  items: Array.isArray(items) ? items : [],
+});
+
+const saveInventoryAutoBackup = (items, reason = "auto") => {
+  try {
+    if (!Array.isArray(items) || items.length === 0) return false;
+    const prev = safeJsonParse(window.localStorage?.getItem(INV_AUTO_BACKUP_KEY) || "[]", []);
+    const last = Array.isArray(prev) ? prev[0] : null;
+    const sig = items.map(p => `${p.id}:${p.code}:${p.name}:${p.qty}:${p.loc}:${p.cat}:${p.subLoc || ""}`).join("|");
+    if (last?.sig === sig) return false;
+    const snap = { ...makeInventorySnapshot(items, reason), sig };
+    window.localStorage?.setItem(INV_AUTO_BACKUP_KEY, JSON.stringify([snap, ...(Array.isArray(prev) ? prev : [])].slice(0, 30)));
+    return true;
+  } catch (e) {
+    console.warn("[inventory backup] failed:", e.message);
+    return false;
+  }
+};
+
+const collectInventoryRecoveryCandidates = () => {
+  const candidates = [];
+  const addCandidate = (source, label, items, meta = {}) => {
+    if (!Array.isArray(items) || items.length === 0) return;
+    candidates.push({
+      id: `${source}-${candidates.length}`,
+      source,
+      label,
+      count: items.length,
+      at: meta.at || null,
+      items,
+      meta,
+    });
+  };
+  try {
+    const current = safeJsonParse(window.localStorage?.getItem(INV_KEY) || "[]", []);
+    addCandidate("current", "현재 브라우저 저장 재고", current, { at: "현재" });
+  } catch (e) {}
+  try {
+    const backups = safeJsonParse(window.localStorage?.getItem(INV_AUTO_BACKUP_KEY) || "[]", []);
+    (Array.isArray(backups) ? backups : []).forEach((snap, idx) => {
+      addCandidate("auto", `자동 백업 ${idx + 1}`, snap.items, { at: snap.at, reason: snap.reason });
+    });
+  } catch (e) {}
+  try {
+    Object.keys(window.localStorage || {})
+      .filter(k => k.startsWith(INV_EXCEL_BACKUP_PREFIX) || k.startsWith("jamsa_inv_prods_backup_"))
+      .sort()
+      .reverse()
+      .forEach(k => {
+        const data = safeJsonParse(window.localStorage.getItem(k) || "[]", []);
+        const items = Array.isArray(data) ? data : data.items;
+        addCandidate("named", `저장 백업: ${k.replace(/^jamsa_inv_prods_/, "")}`, items, { at: data.at || k });
+      });
+  } catch (e) {}
+  try {
+    const hist = safeJsonParse(window.localStorage?.getItem("jamsa_inv_hist") || "[]", []);
+    const byName = new Map();
+    (Array.isArray(hist) ? hist : []).forEach(h => {
+      const name = normalizeInventoryName(h.pn || h.name || h.productName);
+      if (!name) return;
+      const cur = byName.get(name) || { id: byName.size + 1, name, cat: "기타", loc: "미지정", qty: 0, locs: {}, memo: "입출고 기록에서 복구 후보 생성", code: genCode(byName.size + 1), photos: [], minQty: 0, unit: "개" };
+      const detail = String(h.det || "");
+      const qty = Number(h.q || 0);
+      const locMatch = detail.match(/^(.+?)(?:에서|에|로|:|\s)/);
+      const loc = locMatch?.[1]?.trim() || cur.loc || "미지정";
+      if (/추가|입고|일괄/.test(String(h.act || ""))) {
+        cur.qty += qty || 0;
+        cur.loc = cur.loc === "미지정" ? loc : cur.loc;
+        cur.locs[loc] = (cur.locs[loc] || 0) + (qty || 0);
+      } else if (/출고/.test(String(h.act || ""))) {
+        cur.qty = Math.max(0, cur.qty - (qty || 0));
+        cur.locs[loc] = Math.max(0, (cur.locs[loc] || 0) - (qty || 0));
+      } else if (/조정/.test(String(h.act || "")) && qty >= 0) {
+        cur.qty = qty;
+        cur.locs[loc] = qty;
+      }
+      byName.set(name, cur);
+    });
+    const reconstructed = Array.from(byName.values()).map((p, idx) => ({ ...p, id: idx + 1, code: p.code || genCode(idx + 1) }));
+    addCandidate("history", "입출고 기록 기반 복구 후보", reconstructed, { at: "기록 재구성", caution: "수량은 기록 문구 기반 추정입니다." });
+  } catch (e) {}
+  return candidates.sort((a, b) => (b.count || 0) - (a.count || 0));
+};
+
+const getFieldValue = (row, aliases) => {
+  const entries = Object.entries(row || {});
+  for (const alias of aliases) {
+    const found = entries.find(([k]) => String(k).trim().toLowerCase() === alias.toLowerCase());
+    if (found) return found[1];
+  }
+  for (const alias of aliases) {
+    const found = entries.find(([k]) => String(k).replace(/\s/g, "").toLowerCase().includes(alias.replace(/\s/g, "").toLowerCase()));
+    if (found) return found[1];
+  }
+  return "";
+};
+
+const normalizeInventoryImportRow = (row, defaults = {}) => {
+  const code = normalizeInventoryCode(getFieldValue(row, ["QR코드", "QR", "code", "상품코드", "제품코드"]));
+  const name = normalizeInventoryName(getFieldValue(row, ["제품명", "품목", "품목명", "name", "상품명"]));
+  if (!name && !code) return null;
+  const qtyRaw = getFieldValue(row, ["수량", "재고", "qty", "quantity", "현재수량"]);
+  const minRaw = getFieldValue(row, ["적정재고", "최소수량", "minQty", "min", "안전재고"]);
+  const cat = normalizeInventoryName(getFieldValue(row, ["카테고리", "분류", "category", "cat"])) || defaults.cat || "기타";
+  const loc = normalizeInventoryName(getFieldValue(row, ["위치", "장소", "location", "loc", "구역"])) || defaults.loc || "미지정";
+  const subLoc = normalizeInventoryName(getFieldValue(row, ["세부위치", "선반", "칸", "상세위치", "subLoc", "detailLocation"]));
+  return {
+    code,
+    name,
+    cat,
+    loc,
+    subLoc,
+    qty: qtyRaw === "" || qtyRaw == null ? null : Math.max(0, Number(String(qtyRaw).replace(/[^0-9.-]/g, "")) || 0),
+    minQty: minRaw === "" || minRaw == null ? undefined : Math.max(0, Number(String(minRaw).replace(/[^0-9.-]/g, "")) || 0),
+    unit: normalizeInventoryName(getFieldValue(row, ["단위", "unit"])) || "개",
+    memo: normalizeInventoryName(getFieldValue(row, ["메모", "비고", "memo", "특이사항"])),
+  };
+};
+
+const parseInventorySpreadsheet = async (file) => {
+  const ext = file.name.split(".").pop()?.toLowerCase();
+  if (ext === "csv") {
+    const text = await file.text();
+    const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter(Boolean);
+    const rows = lines.map(line => line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(v => v.replace(/^"|"$/g, "").replace(/""/g, '"').trim()));
+    const headers = rows.shift() || [];
+    return rows.map(cols => Object.fromEntries(headers.map((h, i) => [h, cols[i] ?? ""])));
+  }
+  const XLSX = await loadXLSX();
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array", cellDates: false, raw: false });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  return XLSX.utils.sheet_to_json(ws, { defval: "", raw: false });
+};
+
 /* ============================================================
  * 한국잠사플레이팜/박물관 - 통합 관리 시스템 (Integrated Suite)
  *
@@ -6122,6 +6273,15 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
   // 구역별 평면도/3D 모델/마커 저장 — { [zoneId]: { floorPlanUrl, markers: [{id,x,y,label,productIds[]}], model3dUrl, model3dName } }
   const [zoneLayouts,setZoneLayouts]=useLocalStorage("jamsa_zone_layouts", {});
   const [showZoneLayout,setShowZoneLayout]=useState(null); // {zoneId, focusProdId}
+  const invBackupReady = useRef(false);
+
+  useEffect(() => {
+    if (!invBackupReady.current) {
+      invBackupReady.current = true;
+      return;
+    }
+    saveInventoryAutoBackup(prods, "inventory-change");
+  }, [prods]);
 
   // ── 🌦️ 실시간 날씨 + 자동 안전점검 알림 ──
   // 우선순위: 기상청(KMA) 공식 API → 실패/미설정 시 Open-Meteo 폴백
@@ -6661,7 +6821,110 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
     if(p)addH("RFID스캔",p.name,zone+"에서 감지",0);
     return sc;
   };
-  const csv=()=>{const r=[["QR코드","제품명","카테고리","위치","수량"]];prods.forEach(p=>r.push([p.code,p.name,p.cat,p.loc,p.qty]));const c="\uFEFF"+r.map(x=>x.map(v=>`"${v}"`).join(",")).join("\n");const b=new Blob([c],{type:"text/csv;charset=utf-8"});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=`잠사박물관_재고.csv`;a.click();};
+  const csv=()=>{const r=[["QR코드","제품명","카테고리","위치","세부위치","수량","적정재고","단위","메모"]];prods.forEach(p=>r.push([p.code,p.name,p.cat,p.loc,p.subLoc||"",p.qty,p.minQty||0,p.unit||"개",p.memo||""]));const c="\uFEFF"+r.map(x=>x.map(v=>`"${String(v??"").replace(/"/g,'""')}"`).join(",")).join("\n");const b=new Blob([c],{type:"text/csv;charset=utf-8"});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=`잠사박물관_재고_업데이트양식.csv`;a.click();};
+
+  const restoreInventoryProducts = (items, label = "복구") => {
+    if (!Array.isArray(items) || items.length === 0) return alert("복구할 재고 데이터가 없습니다.");
+    if (!confirm(`${label}: ${items.length}개 품목으로 현재 재고목록을 복구할까요?\n현재 목록은 자동 백업으로 한 번 더 저장됩니다.`)) return;
+    saveInventoryAutoBackup(prods, "before-restore");
+    const normalized = items.map((p, idx) => {
+      const id = Number(p.id) || idx + 1;
+      const loc = p.loc || "미지정";
+      const qty = Math.max(0, Number(p.qty ?? p.quantity ?? 0) || 0);
+      return {
+        id,
+        name: p.name || p.productName || `복구품목 ${idx + 1}`,
+        cat: p.cat || p.category || "기타",
+        loc,
+        qty,
+        locs: (p.locs && typeof p.locs === "object") ? p.locs : { [loc]: qty },
+        memo: p.memo || "",
+        code: p.code || genCode(id),
+        photos: Array.isArray(p.photos) ? p.photos : [],
+        usage: p.usage || "",
+        careGuide: p.careGuide || "",
+        stockSchedule: p.stockSchedule || "",
+        supplier: p.supplier || "",
+        minQty: Number(p.minQty || p.min || 0) || 0,
+        unit: p.unit || "개",
+        subLoc: p.subLoc || "",
+        subPosMarkerId: p.subPosMarkerId || null,
+        createdAt: p.createdAt || new Date().toISOString(),
+        createdBy: p.createdBy || curUser?.name || "복구",
+      };
+    });
+    setProds(normalized);
+    addH("재고복구", label, `${normalized.length}개 품목 복구`, normalized.length);
+    setModal(null);
+  };
+
+  const importInventorySheet = async (file, mode = "upsert") => {
+    if (!file) return;
+    saveInventoryAutoBackup(prods, "before-excel-import");
+    try { window.localStorage?.setItem(`${INV_EXCEL_BACKUP_PREFIX}${Date.now()}`, JSON.stringify(makeInventorySnapshot(prods, "before-excel-import"))); } catch (e) {}
+    const rawRows = await parseInventorySpreadsheet(file);
+    const rows = rawRows.map(r => normalizeInventoryImportRow(r)).filter(Boolean);
+    if (!rows.length) throw new Error("읽을 수 있는 재고 행이 없습니다. 첫 행에 제품명/수량/위치 같은 제목을 넣어주세요.");
+    const maxId = Math.max(nextId(), ...prods.map(p=>Number(p.id)||0));
+    let nextIdValue = maxId + 1;
+    let added = 0, updated = 0;
+    const byCode = new Map(prods.map(p => [normalizeInventoryCode(p.code), p]));
+    const byName = new Map(prods.map(p => [normalizeInventoryName(p.name).toLowerCase(), p]));
+    const next = mode === "replace" ? [] : prods.map(p => ({ ...p }));
+    rows.forEach(row => {
+      const match = mode === "replace" ? null : (row.code ? byCode.get(row.code) : null) || byName.get(row.name.toLowerCase());
+      if (match) {
+        updated += 1;
+        const idx = next.findIndex(p => p.id === match.id);
+        const qty = row.qty == null ? next[idx].qty : row.qty;
+        const loc = row.loc || next[idx].loc || "미지정";
+        next[idx] = {
+          ...next[idx],
+          name: row.name || next[idx].name,
+          cat: row.cat || next[idx].cat,
+          loc,
+          subLoc: row.subLoc ?? next[idx].subLoc,
+          qty,
+          locs: { ...(next[idx].locs || {}), [loc]: qty },
+          minQty: row.minQty ?? next[idx].minQty ?? 0,
+          unit: row.unit || next[idx].unit || "개",
+          memo: row.memo || next[idx].memo || "",
+          updatedAt: new Date().toISOString(),
+          updatedBy: curUser?.name || "엑셀업데이트",
+        };
+      } else {
+        const id = nextIdValue++;
+        const qty = row.qty ?? 0;
+        const loc = row.loc || "미지정";
+        next.push({
+          id,
+          name: row.name || row.code || `품목 ${id}`,
+          cat: row.cat || "기타",
+          loc,
+          qty,
+          locs: { [loc]: qty },
+          memo: row.memo || "",
+          code: row.code || genCode(id),
+          photos: [],
+          usage: "",
+          careGuide: "",
+          stockSchedule: "",
+          supplier: "",
+          minQty: row.minQty ?? 0,
+          unit: row.unit || "개",
+          subLoc: row.subLoc || "",
+          subPosMarkerId: null,
+          createdAt: new Date().toISOString(),
+          createdBy: curUser?.name || "엑셀업데이트",
+        });
+        added += 1;
+      }
+    });
+    setProds(next);
+    addH("엑셀업데이트", file.name, `추가 ${added}개 · 수정 ${updated}개`, rows.length);
+    setModal(null);
+    alert(`재고 엑셀 업데이트 완료\n추가: ${added}개\n수정: ${updated}개\n총 처리: ${rows.length}행`);
+  };
 
   // QR Lookup
   const doQRLookup=(q)=>{
@@ -6834,6 +7097,8 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
           <h1 style={{fontSize:16,fontWeight:800,color:"#0f172a"}}>{menus.find(m=>m.id===page)?.label}</h1>
           <div style={{display:"flex",gap:6}}>
             {can("export")&&<button className="btn bs" onClick={csv} style={{fontSize:12}}><IC.DL/>CSV</button>}
+            {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"excelImport"})} style={{fontSize:12,background:"#eff6ff",color:"#1d4ed8",border:"1px solid #bfdbfe"}}>엑셀업데이트</button>}
+            {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"inventoryRecovery"})} style={{fontSize:12,background:"#fff7ed",color:"#9a3412",border:"1px solid #fed7aa"}}>재고복구</button>}
             {can("export")&&<button className="btn bs" onClick={()=>setModal({type:"qrBatch",prods:filtered.length?filtered:prods})} style={{fontSize:12}} title="QR 라벨 일괄 인쇄"><IC.QR/>QR 일괄인쇄</button>}
             {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"storageSections"})} style={{fontSize:12,background:"#ecfeff",color:"#0e7490",border:"1px solid #a5f3fc"}}>수장고 선반</button>}
             {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"locationManager"})} style={{fontSize:12,background:"#eef2ff",color:"#3730a3",border:"1px solid #c7d2fe"}}>위치관리</button>}
@@ -6880,6 +7145,8 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
                     <button className="btn" onClick={()=>setShowScanner(true)}
                       style={{fontSize:13,padding:"8px 12px",background:"#f0f7ff",color:"#3b5bdb",border:"1px solid #bfdbfe"}}><IC.Cam/>스캔</button>
                     {can("export")&&<button className="btn bs" onClick={csv} style={{fontSize:12,padding:"8px 10px"}} title="CSV 내보내기"><IC.DL/></button>}
+                    {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"excelImport"})} style={{fontSize:12,padding:"8px 10px",background:"#eff6ff",color:"#1d4ed8",border:"1px solid #bfdbfe"}} title="엑셀/CSV 일괄 업데이트">엑셀</button>}
+                    {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"inventoryRecovery"})} style={{fontSize:12,padding:"8px 10px",background:"#fff7ed",color:"#9a3412",border:"1px solid #fed7aa"}} title="재고 복구">복구</button>}
                     {can("export")&&<button className="btn bs" onClick={()=>setModal({type:"qrBatch",prods:filtered.length?filtered:prods})} style={{fontSize:12,padding:"8px 10px"}} title="QR 라벨 일괄 인쇄"><IC.QR/></button>}
                     {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"batchAdd"})} style={{fontSize:12,padding:"8px 10px",background:"#f0fdf4",color:"#047857",border:"1px solid #bbf7d0"}} title="수장고 일괄등록">일괄</button>}
                     <button className="btn bs" onClick={()=>setModal({type:"reqPayments"})} style={{fontSize:12,padding:"8px 10px",background:"#fef3c7",color:"#92400e",border:"1px solid #fcd34d"}} title="품의·결제 통합">📋</button>
@@ -7077,6 +7344,8 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
         setModal(null);
       }} onClose={()=>setModal(null)} defaultLoc={modal.zone.name} zoneInfo={modal.zone} cats={invCats} locs={invLocs} storageSections={storageSections}/>}
       {modal?.type==="batchAdd"&&<BatchAddModal cats={invCats} locs={invLocs} storageSections={storageSections} onAdd={doBatchAdd} onClose={()=>setModal(null)}/>}
+      {modal?.type==="excelImport"&&<InventoryExcelImportModal onImport={importInventorySheet} onDownloadTemplate={csv} onClose={()=>setModal(null)}/>}
+      {modal?.type==="inventoryRecovery"&&<InventoryRecoveryModal currentCount={prods.length} onRestore={restoreInventoryProducts} onClose={()=>setModal(null)}/>}
       {modal?.type==="categoryManager"&&<CategoryManagerModal cats={invCats} customCats={customCats} onSave={saveCategoryManager} onDelete={saveCategoryDelete} onClose={()=>setModal(null)}/>}
       {modal?.type==="locationManager"&&<LocationManagerModal locs={invLocs} customLocs={customLocs} onSave={saveLocationManager} onClose={()=>setModal(null)}/>}
       {modal?.type==="storageSections"&&<StorageSectionModal sections={storageSections} onSave={saveStorageSections} onClose={()=>setModal(null)}/>}
@@ -13699,6 +13968,110 @@ function Section({ icon, title, body }) {
       <div style={{fontSize:12,color:"#475569"}}>{body}</div>
     </div>
   );
+}
+
+function InventoryRecoveryModal({ currentCount, onRestore, onClose }) {
+  const [candidates, setCandidates] = useState([]);
+
+  useEffect(() => {
+    setCandidates(collectInventoryRecoveryCandidates());
+  }, []);
+
+  const loadJsonBackup = async (file) => {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const items = parsed?.data?.jamsa_inv_prods || parsed?.jamsa_inv_prods || parsed?.items || parsed;
+      if (!Array.isArray(items)) throw new Error("파일 안에서 jamsa_inv_prods 재고목록을 찾지 못했습니다.");
+      onRestore(items, `백업파일 ${file.name}`);
+    } catch (e) {
+      alert("백업 파일 복구 실패: " + e.message);
+    }
+  };
+
+  return <Modal title="재고 데이터 복구" onClose={onClose} w={720}>
+    <div style={{display:"grid",gap:12}}>
+      <div style={{padding:12,background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:8,fontSize:12,color:"#9a3412",lineHeight:1.6}}>
+        현재 화면의 재고가 비어 있거나 예전 데이터가 안 보이면 아래 후보 중 가장 품목 수가 많은 백업을 먼저 확인하세요.
+        복구 전 현재 목록도 자동 백업으로 저장됩니다.
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+        <div style={{padding:10,background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:8}}>
+          <div style={{fontSize:10,color:"#64748b",fontWeight:800}}>현재 품목</div>
+          <div style={{fontSize:24,fontWeight:900,color:"#0f172a"}}>{currentCount}</div>
+        </div>
+        <div style={{padding:10,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8}}>
+          <div style={{fontSize:10,color:"#047857",fontWeight:800}}>복구 후보</div>
+          <div style={{fontSize:24,fontWeight:900,color:"#065f46"}}>{candidates.length}</div>
+        </div>
+        <label style={{padding:10,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:900,color:"#1d4ed8"}}>
+          JSON 백업 파일 선택
+          <input type="file" accept=".json" onChange={e=>loadJsonBackup(e.target.files?.[0])} style={{display:"none"}}/>
+        </label>
+      </div>
+      <div style={{maxHeight:360,overflow:"auto",border:"1px solid #e5e7eb",borderRadius:8}}>
+        {candidates.length === 0 ? (
+          <div style={{padding:24,textAlign:"center",fontSize:13,color:"#64748b"}}>복구 후보가 없습니다. 기존에 저장해 둔 JSON 백업 파일이 있으면 위 버튼으로 불러오세요.</div>
+        ) : candidates.map(c => (
+          <div key={c.id} style={{display:"grid",gridTemplateColumns:"1fr 90px 150px 110px",gap:8,alignItems:"center",padding:10,borderBottom:"1px solid #f1f5f9"}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:900,color:"#0f172a"}}>{c.label}</div>
+              <div style={{fontSize:10,color:"#64748b"}}>{c.meta?.caution || c.meta?.reason || c.source}</div>
+            </div>
+            <div style={{fontSize:18,fontWeight:900,color:"#2563eb",textAlign:"center"}}>{c.count}개</div>
+            <div style={{fontSize:10,color:"#64748b",fontFamily:"monospace"}}>{c.at || "-"}</div>
+            <button className="btn bp" onClick={()=>onRestore(c.items, c.label)} style={{justifyContent:"center"}}>복구</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  </Modal>;
+}
+
+function InventoryExcelImportModal({ onImport, onDownloadTemplate, onClose }) {
+  const [mode, setMode] = useState("upsert");
+  const [busy, setBusy] = useState(false);
+  const [fileName, setFileName] = useState("");
+
+  const runImport = async (file) => {
+    if (!file) return;
+    if (mode === "replace" && !confirm("전체 교체 모드입니다. 현재 재고목록이 엑셀 내용으로 교체됩니다. 계속할까요?")) return;
+    setBusy(true);
+    setFileName(file.name);
+    try {
+      await onImport(file, mode);
+    } catch (e) {
+      alert("엑셀 업데이트 실패: " + e.message);
+      setBusy(false);
+    }
+  };
+
+  return <Modal title="재고 엑셀/CSV 일괄 업데이트" onClose={onClose} w={720}>
+    <div style={{display:"grid",gap:12}}>
+      <div style={{padding:12,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,fontSize:12,color:"#1e40af",lineHeight:1.6}}>
+        CSV 버튼으로 내려받은 양식에 <strong>QR코드, 제품명, 카테고리, 위치, 세부위치, 수량</strong>을 채운 뒤 업로드하면 됩니다.
+        QR코드가 같으면 기존 품목을 수정하고, 없으면 제품명으로 매칭합니다. 둘 다 없으면 신규 품목으로 추가됩니다.
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+        <button className="btn bs" onClick={onDownloadTemplate} style={{justifyContent:"center",padding:12}}>양식 CSV 내려받기</button>
+        <select className="sel" value={mode} onChange={e=>setMode(e.target.value)}>
+          <option value="upsert">추가 + 기존 수정</option>
+          <option value="replace">전체 교체</option>
+        </select>
+      </div>
+      <label style={{padding:22,border:"2px dashed #93c5fd",borderRadius:12,background:"#f8fafc",textAlign:"center",cursor:busy?"wait":"pointer"}}>
+        <div style={{fontSize:28,marginBottom:6}}>📥</div>
+        <div style={{fontSize:14,fontWeight:900,color:"#0f172a"}}>{busy ? "처리 중..." : "엑셀/CSV 파일 선택"}</div>
+        <div style={{fontSize:11,color:"#64748b",marginTop:4}}>{fileName || ".xlsx, .xls, .csv 지원"}</div>
+        <input type="file" accept=".xlsx,.xls,.csv" disabled={busy} onChange={e=>runImport(e.target.files?.[0])} style={{display:"none"}}/>
+      </label>
+      <div style={{fontSize:11,color:"#64748b",lineHeight:1.7}}>
+        사용 가능한 열 이름: QR코드, 제품명/품목명, 카테고리/분류, 위치/장소, 세부위치/선반/칸, 수량, 적정재고, 단위, 메모.
+        업로드 직전 현재 재고는 자동 백업되므로 문제가 있으면 재고복구에서 되돌릴 수 있습니다.
+      </div>
+    </div>
+  </Modal>;
 }
 
 function BatchAddModal({cats,locs,storageSections,onAdd,onClose}){
