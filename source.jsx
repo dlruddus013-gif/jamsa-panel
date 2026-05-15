@@ -4,6 +4,8 @@ import { useAutoSafetyHazards, useAutoHazardNotifications, SOURCE_META, SEVERITY
 import { InsuranceManagementPage, SafetyCalendarPage } from "./safety-insurance-calendar.jsx";
 import { ReportsNotificationsPage } from "./safety-reports-notifications.jsx";
 import { SafetyIotControlPage } from "./safety-iot-control.jsx";
+import { ZoneScheduler, ZoneScheduleTodayBanner } from "./inventory-zone-scheduler.jsx";
+import { ProductIntelligenceModal, ProductIntelInline, LogPhotoStrip } from "./product-intelligence.jsx";
 
 const DEFAULT_CCTV_SERVER_URL = "https://cctv.thejamsa.com";
 
@@ -2833,6 +2835,11 @@ const getStoredCctvServerUrl = () => {
   catch (e) { return ""; }
 };
 
+const getStoredCctvLocalBridgeUrl = () => {
+  try { return normalizeCctvServerUrl(window.localStorage?.getItem("jamsa_cctv_local_bridge")); }
+  catch (e) { return ""; }
+};
+
 const getEffectiveCctvServerUrl = (...preferred) => {
   const list = [
     ...preferred,
@@ -2843,9 +2850,11 @@ const getEffectiveCctvServerUrl = (...preferred) => {
   return list[0] || DEFAULT_CCTV_SERVER_URL;
 };
 
+// 클라우드 + 로컬 브릿지 둘 다 시도 (자동 폴백)
 const getCctvServerCandidates = (primary) => {
   const list = [
     primary,
+    (typeof window !== "undefined" ? getStoredCctvLocalBridgeUrl() : ""),
     (typeof window !== "undefined" ? window.BACKEND_URL : ""),
     (typeof window !== "undefined" ? getStoredCctvServerUrl() : ""),
     DEFAULT_CCTV_SERVER_URL,
@@ -6099,6 +6108,9 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
   const [search,setSearch]=useState("");
   const [fLoc,setFLoc]=useState("all");
   const [fCat,setFCat]=useState("all");
+  const [sortBy,setSortBy]=useState(()=>{ try{ return localStorage.getItem("jamsa_prod_sort")||"recent_desc"; }catch(e){ return "recent_desc"; } });
+  useEffect(()=>{ try{ localStorage.setItem("jamsa_prod_sort",sortBy); }catch(e){} },[sortBy]);
+  const [showZoneScheduler,setShowZoneScheduler]=useState(false);
   const [modal,setModal]=useState(null);
   const [sideOpen,setSideOpen]=useState(false);
   const [tip,setTip]=useState(null);
@@ -6631,15 +6643,36 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
   };
 
   const totalQ=prods.reduce((s,p)=>s+p.qty,0);
-  const filtered=prods.filter(p=>{
-    const q=(search||"").trim().toLowerCase();
-    const locKeys=Object.keys(p.locs||{});
-    const locText=[p.loc,p.subLoc,...locKeys].filter(Boolean).join(" ").toLowerCase();
-    if(q&&!`${p.name||""} ${p.code||""} ${p.cat||""} ${locText}`.toLowerCase().includes(q))return false;
-    if(fLoc!=="all"&&!(p.loc===fLoc||p.subLoc===fLoc||locKeys.includes(fLoc)))return false;
-    if(fCat!=="all"&&p.cat!==fCat)return false;
-    return true;
-  });
+  const filtered=(()=>{
+    const list=prods.filter(p=>{
+      const q=(search||"").trim().toLowerCase();
+      const locKeys=Object.keys(p.locs||{});
+      const locText=[p.loc,p.subLoc,...locKeys].filter(Boolean).join(" ").toLowerCase();
+      if(q&&!`${p.name||""} ${p.code||""} ${p.cat||""} ${locText}`.toLowerCase().includes(q))return false;
+      if(fLoc!=="all"&&!(p.loc===fLoc||p.subLoc===fLoc||locKeys.includes(fLoc)))return false;
+      if(fCat!=="all"&&p.cat!==fCat)return false;
+      return true;
+    });
+    const recencyKey=p=>{
+      const t=Date.parse(p.createdAt||"");
+      if(!isNaN(t)) return t;
+      // createdAt이 없으면 코드 번호(JB-XXXX) 또는 id로 등록 순서 추정
+      const m=String(p.code||"").match(/(\d+)/);
+      if(m) return Number(m[1]);
+      return Number(p.id)||0;
+    };
+    const sorted=[...list];
+    switch(sortBy){
+      case "recent_desc": sorted.sort((a,b)=>recencyKey(b)-recencyKey(a)); break;
+      case "recent_asc":  sorted.sort((a,b)=>recencyKey(a)-recencyKey(b)); break;
+      case "name_asc":    sorted.sort((a,b)=>(a.name||"").localeCompare(b.name||"","ko")); break;
+      case "name_desc":   sorted.sort((a,b)=>(b.name||"").localeCompare(a.name||"","ko")); break;
+      case "qty_desc":    sorted.sort((a,b)=>(b.qty||0)-(a.qty||0)); break;
+      case "qty_asc":     sorted.sort((a,b)=>(a.qty||0)-(b.qty||0)); break;
+      default: break;
+    }
+    return sorted;
+  })();
 
   const menus=[
     {id:"map",label:"시설 맵",icon:<IC.Map/>,perm:"view"},
@@ -6763,6 +6796,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
             {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"storageSections"})} style={{fontSize:12,background:"#ecfeff",color:"#0e7490",border:"1px solid #a5f3fc"}}>수장고 선반</button>}
             {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"locationManager"})} style={{fontSize:12,background:"#eef2ff",color:"#3730a3",border:"1px solid #c7d2fe"}}>위치관리</button>}
             {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"categoryManager"})} style={{fontSize:12,background:"#fefce8",color:"#854d0e",border:"1px solid #fde68a"}}>카테고리</button>}
+            {can("add")&&<button className="btn bs" onClick={()=>setShowZoneScheduler(true)} style={{fontSize:12,background:"linear-gradient(135deg,#dbeafe,#ede9fe)",color:"#5b21b6",border:"1px solid #c4b5fd"}} title="구역별 AI 분석 + 월간 캘린더 + 사진 인증 체크리스트">📅 구역 스케줄러</button>}
             {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"batchAdd"})} style={{fontSize:12,background:"#f0fdf4",color:"#047857",border:"1px solid #bbf7d0"}}>일괄등록</button>}
             <button className="btn bs" onClick={()=>setModal({type:"reqPayments"})} style={{fontSize:12,background:"#fef3c7",color:"#92400e",border:"1px solid #fcd34d"}} title="품의·카드결제·이체 통합 관리">📋 품의/결제{requisitions.filter(r=>!["received","cancelled","rejected"].includes(r.status)).length>0&&<span style={{marginLeft:4,padding:"1px 5px",background:"#dc2626",color:"#fff",borderRadius:8,fontSize:9}}>{requisitions.filter(r=>!["received","cancelled","rejected"].includes(r.status)).length}</span>}</button>
             {can("add")&&<button className="btn bp" onClick={()=>setModal({type:"add"})} style={{fontSize:12}}><IC.Plus/>제품 추가</button>}
@@ -6912,7 +6946,19 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
                 doAddPhoto={doAddPhoto} doDelPhoto={doDelPhoto}
                 zonePhotos={zonePhotos[selZone]||[]} doAddZonePhoto={doAddZonePhoto} doDelZonePhoto={doDelZonePhoto}
                 allProds={prods} allZonePhotos={zonePhotos} onAddFacAction={onAddFacAction}
+                requisitions={requisitions||[]} payments={payments||[]} curUser={curUser}
+                onTriggerAI={async(p)=>{
+                  try{
+                    const res=await fetch("/api/chatbot",{method:"POST",headers:{"Content-Type":"application/json",...(window.__authToken?{Authorization:"Bearer "+window.__authToken}:{})},body:JSON.stringify({message:`다음 재고에 대해 한국어 3가지 분석 (각 3~5줄, "1) 최저가:", "2) 관리:", "3) 원가:" 로 시작):\n품목: ${p.name} / 카테고리 ${p.cat} / 위치 ${p.loc} / 수량 ${p.qty}${p.unit||"개"} / 적정 ${p.minQty||"미설정"}`})});
+                    if(!res.ok) return null;
+                    const d=await res.json();
+                    const text=d.response||d.message||d.text||"";
+                    const parse=(label)=>{const m=text.match(new RegExp(label+"[:：]([\\s\\S]*?)(?=\\d\\)|$)"));return m?m[1].trim():null;};
+                    return{lowestPrice:parse("최저가")||text,care:parse("관리"),cost:parse("원가")};
+                  }catch(e){return null;}
+                }}
                 onOpenReq={p=>setModal({type:"reqPayments",prod:p})}
+                onOpenIntel={p=>setModal({type:"productIntel",p})}
                 onOpenLayout={(prodId)=>setShowZoneLayout({zoneId:selZone, focusProdId:prodId||null})}
                 zoneLayout={zoneLayouts[selZone]||null}
                 can={can}/>}
@@ -6952,7 +6998,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
             </div>
           )}
 
-          {page==="products"&&<PList prods={filtered} totalQ={totalQ} search={search} setSearch={setSearch} fLoc={fLoc} setFLoc={setFLoc} fCat={fCat} setFCat={setFCat} cats={invCats} locs={invLocs}
+          {page==="products"&&<PList prods={filtered} totalQ={totalQ} search={search} setSearch={setSearch} fLoc={fLoc} setFLoc={setFLoc} fCat={fCat} setFCat={setFCat} sortBy={sortBy} setSortBy={setSortBy} cats={invCats} locs={invLocs}
             selP={selP} setSelP={setSelP} onIn={p=>setModal({type:"in",p})} onOut={p=>setModal({type:"out",p})} onAdj={p=>setModal({type:"adj",p})} onEdit={p=>setModal({type:"edit",p})} onDel={doDel} onShowQR={p=>setModal({type:"qr",p})}/>}
 
           {(page==="stockin"||page==="stockout"||page==="adjust")&&<SPg type={page==="stockin"?"in":page==="stockout"?"out":"adj"} prods={prods} locs={invLocs} onIn={doIn} onOut={doOut} onAdj={doAdj}/>}
@@ -7012,6 +7058,24 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
       }} onClose={()=>setModal(null)}/>}
       {modal?.type==="qr"&&<QRModal p={modal.p} onClose={()=>setModal(null)}/>}
       {modal?.type==="qrBatch"&&<QRBatchPrintModal prods={modal.prods} onClose={()=>setModal(null)}/>}
+      {showZoneScheduler&&<ZoneScheduler prods={prods} locs={invLocs} zones={ZONES} curUser={curUser} onClose={()=>setShowZoneScheduler(false)}/>}
+      {modal?.type==="productIntel"&&<ProductIntelligenceModal
+        product={modal.p}
+        hist={hist}
+        requisitions={requisitions||[]}
+        payments={payments||[]}
+        curUser={curUser}
+        onClose={()=>setModal(null)}
+        onTriggerAI={async(p)=>{
+          try{
+            const res=await fetch("/api/chatbot",{method:"POST",headers:{"Content-Type":"application/json",...(window.__authToken?{Authorization:"Bearer "+window.__authToken}:{})},body:JSON.stringify({message:`다음 재고 품목에 대해 3가지를 한국어로 분석해줘 (각각 3~5줄):\n1) 최저가 비교 분석 (예상 시세·비교처·할인 가능성)\n2) 관리 요령 (보관·청소·점검)\n3) 원가 분석 (현재 가치·과잉/부족·절감 포인트)\n\n품목명: ${p.name}\n카테고리: ${p.cat}\n위치: ${p.loc}\n수량: ${p.qty}${p.unit||"개"}\n적정재고: ${p.minQty||"미설정"}\n현재 시세: ${p.marketPrice?.avg||"미상"}\n\n각 항목은 "1) 최저가:", "2) 관리:", "3) 원가:" 로 시작하게 구분`})});
+            if(!res.ok) return null;
+            const d=await res.json();
+            const text=d.response||d.message||d.text||"";
+            const parse=(label)=>{const m=text.match(new RegExp(label+"[:：]([\\s\\S]*?)(?=\\d\\)|$)"));return m?m[1].trim():null;};
+            return{lowestPrice:parse("최저가")||text,care:parse("관리"),cost:parse("원가")};
+          }catch(e){return null;}
+        }}/>}
       {modal?.type==="reqPayments"&&<ReqPaymentsModal
         prods={prods} requisitions={requisitions} payments={payments}
         statusLabel={reqStatusLabel} statusColor={reqStatusColor}
@@ -11693,7 +11757,7 @@ function DetailBlock({icon, title, text}) {
   );
 }
 
-function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDel,onShowQR,highlightPid,doAddPhoto,doDelPhoto,zonePhotos,doAddZonePhoto,doDelZonePhoto,allProds,allZonePhotos,onAddFacAction,onOpenReq,onOpenLayout,zoneLayout,can}){
+function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDel,onShowQR,highlightPid,doAddPhoto,doDelPhoto,zonePhotos,doAddZonePhoto,doDelZonePhoto,allProds,allZonePhotos,onAddFacAction,onOpenReq,onOpenIntel,onOpenLayout,zoneLayout,can,requisitions=[],payments=[],curUser,onTriggerAI}){
   const [qPid,setQPid]=useState(null);
   const [qAct,setQAct]=useState(null);
   const [qQty,setQQty]=useState("");
@@ -12284,16 +12348,19 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
                       </div>
                     )}
 
-                    {/* 활동 로그 (이 제품 한정) */}
+                    {/* 통합 인텔리전스 인라인 패널 (결제/품의/담당자/판매자/통화·카톡/AI/절감) */}
+                    <ProductIntelInline product={p} requisitions={requisitions} payments={payments} curUser={curUser} onTriggerAI={onTriggerAI}/>
+
+                    {/* 활동 로그 (이 제품 한정) + 로그별 사진 첨부 */}
                     <div style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:6,overflow:"hidden"}}>
                       <div style={{padding:"6px 10px",background:"#f1f5f9",fontSize:10,fontWeight:700,color:"#475569",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                        <span>📜 활동 로그 ({itemHist.length}건)</span>
+                        <span>📜 활동 로그 ({itemHist.length}건) · 각 로그에 사진 첨부 가능 📷</span>
                         {itemHist.length>0 && <span style={{fontWeight:500,color:"#94a3b8"}}>최신 {Math.min(itemHist.length,30)}건 표시</span>}
                       </div>
                       {itemHist.length===0 ? (
                         <div style={{padding:"12px",textAlign:"center",color:"#94a3b8",fontSize:11}}>아직 활동 이력이 없습니다</div>
                       ) : (
-                        <div style={{maxHeight:240,overflowY:"auto"}}>
+                        <div style={{maxHeight:280,overflowY:"auto"}}>
                           {itemHist.slice(0,30).map(h=>(
                             <div key={h.id} style={{padding:"6px 10px",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"flex-start",gap:6}}>
                               <span className="badge" style={{background:(ac[h.act]||"#94a3b8")+"22",color:ac[h.act]||"#64748b",fontSize:9,padding:"2px 6px",flexShrink:0,minWidth:46,textAlign:"center"}}>{h.act}</span>
@@ -12302,6 +12369,7 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
                                 <div style={{fontSize:9,color:"#94a3b8",marginTop:2}}>
                                   {h.user || "시스템"} · {fDate(h.date)}{h.q ? ` · 수량 ${h.q}` : ""}
                                 </div>
+                                <LogPhotoStrip logId={String(h.id)}/>
                               </div>
                             </div>
                           ))}
@@ -12309,8 +12377,9 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
                       )}
                     </div>
 
-                    {/* 액션: 품의/QR/삭제 */}
+                    {/* 액션: 인텔리전스/품의/QR/삭제 */}
                     <div style={{display:"flex",gap:6,justifyContent:"flex-end",marginTop:10,flexWrap:"wrap"}}>
+                      {onOpenIntel && <button onClick={()=>onOpenIntel(p)} className="btn bs" style={{fontSize:11,padding:"6px 10px",background:"linear-gradient(135deg,#ede9fe,#dbeafe)",color:"#5b21b6",border:"1px solid #c4b5fd"}} title="최저가/관리/원가 AI · 통화·카톡 · 담당자 · 절감 · 통합 타임라인">🧠 통합 인텔리전스</button>}
                       {onOpenReq && <button onClick={()=>onOpenReq(p)} className="btn bs" style={{fontSize:11,padding:"6px 10px",background:"#fef3c7",color:"#92400e",border:"1px solid #fcd34d"}} title="이 제품에 대한 품의 작성">📝 품의 작성</button>}
                       <button onClick={()=>onShowQR(p)} className="btn bs" style={{fontSize:11,padding:"6px 10px"}}>🏷️ QR 라벨</button>
                       {can&&can("delete")&&<button onClick={()=>doDel(p.id)} className="btn bd" style={{fontSize:11,padding:"6px 10px"}}>🗑️ 삭제</button>}
@@ -12339,7 +12408,7 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
 }
 
 // ========== PRODUCTS LIST ==========
-function PList({prods,totalQ,search,setSearch,fLoc,setFLoc,fCat,setFCat,cats= CATS,locs= LOCS,selP,setSelP,onIn,onOut,onAdj,onEdit,onDel,onShowQR}){
+function PList({prods,totalQ,search,setSearch,fLoc,setFLoc,fCat,setFCat,sortBy="recent_desc",setSortBy=()=>{},cats= CATS,locs= LOCS,selP,setSelP,onIn,onOut,onAdj,onEdit,onDel,onShowQR}){
   const sp=selP?prods.find(p=>p.id===selP.id)||selP:null;
   return(
     <div style={{display:"flex",height:"100%"}}>
@@ -12351,6 +12420,14 @@ function PList({prods,totalQ,search,setSearch,fLoc,setFLoc,fCat,setFCat,cats= CA
           </div>
           <select className="sel" style={{width:"auto",minWidth:120}} value={fLoc} onChange={e=>setFLoc(e.target.value)}><option value="all">모든 위치</option>{locs.map(l=><option key={l}>{l}</option>)}</select>
           <select className="sel" style={{width:"auto",minWidth:110}} value={fCat} onChange={e=>setFCat(e.target.value)}><option value="all">모든 카테고리</option>{cats.map(c=><option key={c}>{c}</option>)}</select>
+          <select className="sel" style={{width:"auto",minWidth:140}} value={sortBy} onChange={e=>setSortBy(e.target.value)} title="정렬">
+            <option value="recent_desc">🕒 최근 등록순 (내림차순)</option>
+            <option value="recent_asc">🕒 오래된 순 (오름차순)</option>
+            <option value="name_asc">가나다 (오름차순)</option>
+            <option value="name_desc">가나다 (내림차순)</option>
+            <option value="qty_desc">재고 많은 순</option>
+            <option value="qty_asc">재고 적은 순</option>
+          </select>
         </div>
         <div style={{padding:"7px 16px",display:"flex",justifyContent:"space-between",fontSize:11,color:"#94a3b8",fontWeight:600,borderBottom:"1px solid #f1f3f5",background:"#fafbfc"}}>
           <span>{prods.length}개</span><span style={{color:"#3b5bdb",fontWeight:700}}>총 {totalQ.toLocaleString()}</span>
