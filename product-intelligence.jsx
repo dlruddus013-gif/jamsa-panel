@@ -42,7 +42,322 @@ function setIntel(prodId, patch) {
   return all[prodId];
 }
 
-// ─── 메인 모달 ─────────────────────────────────────────────────────
+// ─── 인라인 패널: 펼친 제품 행에 직접 삽입 (모달 X) ──────────────────
+export function ProductIntelInline({ product, requisitions = [], payments = [], curUser, onTriggerAI }) {
+  const [intel, setIntelState] = useState(() => getIntel(product.id));
+  const [openSec, setOpenSec] = useState({ payments: true });
+  const update = (patch) => setIntelState(setIntel(product.id, patch));
+  const toggle = (k) => setOpenSec(s => ({ ...s, [k]: !s[k] }));
+
+  const productReqs = useMemo(() => requisitions.filter(r =>
+    r.productId === product.id || r.productName === product.name ||
+    (Array.isArray(r.items) && r.items.some(it => it.productId === product.id || it.name === product.name))
+  ), [requisitions, product]);
+  const productPayments = useMemo(() => payments.filter(p =>
+    p.productId === product.id || p.productName === product.name ||
+    (Array.isArray(p.items) && p.items.some(it => it.productId === product.id || it.name === product.name))
+  ), [payments, product]);
+
+  return (
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(320px,1fr))",gap:8,marginBottom:10}}>
+      {/* 결제내역 (카드+이체) */}
+      <PanelCard title={`💳 결제내역 (${productPayments.length})`} sub="카드결제·계좌이체 자동 매칭" color="#06b6d4" open={openSec.payments} onToggle={()=>toggle("payments")}>
+        <PaymentsList items={productPayments}/>
+      </PanelCard>
+
+      {/* 품의서 */}
+      <PanelCard title={`📝 품의서 (${productReqs.length})`} sub="이 재고와 연결된 품의·발주" color="#f59e0b" open={openSec.req} onToggle={()=>toggle("req")}>
+        <ReqList items={productReqs}/>
+      </PanelCard>
+
+      {/* 담당자 */}
+      <PanelCard title="👨‍💼 담당자 설정" sub="내부 책임자 연락처" color="#3b82f6" open={openSec.manager} onToggle={()=>toggle("manager")}>
+        <CompactPerson person={intel.stakeholders.manager} onChange={v=>update({stakeholders:{...intel.stakeholders,manager:v}})}/>
+      </PanelCard>
+
+      {/* 판매자 */}
+      <PanelCard title="🏪 판매자 설정" sub="외부 거래처 연락처" color="#dc2626" open={openSec.seller} onToggle={()=>toggle("seller")}>
+        <CompactPerson person={intel.stakeholders.seller} onChange={v=>update({stakeholders:{...intel.stakeholders,seller:v}})} vendor/>
+      </PanelCard>
+
+      {/* 통화/카톡 */}
+      <PanelCard title={`💬 통화·카톡 (${(intel.comms||[]).length})`} sub="첨부 가능: 카톡캡처·녹음·PDF" color="#8b5cf6" open={openSec.comms} onToggle={()=>toggle("comms")} wide>
+        <CompactComms intel={intel} update={update} curUser={curUser}/>
+      </PanelCard>
+
+      {/* AI 분석 */}
+      <PanelCard title="🤖 AI: 최저가·관리·원가" sub={intel.aiCache?`마지막: ${new Date(intel.aiCache.at).toLocaleDateString("ko-KR")}`:"미실행"} color="#7c3aed" open={openSec.ai} onToggle={()=>toggle("ai")} wide>
+        <CompactAI product={product} intel={intel} update={update} onTriggerAI={onTriggerAI}/>
+      </PanelCard>
+
+      {/* 절감 */}
+      <PanelCard title={`💰 지출 절감 (${(intel.savings||[]).length})`} sub={`누적 ${(intel.savings||[]).reduce((s,e)=>s+(e.amount||0),0).toLocaleString()}원`} color="#10b981" open={openSec.savings} onToggle={()=>toggle("savings")}>
+        <CompactSavings intel={intel} update={update} curUser={curUser}/>
+      </PanelCard>
+    </div>
+  );
+}
+
+function PanelCard({ title, sub, color, open, onToggle, children, wide }) {
+  return (
+    <div style={{gridColumn:wide?"1 / -1":"auto",background:"#fff",border:`1px solid ${color}33`,borderRadius:8,overflow:"hidden"}}>
+      <button onClick={onToggle}
+        style={{width:"100%",padding:"8px 10px",background:`linear-gradient(90deg,${color}11,#fff)`,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+        <div style={{textAlign:"left",minWidth:0,flex:1}}>
+          <div style={{fontSize:12,fontWeight:800,color}}>{title}</div>
+          {sub && <div style={{fontSize:9,color:"#64748b",marginTop:1}}>{sub}</div>}
+        </div>
+        <span style={{fontSize:11,color,fontWeight:700}}>{open?"▾":"▸"}</span>
+      </button>
+      {open && <div style={{padding:10,borderTop:`1px solid ${color}22`}}>{children}</div>}
+    </div>
+  );
+}
+
+function PaymentsList({ items }) {
+  if (items.length === 0) return <div style={{fontSize:10,color:"#94a3b8",textAlign:"center",padding:8}}>연결된 카드·이체 내역 없음</div>;
+  return (
+    <div style={{maxHeight:140,overflowY:"auto"}}>
+      {items.slice(0,10).map(p => (
+        <div key={p.id} style={{padding:"5px 7px",borderBottom:"1px solid #f1f5f9",fontSize:10}}>
+          <div style={{display:"flex",justifyContent:"space-between",gap:6}}>
+            <strong style={{color:p.method==="card"||p.method==="카드"?"#1e40af":"#047857"}}>
+              {p.method==="card"||p.method==="카드"?"💳 카드":p.method==="transfer"||p.method==="이체"?"🏦 이체":(p.method||"결제")}
+            </strong>
+            <span style={{fontWeight:800,color:"#0f172a"}}>{(p.amount||0).toLocaleString()}원</span>
+          </div>
+          <div style={{color:"#64748b",marginTop:1}}>{String(p.date||p.paidAt||"").slice(0,10)} · {p.vendor || p.merchant || "-"}{p.memo?` · ${p.memo}`:""}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ReqList({ items }) {
+  if (items.length === 0) return <div style={{fontSize:10,color:"#94a3b8",textAlign:"center",padding:8}}>연결된 품의 없음</div>;
+  return (
+    <div style={{maxHeight:140,overflowY:"auto"}}>
+      {items.slice(0,10).map(r => (
+        <div key={r.id} style={{padding:"5px 7px",borderBottom:"1px solid #f1f5f9",fontSize:10}}>
+          <div style={{fontWeight:700,color:"#0f172a"}}>{r.title || r.itemName || "(제목 없음)"}</div>
+          <div style={{color:"#64748b",marginTop:1}}>{String(r.createdAt||r.date||"").slice(0,10)} · {r.status||"작성"} · {r.amount?r.amount.toLocaleString()+"원":""} · {r.requester||""}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CompactPerson({ person, onChange, vendor }) {
+  const p = person || {};
+  const set = (k,v) => onChange({ ...p, [k]: v });
+  return (
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5}}>
+      <input value={p.name||""} onChange={e=>set("name",e.target.value)} placeholder="이름" style={miniInput}/>
+      <input value={p.role||""} onChange={e=>set("role",e.target.value)} placeholder={vendor?"회사/직책":"직책"} style={miniInput}/>
+      <input value={p.phone||""} onChange={e=>set("phone",e.target.value)} placeholder="📞 전화" style={miniInput}/>
+      <input value={p.kakao||""} onChange={e=>set("kakao",e.target.value)} placeholder="💬 카카오 ID" style={miniInput}/>
+      <input value={p.email||""} onChange={e=>set("email",e.target.value)} placeholder="✉️ 이메일" style={{...miniInput,gridColumn:"1 / -1"}}/>
+      {p.phone && (
+        <div style={{gridColumn:"1 / -1",display:"flex",gap:4,marginTop:2}}>
+          <a href={`tel:${p.phone}`} style={miniBtn("#dbeafe","#1e40af")}>📞 전화</a>
+          <a href={`sms:${p.phone}`} style={miniBtn("#dcfce7","#065f46")}>💬 문자</a>
+          {p.email && <a href={`mailto:${p.email}`} style={miniBtn("#fef3c7","#92400e")}>✉️ 메일</a>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CompactComms({ intel, update, curUser }) {
+  const [draft, setDraft] = useState({ kind:"call", direction:"out", with:"seller", subject:"", text:"", attachments:[] });
+  const add = () => {
+    if (!draft.subject && !draft.text) return alert("제목 또는 내용");
+    const e = { id:"c_"+Date.now(), at:new Date().toISOString(), ...draft, by:curUser?.name||"사용자" };
+    update({ comms:[e, ...(intel.comms||[])] });
+    setDraft({ kind:"call", direction:"out", with:"seller", subject:"", text:"", attachments:[] });
+  };
+  const remove = (id) => update({ comms:(intel.comms||[]).filter(c=>c.id!==id) });
+  const handleFile = (e) => {
+    const files = Array.from(e.target.files||[]);
+    Promise.all(files.map(f=>new Promise(res=>{
+      const r = new FileReader(); r.onload=()=>res({type:f.type,name:f.name,dataUrl:r.result}); r.readAsDataURL(f);
+    }))).then(att=>setDraft(d=>({...d,attachments:[...d.attachments,...att]})));
+    e.target.value="";
+  };
+  return (
+    <div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:5,marginBottom:5}}>
+        <select value={draft.kind} onChange={e=>setDraft({...draft,kind:e.target.value})} style={miniInput}>
+          <option value="call">📞 통화</option><option value="kakao">💬 카톡</option>
+          <option value="sms">📱 문자</option><option value="email">✉️ 이메일</option><option value="memo">📝 메모</option>
+        </select>
+        <select value={draft.direction} onChange={e=>setDraft({...draft,direction:e.target.value})} style={miniInput}>
+          <option value="out">📤 발신</option><option value="in">📥 수신</option>
+        </select>
+        <select value={draft.with} onChange={e=>setDraft({...draft,with:e.target.value})} style={miniInput}>
+          <option value="seller">🏪 판매자</option><option value="manager">👨‍💼 담당자</option><option value="other">기타</option>
+        </select>
+      </div>
+      <input value={draft.subject} onChange={e=>setDraft({...draft,subject:e.target.value})} placeholder="제목 (예: 가격 협상)" style={{...miniInput,width:"100%",marginBottom:5}}/>
+      <textarea value={draft.text} onChange={e=>setDraft({...draft,text:e.target.value})} placeholder="통화 내용 / 카톡 붙여넣기" style={{...miniInput,width:"100%",minHeight:50,resize:"vertical",marginBottom:5}}/>
+      <div style={{display:"flex",gap:5,alignItems:"center",marginBottom:5}}>
+        <label style={{padding:"4px 8px",background:"#f1f5f9",borderRadius:5,fontSize:10,cursor:"pointer",fontWeight:700}}>
+          📎 첨부
+          <input type="file" multiple accept="image/*,audio/*,.pdf,.txt" onChange={handleFile} style={{display:"none"}}/>
+        </label>
+        {draft.attachments.map((a,i)=>(
+          <span key={i} style={{padding:"2px 6px",background:"#f1f5f9",borderRadius:4,fontSize:9,display:"flex",alignItems:"center",gap:3}}>
+            {a.type.startsWith("image/")?"🖼️":"📎"}{a.name.slice(0,10)}
+            <button onClick={()=>setDraft({...draft,attachments:draft.attachments.filter((_,j)=>j!==i)})} style={{border:"none",background:"none",cursor:"pointer",color:"#dc2626"}}>✕</button>
+          </span>
+        ))}
+        <button onClick={add} style={{marginLeft:"auto",padding:"5px 12px",background:"#7c3aed",color:"#fff",border:"none",borderRadius:5,fontSize:11,fontWeight:700,cursor:"pointer"}}>＋ 추가</button>
+      </div>
+      <div style={{maxHeight:160,overflowY:"auto"}}>
+        {(intel.comms||[]).slice(0,8).map(c=>(
+          <div key={c.id} style={{padding:5,borderBottom:"1px solid #f1f5f9",fontSize:10}}>
+            <div style={{display:"flex",justifyContent:"space-between"}}>
+              <strong style={{color:"#5b21b6"}}>{commIcon(c.kind)} {commLabel(c.kind)} · {c.direction==="in"?"수신":"발신"} · {c.with==="manager"?"담당자":c.with==="seller"?"판매자":"기타"}</strong>
+              <button onClick={()=>remove(c.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#dc2626",fontSize:10}}>🗑️</button>
+            </div>
+            {c.subject && <div style={{fontWeight:700,color:"#0f172a"}}>{c.subject}</div>}
+            <div style={{color:"#475569",whiteSpace:"pre-wrap"}}>{c.text}</div>
+            {c.attachments?.length>0 && (
+              <div style={{display:"flex",gap:3,marginTop:3,flexWrap:"wrap"}}>
+                {c.attachments.map((a,i)=>a.type.startsWith("image/")?
+                  <a key={i} href={a.dataUrl} target="_blank" rel="noreferrer"><img src={a.dataUrl} style={{width:36,height:36,objectFit:"cover",borderRadius:3,border:"1px solid #e5e7eb"}}/></a>
+                  :<a key={i} href={a.dataUrl} download={a.name} style={{fontSize:9,padding:"2px 6px",background:"#f1f5f9",borderRadius:3,textDecoration:"none",color:"#475569"}}>📎 {a.name}</a>
+                )}
+              </div>
+            )}
+            <div style={{color:"#94a3b8",marginTop:2,fontSize:9}}>{new Date(c.at).toLocaleString("ko-KR")} · {c.by}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CompactAI({ product, intel, update, onTriggerAI }) {
+  const [busy, setBusy] = useState(false);
+  const c = intel.aiCache;
+  const run = async () => {
+    setBusy(true);
+    try {
+      let r = onTriggerAI ? await onTriggerAI(product) : null;
+      if (!r) r = ruleFallback(product);
+      update({ aiCache: { ...r, at:new Date().toISOString() } });
+    } catch (e) { alert("실패: "+e.message); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div>
+      <button onClick={run} disabled={busy}
+        style={{width:"100%",padding:"7px",background:"linear-gradient(135deg,#7c3aed,#3b82f6)",color:"#fff",border:"none",borderRadius:5,fontWeight:700,fontSize:11,cursor:busy?"wait":"pointer",opacity:busy?0.7:1,marginBottom:8}}>
+        {busy?"⏳ 분석 중...":"🚀 AI 분석 실행 (Claude Opus 4.7)"}
+      </button>
+      {!c && <div style={{fontSize:10,color:"#94a3b8",textAlign:"center",padding:6}}>실행하면 최저가/관리/원가 분석이 표시됩니다</div>}
+      {c && (
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:5}}>
+          <MiniAICard title="💰 최저가" content={c.lowestPrice} color="#dc2626" bg="#fef2f2"/>
+          <MiniAICard title="🧹 관리" content={c.care} color="#10b981" bg="#dcfce7"/>
+          <MiniAICard title="📊 원가" content={c.cost} color="#3b82f6" bg="#dbeafe"/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MiniAICard({ title, content, color, bg }) {
+  if (!content) return null;
+  const text = Array.isArray(content) ? content.join("\n") : String(content);
+  return (
+    <div style={{padding:7,background:bg,border:`1px solid ${color}33`,borderRadius:5,fontSize:10}}>
+      <div style={{fontWeight:800,color,marginBottom:3}}>{title}</div>
+      <div style={{color:"#0f172a",whiteSpace:"pre-wrap",lineHeight:1.4,maxHeight:120,overflowY:"auto"}}>{text}</div>
+    </div>
+  );
+}
+
+function CompactSavings({ intel, update, curUser }) {
+  const [draft, setDraft] = useState({ title:"", amount:"", reason:"" });
+  const add = () => {
+    if (!draft.title) return alert("제목");
+    const e = { id:"s_"+Date.now(), at:new Date().toISOString(), title:draft.title, amount:parseInt(draft.amount)||0, reason:draft.reason, by:curUser?.name||"사용자" };
+    update({ savings:[e, ...(intel.savings||[])] });
+    setDraft({ title:"", amount:"", reason:"" });
+  };
+  const remove = (id) => update({ savings:(intel.savings||[]).filter(s=>s.id!==id) });
+  return (
+    <div>
+      <input value={draft.title} onChange={e=>setDraft({...draft,title:e.target.value})} placeholder="절감 제목" style={{...miniInput,width:"100%",marginBottom:4}}/>
+      <div style={{display:"flex",gap:4,marginBottom:4}}>
+        <input type="number" value={draft.amount} onChange={e=>setDraft({...draft,amount:e.target.value})} placeholder="금액(원)" style={{...miniInput,flex:1}}/>
+        <button onClick={add} style={{padding:"5px 12px",background:"#10b981",color:"#fff",border:"none",borderRadius:5,fontSize:11,fontWeight:700,cursor:"pointer"}}>＋</button>
+      </div>
+      <input value={draft.reason} onChange={e=>setDraft({...draft,reason:e.target.value})} placeholder="사유" style={{...miniInput,width:"100%",marginBottom:4}}/>
+      <div style={{maxHeight:120,overflowY:"auto"}}>
+        {(intel.savings||[]).slice(0,6).map(s=>(
+          <div key={s.id} style={{padding:5,borderBottom:"1px solid #f1f5f9",fontSize:10,display:"flex",justifyContent:"space-between",gap:5}}>
+            <div style={{flex:1,minWidth:0}}>
+              <strong style={{color:"#047857"}}>{s.title}</strong> <span style={{fontWeight:800}}>-{(s.amount||0).toLocaleString()}원</span>
+              {s.reason && <div style={{color:"#64748b",fontSize:9}}>{s.reason}</div>}
+              <div style={{color:"#94a3b8",fontSize:9}}>{String(s.at||"").slice(0,10)} · {s.by}</div>
+            </div>
+            <button onClick={()=>remove(s.id)} style={{background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:10}}>🗑️</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── 로그 첨부 사진 (활동로그 각 행에 사진 N장) ────────────────────
+const LOG_PHOTOS_KEY = "jamsa_log_photos";
+function loadLogPhotos() { try { return JSON.parse(localStorage.getItem(LOG_PHOTOS_KEY)||"{}"); } catch(e) { return {}; } }
+function saveLogPhotos(d) { try { localStorage.setItem(LOG_PHOTOS_KEY, JSON.stringify(d)); } catch(e) {} }
+
+export function LogPhotoStrip({ logId }) {
+  const [photos, setPhotos] = useState(() => loadLogPhotos()[logId] || []);
+  const add = (e) => {
+    const files = Array.from(e.target.files||[]);
+    Promise.all(files.map(f=>new Promise(res=>{
+      const r=new FileReader(); r.onload=()=>res({id:Date.now()+Math.random(),url:r.result,date:new Date().toISOString(),name:f.name}); r.readAsDataURL(f);
+    }))).then(neu=>{
+      const next = [...photos, ...neu];
+      setPhotos(next);
+      const all = loadLogPhotos();
+      all[logId] = next; saveLogPhotos(all);
+    });
+    e.target.value="";
+  };
+  const del = (id) => {
+    const next = photos.filter(p=>p.id!==id);
+    setPhotos(next);
+    const all = loadLogPhotos();
+    if (next.length) all[logId] = next; else delete all[logId];
+    saveLogPhotos(all);
+  };
+  return (
+    <div style={{display:"flex",gap:3,flexWrap:"wrap",alignItems:"center",marginTop:3}}>
+      {photos.map(p=>(
+        <div key={p.id} style={{position:"relative"}}>
+          <a href={p.url} target="_blank" rel="noreferrer"><img src={p.url} style={{width:28,height:28,objectFit:"cover",borderRadius:3,border:"1px solid #e5e7eb"}}/></a>
+          <button onClick={()=>del(p.id)} style={{position:"absolute",top:-4,right:-4,width:14,height:14,background:"#dc2626",color:"#fff",border:"none",borderRadius:"50%",fontSize:8,cursor:"pointer",lineHeight:"14px",padding:0}}>✕</button>
+        </div>
+      ))}
+      <label style={{padding:"2px 6px",background:"#f1f5f9",borderRadius:3,fontSize:9,cursor:"pointer",color:"#475569",fontWeight:700,border:"1px dashed #cbd5e1"}}>
+        📷+
+        <input type="file" accept="image/*" multiple capture="environment" onChange={add} style={{display:"none"}}/>
+      </label>
+    </div>
+  );
+}
+
+const miniInput = { padding:"5px 7px", border:"1px solid #e5e7eb", borderRadius:4, fontSize:11, fontFamily:"inherit", outline:"none" };
+const miniBtn = (bg, color) => ({ flex:1, padding:"4px 6px", textAlign:"center", background:bg, color, borderRadius:4, fontSize:10, fontWeight:700, textDecoration:"none" });
+
+// ─── 모달 (기존) ────────────────────────────────────────────────────
 export function ProductIntelligenceModal({ product, hist = [], requisitions = [], payments = [], curUser, onClose, onTriggerAI }) {
   const [intel, setIntelState] = useState(() => getIntel(product.id));
   const [tab, setTab] = useState("timeline");
