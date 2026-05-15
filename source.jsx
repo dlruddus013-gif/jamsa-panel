@@ -6,6 +6,7 @@ import { ReportsNotificationsPage } from "./safety-reports-notifications.jsx";
 import { SafetyIotControlPage } from "./safety-iot-control.jsx";
 import { ZoneScheduler, ZoneScheduleTodayBanner } from "./inventory-zone-scheduler.jsx";
 import { ProductIntelligenceModal, ProductIntelInline, LogPhotoStrip } from "./product-intelligence.jsx";
+import { BackupHistoryPanel, logFileEvent, maybeAutoBackup } from "./inventory-backup-history.jsx";
 
 const DEFAULT_CCTV_SERVER_URL = "https://cctv.thejamsa.com";
 
@@ -6274,6 +6275,8 @@ function UserMgmt({users,setUsers,curUser,onClose}){
 // ==================== APP ====================
 function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, facActions = [] }){
   const curUser = userCtx;
+  // 일일 자동 백업 (앱 로드 시 1회 시도)
+  useEffect(()=>{ maybeAutoBackup(curUser?.name).catch(()=>{}); },[]);
   const [users,setUsers]=useState(DEF_USERS);
   const [prods,setProds]=useLocalStorage("jamsa_inv_prods", PRODS);
   const [hist,setHist]=useLocalStorage("jamsa_inv_hist", []);
@@ -6907,10 +6910,12 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
     const url=URL.createObjectURL(b);
     const a=document.createElement("a");
     a.href=url;
-    a.download=`잠사박물관_재고_업데이트양식_${new Date().toISOString().slice(0,10)}.csv`;
+    const fname=`잠사박물관_재고_업데이트양식_${new Date().toISOString().slice(0,10)}.csv`;
+    a.download=fname;
     document.body.appendChild(a);
     a.click();
     setTimeout(()=>{try{document.body.removeChild(a);URL.revokeObjectURL(url);}catch(e){}},200);
+    logFileEvent({kind:"download",filename:fname,blob:b,summary:`재고 ${prods.length}건 CSV 양식`,by:curUser?.name}).catch(()=>{});
   };
   const downloadInvXlsx=async()=>{
     try{
@@ -6933,7 +6938,13 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
       ws2["!cols"]=[{wch:30}];
       XLSX.utils.book_append_sheet(wb,ws,"재고");
       XLSX.utils.book_append_sheet(wb,ws2,"참조");
-      XLSX.writeFile(wb,`잠사박물관_재고_업데이트양식_${new Date().toISOString().slice(0,10)}.xlsx`);
+      const fname=`잠사박물관_재고_업데이트양식_${new Date().toISOString().slice(0,10)}.xlsx`;
+      XLSX.writeFile(wb,fname);
+      try{
+        const arr=XLSX.write(wb,{bookType:"xlsx",type:"array"});
+        const blob=new Blob([arr],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+        logFileEvent({kind:"download",filename:fname,blob,summary:`재고 ${prods.length}건 XLSX 양식`,by:curUser?.name}).catch(()=>{});
+      }catch(e){}
     }catch(e){
       alert("엑셀 다운로드 실패: "+e.message+"\n\nCSV 양식으로 다시 시도해보세요.");
     }
@@ -6978,6 +6989,8 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
     if (!file) return;
     saveInventoryAutoBackup(prods, "before-excel-import");
     try { window.localStorage?.setItem(`${INV_EXCEL_BACKUP_PREFIX}${Date.now()}`, JSON.stringify(makeInventorySnapshot(prods, "before-excel-import"))); } catch (e) {}
+    // 업로드된 파일을 이력에 보관 (언제든 재다운로드 가능)
+    try { logFileEvent({kind:"upload",filename:file.name,blob:file,summary:`재고 ${mode==="replace"?"전체 교체":"추가+수정"} 업로드`,by:curUser?.name}); } catch (e) {}
     const rawRows = await parseInventorySpreadsheet(file);
     const rows = rawRows.map(r => normalizeInventoryImportRow(r)).filter(Boolean);
     if (!rows.length) throw new Error("읽을 수 있는 재고 행이 없습니다. 첫 행에 제품명/수량/위치 같은 제목을 넣어주세요.");
@@ -7460,7 +7473,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
         setModal(null);
       }} onClose={()=>setModal(null)} defaultLoc={modal.zone.name} zoneInfo={modal.zone} cats={invCats} locs={invLocs} storageSections={storageSections}/>}
       {modal?.type==="batchAdd"&&<BatchAddModal cats={invCats} locs={invLocs} storageSections={storageSections} onAdd={doBatchAdd} onClose={()=>setModal(null)}/>}
-      {modal?.type==="excelImport"&&<InventoryExcelImportModal onImport={importInventorySheet} onDownloadTemplate={csv} onDownloadXlsx={downloadInvXlsx} onClose={()=>setModal(null)}/>}
+      {modal?.type==="excelImport"&&<InventoryExcelImportModal onImport={importInventorySheet} onDownloadTemplate={csv} onDownloadXlsx={downloadInvXlsx} curUser={curUser} onClose={()=>setModal(null)}/>}
       {modal?.type==="inventoryRecovery"&&<InventoryRecoveryModal currentCount={prods.length} onRestore={restoreInventoryProducts} onClose={()=>setModal(null)}/>}
       {modal?.type==="categoryManager"&&<CategoryManagerModal cats={invCats} customCats={customCats} onSave={saveCategoryManager} onDelete={saveCategoryDelete} onClose={()=>setModal(null)}/>}
       {modal?.type==="locationManager"&&<LocationManagerModal locs={invLocs} customLocs={customLocs} onSave={saveLocationManager} onClose={()=>setModal(null)}/>}
@@ -14145,7 +14158,7 @@ function InventoryRecoveryModal({ currentCount, onRestore, onClose }) {
   </Modal>;
 }
 
-function InventoryExcelImportModal({ onImport, onDownloadTemplate, onDownloadXlsx, onClose }) {
+function InventoryExcelImportModal({ onImport, onDownloadTemplate, onDownloadXlsx, curUser, onClose }) {
   const [mode, setMode] = useState("upsert");
   const [busy, setBusy] = useState(false);
   const [fileName, setFileName] = useState("");
@@ -14187,6 +14200,8 @@ function InventoryExcelImportModal({ onImport, onDownloadTemplate, onDownloadXls
         사용 가능한 열 이름: QR코드, 제품명/품목명, 카테고리/분류, 위치/장소, 세부위치/선반/칸, 수량, 적정재고, 단위, 메모.
         업로드 직전 현재 재고는 자동 백업되므로 문제가 있으면 재고복구에서 되돌릴 수 있습니다.
       </div>
+
+      <BackupHistoryPanel curUserName={curUser?.name}/>
     </div>
   </Modal>;
 }
