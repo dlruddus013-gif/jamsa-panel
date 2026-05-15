@@ -6273,6 +6273,48 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
     setHist(p=>[{id:Date.now(),date:new Date().toISOString(),act:a,pn:n,det:d,q,user:curUser?.name||"시스템",role:curUser?.role||"master"},...p].slice(0,500));
   };
 
+  // 활동로그 편집 (변경 이력 누적)
+  const editH=(id,patch)=>{
+    setHist(p=>p.map(h=>{
+      if(h.id!==id)return h;
+      const changes={};
+      Object.keys(patch).forEach(k=>{ if(h[k]!==patch[k]) changes[k]={from:h[k],to:patch[k]}; });
+      if(Object.keys(changes).length===0)return h;
+      return{
+        ...h,...patch,
+        editLog:[...(h.editLog||[]),{at:new Date().toISOString(),by:curUser?.name||"시스템",changes}],
+      };
+    }));
+  };
+
+  // 활동로그 일괄 삭제
+  const deleteHs=(ids)=>{
+    const set=new Set(ids);
+    setHist(p=>p.filter(h=>!set.has(h.id)));
+  };
+
+  // 결제내역에 productId/productName 매칭 (수정 가능)
+  const matchPaymentToProduct=(payId,product)=>{
+    setPayments(prev=>prev.map(p=>p.id!==payId?p:{
+      ...p,
+      productId:product?.id||null,
+      productName:product?.name||null,
+      matchedAt:new Date().toISOString(),
+      matchedBy:curUser?.name||"사용자",
+    }));
+  };
+  const editPayment=(payId,patch)=>{
+    setPayments(prev=>prev.map(p=>{
+      if(p.id!==payId)return p;
+      const changes={};
+      Object.keys(patch).forEach(k=>{ if(p[k]!==patch[k]) changes[k]={from:p[k],to:patch[k]}; });
+      return{
+        ...p,...patch,
+        editLog:[...(p.editLog||[]),{at:new Date().toISOString(),by:curUser?.name||"사용자",changes}],
+      };
+    }));
+  };
+
   const doUndo=(snapIdx)=>{
     if(!can("undo"))return alert("마스터 권한 필요");
     const snap=snapshots[snapIdx];
@@ -6946,6 +6988,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
                 doAddPhoto={doAddPhoto} doDelPhoto={doDelPhoto}
                 zonePhotos={zonePhotos[selZone]||[]} doAddZonePhoto={doAddZonePhoto} doDelZonePhoto={doDelZonePhoto}
                 allProds={prods} allZonePhotos={zonePhotos} onAddFacAction={onAddFacAction}
+                editH={editH} deleteHs={deleteHs} matchPayment={matchPaymentToProduct} editPayment={editPayment} allPayments={payments||[]}
                 requisitions={requisitions||[]} payments={payments||[]} curUser={curUser}
                 onTriggerAI={async(p)=>{
                   try{
@@ -11757,7 +11800,130 @@ function DetailBlock({icon, title, text}) {
   );
 }
 
-function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDel,onShowQR,highlightPid,doAddPhoto,doDelPhoto,zonePhotos,doAddZonePhoto,doDelZonePhoto,allProds,allZonePhotos,onAddFacAction,onOpenReq,onOpenIntel,onOpenLayout,zoneLayout,can,requisitions=[],payments=[],curUser,onTriggerAI}){
+// ─── 편집/다중선택 가능한 활동 로그 ───────────────────────────────
+function EditableLogList({logs,editH,deleteHs,ac,fDate}){
+  const [sel,setSel]=useState(new Set());
+  const [editing,setEditing]=useState(null); // log id
+  const [showHistory,setShowHistory]=useState(null); // log id (변경 이력)
+  const [draft,setDraft]=useState({});
+
+  const toggle=(id)=>{
+    const next=new Set(sel);
+    if(next.has(id))next.delete(id);else next.add(id);
+    setSel(next);
+  };
+  const selectAll=()=>{
+    if(sel.size===logs.length)setSel(new Set());
+    else setSel(new Set(logs.map(h=>h.id)));
+  };
+  const bulkDelete=()=>{
+    if(sel.size===0)return;
+    if(!confirm(`선택한 ${sel.size}건의 로그를 삭제할까요? (되돌릴 수 없음)`))return;
+    deleteHs&&deleteHs(Array.from(sel));
+    setSel(new Set());
+  };
+  const startEdit=(h)=>{
+    setEditing(h.id);
+    setDraft({act:h.act,det:h.det||"",q:h.q??""});
+  };
+  const saveEdit=(id)=>{
+    editH&&editH(id,{act:draft.act,det:draft.det,q:draft.q===""?null:Number(draft.q)});
+    setEditing(null);setDraft({});
+  };
+
+  return(
+    <div style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:6,overflow:"hidden"}}>
+      <div style={{padding:"6px 10px",background:"#f1f5f9",fontSize:10,fontWeight:700,color:"#475569",display:"flex",justifyContent:"space-between",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+        <span>📜 활동 로그 ({logs.length}건) · 각 로그에 사진/수정/다중선택 가능</span>
+        {logs.length>0&&(
+          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+            <label style={{display:"flex",alignItems:"center",gap:4,fontSize:10,cursor:"pointer"}}>
+              <input type="checkbox" checked={sel.size===logs.length&&logs.length>0} onChange={selectAll}/>
+              전체
+            </label>
+            {sel.size>0&&(
+              <>
+                <span style={{padding:"1px 6px",background:"#dbeafe",color:"#1e40af",borderRadius:4,fontWeight:800}}>{sel.size}건 선택</span>
+                <button onClick={bulkDelete} style={{padding:"3px 8px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:4,fontSize:10,fontWeight:700,cursor:"pointer"}}>🗑️ 일괄 삭제</button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      {logs.length===0?(
+        <div style={{padding:"12px",textAlign:"center",color:"#94a3b8",fontSize:11}}>아직 활동 이력이 없습니다</div>
+      ):(
+        <div style={{maxHeight:300,overflowY:"auto"}}>
+          {logs.slice(0,30).map(h=>{
+            const isSel=sel.has(h.id);
+            const isEdit=editing===h.id;
+            const editCount=(h.editLog||[]).length;
+            return(
+              <div key={h.id} style={{padding:"6px 10px",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"flex-start",gap:6,background:isSel?"#eff6ff":"#fff"}}>
+                <input type="checkbox" checked={isSel} onChange={()=>toggle(h.id)} style={{marginTop:2}}/>
+                {isEdit?(
+                  <div style={{flex:1,display:"flex",flexDirection:"column",gap:4}}>
+                    <div style={{display:"flex",gap:4}}>
+                      <select value={draft.act} onChange={e=>setDraft({...draft,act:e.target.value})} style={{padding:"3px 6px",fontSize:10,border:"1px solid #e5e7eb",borderRadius:4}}>
+                        {["추가","입고","출고","조정","수정","삭제","품의","결제","품의삭제"].map(a=><option key={a}>{a}</option>)}
+                      </select>
+                      <input type="number" placeholder="수량" value={draft.q??""} onChange={e=>setDraft({...draft,q:e.target.value})} style={{width:70,padding:"3px 6px",fontSize:10,border:"1px solid #e5e7eb",borderRadius:4}}/>
+                    </div>
+                    <textarea value={draft.det} onChange={e=>setDraft({...draft,det:e.target.value})} style={{padding:"4px 6px",fontSize:11,border:"1px solid #e5e7eb",borderRadius:4,resize:"vertical",minHeight:36}}/>
+                    <div style={{display:"flex",gap:4,justifyContent:"flex-end"}}>
+                      <button onClick={()=>{setEditing(null);setDraft({});}} style={{padding:"3px 10px",fontSize:10,background:"#f1f5f9",border:"none",borderRadius:4,cursor:"pointer"}}>취소</button>
+                      <button onClick={()=>saveEdit(h.id)} style={{padding:"3px 10px",fontSize:10,background:"#3b82f6",color:"#fff",border:"none",borderRadius:4,cursor:"pointer",fontWeight:700}}>💾 저장</button>
+                    </div>
+                  </div>
+                ):(
+                  <>
+                    <span className="badge" style={{background:(ac[h.act]||"#94a3b8")+"22",color:ac[h.act]||"#64748b",fontSize:9,padding:"2px 6px",flexShrink:0,minWidth:46,textAlign:"center"}}>{h.act}</span>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:11,color:"#334155",lineHeight:1.4,wordBreak:"break-all"}}>{h.det||"-"}</div>
+                      <div style={{fontSize:9,color:"#94a3b8",marginTop:2,display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                        <span>{h.user||"시스템"} · {fDate(h.date)}{h.q?` · 수량 ${h.q}`:""}</span>
+                        {editCount>0&&(
+                          <button onClick={()=>setShowHistory(showHistory===h.id?null:h.id)}
+                            style={{padding:"1px 6px",background:"#fef3c7",color:"#92400e",border:"none",borderRadius:3,fontSize:9,fontWeight:700,cursor:"pointer"}}
+                            title="변경 이력 보기">
+                            🕒 {editCount}회 수정됨
+                          </button>
+                        )}
+                      </div>
+                      {showHistory===h.id&&(
+                        <div style={{marginTop:4,padding:6,background:"#fffbeb",border:"1px solid #fde68a",borderRadius:4,fontSize:9}}>
+                          <div style={{fontWeight:700,color:"#92400e",marginBottom:3}}>📝 변경 이력</div>
+                          {(h.editLog||[]).map((ev,i)=>(
+                            <div key={i} style={{marginBottom:3,paddingBottom:3,borderBottom:"1px dashed #fde68a"}}>
+                              <div style={{color:"#92400e"}}>{new Date(ev.at).toLocaleString("ko-KR")} · {ev.by}</div>
+                              {Object.entries(ev.changes||{}).map(([k,v])=>(
+                                <div key={k} style={{color:"#475569"}}>
+                                  <strong>{k}:</strong> "<span style={{textDecoration:"line-through"}}>{String(v.from??"-")}</span>" → "<strong>{String(v.to??"-")}</strong>"
+                                </div>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <LogPhotoStrip logId={String(h.id)}/>
+                    </div>
+                    <button onClick={()=>startEdit(h)}
+                      style={{padding:"2px 6px",background:"#eff6ff",color:"#1e40af",border:"none",borderRadius:3,fontSize:10,cursor:"pointer",fontWeight:700}}
+                      title="이 로그 수정">
+                      ✏️
+                    </button>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDel,onShowQR,highlightPid,doAddPhoto,doDelPhoto,zonePhotos,doAddZonePhoto,doDelZonePhoto,allProds,allZonePhotos,onAddFacAction,onOpenReq,onOpenIntel,onOpenLayout,zoneLayout,can,requisitions=[],payments=[],curUser,onTriggerAI,editH,deleteHs,matchPayment,editPayment,allPayments=[]}){
   const [qPid,setQPid]=useState(null);
   const [qAct,setQAct]=useState(null);
   const [qQty,setQQty]=useState("");
@@ -12349,33 +12515,10 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
                     )}
 
                     {/* 통합 인텔리전스 인라인 패널 (결제/품의/담당자/판매자/통화·카톡/AI/절감) */}
-                    <ProductIntelInline product={p} requisitions={requisitions} payments={payments} curUser={curUser} onTriggerAI={onTriggerAI}/>
+                    <ProductIntelInline product={p} requisitions={requisitions} payments={payments} allPayments={allPayments} curUser={curUser} onTriggerAI={onTriggerAI} matchPayment={matchPayment} editPayment={editPayment}/>
 
-                    {/* 활동 로그 (이 제품 한정) + 로그별 사진 첨부 */}
-                    <div style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:6,overflow:"hidden"}}>
-                      <div style={{padding:"6px 10px",background:"#f1f5f9",fontSize:10,fontWeight:700,color:"#475569",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                        <span>📜 활동 로그 ({itemHist.length}건) · 각 로그에 사진 첨부 가능 📷</span>
-                        {itemHist.length>0 && <span style={{fontWeight:500,color:"#94a3b8"}}>최신 {Math.min(itemHist.length,30)}건 표시</span>}
-                      </div>
-                      {itemHist.length===0 ? (
-                        <div style={{padding:"12px",textAlign:"center",color:"#94a3b8",fontSize:11}}>아직 활동 이력이 없습니다</div>
-                      ) : (
-                        <div style={{maxHeight:280,overflowY:"auto"}}>
-                          {itemHist.slice(0,30).map(h=>(
-                            <div key={h.id} style={{padding:"6px 10px",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"flex-start",gap:6}}>
-                              <span className="badge" style={{background:(ac[h.act]||"#94a3b8")+"22",color:ac[h.act]||"#64748b",fontSize:9,padding:"2px 6px",flexShrink:0,minWidth:46,textAlign:"center"}}>{h.act}</span>
-                              <div style={{flex:1,minWidth:0}}>
-                                <div style={{fontSize:11,color:"#334155",lineHeight:1.4,wordBreak:"break-all"}}>{h.det || "-"}</div>
-                                <div style={{fontSize:9,color:"#94a3b8",marginTop:2}}>
-                                  {h.user || "시스템"} · {fDate(h.date)}{h.q ? ` · 수량 ${h.q}` : ""}
-                                </div>
-                                <LogPhotoStrip logId={String(h.id)}/>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                    {/* 활동 로그 — 편집/다중선택/사진첨부 */}
+                    <EditableLogList logs={itemHist} editH={editH} deleteHs={deleteHs} ac={ac} fDate={fDate}/>
 
                     {/* 액션: 인텔리전스/품의/QR/삭제 */}
                     <div style={{display:"flex",gap:6,justifyContent:"flex-end",marginTop:10,flexWrap:"wrap"}}>

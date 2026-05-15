@@ -43,7 +43,7 @@ function setIntel(prodId, patch) {
 }
 
 // ─── 인라인 패널: 펼친 제품 행에 직접 삽입 (모달 X) ──────────────────
-export function ProductIntelInline({ product, requisitions = [], payments = [], curUser, onTriggerAI }) {
+export function ProductIntelInline({ product, requisitions = [], payments = [], allPayments = [], curUser, onTriggerAI, matchPayment, editPayment }) {
   const [intel, setIntelState] = useState(() => getIntel(product.id));
   const [openSec, setOpenSec] = useState({ payments: true });
   const update = (patch) => setIntelState(setIntel(product.id, patch));
@@ -60,9 +60,9 @@ export function ProductIntelInline({ product, requisitions = [], payments = [], 
 
   return (
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(320px,1fr))",gap:8,marginBottom:10}}>
-      {/* 결제내역 (카드+이체) */}
-      <PanelCard title={`💳 결제내역 (${productPayments.length})`} sub="카드결제·계좌이체 자동 매칭" color="#06b6d4" open={openSec.payments} onToggle={()=>toggle("payments")}>
-        <PaymentsList items={productPayments}/>
+      {/* 결제내역 (카드+이체) — 통장 매칭/수정 가능 */}
+      <PanelCard title={`💳 결제내역 (${productPayments.length})`} sub="통장·카드 자동 매칭 + 수동 매칭/수정" color="#06b6d4" open={openSec.payments} onToggle={()=>toggle("payments")}>
+        <PaymentsPanel product={product} matched={productPayments} all={allPayments} matchPayment={matchPayment} editPayment={editPayment}/>
       </PanelCard>
 
       {/* 품의서 */}
@@ -114,24 +114,101 @@ function PanelCard({ title, sub, color, open, onToggle, children, wide }) {
   );
 }
 
-function PaymentsList({ items }) {
-  if (items.length === 0) return <div style={{fontSize:10,color:"#94a3b8",textAlign:"center",padding:8}}>연결된 카드·이체 내역 없음</div>;
+function PaymentsPanel({ product, matched, all, matchPayment, editPayment }) {
+  const [tab, setTab] = useState("matched"); // matched | match | unmatched
+  const [editing, setEditing] = useState(null);
+  const [draft, setDraft] = useState({});
+
+  const unmatched = all.filter(p => !p.productId && !p.productName);
+
+  const kindLabel = (p) => {
+    const t = p.type || p.method;
+    if (t === "card" || t === "카드") return "💳 카드";
+    if (t === "transfer" || t === "이체") return "🏦 이체";
+    return t || "결제";
+  };
+  const kindColor = (p) => {
+    const t = p.type || p.method;
+    return (t === "card" || t === "카드") ? "#1e40af" : "#047857";
+  };
+
+  const startEdit = (p) => { setEditing(p.id); setDraft({ amount:p.amount, vendor:p.vendor||"", memo:p.memo||"", date:String(p.date||"").slice(0,10), type:p.type||"card" }); };
+  const saveEdit = (id) => {
+    if (editPayment) editPayment(id, { amount:parseInt(draft.amount)||0, vendor:draft.vendor, memo:draft.memo, date:draft.date, type:draft.type });
+    setEditing(null);
+  };
+
   return (
-    <div style={{maxHeight:140,overflowY:"auto"}}>
-      {items.slice(0,10).map(p => (
-        <div key={p.id} style={{padding:"5px 7px",borderBottom:"1px solid #f1f5f9",fontSize:10}}>
-          <div style={{display:"flex",justifyContent:"space-between",gap:6}}>
-            <strong style={{color:p.method==="card"||p.method==="카드"?"#1e40af":"#047857"}}>
-              {p.method==="card"||p.method==="카드"?"💳 카드":p.method==="transfer"||p.method==="이체"?"🏦 이체":(p.method||"결제")}
-            </strong>
-            <span style={{fontWeight:800,color:"#0f172a"}}>{(p.amount||0).toLocaleString()}원</span>
+    <div>
+      <div style={{display:"flex",gap:3,marginBottom:6,fontSize:10}}>
+        <button onClick={()=>setTab("matched")} style={pillBtn(tab==="matched","#06b6d4")}>매칭됨 ({matched.length})</button>
+        <button onClick={()=>setTab("match")} style={pillBtn(tab==="match","#f59e0b")}>📂 통장 매칭 ({unmatched.length})</button>
+      </div>
+
+      {tab==="matched" && (
+        matched.length === 0 ?
+          <div style={{fontSize:10,color:"#94a3b8",textAlign:"center",padding:8}}>매칭된 결제 없음. "📂 통장 매칭" 탭에서 연결하세요.</div>
+          :
+          <div style={{maxHeight:200,overflowY:"auto"}}>
+            {matched.map(p => editing===p.id ? (
+              <div key={p.id} style={{padding:6,background:"#eff6ff",borderRadius:4,marginBottom:4}}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4,marginBottom:4}}>
+                  <select value={draft.type} onChange={e=>setDraft({...draft,type:e.target.value})} style={miniInput}>
+                    <option value="card">💳 카드</option><option value="transfer">🏦 이체</option>
+                  </select>
+                  <input type="date" value={draft.date} onChange={e=>setDraft({...draft,date:e.target.value})} style={miniInput}/>
+                  <input type="number" value={draft.amount} onChange={e=>setDraft({...draft,amount:e.target.value})} placeholder="금액" style={miniInput}/>
+                  <input value={draft.vendor} onChange={e=>setDraft({...draft,vendor:e.target.value})} placeholder="거래처" style={miniInput}/>
+                </div>
+                <input value={draft.memo} onChange={e=>setDraft({...draft,memo:e.target.value})} placeholder="메모" style={{...miniInput,width:"100%",marginBottom:4}}/>
+                <div style={{display:"flex",gap:4,justifyContent:"flex-end"}}>
+                  <button onClick={()=>setEditing(null)} style={{padding:"3px 8px",fontSize:9,background:"#f1f5f9",border:"none",borderRadius:3,cursor:"pointer"}}>취소</button>
+                  <button onClick={()=>matchPayment&&matchPayment(p.id,null)} style={{padding:"3px 8px",fontSize:9,background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:3,cursor:"pointer",fontWeight:700}}>매칭 해제</button>
+                  <button onClick={()=>saveEdit(p.id)} style={{padding:"3px 8px",fontSize:9,background:"#3b82f6",color:"#fff",border:"none",borderRadius:3,cursor:"pointer",fontWeight:700}}>💾 저장</button>
+                </div>
+              </div>
+            ) : (
+              <div key={p.id} style={{padding:"5px 7px",borderBottom:"1px solid #f1f5f9",fontSize:10,display:"flex",justifyContent:"space-between",gap:6}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:"flex",justifyContent:"space-between"}}>
+                    <strong style={{color:kindColor(p)}}>{kindLabel(p)}</strong>
+                    <span style={{fontWeight:800}}>{(p.amount||0).toLocaleString()}원</span>
+                  </div>
+                  <div style={{color:"#64748b"}}>{String(p.date||"").slice(0,10)} · {p.vendor||"-"}{p.memo?` · ${p.memo}`:""}</div>
+                  {(p.editLog||[]).length>0 && <span style={{fontSize:8,color:"#92400e",background:"#fef3c7",padding:"1px 4px",borderRadius:3,fontWeight:700}}>🕒 {p.editLog.length}회 수정</span>}
+                </div>
+                <button onClick={()=>startEdit(p)} style={{padding:"2px 6px",background:"#eff6ff",color:"#1e40af",border:"none",borderRadius:3,fontSize:9,cursor:"pointer",fontWeight:700}}>✏️</button>
+              </div>
+            ))}
           </div>
-          <div style={{color:"#64748b",marginTop:1}}>{String(p.date||p.paidAt||"").slice(0,10)} · {p.vendor || p.merchant || "-"}{p.memo?` · ${p.memo}`:""}</div>
-        </div>
-      ))}
+      )}
+
+      {tab==="match" && (
+        unmatched.length === 0 ?
+          <div style={{fontSize:10,color:"#94a3b8",textAlign:"center",padding:8}}>모든 통장/카드 거래내역이 이미 매칭됨</div>
+          :
+          <div style={{maxHeight:200,overflowY:"auto"}}>
+            <div style={{fontSize:9,color:"#92400e",background:"#fef3c7",padding:4,borderRadius:3,marginBottom:4}}>💡 클릭하면 이 제품에 매칭됩니다.</div>
+            {unmatched.slice(0,30).map(p => (
+              <button key={p.id} onClick={()=>matchPayment&&matchPayment(p.id, product)}
+                style={{width:"100%",padding:"5px 7px",borderBottom:"1px solid #f1f5f9",fontSize:10,background:"#fff",border:"none",cursor:"pointer",textAlign:"left"}}>
+                <div style={{display:"flex",justifyContent:"space-between"}}>
+                  <strong style={{color:kindColor(p)}}>{kindLabel(p)} 매칭</strong>
+                  <span style={{fontWeight:800}}>{(p.amount||0).toLocaleString()}원</span>
+                </div>
+                <div style={{color:"#64748b"}}>{String(p.date||"").slice(0,10)} · {p.vendor||"-"}{p.memo?` · ${p.memo}`:""}</div>
+              </button>
+            ))}
+          </div>
+      )}
     </div>
   );
 }
+
+const pillBtn = (active, color) => ({
+  padding:"4px 10px", background:active?color:"#f1f5f9", color:active?"#fff":"#475569",
+  border:"none", borderRadius:4, cursor:"pointer", fontWeight:700, fontSize:10,
+});
 
 function ReqList({ items }) {
   if (items.length === 0) return <div style={{fontSize:10,color:"#94a3b8",textAlign:"center",padding:8}}>연결된 품의 없음</div>;
