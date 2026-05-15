@@ -9,11 +9,172 @@ import { ProductIntelligenceModal, ProductIntelInline, LogPhotoStrip } from "./p
 import { BackupHistoryPanel, logFileEvent, maybeAutoBackup } from "./inventory-backup-history.jsx";
 
 const DEFAULT_CCTV_SERVER_URL = "https://cctv.thejamsa.com";
+const JAMSA_PROTECTED_KEYS = [
+  "jamsa_inv_prods",
+  "jamsa_inv_hist",
+  "jamsa_worklogs",
+  "jamsa_worklog_active_checks",
+  "jamsa_worklog_staff",
+  "jamsa_incidents",
+  "jamsa_daily_checks",
+  "jamsa_audit_log",
+  "jamsa_fac_actions",
+  "jamsa_fac_inspections",
+  "jamsa_custom_zones",
+  "jamsa_zone_photos",
+  "jamsa_zonePhotos",
+  "jamsa_warehouse_models",
+  "jamsa_storage_sections",
+  "jamsa_locations",
+  "jamsa_categories",
+  "jamsa_requisitions",
+  "jamsa_payments",
+];
+const JAMSA_PROTECTION_SNAPSHOTS_KEY = "jamsa_data_protection_snapshots";
+const JAMSA_PROTECTION_LAST_GOOD_KEY = "jamsa_data_protection_last_good";
+
+const getStorageRaw = (key) => {
+  try { return window.localStorage?.getItem(key); } catch (e) { return null; }
+};
+
+const parseStorageValue = (raw) => {
+  if (raw == null || raw === "") return null;
+  try { return JSON.parse(raw); } catch (e) { return raw; }
+};
+
+const protectedValueCount = (value) => {
+  if (Array.isArray(value)) return value.length;
+  if (value && typeof value === "object") return Object.keys(value).length;
+  if (typeof value === "string") return value.trim() ? 1 : 0;
+  return value == null ? 0 : 1;
+};
+
+const protectedValueIsEmpty = (value) => protectedValueCount(value) === 0;
+
+const collectProtectedData = () => {
+  const data = {};
+  JAMSA_PROTECTED_KEYS.forEach(key => {
+    const raw = getStorageRaw(key);
+    if (raw == null) return;
+    const value = parseStorageValue(raw);
+    if (!protectedValueIsEmpty(value)) data[key] = value;
+  });
+  return data;
+};
+
+const summarizeProtectedData = (data) => {
+  const summary = {};
+  Object.entries(data || {}).forEach(([key, value]) => { summary[key] = protectedValueCount(value); });
+  return summary;
+};
+
+const fingerprintProtectedData = (data) => {
+  try { return JSON.stringify(summarizeProtectedData(data)); } catch (e) { return String(Date.now()); }
+};
+
+const saveDataProtectionSnapshot = (reason = "manual", opts = {}) => {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return null;
+    const data = opts.data || collectProtectedData();
+    if (!Object.keys(data).length) return null;
+    const snap = {
+      id: `safe_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      at: new Date().toISOString(),
+      reason,
+      summary: summarizeProtectedData(data),
+      data,
+    };
+    const prev = parseStorageValue(getStorageRaw(JAMSA_PROTECTION_SNAPSHOTS_KEY)) || [];
+    const last = Array.isArray(prev) ? prev[0] : null;
+    if (!opts.force && last?.fingerprint === fingerprintProtectedData(data)) return last;
+    snap.fingerprint = fingerprintProtectedData(data);
+    window.localStorage.setItem(JAMSA_PROTECTION_SNAPSHOTS_KEY, JSON.stringify([snap, ...(Array.isArray(prev) ? prev : [])].slice(0, 20)));
+    window.localStorage.setItem(JAMSA_PROTECTION_LAST_GOOD_KEY, JSON.stringify({ at: snap.at, summary: snap.summary, data }));
+    window.sessionStorage?.setItem("jamsa_data_last_snapshot_notice", `${reason} · ${Object.keys(data).length}개 데이터 보호`);
+    return snap;
+  } catch (e) {
+    console.warn("[data protection] snapshot failed:", e.message);
+    return null;
+  }
+};
+
+const guardedLocalStorageSet = (key, value) => {
+  const raw = JSON.stringify(value);
+  if (!JAMSA_PROTECTED_KEYS.includes(key)) {
+    window.localStorage?.setItem(key, raw);
+    return true;
+  }
+  const before = parseStorageValue(getStorageRaw(key));
+  const beforeCount = protectedValueCount(before);
+  const nextCount = protectedValueCount(value);
+  if (beforeCount > 0 && nextCount === 0) {
+    saveDataProtectionSnapshot(`blocked-empty-overwrite:${key}`, { force: true });
+    console.warn(`[data protection] blocked empty overwrite for ${key}`);
+    return false;
+  }
+  window.localStorage?.setItem(key, raw);
+  const lastGood = parseStorageValue(getStorageRaw(JAMSA_PROTECTION_LAST_GOOD_KEY)) || { data: {} };
+  if (nextCount > 0) {
+    lastGood.data = { ...(lastGood.data || {}), [key]: value };
+    lastGood.at = new Date().toISOString();
+    lastGood.summary = summarizeProtectedData(lastGood.data);
+    window.localStorage?.setItem(JAMSA_PROTECTION_LAST_GOOD_KEY, JSON.stringify(lastGood));
+  }
+  return true;
+};
+
+const restoreMissingProtectedData = () => {
+  try {
+    const clearRequestedAt = Number(getStorageRaw("jamsa_data_clear_requested_at") || 0);
+    if (clearRequestedAt && Date.now() - clearRequestedAt < 10 * 60 * 1000) return [];
+    const lastGood = parseStorageValue(getStorageRaw(JAMSA_PROTECTION_LAST_GOOD_KEY));
+    if (!lastGood?.data) return [];
+    const restored = [];
+    JAMSA_PROTECTED_KEYS.forEach(key => {
+      const current = parseStorageValue(getStorageRaw(key));
+      const backup = lastGood.data[key];
+      if (protectedValueIsEmpty(current) && !protectedValueIsEmpty(backup)) {
+        window.localStorage?.setItem(key, JSON.stringify(backup));
+        restored.push(key);
+      }
+    });
+    if (restored.length) {
+      window.sessionStorage?.setItem("jamsa_data_auto_restored", restored.join(","));
+      saveDataProtectionSnapshot("after-auto-restore", { force: true });
+    }
+    return restored;
+  } catch (e) {
+    console.warn("[data protection] auto restore failed:", e.message);
+    return [];
+  }
+};
+
+const installDataProtectionGuards = () => {
+  try {
+    if (typeof window === "undefined" || window.__jamsaDataProtectionInstalled) return;
+    window.__jamsaDataProtectionInstalled = true;
+    restoreMissingProtectedData();
+    saveDataProtectionSnapshot("app-load");
+    window.__jamsaDataProtection = {
+      snapshot: (reason = "manual-console") => saveDataProtectionSnapshot(reason, { force: true }),
+      restoreMissing: restoreMissingProtectedData,
+      keys: JAMSA_PROTECTED_KEYS,
+    };
+    setInterval(() => saveDataProtectionSnapshot("interval-5min"), 5 * 60 * 1000);
+    window.addEventListener("beforeunload", () => saveDataProtectionSnapshot("before-unload"));
+    window.addEventListener("storage", e => {
+      if (e?.key && JAMSA_PROTECTED_KEYS.includes(e.key)) setTimeout(restoreMissingProtectedData, 50);
+    });
+  } catch (e) {
+    console.warn("[data protection] install failed:", e.message);
+  }
+};
 
 // CCTV backend bootstrap: use one default cloud endpoint everywhere.
 try {
   if (typeof window !== 'undefined' && window.localStorage) {
     window.localStorage.setItem("jamsa_cctv_snap_server", DEFAULT_CCTV_SERVER_URL);
+    installDataProtectionGuards();
   }
 } catch(e) {}
 /* ─── LOCAL STORAGE PERSISTENCE HOOK ───
@@ -37,7 +198,7 @@ const useLocalStorage = (key, defaultValue) => {
         // Skip storing empty initial state to save space
         return;
       }
-      window.localStorage?.setItem(key, JSON.stringify(value));
+      guardedLocalStorageSet(key, value);
     } catch (e) {
       // Quota exceeded or disabled — silently ignore
       console.warn("[useLocalStorage] save failed:", key, e.message);
@@ -18823,8 +18984,9 @@ function BrowseView({ allPastLogs, pastLogs, cycle, filterFrom, setFilterFrom, f
 function BackupRestoreModal({ onClose }) {
   const [stats, setStats] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [protection, setProtection] = useState({ snapshots: [], lastGood: null, restored: "" });
 
-  useEffect(() => {
+  const refreshBackupStats = useCallback(() => {
     try {
       const keys = Object.keys(window.localStorage).filter(k => k.startsWith("jamsa_"));
       const totalBytes = keys.reduce((s, k) => s + (window.localStorage[k]?.length || 0), 0);
@@ -18839,7 +19001,37 @@ function BackupRestoreModal({ onClose }) {
     } catch (e) {
       setStats({ error: e.message });
     }
+    setProtection({
+      snapshots: parseStorageValue(getStorageRaw(JAMSA_PROTECTION_SNAPSHOTS_KEY)) || [],
+      lastGood: parseStorageValue(getStorageRaw(JAMSA_PROTECTION_LAST_GOOD_KEY)),
+      restored: window.sessionStorage?.getItem("jamsa_data_auto_restored") || "",
+    });
   }, []);
+
+  useEffect(() => { refreshBackupStats(); }, [refreshBackupStats]);
+
+  const handleSafetySnapshot = () => {
+    const snap = saveDataProtectionSnapshot("manual-safety-button", { force: true });
+    refreshBackupStats();
+    alert(snap ? `안전 스냅샷 저장 완료\n${Object.keys(snap.data || {}).length}개 데이터 묶음 보호됨` : "저장할 데이터가 없습니다.");
+  };
+
+  const restoreProtectionSnapshot = (snap) => {
+    if (!snap?.data) return alert("복원할 스냅샷 데이터가 없습니다.");
+    if (!confirm(`이 안전 스냅샷으로 비어있는 중요 데이터를 복구할까요?\n스냅샷 시각: ${new Date(snap.at).toLocaleString("ko-KR")}\n현재 값이 있는 데이터는 덮어쓰지 않습니다.`)) return;
+    let restored = 0;
+    Object.entries(snap.data).forEach(([key, value]) => {
+      const current = parseStorageValue(getStorageRaw(key));
+      if (protectedValueIsEmpty(current) && !protectedValueIsEmpty(value)) {
+        window.localStorage?.setItem(key, JSON.stringify(value));
+        restored++;
+      }
+    });
+    saveDataProtectionSnapshot("restore-from-safety-snapshot", { force: true });
+    refreshBackupStats();
+    alert(`복구 완료: ${restored}개 데이터\n화면 반영을 위해 새로고침합니다.`);
+    window.location.reload();
+  };
 
   const handleImport = async (e) => {
     const file = e.target.files?.[0];
@@ -18860,7 +19052,9 @@ function BackupRestoreModal({ onClose }) {
     if (!confirm("⚠️ 모든 데이터를 삭제합니다.\n정말 계속하시겠습니까? 되돌릴 수 없습니다.")) return;
     if (!confirm("⚠️ 정말 확실합니까?\n제품, 활동 기록, 구역, 업무일지가 모두 사라집니다.")) return;
     try {
-      Object.keys(window.localStorage).filter(k => k.startsWith("jamsa_")).forEach(k => window.localStorage.removeItem(k));
+      saveDataProtectionSnapshot("before-clear-all", { force: true });
+      Object.keys(window.localStorage).filter(k => k.startsWith("jamsa_") && !k.startsWith("jamsa_data_protection_")).forEach(k => window.localStorage.removeItem(k));
+      window.localStorage?.setItem("jamsa_data_clear_requested_at", String(Date.now()));
       alert("초기화 완료. 페이지를 새로고침합니다.");
       window.location.reload();
     } catch (e) {
@@ -18893,6 +19087,11 @@ function BackupRestoreModal({ onClose }) {
           {/* Current data summary */}
           <div style={{marginBottom:16,padding:12,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8}}>
             <div style={{fontSize:11,fontWeight:800,color:"#065f46",marginBottom:8}}>📊 현재 저장된 데이터</div>
+            {protection.restored && (
+              <div style={{fontSize:11,color:"#1d4ed8",fontWeight:800,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:6,padding:8,marginBottom:8}}>
+                자동 복구됨: {protection.restored}
+              </div>
+            )}
             {stats?.error ? (
               <div style={{fontSize:11,color:"#991b1b"}}>⚠️ {stats.error}</div>
             ) : stats?.keys?.length === 0 ? (
@@ -18913,8 +19112,50 @@ function BackupRestoreModal({ onClose }) {
                   <span>총 사용량</span>
                   <span style={{fontFamily:"monospace",fontWeight:700}}>{(stats.totalBytes/1024).toFixed(1)} KB</span>
                 </div>
+                <div style={{marginTop:8,paddingTop:8,borderTop:"1px solid #bbf7d0",fontSize:10,color:"#065f46",lineHeight:1.6}}>
+                  <strong>보호 중인 핵심 데이터:</strong> {JAMSA_PROTECTED_KEYS.filter(k => stats.keys.includes(k)).length}/{JAMSA_PROTECTED_KEYS.length}개 ·
+                  안전 스냅샷 {protection.snapshots.length}개
+                  {protection.lastGood?.at && ` · 마지막 정상본 ${new Date(protection.lastGood.at).toLocaleString("ko-KR")}`}
+                </div>
               </>
             ) : <div>로딩 중...</div>}
+          </div>
+
+          {/* Data protection guard */}
+          <div style={{marginBottom:14,padding:12,background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+              <div>
+                <div style={{fontSize:12,fontWeight:900,color:"#1e3a8a"}}>🛡️ 데이터 손실 방지 보호막</div>
+                <div style={{fontSize:10,color:"#475569",lineHeight:1.5}}>
+                  재고·안전·업무일지·직원정보가 갑자기 빈 값으로 저장되면 차단하고, 앱 시작/5분마다/종료 전에 정상본을 보관합니다.
+                </div>
+              </div>
+              <button onClick={handleSafetySnapshot} style={{marginLeft:"auto",padding:"7px 10px",borderRadius:6,background:"#2563eb",color:"#fff",border:"none",fontSize:11,fontWeight:900,cursor:"pointer"}}>
+                지금 안전스냅샷
+              </button>
+            </div>
+            {protection.snapshots.length > 0 ? (
+              <div style={{maxHeight:140,overflowY:"auto",border:"1px solid #dbeafe",borderRadius:6,background:"#fff"}}>
+                {protection.snapshots.slice(0, 8).map(snap => (
+                  <div key={snap.id} style={{display:"grid",gridTemplateColumns:"1fr 80px",gap:8,alignItems:"center",padding:"7px 9px",borderBottom:"1px solid #eff6ff",fontSize:10}}>
+                    <div style={{minWidth:0}}>
+                      <div style={{fontWeight:900,color:"#0f172a",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                        {new Date(snap.at).toLocaleString("ko-KR")} · {snap.reason}
+                      </div>
+                      <div style={{color:"#64748b",marginTop:2}}>
+                        {Object.entries(snap.summary || {}).slice(0, 5).map(([k,v]) => `${k.replace("jamsa_", "")}:${v}`).join(" · ")}
+                        {Object.keys(snap.summary || {}).length > 5 ? " ..." : ""}
+                      </div>
+                    </div>
+                    <button onClick={() => restoreProtectionSnapshot(snap)} style={{padding:"5px 8px",border:"1px solid #bfdbfe",borderRadius:5,background:"#eff6ff",color:"#1d4ed8",fontWeight:900,cursor:"pointer"}}>
+                      복원
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{fontSize:11,color:"#64748b",background:"#fff",borderRadius:6,padding:10}}>아직 안전 스냅샷이 없습니다. 앱을 사용하거나 위 버튼을 누르면 생성됩니다.</div>
+            )}
           </div>
 
           {/* Actions */}

@@ -135,11 +135,14 @@ export async function maybeAutoBackup(curUserName) {
       data: {},
     };
     const keys = [
-      "jamsa_inv_products", "jamsa_inv_hist", "jamsa_payments",
+      "jamsa_inv_prods", "jamsa_inv_products", "jamsa_inv_hist", "jamsa_payments",
       "jamsa_requisitions", "jamsa_product_intel", "jamsa_log_photos",
-      "jamsa_zone_schedule_tasks", "jamsa_zonePhotos",
-      "jamsa_facilities", "jamsa_facActions", "jamsa_zones",
+      "jamsa_zone_schedule_tasks", "jamsa_zonePhotos", "jamsa_zone_photos",
+      "jamsa_facilities", "jamsa_facActions", "jamsa_fac_actions", "jamsa_fac_inspections", "jamsa_zones",
       "jamsa_categories", "jamsa_locations", "jamsa_storage_sections",
+      "jamsa_worklogs", "jamsa_worklog_active_checks", "jamsa_worklog_staff",
+      "jamsa_incidents", "jamsa_daily_checks", "jamsa_audit_log",
+      "jamsa_warehouse_models", "jamsa_custom_zones",
     ];
     keys.forEach(k => {
       const v = localStorage.getItem(k);
