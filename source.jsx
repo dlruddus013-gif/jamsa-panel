@@ -18642,6 +18642,7 @@ const WORKLOG_TEMPLATES = {
 /* ─── BROWSE VIEW — period-based worklog search ─── */
 function BrowseView({ allPastLogs, pastLogs, cycle, filterFrom, setFilterFrom, filterTo, setFilterTo, filterAllCycles, setFilterAllCycles, setPresetRange, clearFilter, setReportLog }) {
   const [sortBy, setSortBy] = useState("newest"); // newest | oldest | completion
+  const [searchedAt, setSearchedAt] = useState("");
 
   const sortedLogs = [...pastLogs].sort((a, b) => {
     if (sortBy === "newest") return new Date(b.at) - new Date(a.at);
@@ -18687,6 +18688,10 @@ function BrowseView({ allPastLogs, pastLogs, cycle, filterFrom, setFilterFrom, f
             <span style={{ color: "#94a3b8", fontSize: 13 }}>~</span>
             <input type="date" value={filterTo} onChange={e => setFilterTo(e.target.value)}
               style={{ fontSize: 13, padding: "6px 10px", border: "1px solid #cbd5e1", borderRadius: 6, fontFamily: "inherit" }} />
+            <button type="button" onClick={() => setSearchedAt(new Date().toISOString())}
+              style={{ fontSize: 12, padding: "7px 18px", borderRadius: 7, background: "#2563eb", border: "1px solid #1d4ed8", color: "#fff", cursor: "pointer", fontWeight: 900 }}>
+              조회
+            </button>
             {(filterFrom || filterTo) && (
               <button type="button" onClick={clearFilter}
                 style={{ fontSize: 11, padding: "6px 12px", borderRadius: 6, background: "#fff", border: "1px solid #e5e7eb", color: "#64748b", cursor: "pointer", fontWeight: 700 }}>
@@ -19784,6 +19789,11 @@ function WorklogStaffDetailModal({ staff, onClose, onSave }) {
               </div>
             </section>
           </div>
+          {searchedAt && (
+            <div style={{ fontSize: 11, color: "#2563eb", fontWeight: 800, marginTop: 8 }}>
+              조회 완료 · {new Date(searchedAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })} 기준 {pastLogs.length}건
+            </div>
+          )}
         </div>
       </div>
     </div>
