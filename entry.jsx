@@ -244,7 +244,17 @@ localStorage.setItem = function(key, value) {
   if (!key.startsWith(SYNC_PREFIX)) return;
   if (!supabase || !session) return; // 미인증 시 sync 안 함
   if (typeof value === 'string' && value.length > 5 * 1024 * 1024) {
-    console.warn('[sync] skip huge value:', key);
+    console.warn('[sync] skip huge value:', key, '(' + Math.round(value.length/1024/1024) + 'MB) — 데이터 유실 위험');
+    try {
+      window.__syncSkipped = window.__syncSkipped || {};
+      window.__syncSkipped[key] = { size: value.length, at: new Date().toISOString() };
+      const badge = document.getElementById('syncBadge');
+      if (badge) {
+        const txt = badge.querySelector('.sync-txt');
+        if (txt) txt.textContent = '⚠️ 큰 데이터 차단';
+        badge.dataset.state = 'error';
+      }
+    } catch (e) {}
     return;
   }
   let parsed;
