@@ -8,6 +8,7 @@
 // 자동 트리거: 변경 감지(debounce) / 임포트 직전 / 일일 / 변경 시 강제
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { DataLossPreventionPanel } from "./data-loss-prevention.jsx";
 
 const META_KEY = "jamsa_inv_backup_history";
 const DB_NAME = "jamsaBackups";
@@ -436,6 +437,7 @@ export function BackupManagerModal({ onClose, curUserName }) {
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState(null);
   const [filter, setFilter] = useState({ kind: "all", category: "all", q: "" });
+  const [showDiagnostic, setShowDiagnostic] = useState(false);
 
   const refresh = () => setList(loadMeta());
 
@@ -579,6 +581,10 @@ export function BackupManagerModal({ onClose, curUserName }) {
                 <button type="button" onClick={onManualFull} disabled={busy}
                   style={{padding:"8px 16px",background:"#dc2626",color:"#fff",border:"none",borderRadius:6,fontWeight:700,fontSize:12,cursor:busy?"wait":"pointer"}}>
                   💾 전체 백업 + 다운로드
+                </button>
+                <button type="button" onClick={()=>setShowDiagnostic(true)}
+                  style={{padding:"8px 16px",background:"linear-gradient(135deg,#dc2626,#f59e0b)",color:"#fff",border:"none",borderRadius:6,fontWeight:700,fontSize:12,cursor:"pointer"}}>
+                  🔬 유실 원인 진단 + 재발 방지
                 </button>
               </div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:8}}>
@@ -737,6 +743,7 @@ export function BackupManagerModal({ onClose, curUserName }) {
             <RestoreTab list={list} onPreview={onPreview} onClose={()=>{}} curUserName={curUserName} onRestoreFile={onRestoreFile} refresh={refresh} preview={preview} setPreview={setPreview}/>
           )}
 
+          {showDiagnostic && <DataLossPreventionPanel onClose={()=>setShowDiagnostic(false)}/>}
           {preview && tab !== "restore" && (
             <PreviewModal preview={preview} onClose={()=>setPreview(null)}/>
           )}

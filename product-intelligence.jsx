@@ -521,17 +521,28 @@ function saveLogPhotos(d) { try { localStorage.setItem(LOG_PHOTOS_KEY, JSON.stri
 
 export function LogPhotoStrip({ logId }) {
   const [photos, setPhotos] = useState(() => loadLogPhotos()[logId] || []);
-  const add = (e) => {
+  const add = async (e) => {
     const files = Array.from(e.target.files||[]);
-    Promise.all(files.map(f=>new Promise(res=>{
-      const r=new FileReader(); r.onload=()=>res({id:Date.now()+Math.random(),url:r.result,date:new Date().toISOString(),name:f.name}); r.readAsDataURL(f);
-    }))).then(neu=>{
-      const next = [...photos, ...neu];
-      setPhotos(next);
-      const all = loadLogPhotos();
-      all[logId] = next; saveLogPhotos(all);
-    });
     e.target.value="";
+    // 동적 import로 압축 모듈 로드 (circular import 방지)
+    let compressImage;
+    try { ({ compressImage } = await import("./data-loss-prevention.jsx")); } catch (e) {}
+    const neu = [];
+    for (const f of files) {
+      try {
+        if (compressImage && f.type?.startsWith?.("image/")) {
+          const r = await compressImage(f);
+          neu.push({ id: Date.now()+Math.random(), url: r.dataUrl, date: new Date().toISOString(), name: f.name, compressed: r.ratio<1 });
+        } else {
+          const url = await new Promise(res=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.readAsDataURL(f); });
+          neu.push({ id: Date.now()+Math.random(), url, date: new Date().toISOString(), name: f.name });
+        }
+      } catch (err) { console.warn("photo add failed:", err); }
+    }
+    const next = [...photos, ...neu];
+    setPhotos(next);
+    const all = loadLogPhotos();
+    all[logId] = next; saveLogPhotos(all);
   };
   const del = (id) => {
     const next = photos.filter(p=>p.id!==id);
