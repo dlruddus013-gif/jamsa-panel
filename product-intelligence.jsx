@@ -184,23 +184,148 @@ function PaymentsPanel({ product, matched, all, matchPayment, editPayment }) {
       )}
 
       {tab==="match" && (
-        unmatched.length === 0 ?
-          <div style={{fontSize:10,color:"#94a3b8",textAlign:"center",padding:8}}>모든 통장/카드 거래내역이 이미 매칭됨</div>
-          :
-          <div style={{maxHeight:200,overflowY:"auto"}}>
-            <div style={{fontSize:9,color:"#92400e",background:"#fef3c7",padding:4,borderRadius:3,marginBottom:4}}>💡 클릭하면 이 제품에 매칭됩니다.</div>
-            {unmatched.slice(0,30).map(p => (
-              <button key={p.id} onClick={()=>matchPayment&&matchPayment(p.id, product)}
-                style={{width:"100%",padding:"5px 7px",borderBottom:"1px solid #f1f5f9",fontSize:10,background:"#fff",border:"none",cursor:"pointer",textAlign:"left"}}>
-                <div style={{display:"flex",justifyContent:"space-between"}}>
-                  <strong style={{color:kindColor(p)}}>{kindLabel(p)} 매칭</strong>
-                  <span style={{fontWeight:800}}>{(p.amount||0).toLocaleString()}원</span>
-                </div>
-                <div style={{color:"#64748b"}}>{String(p.date||"").slice(0,10)} · {p.vendor||"-"}{p.memo?` · ${p.memo}`:""}</div>
-              </button>
-            ))}
-          </div>
+        <MatchPicker product={product} unmatched={unmatched} matchPayment={matchPayment} kindLabel={kindLabel} kindColor={kindColor}/>
       )}
+    </div>
+  );
+}
+
+function MatchPicker({ product, unmatched, matchPayment, kindLabel, kindColor }) {
+  const [q, setQ] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [amountMin, setAmountMin] = useState("");
+  const [amountMax, setAmountMax] = useState("");
+  const [sel, setSel] = useState(new Set());
+
+  const filtered = useMemo(() => {
+    const qq = q.trim().toLowerCase();
+    const min = amountMin ? parseInt(amountMin) : null;
+    const max = amountMax ? parseInt(amountMax) : null;
+    return unmatched.filter(p => {
+      if (qq) {
+        const hay = `${p.vendor||""} ${p.memo||""} ${p.ref||""} ${p.amount||""}`.toLowerCase();
+        if (!hay.includes(qq)) return false;
+      }
+      const d = String(p.date||"").slice(0,10);
+      if (dateFrom && d < dateFrom) return false;
+      if (dateTo && d > dateTo) return false;
+      if (typeFilter !== "all") {
+        const t = p.type || p.method;
+        const isCard = t === "card" || t === "카드";
+        const isXfer = t === "transfer" || t === "이체";
+        if (typeFilter === "card" && !isCard) return false;
+        if (typeFilter === "transfer" && !isXfer) return false;
+      }
+      if (min != null && (p.amount||0) < min) return false;
+      if (max != null && (p.amount||0) > max) return false;
+      return true;
+    });
+  }, [unmatched, q, dateFrom, dateTo, typeFilter, amountMin, amountMax]);
+
+  const toggle = (id) => {
+    const next = new Set(sel);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSel(next);
+  };
+  const selectVisible = () => {
+    if (filtered.every(p => sel.has(p.id))) {
+      const next = new Set(sel);
+      filtered.forEach(p => next.delete(p.id));
+      setSel(next);
+    } else {
+      const next = new Set(sel);
+      filtered.forEach(p => next.add(p.id));
+      setSel(next);
+    }
+  };
+
+  const matchSelected = () => {
+    if (sel.size === 0) return alert("매칭할 거래를 선택하세요");
+    if (!confirm(`선택한 ${sel.size}건을 "${product.name}"에 매칭할까요?`)) return;
+    unmatched.filter(p => sel.has(p.id)).forEach(p => matchPayment && matchPayment(p.id, product));
+    setSel(new Set());
+  };
+  const matchAllFiltered = () => {
+    if (filtered.length === 0) return;
+    if (!confirm(`필터된 ${filtered.length}건 전체를 "${product.name}"에 매칭할까요?`)) return;
+    filtered.forEach(p => matchPayment && matchPayment(p.id, product));
+    setSel(new Set());
+  };
+
+  if (unmatched.length === 0) {
+    return <div style={{fontSize:10,color:"#94a3b8",textAlign:"center",padding:8}}>모든 통장/카드 거래내역이 이미 매칭됨</div>;
+  }
+
+  const filteredTotal = filtered.reduce((s,p)=>s+(p.amount||0), 0);
+
+  return (
+    <div>
+      <div style={{padding:6,background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:4,marginBottom:6}}>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 거래처/메모/금액 검색..." style={{...miniInput,width:"100%",marginBottom:4}}/>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4,marginBottom:4}}>
+          <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={miniInput}/>
+          <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={miniInput}/>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:4}}>
+          <select value={typeFilter} onChange={e=>setTypeFilter(e.target.value)} style={miniInput}>
+            <option value="all">전체 유형</option>
+            <option value="card">💳 카드</option>
+            <option value="transfer">🏦 이체</option>
+          </select>
+          <input type="number" value={amountMin} onChange={e=>setAmountMin(e.target.value)} placeholder="최소금액" style={miniInput}/>
+          <input type="number" value={amountMax} onChange={e=>setAmountMax(e.target.value)} placeholder="최대금액" style={miniInput}/>
+        </div>
+      </div>
+
+      <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap",marginBottom:4,fontSize:10}}>
+        <label style={{display:"flex",alignItems:"center",gap:3,cursor:"pointer"}}>
+          <input type="checkbox" checked={filtered.length>0 && filtered.every(p=>sel.has(p.id))} onChange={selectVisible}/>
+          현재 결과
+        </label>
+        <span style={{padding:"1px 6px",background:"#dbeafe",color:"#1e40af",borderRadius:3,fontWeight:800}}>
+          {filtered.length}건 / {filteredTotal.toLocaleString()}원
+        </span>
+        {sel.size > 0 && (
+          <button onClick={matchSelected} style={{padding:"3px 8px",background:"#06b6d4",color:"#fff",border:"none",borderRadius:3,fontSize:10,fontWeight:700,cursor:"pointer"}}>
+            ✓ 선택 매칭 ({sel.size})
+          </button>
+        )}
+        <button onClick={matchAllFiltered} style={{padding:"3px 8px",background:"#f59e0b",color:"#fff",border:"none",borderRadius:3,fontSize:10,fontWeight:700,cursor:"pointer",marginLeft:"auto"}}>
+          🚀 결과 전체 매칭
+        </button>
+      </div>
+
+      <div style={{maxHeight:220,overflowY:"auto",border:"1px solid #f1f5f9",borderRadius:4}}>
+        {filtered.length === 0 ? (
+          <div style={{padding:12,textAlign:"center",fontSize:10,color:"#94a3b8"}}>일치하는 거래가 없습니다</div>
+        ) : (
+          filtered.slice(0, 200).map(p => {
+            const isSel = sel.has(p.id);
+            return (
+              <div key={p.id} style={{padding:"4px 6px",borderBottom:"1px solid #f8fafc",fontSize:10,display:"flex",alignItems:"center",gap:5,background:isSel?"#ecfeff":"#fff"}}>
+                <input type="checkbox" checked={isSel} onChange={()=>toggle(p.id)}/>
+                <div style={{flex:1,minWidth:0,cursor:"pointer"}} onClick={()=>toggle(p.id)}>
+                  <div style={{display:"flex",justifyContent:"space-between"}}>
+                    <strong style={{color:kindColor(p)}}>{kindLabel(p)}</strong>
+                    <span style={{fontWeight:800}}>{(p.amount||0).toLocaleString()}원</span>
+                  </div>
+                  <div style={{color:"#64748b"}}>{String(p.date||"").slice(0,10)} · {p.vendor||"-"}{p.memo?` · ${p.memo}`:""}</div>
+                </div>
+                <button onClick={()=>matchPayment&&matchPayment(p.id, product)}
+                  style={{padding:"2px 7px",background:"#06b6d4",color:"#fff",border:"none",borderRadius:3,fontSize:9,fontWeight:700,cursor:"pointer"}}
+                  title="이 1건만 즉시 매칭">
+                  ＋
+                </button>
+              </div>
+            );
+          })
+        )}
+        {filtered.length > 200 && (
+          <div style={{padding:6,textAlign:"center",fontSize:9,color:"#94a3b8",background:"#f8fafc"}}>처음 200건만 표시 · 검색으로 더 좁히세요</div>
+        )}
+      </div>
     </div>
   );
 }
