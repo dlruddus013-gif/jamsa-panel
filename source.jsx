@@ -14124,17 +14124,117 @@ function BatchAddModal({cats,locs,storageSections,onAdd,onClose}){
   const [cat,setCat]=useState(cats[0]||"기타");
   const [loc,setLoc]=useState(storageSections[0]||locs[0]||"수장고");
   const [text,setText]=useState("");
+  const [excelError,setExcelError]=useState("");
+  const [excelInfo,setExcelInfo]=useState("");
+
   const parseRows=()=>text.split(/\n+/).map(line=>line.trim()).filter(Boolean).map(line=>{const parts=line.split(/\t|,|\|/).map(x=>x.trim());return{name:parts[0]||"",qty:parts[1]||"1",cat:parts[2]||cat,loc:parts[3]||loc,subLoc:parts[4]||"",memo:parts[5]||""};}).filter(r=>r.name);
   const rows=parseRows();
-  return <Modal title="수장고 선반 재고 일괄 등록" onClose={onClose} w={760}>
+
+  // 엑셀 업로드 처리
+  const handleExcel=async(e)=>{
+    const file=e.target.files?.[0];
+    e.target.value="";
+    if(!file)return;
+    setExcelError("");setExcelInfo("⏳ 엑셀 라이브러리 로드 중...");
+    try{
+      const XLSX=await loadXLSX();
+      setExcelInfo("📂 파일 읽는 중...");
+      const buf=await file.arrayBuffer();
+      const wb=XLSX.read(buf,{type:"array"});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      if(!ws){setExcelError("시트를 찾을 수 없습니다");setExcelInfo("");return;}
+      const aoa=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+      if(aoa.length<2){setExcelError("데이터 행이 없습니다 (헤더+1행 이상 필요)");setExcelInfo("");return;}
+      // 헤더 찾기
+      const headers=aoa[0].map(h=>String(h||"").trim().toLowerCase());
+      const col=(names)=>{
+        for(const n of names){const i=headers.findIndex(h=>h.includes(n.toLowerCase()));if(i>=0)return i;}
+        return -1;
+      };
+      const idxName=col(["품목","품명","제품명","name","item"]);
+      const idxQty=col(["수량","qty","개수"]);
+      const idxCat=col(["카테고리","분류","cat","category"]);
+      const idxLoc=col(["위치","loc","location","장소","선반"]);
+      const idxSub=col(["세부","subloc","sub","상세"]);
+      const idxMemo=col(["메모","비고","memo","note"]);
+      if(idxName<0){setExcelError("'품목명' 컬럼을 찾을 수 없습니다. 템플릿 다운로드 후 사용하세요.");setExcelInfo("");return;}
+      const lines=aoa.slice(1).map(row=>{
+        const n=String(row[idxName]||"").trim();
+        if(!n)return null;
+        return [
+          n,
+          String(row[idxQty]??"1").trim()||"1",
+          String(row[idxCat]??cat).trim()||cat,
+          String(row[idxLoc]??loc).trim()||loc,
+          String(row[idxSub]??"").trim(),
+          String(row[idxMemo]??"").trim(),
+        ].join(",");
+      }).filter(Boolean);
+      if(lines.length===0){setExcelError("등록할 행이 없습니다 (품목명이 비어있음)");setExcelInfo("");return;}
+      setText(lines.join("\n"));
+      setExcelInfo(`✅ ${lines.length}개 행 가져옴 (시트: ${wb.SheetNames[0]})`);
+    }catch(err){
+      setExcelError("파싱 실패: "+err.message);setExcelInfo("");
+    }
+  };
+
+  // 엑셀 템플릿 다운로드
+  const downloadTemplate=async()=>{
+    try{
+      const XLSX=await loadXLSX();
+      const wb=XLSX.utils.book_new();
+      const header=["품목명","수량","카테고리","위치","세부위치","메모"];
+      const sample=[
+        ["실버온열워터 900ml","1",cats[0]||"체험",locs[0]||"수장고","2번 선반 1칸","예시 메모"],
+        ["조화 화분","3","전시용","수장고","2번 선반 2칸",""],
+        ["LED 원형 전구","10","조명","수장고","3번 선반",""],
+        ["","","","","",""],
+      ];
+      const ws=XLSX.utils.aoa_to_sheet([header,...sample]);
+      ws["!cols"]=[{wch:24},{wch:8},{wch:14},{wch:18},{wch:18},{wch:24}];
+      // 사용 가능 카테고리/위치를 두 번째 시트에 기입
+      const ws2=XLSX.utils.aoa_to_sheet([
+        ["📋 사용 가능 카테고리"],...cats.map(c=>[c]),
+        [""],
+        ["📍 사용 가능 위치"],...locs.map(l=>[l]),
+      ]);
+      ws2["!cols"]=[{wch:30}];
+      XLSX.utils.book_append_sheet(wb,ws,"재고등록");
+      XLSX.utils.book_append_sheet(wb,ws2,"참조");
+      XLSX.writeFile(wb,`재고일괄등록_템플릿_${new Date().toISOString().slice(0,10)}.xlsx`);
+    }catch(err){
+      alert("템플릿 생성 실패: "+err.message);
+    }
+  };
+
+  return <Modal title="📦 재고 일괄 등록 (엑셀 / 텍스트)" onClose={onClose} w={760}>
     <div style={{display:"grid",gap:10}}>
-      <div style={{padding:10,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8,fontSize:12,color:"#047857",lineHeight:1.55}}>한 줄에 <strong>품목명, 수량, 카테고리, 위치, 세부위치, 메모</strong> 순서로 붙여넣으세요. 품목명만 적으면 기본 카테고리/선반으로 등록됩니다.</div>
+      {/* 엑셀 업로드 + 템플릿 다운로드 */}
+      <div style={{padding:12,background:"linear-gradient(135deg,#eff6ff,#ede9fe)",border:"2px solid #c7d2fe",borderRadius:10}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:8,flexWrap:"wrap"}}>
+          <div style={{fontSize:13,fontWeight:900,color:"#3730a3"}}>📊 엑셀 파일로 한 번에 등록</div>
+          <button type="button" onClick={downloadTemplate} className="btn bs" style={{fontSize:11,padding:"6px 12px",background:"#10b981",color:"#fff",border:"none",fontWeight:700}}>
+            📥 엑셀 양식 다운로드
+          </button>
+        </div>
+        <div style={{fontSize:11,color:"#475569",lineHeight:1.5,marginBottom:8}}>
+          템플릿 받기 → 엑셀에서 채우기 → 여기서 업로드. 컬럼 순서: <strong>품목명 · 수량 · 카테고리 · 위치 · 세부위치 · 메모</strong>
+        </div>
+        <label style={{display:"flex",alignItems:"center",justifyContent:"center",padding:"14px",background:"#fff",border:"2px dashed #818cf8",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:700,color:"#3730a3"}}>
+          📂 .xlsx / .xls / .csv 파일 선택...
+          <input type="file" accept=".xlsx,.xls,.csv" onChange={handleExcel} style={{display:"none"}}/>
+        </label>
+        {excelInfo && <div style={{marginTop:6,fontSize:11,color:"#065f46",fontWeight:700}}>{excelInfo}</div>}
+        {excelError && <div style={{marginTop:6,fontSize:11,color:"#dc2626",fontWeight:700}}>⚠️ {excelError}</div>}
+      </div>
+
+      <div style={{padding:10,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8,fontSize:12,color:"#047857",lineHeight:1.55}}>또는 텍스트로 직접 입력: 한 줄에 <strong>품목명, 수량, 카테고리, 위치, 세부위치, 메모</strong> 순서. 품목명만 적으면 기본값으로 등록.</div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}><label style={{fontSize:11,fontWeight:800,color:"#64748b"}}>기본 카테고리<select className="sel" value={cat} onChange={e=>setCat(e.target.value)} style={{marginTop:4}}>{cats.map(c=><option key={c}>{c}</option>)}</select></label><label style={{fontSize:11,fontWeight:800,color:"#64748b"}}>기본 위치/선반<select className="sel" value={loc} onChange={e=>setLoc(e.target.value)} style={{marginTop:4}}>{locs.map(l=><option key={l}>{l}</option>)}</select></label></div>
-      {storageSections.length>0&&<div style={{display:"flex",gap:5,flexWrap:"wrap"}}>{storageSections.slice(0,12).map(s=><button key={s} className="btn bs" onClick={()=>setLoc(s)} style={{fontSize:10,padding:"4px 7px",background:loc===s?"#e0f2fe":"#fff"}}>{s}</button>)}</div>}
+      {storageSections.length>0&&<div style={{display:"flex",gap:5,flexWrap:"wrap"}}>{storageSections.slice(0,12).map(s=><button type="button" key={s} className="btn bs" onClick={()=>setLoc(s)} style={{fontSize:10,padding:"4px 7px",background:loc===s?"#e0f2fe":"#fff"}}>{s}</button>)}</div>}
       <textarea className="inp" rows={10} value={text} onChange={e=>setText(e.target.value)} placeholder={"실버온열워터 900ml,1,체험,수장고 2번 선반,라벨 1칸\n조화화분,1,전시용,수장고 2번 선반,라벨 2칸\nLED 원형 전구,3,조명/전기,수장고 3번 선반"}/>
       <div style={{fontSize:12,color:"#64748b"}}>미리보기: {rows.length}개 품목</div>
-      {rows.length>0&&<div style={{maxHeight:160,overflow:"auto",border:"1px solid #e5e7eb",borderRadius:8}}>{rows.slice(0,20).map((r,i)=><div key={i} style={{display:"grid",gridTemplateColumns:"1fr 50px 90px 130px 1fr",gap:6,padding:7,borderBottom:"1px solid #f1f5f9",fontSize:11}}><strong>{r.name}</strong><span>{r.qty}</span><span>{r.cat}</span><span>{r.loc}</span><span>{r.subLoc}</span></div>)}</div>}
-      <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}><button className="btn bs" onClick={onClose}>취소</button><button className="btn bp" onClick={()=>onAdd(rows)}>일괄 등록 + QR 생성</button></div>
+      {rows.length>0&&<div style={{maxHeight:160,overflow:"auto",border:"1px solid #e5e7eb",borderRadius:8}}>{rows.slice(0,20).map((r,i)=><div key={i} style={{display:"grid",gridTemplateColumns:"1fr 50px 90px 130px 1fr",gap:6,padding:7,borderBottom:"1px solid #f1f5f9",fontSize:11}}><strong>{r.name}</strong><span>{r.qty}</span><span>{r.cat}</span><span>{r.loc}</span><span>{r.subLoc}</span></div>)}{rows.length>20&&<div style={{padding:6,fontSize:10,color:"#94a3b8",textAlign:"center"}}>+{rows.length-20}개 더</div>}</div>}
+      <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}><button type="button" className="btn bs" onClick={onClose}>취소</button><button type="button" className="btn bp" onClick={()=>onAdd(rows)} disabled={rows.length===0}>📦 {rows.length}개 일괄 등록 + QR 생성</button></div>
     </div>
   </Modal>;
 }
