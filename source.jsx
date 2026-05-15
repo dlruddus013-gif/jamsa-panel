@@ -147,6 +147,32 @@ const applyInventoryHashRestore = () => {
 };
 applyInventoryHashRestore();
 
+const applyInventoryFileRestore = async () => {
+  try {
+    if (typeof window === "undefined" || !window.location?.hash) return null;
+    const prefix = "#restoreInventoryFile=";
+    if (!window.location.hash.startsWith(prefix)) return null;
+    const url = decodeURIComponent(window.location.hash.slice(prefix.length));
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error(`restore file ${res.status}`);
+    const items = await res.json();
+    if (!Array.isArray(items) || items.length === 0) return null;
+    const current = safeJsonParse(window.localStorage?.getItem(INV_KEY) || "[]", []);
+    saveInventoryAutoBackup(current, "before-file-restore");
+    window.localStorage?.setItem(INV_KEY, JSON.stringify(items));
+    window.localStorage?.setItem("jamsa_inv_recovered_at", new Date().toISOString());
+    window.sessionStorage?.setItem("jamsa_inv_restore_notice", `${items.length}개 재고 복구 완료`);
+    window.history?.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+    return { items };
+  } catch (e) {
+    console.warn("[inventory restore file] failed:", e.message);
+    return null;
+  }
+};
+applyInventoryFileRestore().then(restored => {
+  if (restored?.items) setTimeout(() => window.location.reload(), 80);
+});
+
 const collectInventoryRecoveryCandidates = () => {
   const candidates = [];
   const addCandidate = (source, label, items, meta = {}) => {
@@ -6277,6 +6303,11 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
       }, 300);
     };
     applyRestore();
+    applyInventoryFileRestore().then(restored => {
+      if (!restored?.items) return;
+      setProds(restored.items);
+      setHist(prev => [{ id: Date.now(), t: new Date().toLocaleString(), type: "재고복구", name: "복구 파일", note: `${restored.items.length}개 품목 복구`, qty: restored.items.length }, ...prev].slice(0, 500));
+    });
     window.addEventListener("hashchange", applyRestore);
     return () => window.removeEventListener("hashchange", applyRestore);
   }, [setProds, setHist]);
