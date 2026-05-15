@@ -101,7 +101,7 @@ export function ProductIntelInline({ product, requisitions = [], payments = [], 
 function PanelCard({ title, sub, color, open, onToggle, children, wide }) {
   return (
     <div style={{gridColumn:wide?"1 / -1":"auto",background:"#fff",border:`1px solid ${color}33`,borderRadius:8,overflow:"hidden"}}>
-      <button onClick={onToggle}
+      <button type="button" onClick={onToggle}
         style={{width:"100%",padding:"8px 10px",background:`linear-gradient(90deg,${color}11,#fff)`,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
         <div style={{textAlign:"left",minWidth:0,flex:1}}>
           <div style={{fontSize:12,fontWeight:800,color}}>{title}</div>
@@ -141,8 +141,8 @@ function PaymentsPanel({ product, matched, all, matchPayment, editPayment }) {
   return (
     <div>
       <div style={{display:"flex",gap:3,marginBottom:6,fontSize:10}}>
-        <button onClick={()=>setTab("matched")} style={pillBtn(tab==="matched","#06b6d4")}>매칭됨 ({matched.length})</button>
-        <button onClick={()=>setTab("match")} style={pillBtn(tab==="match","#f59e0b")}>📂 통장 매칭 ({unmatched.length})</button>
+        <button type="button" onClick={()=>setTab("matched")} style={pillBtn(tab==="matched","#06b6d4")}>매칭됨 ({matched.length})</button>
+        <button type="button" onClick={()=>setTab("match")} style={pillBtn(tab==="match","#f59e0b")}>📂 통장 매칭 ({unmatched.length})</button>
       </div>
 
       {tab==="matched" && (
@@ -162,9 +162,9 @@ function PaymentsPanel({ product, matched, all, matchPayment, editPayment }) {
                 </div>
                 <input value={draft.memo} onChange={e=>setDraft({...draft,memo:e.target.value})} placeholder="메모" style={{...miniInput,width:"100%",marginBottom:4}}/>
                 <div style={{display:"flex",gap:4,justifyContent:"flex-end"}}>
-                  <button onClick={()=>setEditing(null)} style={{padding:"3px 8px",fontSize:9,background:"#f1f5f9",border:"none",borderRadius:3,cursor:"pointer"}}>취소</button>
-                  <button onClick={()=>matchPayment&&matchPayment(p.id,null)} style={{padding:"3px 8px",fontSize:9,background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:3,cursor:"pointer",fontWeight:700}}>매칭 해제</button>
-                  <button onClick={()=>saveEdit(p.id)} style={{padding:"3px 8px",fontSize:9,background:"#3b82f6",color:"#fff",border:"none",borderRadius:3,cursor:"pointer",fontWeight:700}}>💾 저장</button>
+                  <button type="button" onClick={()=>setEditing(null)} style={{padding:"3px 8px",fontSize:9,background:"#f1f5f9",border:"none",borderRadius:3,cursor:"pointer"}}>취소</button>
+                  <button type="button" onClick={()=>matchPayment&&matchPayment(p.id,null)} style={{padding:"3px 8px",fontSize:9,background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:3,cursor:"pointer",fontWeight:700}}>매칭 해제</button>
+                  <button type="button" onClick={()=>saveEdit(p.id)} style={{padding:"3px 8px",fontSize:9,background:"#3b82f6",color:"#fff",border:"none",borderRadius:3,cursor:"pointer",fontWeight:700}}>💾 저장</button>
                 </div>
               </div>
             ) : (
@@ -177,7 +177,7 @@ function PaymentsPanel({ product, matched, all, matchPayment, editPayment }) {
                   <div style={{color:"#64748b"}}>{String(p.date||"").slice(0,10)} · {p.vendor||"-"}{p.memo?` · ${p.memo}`:""}</div>
                   {(p.editLog||[]).length>0 && <span style={{fontSize:8,color:"#92400e",background:"#fef3c7",padding:"1px 4px",borderRadius:3,fontWeight:700}}>🕒 {p.editLog.length}회 수정</span>}
                 </div>
-                <button onClick={()=>startEdit(p)} style={{padding:"2px 6px",background:"#eff6ff",color:"#1e40af",border:"none",borderRadius:3,fontSize:9,cursor:"pointer",fontWeight:700}}>✏️</button>
+                <button type="button" onClick={()=>startEdit(p)} style={{padding:"2px 6px",background:"#eff6ff",color:"#1e40af",border:"none",borderRadius:3,fontSize:9,cursor:"pointer",fontWeight:700}}>✏️</button>
               </div>
             ))}
           </div>
@@ -288,11 +288,11 @@ function MatchPicker({ product, unmatched, matchPayment, kindLabel, kindColor })
           {filtered.length}건 / {filteredTotal.toLocaleString()}원
         </span>
         {sel.size > 0 && (
-          <button onClick={matchSelected} style={{padding:"3px 8px",background:"#06b6d4",color:"#fff",border:"none",borderRadius:3,fontSize:10,fontWeight:700,cursor:"pointer"}}>
+          <button type="button" onClick={matchSelected} style={{padding:"3px 8px",background:"#06b6d4",color:"#fff",border:"none",borderRadius:3,fontSize:10,fontWeight:700,cursor:"pointer"}}>
             ✓ 선택 매칭 ({sel.size})
           </button>
         )}
-        <button onClick={matchAllFiltered} style={{padding:"3px 8px",background:"#f59e0b",color:"#fff",border:"none",borderRadius:3,fontSize:10,fontWeight:700,cursor:"pointer",marginLeft:"auto"}}>
+        <button type="button" onClick={matchAllFiltered} style={{padding:"3px 8px",background:"#f59e0b",color:"#fff",border:"none",borderRadius:3,fontSize:10,fontWeight:700,cursor:"pointer",marginLeft:"auto"}}>
           🚀 결과 전체 매칭
         </button>
       </div>
@@ -313,8 +313,8 @@ function MatchPicker({ product, unmatched, matchPayment, kindLabel, kindColor })
                   </div>
                   <div style={{color:"#64748b"}}>{String(p.date||"").slice(0,10)} · {p.vendor||"-"}{p.memo?` · ${p.memo}`:""}</div>
                 </div>
-                <button onClick={()=>matchPayment&&matchPayment(p.id, product)}
-                  style={{padding:"2px 7px",background:"#06b6d4",color:"#fff",border:"none",borderRadius:3,fontSize:9,fontWeight:700,cursor:"pointer"}}
+                <button type="button" onClick={(e)=>{e.stopPropagation(); matchPayment&&matchPayment(p.id, product);}}
+                  style={{padding:"6px 12px",background:"#06b6d4",color:"#fff",border:"none",borderRadius:5,fontSize:13,fontWeight:900,cursor:"pointer",minWidth:36,minHeight:28,boxShadow:"0 1px 3px rgba(0,0,0,0.15)"}}
                   title="이 1건만 즉시 매칭">
                   ＋
                 </button>
@@ -410,17 +410,17 @@ function CompactComms({ intel, update, curUser }) {
         {draft.attachments.map((a,i)=>(
           <span key={i} style={{padding:"2px 6px",background:"#f1f5f9",borderRadius:4,fontSize:9,display:"flex",alignItems:"center",gap:3}}>
             {a.type.startsWith("image/")?"🖼️":"📎"}{a.name.slice(0,10)}
-            <button onClick={()=>setDraft({...draft,attachments:draft.attachments.filter((_,j)=>j!==i)})} style={{border:"none",background:"none",cursor:"pointer",color:"#dc2626"}}>✕</button>
+            <button type="button" onClick={()=>setDraft({...draft,attachments:draft.attachments.filter((_,j)=>j!==i)})} style={{border:"none",background:"none",cursor:"pointer",color:"#dc2626"}}>✕</button>
           </span>
         ))}
-        <button onClick={add} style={{marginLeft:"auto",padding:"5px 12px",background:"#7c3aed",color:"#fff",border:"none",borderRadius:5,fontSize:11,fontWeight:700,cursor:"pointer"}}>＋ 추가</button>
+        <button type="button" onClick={add} style={{marginLeft:"auto",padding:"5px 12px",background:"#7c3aed",color:"#fff",border:"none",borderRadius:5,fontSize:11,fontWeight:700,cursor:"pointer"}}>＋ 추가</button>
       </div>
       <div style={{maxHeight:160,overflowY:"auto"}}>
         {(intel.comms||[]).slice(0,8).map(c=>(
           <div key={c.id} style={{padding:5,borderBottom:"1px solid #f1f5f9",fontSize:10}}>
             <div style={{display:"flex",justifyContent:"space-between"}}>
               <strong style={{color:"#5b21b6"}}>{commIcon(c.kind)} {commLabel(c.kind)} · {c.direction==="in"?"수신":"발신"} · {c.with==="manager"?"담당자":c.with==="seller"?"판매자":"기타"}</strong>
-              <button onClick={()=>remove(c.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#dc2626",fontSize:10}}>🗑️</button>
+              <button type="button" onClick={()=>remove(c.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#dc2626",fontSize:10}}>🗑️</button>
             </div>
             {c.subject && <div style={{fontWeight:700,color:"#0f172a"}}>{c.subject}</div>}
             <div style={{color:"#475569",whiteSpace:"pre-wrap"}}>{c.text}</div>
@@ -454,7 +454,7 @@ function CompactAI({ product, intel, update, onTriggerAI }) {
   };
   return (
     <div>
-      <button onClick={run} disabled={busy}
+      <button type="button" onClick={run} disabled={busy}
         style={{width:"100%",padding:"7px",background:"linear-gradient(135deg,#7c3aed,#3b82f6)",color:"#fff",border:"none",borderRadius:5,fontWeight:700,fontSize:11,cursor:busy?"wait":"pointer",opacity:busy?0.7:1,marginBottom:8}}>
         {busy?"⏳ 분석 중...":"🚀 AI 분석 실행 (Claude Opus 4.7)"}
       </button>
@@ -495,7 +495,7 @@ function CompactSavings({ intel, update, curUser }) {
       <input value={draft.title} onChange={e=>setDraft({...draft,title:e.target.value})} placeholder="절감 제목" style={{...miniInput,width:"100%",marginBottom:4}}/>
       <div style={{display:"flex",gap:4,marginBottom:4}}>
         <input type="number" value={draft.amount} onChange={e=>setDraft({...draft,amount:e.target.value})} placeholder="금액(원)" style={{...miniInput,flex:1}}/>
-        <button onClick={add} style={{padding:"5px 12px",background:"#10b981",color:"#fff",border:"none",borderRadius:5,fontSize:11,fontWeight:700,cursor:"pointer"}}>＋</button>
+        <button type="button" onClick={add} style={{padding:"5px 12px",background:"#10b981",color:"#fff",border:"none",borderRadius:5,fontSize:11,fontWeight:700,cursor:"pointer"}}>＋</button>
       </div>
       <input value={draft.reason} onChange={e=>setDraft({...draft,reason:e.target.value})} placeholder="사유" style={{...miniInput,width:"100%",marginBottom:4}}/>
       <div style={{maxHeight:120,overflowY:"auto"}}>
@@ -506,7 +506,7 @@ function CompactSavings({ intel, update, curUser }) {
               {s.reason && <div style={{color:"#64748b",fontSize:9}}>{s.reason}</div>}
               <div style={{color:"#94a3b8",fontSize:9}}>{String(s.at||"").slice(0,10)} · {s.by}</div>
             </div>
-            <button onClick={()=>remove(s.id)} style={{background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:10}}>🗑️</button>
+            <button type="button" onClick={()=>remove(s.id)} style={{background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:10}}>🗑️</button>
           </div>
         ))}
       </div>
@@ -545,7 +545,7 @@ export function LogPhotoStrip({ logId }) {
       {photos.map(p=>(
         <div key={p.id} style={{position:"relative"}}>
           <a href={p.url} target="_blank" rel="noreferrer"><img src={p.url} style={{width:28,height:28,objectFit:"cover",borderRadius:3,border:"1px solid #e5e7eb"}}/></a>
-          <button onClick={()=>del(p.id)} style={{position:"absolute",top:-4,right:-4,width:14,height:14,background:"#dc2626",color:"#fff",border:"none",borderRadius:"50%",fontSize:8,cursor:"pointer",lineHeight:"14px",padding:0}}>✕</button>
+          <button type="button" onClick={()=>del(p.id)} style={{position:"absolute",top:-4,right:-4,width:14,height:14,background:"#dc2626",color:"#fff",border:"none",borderRadius:"50%",fontSize:8,cursor:"pointer",lineHeight:"14px",padding:0}}>✕</button>
         </div>
       ))}
       <label style={{padding:"2px 6px",background:"#f1f5f9",borderRadius:3,fontSize:9,cursor:"pointer",color:"#475569",fontWeight:700,border:"1px dashed #cbd5e1"}}>
@@ -630,7 +630,7 @@ export function ProductIntelligenceModal({ product, hist = [], requisitions = []
               [{product.code}] · {product.cat} · {product.loc} · 재고 {product.qty} · 누적 이벤트 {timeline.length}건
             </div>
           </div>
-          <button onClick={onClose} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",fontSize:18,padding:"4px 12px",borderRadius:6,cursor:"pointer"}}>✕</button>
+          <button type="button" onClick={onClose} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",fontSize:18,padding:"4px 12px",borderRadius:6,cursor:"pointer"}}>✕</button>
         </div>
 
         {/* 탭 */}
@@ -744,7 +744,7 @@ function AIAnalysisTab({ product, intel, update, onTriggerAI }) {
           <div style={{fontSize:13,fontWeight:800}}>Claude AI 기반 자동 분석</div>
           <div style={{fontSize:11,color:"#64748b"}}>최저가 비교 · 관리요령 · 원가 분석을 한 번에</div>
         </div>
-        <button onClick={runAnalysis} disabled={busy}
+        <button type="button" onClick={runAnalysis} disabled={busy}
           style={{padding:"8px 16px",background:"linear-gradient(135deg,#7c3aed,#3b82f6)",color:"#fff",border:"none",borderRadius:6,fontWeight:700,fontSize:12,cursor:busy?"wait":"pointer",opacity:busy?0.7:1}}>
           {busy ? "⏳ 분석 중..." : "🚀 분석 실행"}
         </button>
@@ -931,13 +931,13 @@ function CommsTab({ intel, update, curUser }) {
               <div key={i} style={{padding:4,background:"#f1f5f9",borderRadius:5,fontSize:10,display:"flex",alignItems:"center",gap:4}}>
                 {a.type.startsWith("image/") ? <img src={a.dataUrl} style={{width:30,height:30,objectFit:"cover",borderRadius:3}}/> : <span>📎</span>}
                 <span>{a.name}</span>
-                <button onClick={()=>setDraft({...draft,attachments:draft.attachments.filter((_,j)=>j!==i)})}
+                <button type="button" onClick={()=>setDraft({...draft,attachments:draft.attachments.filter((_,j)=>j!==i)})}
                   style={{background:"none",border:"none",cursor:"pointer",color:"#dc2626"}}>✕</button>
               </div>
             ))}
           </div>
         )}
-        <button onClick={add} style={{marginTop:10,padding:"8px 16px",background:"#7c3aed",color:"#fff",border:"none",borderRadius:6,fontWeight:700,fontSize:12,cursor:"pointer",width:"100%"}}>
+        <button type="button" onClick={add} style={{marginTop:10,padding:"8px 16px",background:"#7c3aed",color:"#fff",border:"none",borderRadius:6,fontWeight:700,fontSize:12,cursor:"pointer",width:"100%"}}>
           💾 기록 추가
         </button>
       </div>
@@ -969,7 +969,7 @@ function CommsTab({ intel, update, curUser }) {
                 )}
                 <div style={{fontSize:9,color:"#94a3b8",marginTop:6}}>{new Date(c.at).toLocaleString("ko-KR")} · {c.by}</div>
               </div>
-              <button onClick={()=>remove(c.id)} style={{padding:"3px 8px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:4,fontSize:10,cursor:"pointer"}}>🗑️</button>
+              <button type="button" onClick={()=>remove(c.id)} style={{padding:"3px 8px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:4,fontSize:10,cursor:"pointer"}}>🗑️</button>
             </div>
           </div>
         ))
@@ -1018,7 +1018,7 @@ function SavingsTab({ intel, update, curUser }) {
         <Field label="제목"><Inp value={draft.title} onChange={v=>setDraft({...draft,title:v})} placeholder="예: 대안 공급사 발굴"/></Field>
         <Field label="절감액 (원)"><Inp type="number" value={draft.amount} onChange={v=>setDraft({...draft,amount:v})}/></Field>
         <Field label="사유"><textarea value={draft.reason} onChange={e=>setDraft({...draft,reason:e.target.value})} style={{...inputStyle,minHeight:50}}/></Field>
-        <button onClick={add} style={{marginTop:8,padding:"8px 16px",background:"#10b981",color:"#fff",border:"none",borderRadius:6,fontWeight:700,fontSize:12,cursor:"pointer",width:"100%"}}>
+        <button type="button" onClick={add} style={{marginTop:8,padding:"8px 16px",background:"#10b981",color:"#fff",border:"none",borderRadius:6,fontWeight:700,fontSize:12,cursor:"pointer",width:"100%"}}>
           💾 절감 기록 추가
         </button>
       </div>
@@ -1031,7 +1031,7 @@ function SavingsTab({ intel, update, curUser }) {
             {s.reason && <div style={{fontSize:10,color:"#64748b",marginTop:4}}>{s.reason}</div>}
             <div style={{fontSize:9,color:"#94a3b8",marginTop:4}}>{new Date(s.at).toLocaleString("ko-KR")} · {s.by}</div>
           </div>
-          <button onClick={()=>remove(s.id)} style={{padding:"3px 8px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:4,fontSize:10,cursor:"pointer",alignSelf:"flex-start"}}>🗑️</button>
+          <button type="button" onClick={()=>remove(s.id)} style={{padding:"3px 8px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:4,fontSize:10,cursor:"pointer",alignSelf:"flex-start"}}>🗑️</button>
         </div>
       ))}
     </div>
