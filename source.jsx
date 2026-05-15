@@ -19639,11 +19639,26 @@ function WorklogStaffCalendar({ staffList, tasks, selectedStaffId, setSelectedSt
 }
 
 function WorklogStaffSettings({ staffList, setStaffList, reminderSettings, setReminderSettings, reminderLog, onSendNow }) {
+  const [detailStaffId, setDetailStaffId] = useState(null);
   const updateStaff = (id, patch) => setStaffList(prev => prev.map(s => s.id === id ? { ...s, ...patch } : s));
-  const addStaff = () => setStaffList(prev => [...prev, { id: `staff-${Date.now()}`, name: "신규 직원", role: "직원", phone: "", active: true, notifySms: false, notifyApp: true }]);
+  const addStaff = () => {
+    const id = `staff-${Date.now()}`;
+    setStaffList(prev => [...prev, {
+      id,
+      name: "신규 직원",
+      role: "직원",
+      phone: "",
+      active: true,
+      notifySms: false,
+      notifyApp: true,
+      profile: { employeeNo: "", dept: "", position: "", hireDate: "", employmentType: "정규", email: "", birthDate: "", address: "", workArea: "", mainDuties: "", emergencyName: "", emergencyRelation: "", emergencyPhone: "", certificates: "", trainings: "", healthMemo: "", memo: "" },
+    }]);
+    setDetailStaffId(id);
+  };
   const removeStaff = (id) => setStaffList(prev => prev.filter(s => s.id !== id));
   const updateSettings = (patch) => setReminderSettings(prev => ({ ...prev, ...patch }));
   const updateSmsConfig = (patch) => setReminderSettings(prev => ({ ...prev, smsConfig: { ...(prev.smsConfig || {}), ...patch } }));
+  const detailStaff = staffList.find(s => s.id === detailStaffId);
   return (
     <div style={{ display: "grid", gap: 14 }}>
       <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
@@ -19652,13 +19667,14 @@ function WorklogStaffSettings({ staffList, setStaffList, reminderSettings, setRe
           <button onClick={addStaff} style={{ marginLeft: "auto", padding: "8px 12px", border: "none", borderRadius: 8, background: "#2563eb", color: "#fff", fontWeight: 900, cursor: "pointer" }}>직원 추가</button>
         </div>
         <div style={{ display: "grid", gap: 8 }}>
-          {staffList.map(s => <div key={s.id} style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr 80px 80px 80px 70px", gap: 8, alignItems: "center" }}>
+          {staffList.map(s => <div key={s.id} style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr 80px 80px 80px 82px 70px", gap: 8, alignItems: "center" }}>
             <input value={s.name} onChange={e => updateStaff(s.id, { name: e.target.value })} style={{ padding: 8, border: "1px solid #cbd5e1", borderRadius: 8 }} />
             <input value={s.role} onChange={e => updateStaff(s.id, { role: e.target.value })} style={{ padding: 8, border: "1px solid #cbd5e1", borderRadius: 8 }} />
             <input value={s.phone || ""} onChange={e => updateStaff(s.id, { phone: e.target.value.replace(/[^0-9]/g, "") })} placeholder="010..." style={{ padding: 8, border: "1px solid #cbd5e1", borderRadius: 8 }} />
             <label style={{ fontSize: 12, fontWeight: 800 }}><input type="checkbox" checked={s.active !== false} onChange={e => updateStaff(s.id, { active: e.target.checked })} /> 사용</label>
             <label style={{ fontSize: 12, fontWeight: 800 }}><input type="checkbox" checked={s.notifyApp !== false} onChange={e => updateStaff(s.id, { notifyApp: e.target.checked })} /> 앱</label>
             <label style={{ fontSize: 12, fontWeight: 800 }}><input type="checkbox" checked={!!s.notifySms} onChange={e => updateStaff(s.id, { notifySms: e.target.checked })} /> 문자</label>
+            <button onClick={() => setDetailStaffId(s.id)} style={{ padding: 8, border: "1px solid #bfdbfe", borderRadius: 8, background: "#eff6ff", color: "#1d4ed8", fontWeight: 900, cursor: "pointer" }}>상세</button>
             <button onClick={() => removeStaff(s.id)} style={{ padding: 8, border: "1px solid #fecaca", borderRadius: 8, background: "#fff1f2", color: "#dc2626", fontWeight: 900, cursor: "pointer" }}>삭제</button>
           </div>)}
         </div>
@@ -19683,6 +19699,92 @@ function WorklogStaffSettings({ staffList, setStaffList, reminderSettings, setRe
         {(reminderLog || []).length === 0 ? <div style={{ padding: 24, color: "#94a3b8", textAlign: "center" }}>아직 발송 기록이 없습니다.</div> : (reminderLog || []).slice(0, 30).map(r => <div key={r.id} style={{ padding: 10, borderBottom: "1px solid #f1f5f9", fontSize: 12 }}>
           <b>{new Date(r.at).toLocaleString("ko-KR")}</b> · {r.staffName} · {r.title} · 앱 {r.appOk ? "성공" : "미전송"} · SMS {r.smsOk ? "성공" : (r.smsError || "미전송")}
         </div>)}
+      </div>
+      {detailStaff && <WorklogStaffDetailModal staff={detailStaff} onClose={() => setDetailStaffId(null)} onSave={(patch) => { updateStaff(detailStaff.id, patch); setDetailStaffId(null); }} />}
+    </div>
+  );
+}
+
+function WorklogStaffDetailModal({ staff, onClose, onSave }) {
+  const [draft, setDraft] = useState(() => ({ ...staff, profile: { ...(staff.profile || {}) } }));
+  const setRoot = (key, value) => setDraft(prev => ({ ...prev, [key]: value }));
+  const setProfile = (key, value) => setDraft(prev => ({ ...prev, profile: { ...(prev.profile || {}), [key]: value } }));
+  const profile = draft.profile || {};
+  const onPhoto = (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setProfile("photo", reader.result);
+    reader.readAsDataURL(file);
+  };
+  const inputStyle = { padding: 9, border: "1px solid #cbd5e1", borderRadius: 8, fontFamily: "inherit", width: "100%" };
+  const labelStyle = { display: "grid", gap: 5, fontSize: 12, fontWeight: 900, color: "#334155" };
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 10020, background: "rgba(15,23,42,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ width: "min(980px, 96vw)", maxHeight: "90vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 24px 60px rgba(15,23,42,0.35)" }}>
+        <div style={{ position: "sticky", top: 0, zIndex: 1, background: "#fff", borderBottom: "1px solid #e5e7eb", padding: "14px 18px", display: "flex", alignItems: "center", gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 950, color: "#0f172a" }}>직원 신상 상세</div>
+            <div style={{ fontSize: 12, color: "#64748b" }}>기본 인적사항, 근무 정보, 비상연락망, 자격/교육 이력을 직원별로 저장합니다.</div>
+          </div>
+          <button onClick={onClose} style={{ marginLeft: "auto", padding: "8px 12px", border: "1px solid #e5e7eb", borderRadius: 8, background: "#fff", fontWeight: 900, cursor: "pointer" }}>닫기</button>
+          <button onClick={() => onSave(draft)} style={{ padding: "8px 14px", border: "none", borderRadius: 8, background: "#2563eb", color: "#fff", fontWeight: 900, cursor: "pointer" }}>저장</button>
+        </div>
+        <div style={{ padding: 18, display: "grid", gridTemplateColumns: "180px 1fr", gap: 18 }}>
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, alignSelf: "start", background: "#f8fafc" }}>
+            <div style={{ width: 132, height: 132, margin: "0 auto", borderRadius: 16, overflow: "hidden", background: "#e2e8f0", border: "1px solid #cbd5e1", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 36, fontWeight: 950, color: "#64748b" }}>
+              {profile.photo ? <img src={profile.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : (draft.name || "?").slice(0, 1)}
+            </div>
+            <label style={{ marginTop: 10, display: "block", textAlign: "center", padding: "8px 10px", borderRadius: 8, background: "#fff", border: "1px solid #cbd5e1", color: "#1d4ed8", fontWeight: 900, cursor: "pointer" }}>
+              사진 등록
+              <input type="file" accept="image/*" onChange={e => onPhoto(e.target.files?.[0])} style={{ display: "none" }} />
+            </label>
+            <div style={{ marginTop: 10, fontSize: 11, color: "#64748b", lineHeight: 1.5 }}>사진은 이 브라우저 저장소에만 보관됩니다. 민감정보는 필요한 범위만 입력하세요.</div>
+          </div>
+          <div style={{ display: "grid", gap: 16 }}>
+            <section style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
+              <div style={{ fontSize: 14, fontWeight: 950, marginBottom: 10 }}>기본 신상</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+                <label style={labelStyle}>성명<input style={inputStyle} value={draft.name || ""} onChange={e => setRoot("name", e.target.value)} /></label>
+                <label style={labelStyle}>직원번호<input style={inputStyle} value={profile.employeeNo || ""} onChange={e => setProfile("employeeNo", e.target.value)} /></label>
+                <label style={labelStyle}>생년월일<input type="date" style={inputStyle} value={profile.birthDate || ""} onChange={e => setProfile("birthDate", e.target.value)} /></label>
+                <label style={labelStyle}>휴대폰<input style={inputStyle} value={draft.phone || ""} onChange={e => setRoot("phone", e.target.value.replace(/[^0-9]/g, ""))} placeholder="010..." /></label>
+                <label style={labelStyle}>이메일<input type="email" style={inputStyle} value={profile.email || ""} onChange={e => setProfile("email", e.target.value)} /></label>
+                <label style={labelStyle}>주소<input style={inputStyle} value={profile.address || ""} onChange={e => setProfile("address", e.target.value)} /></label>
+              </div>
+            </section>
+            <section style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
+              <div style={{ fontSize: 14, fontWeight: 950, marginBottom: 10 }}>근무/담당 정보</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+                <label style={labelStyle}>권한/직무<input style={inputStyle} value={draft.role || ""} onChange={e => setRoot("role", e.target.value)} /></label>
+                <label style={labelStyle}>부서<input style={inputStyle} value={profile.dept || ""} onChange={e => setProfile("dept", e.target.value)} /></label>
+                <label style={labelStyle}>직책<input style={inputStyle} value={profile.position || ""} onChange={e => setProfile("position", e.target.value)} /></label>
+                <label style={labelStyle}>입사일<input type="date" style={inputStyle} value={profile.hireDate || ""} onChange={e => setProfile("hireDate", e.target.value)} /></label>
+                <label style={labelStyle}>고용형태<select style={inputStyle} value={profile.employmentType || "정규"} onChange={e => setProfile("employmentType", e.target.value)}><option>정규</option><option>계약</option><option>파트타임</option><option>일용</option><option>외주</option></select></label>
+                <label style={labelStyle}>주 담당구역<input style={inputStyle} value={profile.workArea || ""} onChange={e => setProfile("workArea", e.target.value)} placeholder="예: 수장고 B-2" /></label>
+              </div>
+              <label style={{ ...labelStyle, marginTop: 10 }}>주요 담당업무<textarea style={{ ...inputStyle, minHeight: 70, resize: "vertical" }} value={profile.mainDuties || ""} onChange={e => setProfile("mainDuties", e.target.value)} /></label>
+            </section>
+            <section style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
+              <div style={{ fontSize: 14, fontWeight: 950, marginBottom: 10 }}>비상연락/자격</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+                <label style={labelStyle}>비상연락 성명<input style={inputStyle} value={profile.emergencyName || ""} onChange={e => setProfile("emergencyName", e.target.value)} /></label>
+                <label style={labelStyle}>관계<input style={inputStyle} value={profile.emergencyRelation || ""} onChange={e => setProfile("emergencyRelation", e.target.value)} /></label>
+                <label style={labelStyle}>비상연락처<input style={inputStyle} value={profile.emergencyPhone || ""} onChange={e => setProfile("emergencyPhone", e.target.value.replace(/[^0-9]/g, ""))} /></label>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                <label style={labelStyle}>자격/면허<textarea style={{ ...inputStyle, minHeight: 70, resize: "vertical" }} value={profile.certificates || ""} onChange={e => setProfile("certificates", e.target.value)} placeholder="예: 소방안전관리, 응급처치, 전기 관련" /></label>
+                <label style={labelStyle}>교육 이수<textarea style={{ ...inputStyle, minHeight: 70, resize: "vertical" }} value={profile.trainings || ""} onChange={e => setProfile("trainings", e.target.value)} placeholder="예: 산업안전교육 2026-05-15" /></label>
+              </div>
+            </section>
+            <section style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
+              <div style={{ fontSize: 14, fontWeight: 950, marginBottom: 10 }}>관리 메모</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <label style={labelStyle}>건강/주의사항<textarea style={{ ...inputStyle, minHeight: 80, resize: "vertical" }} value={profile.healthMemo || ""} onChange={e => setProfile("healthMemo", e.target.value)} /></label>
+                <label style={labelStyle}>기타 메모<textarea style={{ ...inputStyle, minHeight: 80, resize: "vertical" }} value={profile.memo || ""} onChange={e => setProfile("memo", e.target.value)} /></label>
+              </div>
+            </section>
+          </div>
+        </div>
       </div>
     </div>
   );
