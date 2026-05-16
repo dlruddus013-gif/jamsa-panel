@@ -29,12 +29,31 @@ const JAMSA_PROTECTED_KEYS = [
   "jamsa_categories",
   "jamsa_requisitions",
   "jamsa_payments",
+  "jamsa_cctv_snap_server",
+  "jamsa_cctv_zone_map",
+  "jamsa_cctv_offsets",
+  "jamsa_cctv_guard_url",
 ];
 const JAMSA_PROTECTION_SNAPSHOTS_KEY = "jamsa_data_protection_snapshots";
 const JAMSA_PROTECTION_LAST_GOOD_KEY = "jamsa_data_protection_last_good";
 
+const rawLocalStorageGet = (key) => {
+  const nativeGet = window.__jamsaNativeLocalStorageGetItem || Storage.prototype.getItem;
+  return nativeGet.call(window.localStorage, key);
+};
+
 const getStorageRaw = (key) => {
-  try { return window.localStorage?.getItem(key); } catch (e) { return null; }
+  try { return rawLocalStorageGet(key); } catch (e) { return null; }
+};
+
+const rawLocalStorageSet = (key, value) => {
+  const nativeSet = window.__jamsaNativeLocalStorageSetItem || Storage.prototype.setItem;
+  nativeSet.call(window.localStorage, key, value);
+};
+
+const rawLocalStorageClear = () => {
+  const nativeClear = window.__jamsaNativeLocalStorageClear || Storage.prototype.clear;
+  nativeClear.call(window.localStorage);
 };
 
 const parseStorageValue = (raw) => {
@@ -50,6 +69,8 @@ const protectedValueCount = (value) => {
 };
 
 const protectedValueIsEmpty = (value) => protectedValueCount(value) === 0;
+
+const serializeStorageValue = (value) => (typeof value === "string" ? value : JSON.stringify(value));
 
 const collectProtectedData = () => {
   const data = {};
@@ -88,8 +109,8 @@ const saveDataProtectionSnapshot = (reason = "manual", opts = {}) => {
     const last = Array.isArray(prev) ? prev[0] : null;
     if (!opts.force && last?.fingerprint === fingerprintProtectedData(data)) return last;
     snap.fingerprint = fingerprintProtectedData(data);
-    window.localStorage.setItem(JAMSA_PROTECTION_SNAPSHOTS_KEY, JSON.stringify([snap, ...(Array.isArray(prev) ? prev : [])].slice(0, 20)));
-    window.localStorage.setItem(JAMSA_PROTECTION_LAST_GOOD_KEY, JSON.stringify({ at: snap.at, summary: snap.summary, data }));
+    rawLocalStorageSet(JAMSA_PROTECTION_SNAPSHOTS_KEY, JSON.stringify([snap, ...(Array.isArray(prev) ? prev : [])].slice(0, 20)));
+    rawLocalStorageSet(JAMSA_PROTECTION_LAST_GOOD_KEY, JSON.stringify({ at: snap.at, summary: snap.summary, data }));
     window.sessionStorage?.setItem("jamsa_data_last_snapshot_notice", `${reason} · ${Object.keys(data).length}개 데이터 보호`);
     return snap;
   } catch (e) {
@@ -99,9 +120,9 @@ const saveDataProtectionSnapshot = (reason = "manual", opts = {}) => {
 };
 
 const guardedLocalStorageSet = (key, value) => {
-  const raw = JSON.stringify(value);
+  const raw = serializeStorageValue(value);
   if (!JAMSA_PROTECTED_KEYS.includes(key)) {
-    window.localStorage?.setItem(key, raw);
+    rawLocalStorageSet(key, raw);
     return true;
   }
   const before = parseStorageValue(getStorageRaw(key));
@@ -112,13 +133,13 @@ const guardedLocalStorageSet = (key, value) => {
     console.warn(`[data protection] blocked empty overwrite for ${key}`);
     return false;
   }
-  window.localStorage?.setItem(key, raw);
+  rawLocalStorageSet(key, raw);
   const lastGood = parseStorageValue(getStorageRaw(JAMSA_PROTECTION_LAST_GOOD_KEY)) || { data: {} };
   if (nextCount > 0) {
     lastGood.data = { ...(lastGood.data || {}), [key]: value };
     lastGood.at = new Date().toISOString();
     lastGood.summary = summarizeProtectedData(lastGood.data);
-    window.localStorage?.setItem(JAMSA_PROTECTION_LAST_GOOD_KEY, JSON.stringify(lastGood));
+    rawLocalStorageSet(JAMSA_PROTECTION_LAST_GOOD_KEY, JSON.stringify(lastGood));
   }
   return true;
 };
@@ -134,7 +155,7 @@ const restoreMissingProtectedData = () => {
       const current = parseStorageValue(getStorageRaw(key));
       const backup = lastGood.data[key];
       if (protectedValueIsEmpty(current) && !protectedValueIsEmpty(backup)) {
-        window.localStorage?.setItem(key, JSON.stringify(backup));
+        rawLocalStorageSet(key, serializeStorageValue(backup));
         restored.push(key);
       }
     });
@@ -153,6 +174,53 @@ const installDataProtectionGuards = () => {
   try {
     if (typeof window === "undefined" || window.__jamsaDataProtectionInstalled) return;
     window.__jamsaDataProtectionInstalled = true;
+    if (!window.__jamsaNativeLocalStorageGetItem) {
+      window.__jamsaNativeLocalStorageGetItem = Storage.prototype.getItem;
+    }
+    if (!window.__jamsaNativeLocalStorageSetItem) {
+      window.__jamsaNativeLocalStorageSetItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function(key, value) {
+        if (this === window.localStorage && JAMSA_PROTECTED_KEYS.includes(String(key))) {
+          const parsed = parseStorageValue(String(value));
+          guardedLocalStorageSet(String(key), parsed);
+          return;
+        }
+        window.__jamsaNativeLocalStorageSetItem.call(this, key, value);
+      };
+    }
+    if (!window.__jamsaNativeLocalStorageRemoveItem) {
+      window.__jamsaNativeLocalStorageRemoveItem = Storage.prototype.removeItem;
+      Storage.prototype.removeItem = function(key) {
+        if (this === window.localStorage && JAMSA_PROTECTED_KEYS.includes(String(key))) {
+          saveDataProtectionSnapshot(`before-remove:${String(key)}`, { force: true });
+        }
+        window.__jamsaNativeLocalStorageRemoveItem.call(this, key);
+      };
+    }
+    if (!window.__jamsaNativeLocalStorageClear) {
+      window.__jamsaNativeLocalStorageClear = Storage.prototype.clear;
+      Storage.prototype.clear = function() {
+        if (this !== window.localStorage) {
+          window.__jamsaNativeLocalStorageClear.call(this);
+          return;
+        }
+        const previousLastGood = parseStorageValue(getStorageRaw(JAMSA_PROTECTION_LAST_GOOD_KEY));
+        const snap = saveDataProtectionSnapshot("before-storage-clear", { force: true });
+        const mergedData = { ...(previousLastGood?.data || {}), ...(snap?.data || {}) };
+        rawLocalStorageClear();
+        if (Object.keys(mergedData).length) {
+          const mergedSnap = snap ? { ...snap, data: mergedData, summary: summarizeProtectedData(mergedData) } : {
+            id: `safe_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            at: new Date().toISOString(),
+            reason: "before-storage-clear",
+            data: mergedData,
+            summary: summarizeProtectedData(mergedData),
+          };
+          rawLocalStorageSet(JAMSA_PROTECTION_SNAPSHOTS_KEY, JSON.stringify([mergedSnap]));
+          rawLocalStorageSet(JAMSA_PROTECTION_LAST_GOOD_KEY, JSON.stringify({ at: mergedSnap.at, summary: mergedSnap.summary, data: mergedData }));
+        }
+      };
+    }
     restoreMissingProtectedData();
     saveDataProtectionSnapshot("app-load");
     window.__jamsaDataProtection = {
@@ -173,7 +241,7 @@ const installDataProtectionGuards = () => {
 // CCTV backend bootstrap: use one default cloud endpoint everywhere.
 try {
   if (typeof window !== 'undefined' && window.localStorage) {
-    window.localStorage.setItem("jamsa_cctv_snap_server", DEFAULT_CCTV_SERVER_URL);
+    try { rawLocalStorageSet("jamsa_cctv_snap_server", DEFAULT_CCTV_SERVER_URL); } catch (e) {}
     installDataProtectionGuards();
   }
 } catch(e) {}
@@ -183,7 +251,7 @@ try {
 const useLocalStorage = (key, defaultValue) => {
   const [value, setValue] = useState(() => {
     try {
-      const stored = window.localStorage?.getItem(key);
+      const stored = getStorageRaw(key);
       if (stored == null) return defaultValue;
       const parsed = JSON.parse(stored);
       return parsed;
