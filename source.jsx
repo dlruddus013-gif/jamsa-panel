@@ -19773,7 +19773,74 @@ function WorklogPage({ onClose, addAudit, facActions, worklogs, setWorklogs, cur
       const seeded = seedItem(prev, itemId);
       const cur = seeded[itemId];
       if (cur.status === st) return seeded;
+      // 사진 증빙 필수: DONE 전환 시 photos 있어야 함
+      if (st === "DONE" && (!cur.photos || cur.photos.length === 0)) {
+        setTimeout(() => alert("⚠️ 완료 처리에는 사진 증빙이 필수입니다.\n📷 사진 증빙 버튼으로 1장 이상 첨부 후 완료로 변경하세요."), 0);
+        return seeded;
+      }
+      // 시설점검 카테고리는 최소 2장 권장 (자동 추가 요청)
+      const isFacility = /시설점검|fac_/.test(itemId);
+      if (st === "DONE" && isFacility && (cur.photos?.length || 0) < 2) {
+        const ok = confirm(`시설점검은 사진 2장 이상이 권장됩니다 (현재 ${cur.photos.length}장).\n그래도 완료 처리할까요? (취소하면 추가 사진 요청 상태로 전환)`);
+        if (!ok) {
+          return { ...seeded, [itemId]: { ...cur, status: "PHOTO_NEEDED", logs: [...cur.logs, { at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name, action: "photo_request", note: "시설점검 추가 사진 필요" }] } };
+        }
+      }
       return { ...seeded, [itemId]: { ...cur, status: st, checked: st === "DONE" ? true : cur.checked, at: st === "DONE" ? (cur.at || new Date().toISOString()) : cur.at, logs: [...cur.logs, { at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name, action: "status", from: cur.status, to: st }] } };
+    });
+  };
+
+  // 사진 증빙 추가 (압축 + 시간대 자동 태깅)
+  const addProofPhoto = async (itemId, file) => {
+    if (!file) return;
+    let dataUrl;
+    try {
+      const mod = await import("./data-loss-prevention.jsx");
+      const r = await mod.compressImage(file);
+      dataUrl = r.dataUrl;
+    } catch (e) {
+      dataUrl = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(file); });
+    }
+    const h = new Date().getHours();
+    const slot = h < 12 ? "오전" : h < 18 ? "오후" : "저녁";
+    setChecks(prev => {
+      const seeded = seedItem(prev, itemId);
+      const cur = seeded[itemId];
+      return { ...seeded, [itemId]: { ...cur, photos: [...(cur.photos || []), dataUrl], photoSlots: [...(cur.photoSlots || []), slot], logs: [...cur.logs, { at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name, action: "photo", note: `${slot} 사진 증빙 추가` }] } };
+    });
+  };
+  const delProofPhoto = (itemId, idx) => {
+    setChecks(prev => {
+      const seeded = seedItem(prev, itemId);
+      const cur = seeded[itemId];
+      const next = (cur.photos || []).filter((_, i) => i !== idx);
+      const slots = (cur.photoSlots || []).filter((_, i) => i !== idx);
+      return { ...seeded, [itemId]: { ...cur, photos: next, photoSlots: slots, logs: [...cur.logs, { at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name, action: "photo_del" }] } };
+    });
+  };
+  // 시간대 선택 (오전/오후/저녁)
+  const setSlot = (itemId, slot) => {
+    setChecks(prev => {
+      const seeded = seedItem(prev, itemId);
+      const cur = seeded[itemId];
+      return { ...seeded, [itemId]: { ...cur, slot, logs: [...cur.logs, { at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name, action: "slot", to: slot }] } };
+    });
+  };
+  // 문제 조치 로그 + 최종 사진 + 진행 상황
+  const addIssue = (itemId, issue) => {
+    setChecks(prev => {
+      const seeded = seedItem(prev, itemId);
+      const cur = seeded[itemId];
+      const next = [...(cur.issues || []), { id: "iss_" + Date.now(), at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name, ...issue }];
+      return { ...seeded, [itemId]: { ...cur, issues: next, status: issue.resolved ? cur.status : "ISSUE", logs: [...cur.logs, { at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name, action: "issue", title: issue.title, resolved: !!issue.resolved }] } };
+    });
+  };
+  const updateIssue = (itemId, issueId, patch) => {
+    setChecks(prev => {
+      const seeded = seedItem(prev, itemId);
+      const cur = seeded[itemId];
+      const next = (cur.issues || []).map(is => is.id === issueId ? { ...is, ...patch } : is);
+      return { ...seeded, [itemId]: { ...cur, issues: next, logs: [...cur.logs, { at: new Date().toISOString(), by: currentUser?.id, byName: currentUser?.name, action: "issue_update", issueId, resolved: !!patch.resolved }] } };
     });
   };
 
@@ -20130,6 +20197,14 @@ function WorklogPage({ onClose, addAudit, facActions, worklogs, setWorklogs, cur
                               <option key={u.id} value={u.id}>{u.name} ({u.id}) · {u.role}</option>
                             ))}
                           </select>
+                          <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700, marginLeft: 6 }}>시간대:</span>
+                          <select value={st.slot || ""} onChange={e => setSlot(item.id, e.target.value)}
+                            style={{ fontSize: 11, padding: "3px 8px", border: "1px solid #e5e7eb", borderRadius: 4, background: st.slot==="오전"?"#fef3c7":st.slot==="오후"?"#dbeafe":st.slot==="저녁"?"#ede9fe":"#fff", color: st.slot==="오전"?"#92400e":st.slot==="오후"?"#1e40af":st.slot==="저녁"?"#5b21b6":"#475569", cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }}>
+                            <option value="">선택</option>
+                            <option value="오전">🌅 오전</option>
+                            <option value="오후">☀️ 오후</option>
+                            <option value="저녁">🌙 저녁</option>
+                          </select>
                           <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700, marginLeft: 6 }}>상태:</span>
                           <select value={st.status} onChange={e => setStatus(item.id, e.target.value)}
                             style={{ fontSize: 11, padding: "3px 8px", border: `1px solid ${stOpt.c}44`, borderRadius: 4, background: stOpt.bg, color: stOpt.c, cursor: "pointer", fontWeight: 700, fontFamily: "inherit" }}>
@@ -20144,6 +20219,91 @@ function WorklogPage({ onClose, addAudit, facActions, worklogs, setWorklogs, cur
                             <span style={{ fontSize: 10, color: "#059669", fontWeight: 700, marginLeft: "auto" }}>
                               ✓ 숙지 {Object.values(st.acks).filter(Boolean).length}/4
                             </span>
+                          )}
+                        </div>
+
+                        {/* 사진 증빙 + 문제 조치 (의무) */}
+                        <div style={{ marginTop: 8, marginLeft: 32, padding: 8, background: (st.photos?.length||0) === 0 ? "#fef2f2" : "#f0fdf4", border: `1px solid ${(st.photos?.length||0) === 0 ? "#fca5a5" : "#86efac"}`, borderRadius: 6 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+                            <span style={{ fontSize: 11, fontWeight: 800, color: (st.photos?.length||0)===0 ? "#991b1b" : "#065f46" }}>
+                              📷 사진 증빙 {(st.photos?.length || 0)}장
+                              {(st.photos?.length || 0) === 0 && " · 필수"}
+                              {st.status === "PHOTO_NEEDED" && " · ⚠️ 추가 요청됨"}
+                            </span>
+                            <label style={{ marginLeft: "auto", padding: "4px 10px", background: "#3b82f6", color: "#fff", borderRadius: 4, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                              📷+ 증빙 추가
+                              <input type="file" accept="image/*" capture="environment" onChange={e => { const f = e.target.files?.[0]; if (f) addProofPhoto(item.id, f); e.target.value=""; }} style={{ display: "none" }}/>
+                            </label>
+                            <button type="button" onClick={() => {
+                              const title = prompt("문제 제목 (예: 미끄럼틀 균열 발견)");
+                              if (!title) return;
+                              const desc = prompt("상세 내용 / 진행 상황");
+                              addIssue(item.id, { title, desc: desc || "", resolved: false });
+                            }}
+                              style={{ padding: "4px 10px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 4, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                              🚨 문제 발생
+                            </button>
+                          </div>
+                          {/* 사진 썸네일 */}
+                          {(st.photos || []).length > 0 && (
+                            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                              {(st.photos || []).map((p, pi) => (
+                                <div key={pi} style={{ position: "relative" }}>
+                                  <a href={p} target="_blank" rel="noreferrer">
+                                    <img src={p} alt="proof" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 4, border: "1px solid #e5e7eb", cursor: "zoom-in" }}/>
+                                  </a>
+                                  {st.photoSlots?.[pi] && (
+                                    <span style={{ position: "absolute", bottom: 0, left: 0, padding: "0 3px", fontSize: 8, fontWeight: 800, background: st.photoSlots[pi]==="오전"?"#fcd34d":st.photoSlots[pi]==="오후"?"#60a5fa":"#a78bfa", color: "#fff", borderBottomLeftRadius: 4 }}>{st.photoSlots[pi]}</span>
+                                  )}
+                                  <button type="button" onClick={() => delProofPhoto(item.id, pi)}
+                                    style={{ position: "absolute", top: -4, right: -4, width: 16, height: 16, background: "#dc2626", color: "#fff", border: "none", borderRadius: "50%", fontSize: 9, cursor: "pointer", lineHeight: "16px", padding: 0 }}>✕</button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {/* 문제 조치 로그 */}
+                          {(st.issues || []).length > 0 && (
+                            <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #cbd5e1" }}>
+                              <div style={{ fontSize: 10, fontWeight: 800, color: "#991b1b", marginBottom: 4 }}>🚨 문제 조치 로그 ({(st.issues||[]).length})</div>
+                              {(st.issues || []).map(iss => (
+                                <div key={iss.id} style={{ padding: 6, marginBottom: 4, background: iss.resolved ? "#dcfce7" : "#fee2e2", border: `1px solid ${iss.resolved ? "#86efac" : "#fca5a5"}`, borderRadius: 4 }}>
+                                  <div style={{ display: "flex", justifyContent: "space-between", gap: 4 }}>
+                                    <strong style={{ fontSize: 11, color: iss.resolved ? "#065f46" : "#991b1b" }}>
+                                      {iss.resolved ? "✅" : "🚨"} {iss.title}
+                                    </strong>
+                                    {!iss.resolved && <button type="button" onClick={() => {
+                                      const note = prompt("최종 조치 내용 (해결 방법)");
+                                      if (!note) return;
+                                      updateIssue(item.id, iss.id, { resolved: true, resolvedAt: new Date().toISOString(), resolvedBy: currentUser?.name, resolutionNote: note });
+                                    }} style={{ padding: "2px 8px", fontSize: 9, background: "#10b981", color: "#fff", border: "none", borderRadius: 3, cursor: "pointer", fontWeight: 700 }}>해결 처리</button>}
+                                  </div>
+                                  {iss.desc && <div style={{ fontSize: 10, color: "#475569", marginTop: 2 }}>{iss.desc}</div>}
+                                  {iss.resolutionNote && <div style={{ fontSize: 10, color: "#065f46", marginTop: 2, fontStyle: "italic" }}>→ {iss.resolutionNote}</div>}
+                                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+                                    <label style={{ padding: "2px 8px", fontSize: 9, background: "#fff", color: "#475569", border: "1px solid #cbd5e1", borderRadius: 3, cursor: "pointer", fontWeight: 700 }}>
+                                      📷 최종 사진
+                                      <input type="file" accept="image/*" capture="environment" onChange={async e => {
+                                        const f = e.target.files?.[0]; e.target.value="";
+                                        if (!f) return;
+                                        let dataUrl;
+                                        try { const mod = await import("./data-loss-prevention.jsx"); const r = await mod.compressImage(f); dataUrl = r.dataUrl; }
+                                        catch(err) { dataUrl = await new Promise(res=>{const r=new FileReader();r.onload=()=>res(r.result);r.readAsDataURL(f);}); }
+                                        updateIssue(item.id, iss.id, { finalPhotos: [...(iss.finalPhotos||[]), dataUrl] });
+                                      }} style={{ display: "none" }}/>
+                                    </label>
+                                    {(iss.finalPhotos || []).map((p, pi) => (
+                                      <a key={pi} href={p} target="_blank" rel="noreferrer">
+                                        <img src={p} style={{ width: 32, height: 32, objectFit: "cover", borderRadius: 3, border: "1px solid #86efac" }}/>
+                                      </a>
+                                    ))}
+                                    <span style={{ fontSize: 9, color: "#64748b", marginLeft: "auto" }}>
+                                      {new Date(iss.at).toLocaleString("ko-KR")} · {iss.byName}
+                                      {iss.resolvedAt && ` → ${new Date(iss.resolvedAt).toLocaleString("ko-KR")} · ${iss.resolvedBy}`}
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
                           )}
                         </div>
 
