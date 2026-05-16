@@ -18425,6 +18425,188 @@ function WorklogReportModal({ log, onClose }) {
 }
 
 /* ─── WORKLOG GUIDE MODAL (상세 가이드) ─── */
+// ─── 업무별 시각 도해 (자동 인포그래픽 + 사용자 사진 업로드) ───────
+function TaskInfographic({ itemId, itemLabel, catLabel, guide }) {
+  const PHOTO_KEY = "jamsa_task_guide_photos";
+  const loadAll = () => { try { return JSON.parse(localStorage.getItem(PHOTO_KEY) || "{}"); } catch (e) { return {}; } };
+  const saveAll = (d) => { try { localStorage.setItem(PHOTO_KEY, JSON.stringify(d)); } catch (e) {} };
+  const [photos, setPhotos] = useState(() => loadAll()[itemId] || {});
+  const [busy, setBusy] = useState(false);
+
+  // 카테고리별 색 + 헤드라인 일러스트
+  const catTheme = (() => {
+    const c = (catLabel || "").toLowerCase();
+    if (/전기|배전|차단/.test(catLabel)) return { c: "#f59e0b", bg: "#fef3c7", emoji: "⚡", desc: "감전·과열 주의" };
+    if (/소방|화재|가스/.test(catLabel)) return { c: "#dc2626", bg: "#fee2e2", emoji: "🔥", desc: "화재·폭발 예방" };
+    if (/위생|청소|식약/.test(catLabel)) return { c: "#0ea5e9", bg: "#e0f2fe", emoji: "🧼", desc: "감염·식중독 예방" };
+    if (/cctv|보안|잠금/.test(c))         return { c: "#7c3aed", bg: "#ede9fe", emoji: "📹", desc: "기록·증거 확보" };
+    if (/안전|점검|보호구/.test(catLabel)) return { c: "#10b981", bg: "#dcfce7", emoji: "🦺", desc: "사고 예방·산재 방지" };
+    if (/시설|설비|기계/.test(catLabel)) return { c: "#3b82f6", bg: "#dbeafe", emoji: "🛠️", desc: "정상 작동 확인" };
+    return { c: "#475569", bg: "#f1f5f9", emoji: "📋", desc: "표준 절차 수행" };
+  })();
+
+  const addPhoto = async (stepKey, e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setBusy(true);
+    try {
+      // 이미지 압축 (data-loss-prevention 모듈)
+      let compressedUrl;
+      try {
+        const mod = await import("./data-loss-prevention.jsx");
+        const r = await mod.compressImage(file);
+        compressedUrl = r.dataUrl;
+      } catch (err) {
+        compressedUrl = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(file); });
+      }
+      const next = { ...photos, [stepKey]: [...(photos[stepKey] || []), { id: Date.now(), url: compressedUrl, at: new Date().toISOString() }] };
+      setPhotos(next);
+      const all = loadAll(); all[itemId] = next; saveAll(all);
+    } finally { setBusy(false); }
+  };
+  const delPhoto = (stepKey, photoId) => {
+    const next = { ...photos, [stepKey]: (photos[stepKey] || []).filter(p => p.id !== photoId) };
+    if (next[stepKey].length === 0) delete next[stepKey];
+    setPhotos(next);
+    const all = loadAll(); all[itemId] = next; saveAll(all);
+  };
+
+  // 위험·주의·확인 카드 분류 (단계 설명 키워드 기반)
+  const riskOf = (text) => {
+    const t = String(text || "");
+    if (/금지|위험|즉시 중단|폭발|감전|추락|화재/.test(t)) return "danger";
+    if (/주의|반드시|필수|확인|점검/.test(t)) return "caution";
+    return "ok";
+  };
+  const riskStyle = {
+    danger:  { border: "#dc2626", bg: "#fef2f2", label: "⚠️ 위험", color: "#991b1b" },
+    caution: { border: "#f59e0b", bg: "#fffbeb", label: "🔔 주의", color: "#92400e" },
+    ok:      { border: "#10b981", bg: "#f0fdf4", label: "✓ 표준", color: "#047857" },
+  };
+
+  return (
+    <div>
+      {/* 헤드라인 인포그래픽 */}
+      <div style={{ padding: 18, background: `linear-gradient(135deg,${catTheme.bg},#fff)`, border: `2px solid ${catTheme.c}33`, borderRadius: 12, marginBottom: 14, display: "flex", alignItems: "center", gap: 14 }}>
+        <div style={{ fontSize: 64, lineHeight: 1 }}>{catTheme.emoji}</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: catTheme.c, marginBottom: 3 }}>{catLabel}</div>
+          <div style={{ fontSize: 17, fontWeight: 900, color: "#0f172a" }}>{itemLabel}</div>
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: 3 }}>핵심: {catTheme.desc}</div>
+        </div>
+      </div>
+
+      {/* 흐름 다이어그램 (대형) */}
+      {guide.visualSteps && (
+        <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: 12, marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#0f172a", marginBottom: 10 }}>📊 한눈에 보는 흐름</div>
+          <div style={{ display: "flex", gap: 4, overflowX: "auto" }}>
+            {guide.visualSteps.map((v, i) => (
+              <React.Fragment key={i}>
+                <div style={{ flex: "0 0 110px", padding: "12px 6px", background: catTheme.bg, border: `2px solid ${catTheme.c}`, borderRadius: 10, textAlign: "center" }}>
+                  <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 22, height: 22, borderRadius: "50%", background: catTheme.c, color: "#fff", fontSize: 10, fontWeight: 900, marginBottom: 4 }}>{i + 1}</div>
+                  <div style={{ fontSize: 28, marginBottom: 3, lineHeight: 1 }}>{v.icon}</div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: catTheme.c }}>{v.label}</div>
+                </div>
+                {i < guide.visualSteps.length - 1 && (
+                  <div style={{ display: "flex", alignItems: "center", color: catTheme.c, fontSize: 18, fontWeight: 900 }}>→</div>
+                )}
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 단계별 시각 카드 + 실제 사진 업로드 */}
+      <div style={{ fontSize: 13, fontWeight: 900, color: "#0f172a", marginBottom: 8 }}>📸 단계별 도해 + 현장 사진</div>
+      <div style={{ fontSize: 10, color: "#64748b", marginBottom: 10, padding: 8, background: "#f8fafc", borderRadius: 6 }}>
+        💡 각 단계에 실제 현장 사진을 첨부하면 신규 직원이 더 쉽게 이해합니다. 사진은 자동 압축됩니다.
+      </div>
+      {guide.steps.map(s => {
+        const risk = riskOf(s.desc);
+        const rs = riskStyle[risk];
+        const stepKey = `s${s.n}`;
+        const stepPhotos = photos[stepKey] || [];
+        return (
+          <div key={s.n} style={{ background: "#fff", border: `2px solid ${rs.border}33`, borderRadius: 10, padding: 0, marginBottom: 10, overflow: "hidden" }}>
+            {/* 헤더 */}
+            <div style={{ padding: "10px 12px", background: rs.bg, borderBottom: `1px solid ${rs.border}33`, display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, borderRadius: "50%", background: rs.border, color: "#fff", fontWeight: 900, fontSize: 14 }}>{s.n}</div>
+              <div style={{ fontSize: 32, lineHeight: 1 }}>{s.icon}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 900, color: "#0f172a" }}>{s.title}</div>
+                <div style={{ fontSize: 10, color: rs.color, fontWeight: 700, marginTop: 2 }}>
+                  <span style={{ padding: "1px 6px", background: "#fff", border: `1px solid ${rs.border}`, borderRadius: 3, marginRight: 4 }}>{rs.label}</span>
+                  ⏱ {s.duration}
+                </div>
+              </div>
+            </div>
+            {/* 설명 */}
+            <div style={{ padding: 12, fontSize: 12, color: "#1f2937", lineHeight: 1.7 }}>{s.desc}</div>
+            {/* 사진 영역 */}
+            <div style={{ padding: "8px 12px 12px", display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", borderTop: "1px dashed #e5e7eb" }}>
+              {stepPhotos.map(p => (
+                <div key={p.id} style={{ position: "relative" }}>
+                  <a href={p.url} target="_blank" rel="noreferrer">
+                    <img src={p.url} alt="step" style={{ width: 80, height: 80, objectFit: "cover", borderRadius: 6, border: "1px solid #e5e7eb", cursor: "zoom-in" }}/>
+                  </a>
+                  <button type="button" onClick={() => delPhoto(stepKey, p.id)}
+                    style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, background: "#dc2626", color: "#fff", border: "none", borderRadius: "50%", fontSize: 10, cursor: "pointer" }}>✕</button>
+                </div>
+              ))}
+              <label style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 80, height: 80, border: "2px dashed #cbd5e1", borderRadius: 6, cursor: busy ? "wait" : "pointer", color: "#64748b", fontSize: 10, fontWeight: 700, background: "#fafafa", textAlign: "center", lineHeight: 1.3 }}>
+                📷<br/>현장 사진<br/>추가
+                <input type="file" accept="image/*" capture="environment" onChange={e => addPhoto(stepKey, e)} disabled={busy} style={{ display: "none" }}/>
+              </label>
+              {stepPhotos.length === 0 && (
+                <span style={{ fontSize: 10, color: "#94a3b8" }}>현장 사진을 추가하면 더 쉽게 이해됩니다</span>
+              )}
+            </div>
+          </div>
+        );
+      })}
+
+      {/* 준비물 시각화 */}
+      {guide.tools && guide.tools.length > 0 && (
+        <div style={{ marginTop: 14, padding: 12, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#0f172a", marginBottom: 8 }}>🧰 준비물 체크리스트</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(140px,1fr))", gap: 6 }}>
+            {guide.tools.map((t, i) => (
+              <div key={i} style={{ padding: "8px 10px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 6, fontSize: 11, color: "#334155", display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 14 }}>✓</span> {t}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 위험 신호 카드 */}
+      <div style={{ marginTop: 14, padding: 12, background: "linear-gradient(135deg,#fef2f2,#fff)", border: "2px solid #fca5a5", borderRadius: 10 }}>
+        <div style={{ fontSize: 12, fontWeight: 900, color: "#991b1b", marginBottom: 8 }}>🚨 즉시 중단 + 신고 신호</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(120px,1fr))", gap: 6 }}>
+          {[
+            { emoji: "💨", txt: "가스 냄새" },
+            { emoji: "💥", txt: "타는 냄새/연기" },
+            { emoji: "⚡", txt: "스파크·합선" },
+            { emoji: "💧", txt: "예상치 못한 누수" },
+            { emoji: "🩸", txt: "사람 부상" },
+            { emoji: "❓", txt: "원인불명 이상음" },
+          ].map((d, i) => (
+            <div key={i} style={{ padding: 8, background: "#fff", border: "1px solid #fca5a5", borderRadius: 6, textAlign: "center" }}>
+              <div style={{ fontSize: 22 }}>{d.emoji}</div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#991b1b", marginTop: 2 }}>{d.txt}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ marginTop: 8, fontSize: 11, color: "#7f1d1d", textAlign: "center" }}>
+          → 즉시 작업 중단 → 119 (인명 위급 시) → 시설안전관리자 → CCTV 확인 → 사진 기록
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WorklogGuideModal({ itemId, itemLabel, catLabel, cycle, onClose, currentUser, acks = {}, onAck }) {
   const g = getGuide(itemId, itemLabel, catLabel, cycle);
   const [tab, setTab] = useState("overview");
@@ -18433,6 +18615,7 @@ function WorklogGuideModal({ itemId, itemLabel, catLabel, cycle, onClose, curren
   // Tabs — 노무/산재/법규 restricted to ADMIN
   const allTabs = [
     { k: "overview", l: "📋 개요", requiresAck: false, adminOnly: false },
+    { k: "infographic", l: "🖼️ 도해", requiresAck: false, adminOnly: false },
     { k: "steps", l: "📝 절차", requiresAck: true, adminOnly: false, ackKey: "procedure" },
     { k: "labor", l: "⚖️ 노무", requiresAck: true, adminOnly: true, ackKey: "labor" },
     { k: "accident", l: "🚨 산재", requiresAck: true, adminOnly: true, ackKey: "accident" },
@@ -18532,6 +18715,10 @@ function WorklogGuideModal({ itemId, itemLabel, catLabel, cycle, onClose, curren
                 <div style={{ fontSize: 12, color: "#7f1d1d", lineHeight: 1.6 }}>{g.emergency}</div>
               </div>
             </div>
+          )}
+
+          {tab === "infographic" && (
+            <TaskInfographic itemId={itemId} itemLabel={itemLabel} catLabel={catLabel} guide={g}/>
           )}
 
           {tab === "steps" && (
