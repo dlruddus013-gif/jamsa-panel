@@ -9,6 +9,7 @@ import { ProductIntelligenceModal, ProductIntelInline, LogPhotoStrip } from "./p
 import { BackupHistoryPanel, logFileEvent, maybeAutoBackup } from "./inventory-backup-history.jsx";
 
 const DEFAULT_CCTV_SERVER_URL = "https://cctv.thejamsa.com";
+const DEFAULT_OKPOS_BRIDGE_URL = "http://127.0.0.1:5566";
 const JAMSA_PROTECTED_KEYS = [
   "jamsa_inv_prods",
   "jamsa_inv_hist",
@@ -36,6 +37,43 @@ const JAMSA_PROTECTED_KEYS = [
 ];
 const JAMSA_PROTECTION_SNAPSHOTS_KEY = "jamsa_data_protection_snapshots";
 const JAMSA_PROTECTION_LAST_GOOD_KEY = "jamsa_data_protection_last_good";
+const JAMSA_OKPOS_EVENTS_KEY = "jamsa_okpos_usage_events";
+
+const getOkposBridgeUrl = () => {
+  try {
+    return (window.localStorage.getItem("jamsa_okpos_bridge_url") || DEFAULT_OKPOS_BRIDGE_URL).replace(/\/+$/, "");
+  } catch (e) {
+    return DEFAULT_OKPOS_BRIDGE_URL;
+  }
+};
+
+async function forwardOnlineUsageToOkpos(payload) {
+  const event = {
+    id: payload?.id || `usage-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    source: payload?.source || "jamsa-panel",
+    type: payload?.type || "online_usage",
+    createdAt: new Date().toISOString(),
+    ...payload,
+  };
+  try {
+    const bridgeUrl = getOkposBridgeUrl();
+    const res = await fetch(`${bridgeUrl}/okpos/usage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
+    return { ok: true, bridge: data };
+  } catch (e) {
+    try {
+      const current = JSON.parse(window.localStorage.getItem(JAMSA_OKPOS_EVENTS_KEY) || "[]");
+      current.unshift({ ...event, status: "pending_local_bridge", error: e.message || String(e) });
+      window.localStorage.setItem(JAMSA_OKPOS_EVENTS_KEY, JSON.stringify(current.slice(0, 500)));
+    } catch (storageError) {}
+    return { ok: false, error: e.message || String(e), queued: true };
+  }
+}
 
 const rawLocalStorageGet = (key) => {
   const nativeGet = window.__jamsaNativeLocalStorageGetItem || Storage.prototype.getItem;
@@ -22232,6 +22270,20 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         if (data.ok) {
           setCheckinResult({ zone, message: `✅ ${zone.name} 체크인 완료!` });
           // URL 정리 (한 번만 체크인되도록)
+          forwardOnlineUsageToOkpos({
+            source: "jamsa-panel",
+            type: "qr_checkin_entry",
+            visitorId,
+            zoneId: checkinZone,
+            zoneName: zone.name,
+            checkpointType: "entry",
+            productName: zone.name,
+            qty: 1,
+            amount: 0,
+            memo: "온라인 QR 체크인 자동 POS 연동",
+          }).then(result => {
+            if (!result.ok) console.warn("[OKPOS] online usage queued locally:", result.error);
+          });
           const url = new URL(window.location);
           url.searchParams.delete("checkin");
           window.history.replaceState({}, "", url);
