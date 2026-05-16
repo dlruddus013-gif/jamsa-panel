@@ -20334,6 +20334,44 @@ function analyzeSystemForWorklog(cycle, periodStart, periodEnd, facActions, audi
   };
 }
 
+function buildWorklogTaskInfographic(item) {
+  const id = String(item?.id || "");
+  const evidence = `${item?.note || ""} ${item?.inference || ""}`;
+  const done = !!item?.checked;
+  const urgent = /urgent|incident|low/i.test(id) || /URGENT|긴급|저재고|미처리|부족/.test(evidence);
+  const cctv = /cctv/i.test(id);
+  const inventory = /^inv_/.test(id);
+  const safety = /^saf_/.test(id);
+  const facility = /^fac_/.test(id);
+  const palette = done
+    ? { bg: "#ecfdf5", border: "#a7f3d0", ink: "#047857", bar: "#10b981" }
+    : urgent
+      ? { bg: "#fff7ed", border: "#fed7aa", ink: "#c2410c", bar: "#f97316" }
+      : { bg: "#f8fafc", border: "#cbd5e1", ink: "#475569", bar: "#64748b" };
+  const icon = cctv ? "📹" : inventory ? "📦" : safety ? "🛡️" : facility ? "🛠️" : "📋";
+  return {
+    icon,
+    palette,
+    statusLabel: done ? "자동 완료" : urgent ? "우선 확인" : "수동 확인",
+    progress: done ? 100 : urgent ? 38 : 55,
+    short: done
+      ? "시스템 기록상 처리 완료로 판단됩니다."
+      : urgent
+        ? "남은 위험/부족 항목이 있어 담당자 확인이 필요합니다."
+        : "자동 판정 근거가 부족해 현장 확인 후 체크합니다.",
+    next: done
+      ? "일지 저장 시 완료 항목으로 반영"
+      : urgent
+        ? "담당자 지정 후 처리 결과와 사진/메모 보강"
+        : "현장 점검 후 완료 여부만 빠르게 선택",
+    chips: [
+      item?.cat || "업무",
+      item?.assigneeName ? `담당 ${item.assigneeName}` : "담당 미지정",
+      done ? "근거 있음" : "확인 대기",
+    ],
+  };
+}
+
 function WorklogAiGenModal({ facActions, currentUser, allPastLogs, onClose, onSave }) {
   const [cycle, setCycle] = useState("DAILY");
   const [dateFrom, setDateFrom] = useState(() => {
@@ -20661,7 +20699,40 @@ function WorklogAiGenModal({ facActions, currentUser, allPastLogs, onClose, onSa
                     <div style={{ padding: "6px 10px", background: "#f8fafc", fontSize: 11, fontWeight: 800, color: "#475569" }}>
                       {catLabel} <span style={{ color: "#94a3b8", fontWeight: 600 }}>({catItems.filter(i => i.checked).length}/{catItems.length})</span>
                     </div>
-                    {catItems.map(it => (
+                    <div style={{ display: "grid", gap: 8, padding: 8, background: "#fff" }}>
+                      {catItems.map(it => {
+                        const visual = buildWorklogTaskInfographic(it);
+                        return (
+                          <div key={`info-${it.id}`} style={{ padding: 10, border: `1px solid ${visual.palette.border}`, borderRadius: 9, background: visual.palette.bg }}>
+                            <div style={{ display: "grid", gridTemplateColumns: "42px 1fr 120px", gap: 10, alignItems: "start" }}>
+                              <div style={{ width: 38, height: 38, borderRadius: 10, background: "#fff", border: `1px solid ${visual.palette.border}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 19 }}>{visual.icon}</div>
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                                  <span style={{ fontSize: 12, fontWeight: 900, color: "#0f172a" }}>{it.label}</span>
+                                  <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 999, background: visual.palette.bar, color: "#fff", fontWeight: 900 }}>{visual.statusLabel}</span>
+                                </div>
+                                <div style={{ fontSize: 10, color: visual.palette.ink, fontWeight: 800, marginTop: 4 }}>{visual.short}</div>
+                                {it.note && <div style={{ fontSize: 10, color: "#475569", lineHeight: 1.45, marginTop: 4 }}>세부: {it.note}</div>}
+                                {it.inference && <div style={{ fontSize: 9, color: "#64748b", lineHeight: 1.45, marginTop: 3, fontStyle: "italic" }}>근거: {it.inference}</div>}
+                                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 6 }}>
+                                  {visual.chips.map(chip => <span key={chip} style={{ fontSize: 9, padding: "2px 6px", borderRadius: 999, background: "#fff", border: `1px solid ${visual.palette.border}`, color: visual.palette.ink, fontWeight: 800 }}>{chip}</span>)}
+                                </div>
+                              </div>
+                              <div style={{ background: "#fff", border: `1px solid ${visual.palette.border}`, borderRadius: 8, padding: 8 }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#64748b", fontWeight: 800, marginBottom: 5 }}>
+                                  <span>판정</span><span>{visual.progress}%</span>
+                                </div>
+                                <div style={{ height: 8, borderRadius: 999, background: "#e5e7eb", overflow: "hidden", marginBottom: 6 }}>
+                                  <div style={{ width: `${visual.progress}%`, height: "100%", background: visual.palette.bar }} />
+                                </div>
+                                <div style={{ fontSize: 9, color: "#475569", lineHeight: 1.35 }}>{visual.next}</div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {false && catItems.map(it => (
                       <div key={it.id} style={{ padding: "8px 10px", borderTop: "1px solid #f1f5f9", display: "flex", alignItems: "flex-start", gap: 8 }}>
                         <span style={{ fontSize: 14, flexShrink: 0 }}>{it.checked ? "✅" : "⬜"}</span>
                         <div style={{ flex: 1, minWidth: 0 }}>
