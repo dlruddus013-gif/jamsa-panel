@@ -51,6 +51,17 @@ const rawLocalStorageSet = (key, value) => {
   nativeSet.call(window.localStorage, key, value);
 };
 
+const queueCloudStorageSync = (key, rawValue) => {
+  try {
+    if (typeof window === "undefined" || !String(key).startsWith("jamsa_")) return;
+    if (typeof window.__jamsaQueueCloudSync === "function") {
+      window.__jamsaQueueCloudSync(String(key), rawValue);
+      return;
+    }
+    window.dispatchEvent(new CustomEvent("jamsa:storage-sync", { detail: { key: String(key), value: rawValue } }));
+  } catch (e) {}
+};
+
 const rawLocalStorageClear = () => {
   const nativeClear = window.__jamsaNativeLocalStorageClear || Storage.prototype.clear;
   nativeClear.call(window.localStorage);
@@ -123,6 +134,7 @@ const guardedLocalStorageSet = (key, value) => {
   const raw = serializeStorageValue(value);
   if (!JAMSA_PROTECTED_KEYS.includes(key)) {
     rawLocalStorageSet(key, raw);
+    queueCloudStorageSync(key, raw);
     return true;
   }
   const before = parseStorageValue(getStorageRaw(key));
@@ -134,6 +146,7 @@ const guardedLocalStorageSet = (key, value) => {
     return false;
   }
   rawLocalStorageSet(key, raw);
+  queueCloudStorageSync(key, raw);
   const lastGood = parseStorageValue(getStorageRaw(JAMSA_PROTECTION_LAST_GOOD_KEY)) || { data: {} };
   if (nextCount > 0) {
     lastGood.data = { ...(lastGood.data || {}), [key]: value };
@@ -155,7 +168,9 @@ const restoreMissingProtectedData = () => {
       const current = parseStorageValue(getStorageRaw(key));
       const backup = lastGood.data[key];
       if (protectedValueIsEmpty(current) && !protectedValueIsEmpty(backup)) {
-        rawLocalStorageSet(key, serializeStorageValue(backup));
+        const rawBackup = serializeStorageValue(backup);
+        rawLocalStorageSet(key, rawBackup);
+        queueCloudStorageSync(key, rawBackup);
         restored.push(key);
       }
     });

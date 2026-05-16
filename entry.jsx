@@ -211,6 +211,40 @@ function setSyncStatus(state, msg) {
   if (txt) txt.textContent = msg;
 }
 
+function queueCloudSync(key, value) {
+  key = String(key || '');
+  if (!key.startsWith(SYNC_PREFIX)) return false;
+  if (!supabase || !session) return false;
+  if (typeof value === 'string' && value.length > 5 * 1024 * 1024) {
+    console.warn('[sync] skip huge value:', key, '(' + Math.round(value.length / 1024 / 1024) + 'MB)');
+    try {
+      window.__syncSkipped = window.__syncSkipped || {};
+      window.__syncSkipped[key] = { size: value.length, at: new Date().toISOString() };
+      const badge = document.getElementById('syncBadge');
+      if (badge) {
+        const txt = badge.querySelector('.sync-txt');
+        if (txt) txt.textContent = 'cloud blocked: large data';
+        badge.dataset.state = 'error';
+      }
+    } catch (e) {}
+    return false;
+  }
+  let parsed;
+  try { parsed = typeof value === 'string' ? JSON.parse(value) : value; } catch (e) { parsed = value; }
+  _pendingPush.set(key, parsed);
+  setSyncStatus('pending', 'cloud save pending');
+  if (_flushTimer) clearTimeout(_flushTimer);
+  _flushTimer = setTimeout(flushPush, SYNC_DEBOUNCE_MS);
+  return true;
+}
+
+window.__jamsaQueueCloudSync = queueCloudSync;
+window.addEventListener('jamsa:storage-sync', (event) => {
+  const detail = event?.detail || {};
+  if (!detail.key) return;
+  queueCloudSync(detail.key, detail.value);
+});
+
 async function flushPush() {
   if (_pendingPush.size === 0) return;
   if (!supabase || !session) {
@@ -263,6 +297,11 @@ localStorage.setItem = function(key, value) {
   setSyncStatus('pending', '저장 대기...');
   if (_flushTimer) clearTimeout(_flushTimer);
   _flushTimer = setTimeout(flushPush, SYNC_DEBOUNCE_MS);
+};
+
+localStorage.setItem = function(key, value) {
+  _origSetItem(key, value);
+  queueCloudSync(key, value);
 };
 
 localStorage.removeItem = function(key) {
