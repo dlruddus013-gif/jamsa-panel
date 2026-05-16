@@ -19456,6 +19456,214 @@ function BackupRestoreModal({ onClose }) {
   );
 }
 
+function CloudDatabasePage({ onClose }) {
+  const [rows, setRows] = useState([]);
+  const [bulkData, setBulkData] = useState({});
+  const [selectedKey, setSelectedKey] = useState("all");
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState({ state: "idle", message: "대기 중" });
+  const [source, setSource] = useState("local");
+
+  const labelMap = {
+    jamsa_inv_prods: "재고 제품 목록",
+    jamsa_inv_hist: "재고 입출고 기록",
+    jamsa_worklogs: "업무일지",
+    jamsa_worklog_staff: "직원/알림 설정",
+    jamsa_incidents: "사고/아차사고",
+    jamsa_daily_checks: "일일 안전점검",
+    jamsa_fac_actions: "시설 보완과제",
+    jamsa_fac_inspections: "시설 점검 이력",
+    jamsa_audit_log: "활동 기록",
+    jamsa_locations: "위치 목록",
+    jamsa_categories: "카테고리 목록",
+    jamsa_storage_sections: "수장고 선반/섹션",
+    jamsa_custom_zones: "지도 구역",
+    jamsa_warehouse_models: "창고 모델링",
+    jamsa_data_protection_last_good: "마지막 정상본",
+    jamsa_data_protection_snapshots: "자동 보호 백업",
+  };
+
+  const formatBytes = (bytes) => {
+    if (!Number.isFinite(bytes)) return "-";
+    if (bytes > 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    if (bytes > 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${bytes} B`;
+  };
+  const countValue = (value) => {
+    if (Array.isArray(value)) return value.length;
+    if (value && typeof value === "object") return Object.keys(value).length;
+    if (value == null || value === "") return 0;
+    return 1;
+  };
+  const normalizeRows = (data, metaRows = []) => {
+    const meta = Object.fromEntries((metaRows || []).map(r => [r.key, r]));
+    return Object.entries(data || {}).map(([key, value]) => {
+      const raw = JSON.stringify(value);
+      return {
+        key,
+        label: labelMap[key] || key.replace(/^jamsa_/, ""),
+        value,
+        count: meta[key]?.count ?? countValue(value),
+        size: meta[key]?.size ?? raw.length,
+        modified: meta[key]?.modified || meta[key]?.updated_at || null,
+        protected: JAMSA_PROTECTED_KEYS.includes(key),
+      };
+    }).sort((a, b) => String(b.modified || "").localeCompare(String(a.modified || "")) || a.key.localeCompare(b.key));
+  };
+
+  const loadLocal = useCallback(() => {
+    const data = {};
+    try {
+      Object.keys(window.localStorage || {}).filter(k => k.startsWith("jamsa_")).forEach(k => {
+        const raw = window.localStorage.getItem(k);
+        try { data[k] = JSON.parse(raw); } catch (e) { data[k] = raw; }
+      });
+    } catch (e) {}
+    setBulkData(data);
+    setRows(normalizeRows(data));
+    setSource("local");
+    setStatus({ state: "local", message: `로컬 캐시 ${Object.keys(data).length}개 표시 중` });
+  }, []);
+
+  const loadCloud = useCallback(async () => {
+    setStatus({ state: "loading", message: "클라우드 DB 조회 중..." });
+    try {
+      const fetcher = window.authFetch || ((path, opts) => fetch(path, opts));
+      const [keysRes, bulkRes] = await Promise.all([
+        fetcher("/api/keys", { cache: "no-store" }),
+        fetcher("/api/data-bulk", { cache: "no-store" }),
+      ]);
+      if (keysRes.status === 401 || bulkRes.status === 401) {
+        loadLocal();
+        setStatus({ state: "auth", message: "Supabase 로그인 토큰이 없어 로컬 캐시를 표시합니다." });
+        return;
+      }
+      if (!keysRes.ok || !bulkRes.ok) throw new Error(`API 오류: keys ${keysRes.status}, data ${bulkRes.status}`);
+      const metaRows = await keysRes.json();
+      const bulk = await bulkRes.json();
+      const data = bulk?.data || {};
+      setBulkData(data);
+      setRows(normalizeRows(data, metaRows));
+      setSource("cloud");
+      setStatus({ state: "ok", message: `Supabase DB ${Object.keys(data).length}개 키 조회 완료` });
+    } catch (e) {
+      loadLocal();
+      setStatus({ state: "error", message: `클라우드 조회 실패: ${e.message} · 로컬 캐시 표시` });
+    }
+  }, [loadLocal]);
+
+  useEffect(() => { loadCloud(); }, [loadCloud]);
+
+  const filteredRows = rows.filter(row => {
+    const q = query.trim().toLowerCase();
+    return !q || row.key.toLowerCase().includes(q) || row.label.toLowerCase().includes(q);
+  });
+  const selectedRow = selectedKey === "all" ? null : rows.find(r => r.key === selectedKey);
+  const totalSize = rows.reduce((sum, r) => sum + (Number(r.size) || 0), 0);
+  const protectedCount = rows.filter(r => r.protected).length;
+
+  const exportVisible = () => {
+    const data = {};
+    (selectedRow ? [selectedRow] : filteredRows).forEach(row => { data[row.key] = row.value; });
+    const blob = new Blob([JSON.stringify({ source, exportedAt: new Date().toISOString(), data }, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `jamsa-cloud-db-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const copySelected = async () => {
+    const payload = selectedRow ? selectedRow.value : bulkData;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      alert("선택한 DB 데이터를 클립보드에 복사했습니다.");
+    } catch (e) {
+      alert("복사 실패: " + e.message);
+    }
+  };
+
+  const cloudColor = source === "cloud" ? "#0f766e" : status.state === "auth" ? "#b45309" : "#475569";
+
+  return (
+    <div style={{ height: "100%", overflow: "auto", background: "#eef3f8", padding: 18 }}>
+      <div style={{ maxWidth: 1380, margin: "0 auto" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 800, color: "#64748b" }}>클라우드 데이터베이스</div>
+            <div style={{ fontSize: 26, fontWeight: 950, color: "#0f172a", marginTop: 2 }}>☁️ DB 클라우드 탐색기</div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={loadCloud} style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #bfdbfe", background: "#fff", color: "#1d4ed8", fontWeight: 900, cursor: "pointer" }}>새로고침</button>
+            <button onClick={exportVisible} style={{ padding: "10px 14px", borderRadius: 8, border: "none", background: "#059669", color: "#fff", fontWeight: 900, cursor: "pointer" }}>JSON 내보내기</button>
+            {onClose && <button onClick={onClose} style={{ padding: "10px 14px", borderRadius: 8, border: "none", background: "#0f172a", color: "#fff", fontWeight: 900, cursor: "pointer" }}>닫기</button>}
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10, marginBottom: 12 }}>
+          {[
+            ["저장소", source === "cloud" ? "Supabase" : "Local Cache", cloudColor],
+            ["DB 키", `${rows.length}개`, "#2563eb"],
+            ["보호 데이터", `${protectedCount}/${JAMSA_PROTECTED_KEYS.length}`, "#7c3aed"],
+            ["총 용량", formatBytes(totalSize), "#0f766e"],
+          ].map(([label, value, color]) => (
+            <div key={label} style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 14 }}>
+              <div style={{ fontSize: 11, color: "#64748b", fontWeight: 800 }}>{label}</div>
+              <div style={{ fontSize: 22, color, fontWeight: 950, marginTop: 5 }}>{value}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ padding: 12, borderRadius: 8, background: source === "cloud" ? "#ecfdf5" : "#fffbeb", border: `1px solid ${source === "cloud" ? "#99f6e4" : "#fde68a"}`, color: cloudColor, fontSize: 12, fontWeight: 800, marginBottom: 12 }}>
+          {status.message}
+          {source !== "cloud" && <span style={{ marginLeft: 8, fontWeight: 700 }}>프로그램 화면의 로컬 저장본은 볼 수 있지만, Supabase DB 원본 열람은 로그인 토큰이 필요합니다.</span>}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", gap: 12, minHeight: 620 }}>
+          <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}>
+            <div style={{ padding: 12, borderBottom: "1px solid #e2e8f0", display: "flex", gap: 8 }}>
+              <input value={query} onChange={e => setQuery(e.target.value)} placeholder="DB 키/이름 검색..." style={{ flex: 1, padding: "9px 10px", border: "1px solid #cbd5e1", borderRadius: 7, fontSize: 13 }} />
+            </div>
+            <div style={{ maxHeight: 650, overflow: "auto" }}>
+              <button onClick={() => setSelectedKey("all")} style={{ width: "100%", textAlign: "left", border: "none", borderBottom: "1px solid #f1f5f9", background: selectedKey === "all" ? "#eff6ff" : "#fff", padding: 12, cursor: "pointer" }}>
+                <div style={{ fontSize: 13, fontWeight: 950, color: "#0f172a" }}>전체 DB 보기</div>
+                <div style={{ fontSize: 11, color: "#64748b", marginTop: 3 }}>{filteredRows.length}개 키 · {formatBytes(totalSize)}</div>
+              </button>
+              {filteredRows.map(row => (
+                <button key={row.key} onClick={() => setSelectedKey(row.key)} style={{ width: "100%", textAlign: "left", border: "none", borderBottom: "1px solid #f1f5f9", background: selectedKey === row.key ? "#eff6ff" : "#fff", padding: 12, cursor: "pointer" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 900, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
+                    {row.protected && <span style={{ fontSize: 10, color: "#7c3aed", fontWeight: 900 }}>보호</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, fontFamily: "monospace" }}>{row.key}</div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 6, fontSize: 10, color: "#475569" }}>
+                    <span>{row.count}건</span><span>{formatBytes(row.size)}</span><span>{row.modified ? new Date(row.modified).toLocaleString("ko-KR") : "로컬"}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+            <div style={{ padding: 14, borderBottom: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 950, color: "#0f172a" }}>{selectedRow ? selectedRow.label : "전체 DB 스냅샷"}</div>
+                <div style={{ fontSize: 11, color: "#64748b", marginTop: 3 }}>{selectedRow ? selectedRow.key : "현재 조회된 모든 jamsa_ 데이터"}</div>
+              </div>
+              <button onClick={copySelected} style={{ padding: "8px 11px", borderRadius: 7, border: "1px solid #cbd5e1", background: "#fff", fontSize: 12, fontWeight: 900, cursor: "pointer" }}>복사</button>
+            </div>
+            <div style={{ padding: 14, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+              <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 7, padding: 10 }}><div style={{ fontSize: 10, color: "#64748b", fontWeight: 800 }}>항목 수</div><div style={{ fontSize: 20, fontWeight: 950 }}>{selectedRow ? selectedRow.count : filteredRows.length}</div></div>
+              <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 7, padding: 10 }}><div style={{ fontSize: 10, color: "#64748b", fontWeight: 800 }}>용량</div><div style={{ fontSize: 20, fontWeight: 950 }}>{formatBytes(selectedRow ? selectedRow.size : totalSize)}</div></div>
+              <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 7, padding: 10 }}><div style={{ fontSize: 10, color: "#64748b", fontWeight: 800 }}>저장 원본</div><div style={{ fontSize: 20, fontWeight: 950, color: cloudColor }}>{source === "cloud" ? "DB" : "LOCAL"}</div></div>
+            </div>
+            <pre style={{ flex: 1, minHeight: 420, margin: 14, marginTop: 0, padding: 14, overflow: "auto", background: "#0f172a", color: "#e2e8f0", borderRadius: 8, fontSize: 11, lineHeight: 1.55, fontFamily: "Consolas, monospace" }}>
+              {JSON.stringify(selectedRow ? selectedRow.value : Object.fromEntries(filteredRows.map(r => [r.key, r.value])), null, 2)}
+            </pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WorklogPage({ onClose, addAudit, facActions, worklogs, setWorklogs, currentUser }) {
   const [cycle, setCycle] = useState("DAILY");
   const [date] = useState(new Date().toISOString().slice(0, 10));
@@ -25943,7 +26151,14 @@ function AppInner() {
     }
   }, [currentUser]);
 
-  const [module, setModule] = useState("home"); // "home" | "facility" | "inventory" | "safety"
+  const getInitialModule = () => {
+    try {
+      const hashModule = window.location.hash.replace(/^#/, "");
+      if (["home", "facility", "inventory", "safety", "subagents", "clouddb"].includes(hashModule)) return hashModule;
+    } catch (e) {}
+    return "home";
+  };
+  const [module, setModule] = useState(getInitialModule); // "home" | "facility" | "inventory" | "safety" | "subagents" | "clouddb"
 
   // 🤖 AI 작업 도우미 액션 디스패처 — 검색바 챗봇의 action 버튼이 jamsa-ai-action 이벤트 발행
   useEffect(() => {
@@ -25972,7 +26187,30 @@ function AppInner() {
     window.addEventListener("jamsa-ai-action", handler);
     return () => window.removeEventListener("jamsa-ai-action", handler);
   }, []);
-  useEffect(() => { window.__jamsa_current_page = module; }, [module]);
+  useEffect(() => {
+    window.__jamsa_current_page = module;
+    try {
+      if (window.location.hash !== `#${module}`) window.history.replaceState(null, "", `#${module}`);
+    } catch (e) {}
+  }, [module]);
+  useEffect(() => {
+    const onHashChange = () => {
+      const hashModule = window.location.hash.replace(/^#/, "");
+      if (["home", "facility", "inventory", "safety", "subagents", "clouddb"].includes(hashModule)) setModule(hashModule);
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+  useEffect(() => {
+    const onModuleClick = (event) => {
+      const target = event.target?.closest?.("[data-jamsa-module]");
+      const nextModule = target?.getAttribute?.("data-jamsa-module");
+      if (!nextModule) return;
+      setModule(nextModule);
+    };
+    document.addEventListener("click", onModuleClick, true);
+    return () => document.removeEventListener("click", onModuleClick, true);
+  }, []);
 
   // Lifted state so cross-module features (e.g. Inventory AI → Facility Action) work
   const [facInspections, setFacInspections] = useLocalStorage("jamsa_fac_inspections", FAC_INIT_INSPECTIONS);
@@ -26013,36 +26251,42 @@ function AppInner() {
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
           <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: 0.2 }}>🏛️ 통합관리 시스템</div>
           <div style={{ display: "flex", gap: 2, background: "rgba(255,255,255,0.08)", padding: 3, borderRadius: 8 }}>
-            <button onClick={() => setModule("home")}
+            <button data-jamsa-module="home" onClick={() => setModule("home")}
               style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
                 background: module === "home" ? "linear-gradient(135deg,#059669,#0891b2)" : "transparent",
                 color: module === "home" ? "#fff" : "rgba(255,255,255,0.6)" }}>
               🗺️ 통합지도
             </button>
-            <button onClick={() => setModule("facility")}
+            <button data-jamsa-module="facility" onClick={() => setModule("facility")}
               style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
                 background: module === "facility" ? "#3b5bdb" : "transparent",
                 color: module === "facility" ? "#fff" : "rgba(255,255,255,0.6)" }}>
               🛠 시설점검
             </button>
-            <button onClick={() => setModule("inventory")}
+            <button data-jamsa-module="inventory" onClick={() => setModule("inventory")}
               style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
                 background: module === "inventory" ? "#3b5bdb" : "transparent",
                 color: module === "inventory" ? "#fff" : "rgba(255,255,255,0.6)" }}>
               📦 재고관리
             </button>
-            <button onClick={() => setModule("safety")}
+            <button data-jamsa-module="safety" onClick={() => setModule("safety")}
               style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
                 background: module === "safety" ? "#ef4444" : "transparent",
                 color: module === "safety" ? "#fff" : "rgba(255,255,255,0.6)" }}>
               🛡️ 안전관리
             </button>
-            <button onClick={() => setModule("subagents")}
+            <button data-jamsa-module="subagents" onClick={() => setModule("subagents")}
               style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 800,
                 background: module === "subagents" ? "linear-gradient(135deg,#7c3aed,#2563eb)" : "transparent",
                 color: module === "subagents" ? "#fff" : "rgba(255,255,255,0.6)" }}>
               🤖 서브에이전트
             </button>
+            <a href="#clouddb" data-jamsa-module="clouddb" onMouseDown={() => { window.location.hash = "clouddb"; setModule("clouddb"); }} onClick={() => { window.location.hash = "clouddb"; setModule("clouddb"); }}
+              style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 800,
+                background: module === "clouddb" ? "linear-gradient(135deg,#0ea5e9,#059669)" : "transparent",
+                color: module === "clouddb" ? "#fff" : "rgba(255,255,255,0.6)", textDecoration: "none", display: "inline-flex", alignItems: "center" }}>
+              ☁️ DB 클라우드
+            </a>
             <button onClick={() => {
               const url = localStorage.getItem("jamsa_cctv_guard_url") || "";
               if (!url) {
@@ -26062,7 +26306,7 @@ function AppInner() {
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button onClick={() => setModule("subagents")} title="자동 서브에이전트 관제"
+          <button data-jamsa-module="subagents" onClick={() => setModule("subagents")} title="자동 서브에이전트 관제"
             style={{ padding: "5px 10px", borderRadius: 6, background: autoAgentAlertCount > 0 ? "rgba(220,38,38,0.18)" : "rgba(124,58,237,0.18)", border: autoAgentAlertCount > 0 ? "1px solid rgba(248,113,113,0.45)" : "1px solid rgba(167,139,250,0.35)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 800, display: "flex", alignItems: "center", gap: 4 }}>
             🤖 서브에이전트 <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 10, background: autoAgentAlertCount > 0 ? "rgba(248,113,113,0.28)" : "rgba(167,139,250,0.25)", color: autoAgentAlertCount > 0 ? "#fecaca" : "#ddd6fe" }}>{autoAgentEnabled ? autoAgentReport.recommendations.length : "OFF"}</span>
           </button>
@@ -26078,6 +26322,10 @@ function AppInner() {
             style={{ padding: "5px 10px", borderRadius: 6, background: "rgba(5,150,105,0.15)", border: "1px solid rgba(5,150,105,0.3)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
             💾 백업
           </button>
+          <a href="#clouddb" data-jamsa-module="clouddb" onMouseDown={() => { window.location.hash = "clouddb"; setModule("clouddb"); }} onClick={() => { window.location.hash = "clouddb"; setModule("clouddb"); }} title="클라우드 DB 열람"
+            style={{ padding: "5px 10px", borderRadius: 6, background: "rgba(14,165,233,0.16)", border: "1px solid rgba(14,165,233,0.35)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 800, display: "flex", alignItems: "center", gap: 4 }}>
+            ☁️ DB
+          </a>
           <span style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}>{currentUser.dept}</span>
           <span style={{ fontSize: 12, fontWeight: 700 }}>{currentUser.name}</span>
           <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 4, background: "rgba(59,91,219,0.2)", color: "#93c5fd", fontWeight: 700 }}>{currentUser.role}</span>
@@ -26094,6 +26342,7 @@ function AppInner() {
         {module === "facility"  && <FacilityModule  userCtx={facUser} onLogout={logout} inspections={facInspections} setInspections={setFacInspections} actions={facActions} setActions={setFacActions} addAudit={addAudit} updateFacAction={updateFacAction} />}
         {module === "inventory" && <InventoryModule userCtx={invUser} onLogout={logout} onAddFacAction={addFacAction} switchToFacility={() => setModule("facility")} facActions={facActions} addAudit={addAudit} />}
         {module === "safety"    && <SafetyModule userCtx={facUser} onLogout={logout} facilities={FAC_FACILITIES} onAddFacAction={addFacAction} addAudit={addAudit} worklogs={worklogs} facActions={facActions} auditLog={auditLog} />}
+        {module === "clouddb"   && <CloudDatabasePage />}
         {module === "subagents" && <AutoSubAgentPage
           report={autoAgentReport}
           enabled={autoAgentEnabled}
