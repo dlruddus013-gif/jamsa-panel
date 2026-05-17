@@ -1,0 +1,259 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1600" font-family="'Pretendard','Noto Sans KR',sans-serif">
+  <defs>
+    <linearGradient id="ph-hdr" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#3b5bdb"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="ph-cam" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#dbeafe"/>
+      <stop offset="100%" stop-color="#eef2ff"/>
+    </linearGradient>
+    <linearGradient id="ph-gal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f8fafc"/>
+      <stop offset="100%" stop-color="#f1f5f9"/>
+    </linearGradient>
+    <linearGradient id="ph-burst" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3b5bdb"/>
+      <stop offset="100%" stop-color="#1e40af"/>
+    </linearGradient>
+    <filter id="ph-sh" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-opacity="0.15"/>
+    </filter>
+    <marker id="ph-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3b5bdb"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="1600" fill="#f8fafc"/>
+
+  <!-- Header -->
+  <rect x="0" y="0" width="1200" height="130" fill="url(#ph-hdr)"/>
+  <text x="600" y="55" text-anchor="middle" font-size="32" font-weight="900" fill="#fff">📸 사진 여러 장 동시 입력</text>
+  <text x="600" y="90" text-anchor="middle" font-size="15" fill="#e0e7ff">3가지 방식으로 빠르게 등록 + 자동 압축</text>
+  <text x="600" y="115" text-anchor="middle" font-size="12" fill="#c7d2fe">한국잠사박물관 통합관리 · 사진 다중 입력 가이드 v3.0</text>
+
+  <!-- BEFORE / AFTER 비교 -->
+  <g transform="translate(50,160)">
+    <rect width="1100" height="180" rx="14" fill="#fff" filter="url(#ph-sh)"/>
+    <text x="20" y="35" font-size="20" font-weight="900" fill="#0f172a">⚡ 어떻게 바뀌었나</text>
+
+    <!-- BEFORE -->
+    <g transform="translate(20,55)">
+      <rect width="520" height="105" rx="10" fill="#fef2f2" stroke="#fca5a5"/>
+      <text x="15" y="25" font-size="13" font-weight="900" fill="#991b1b">❌ 이전</text>
+      <text x="15" y="48" font-size="11" fill="#0f172a">• 갤러리 다중 선택은 가능했지만 안 보이는 기능</text>
+      <text x="15" y="66" font-size="11" fill="#0f172a">• 카메라는 한 번에 1장만</text>
+      <text x="15" y="84" font-size="11" fill="#0f172a">• 800px 압축 (선명도 부족)</text>
+      <text x="15" y="98" font-size="11" fill="#0f172a">• 업로드 진행상황 표시 없음</text>
+    </g>
+
+    <!-- AFTER -->
+    <g transform="translate(560,55)">
+      <rect width="520" height="105" rx="10" fill="#dcfce7" stroke="#86efac"/>
+      <text x="15" y="25" font-size="13" font-weight="900" fill="#065f46">✅ 지금</text>
+      <text x="15" y="48" font-size="11" fill="#0f172a">• 🖼️ 갤러리에 <strong>"다중" 배지</strong> 명시</text>
+      <text x="15" y="66" font-size="11" fill="#0f172a">• 📸×N <strong>일괄 카메라 모드</strong> — 연속 촬영</text>
+      <text x="15" y="84" font-size="11" fill="#0f172a">• <strong>1600px·JPEG 75%</strong> 자동 압축 (선명+가벼움)</text>
+      <text x="15" y="98" font-size="11" fill="#0f172a">• <strong>실시간 진행률</strong> ⏳ N/M (%)</text>
+    </g>
+  </g>
+
+  <!-- 3개 버튼 비교 (시각화) -->
+  <g transform="translate(50,360)">
+    <rect width="1100" height="380" rx="14" fill="#fff" filter="url(#ph-sh)"/>
+    <text x="20" y="35" font-size="20" font-weight="900" fill="#0f172a">🎯 3개 버튼 — 상황별 사용법</text>
+
+    <!-- 버튼 1: 카메라 단일 -->
+    <g transform="translate(40,80)">
+      <rect width="320" height="270" rx="12" fill="#fafafa" stroke="#e5e7eb"/>
+      <text x="160" y="35" text-anchor="middle" font-size="13" font-weight="800" fill="#475569">방식 1 · 일반 카메라</text>
+
+      <!-- 버튼 미리보기 -->
+      <g transform="translate(125,55)">
+        <rect width="70" height="70" rx="10" fill="url(#ph-cam)" stroke="#3b5bdb" stroke-width="2" stroke-dasharray="4,2"/>
+        <text x="35" y="50" text-anchor="middle" font-size="32" fill="#3b5bdb">📷</text>
+      </g>
+
+      <text x="160" y="160" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">📷 카메라 1회 촬영</text>
+      <text x="160" y="180" text-anchor="middle" font-size="10" fill="#64748b">한 장만 빠르게 찍을 때</text>
+
+      <line x1="20" y1="200" x2="300" y2="200" stroke="#e5e7eb"/>
+      <text x="20" y="222" font-size="10" font-weight="700" fill="#475569">사용 시나리오</text>
+      <text x="20" y="240" font-size="10" fill="#64748b">• 단순 상태 확인 1컷</text>
+      <text x="20" y="256" font-size="10" fill="#64748b">• QR 라벨 1장</text>
+    </g>
+
+    <!-- 버튼 2: 갤러리 다중 -->
+    <g transform="translate(390,80)">
+      <rect width="320" height="270" rx="12" fill="#fafafa" stroke="#e5e7eb"/>
+      <text x="160" y="35" text-anchor="middle" font-size="13" font-weight="800" fill="#475569">방식 2 · 갤러리 다중 선택</text>
+
+      <g transform="translate(125,55)">
+        <rect width="70" height="70" rx="10" fill="url(#ph-gal)" stroke="#64748b" stroke-width="2" stroke-dasharray="4,2"/>
+        <text x="35" y="50" text-anchor="middle" font-size="30" fill="#64748b">🖼️</text>
+        <!-- "다중" 배지 -->
+        <rect x="48" y="58" width="32" height="14" rx="7" fill="#64748b"/>
+        <text x="64" y="68" text-anchor="middle" font-size="9" font-weight="900" fill="#fff">다중</text>
+      </g>
+
+      <text x="160" y="160" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a">🖼️ 갤러리에서 여러 장</text>
+      <text x="160" y="180" text-anchor="middle" font-size="10" fill="#64748b">앨범에 이미 있는 사진 일괄</text>
+
+      <line x1="20" y1="200" x2="300" y2="200" stroke="#e5e7eb"/>
+      <text x="20" y="222" font-size="10" font-weight="700" fill="#475569">사용 방법</text>
+      <text x="20" y="240" font-size="10" fill="#64748b">• 모바일: 길게 누르기 → 추가 탭</text>
+      <text x="20" y="256" font-size="10" fill="#64748b">• PC: Ctrl/Shift + 클릭</text>
+    </g>
+
+    <!-- 버튼 3: 버스트 모드 -->
+    <g transform="translate(740,80)">
+      <rect width="320" height="270" rx="12" fill="#dbeafe" stroke="#3b5bdb" stroke-width="2"/>
+      <text x="160" y="35" text-anchor="middle" font-size="13" font-weight="800" fill="#1e40af">방식 3 · 일괄 카메라 (NEW)</text>
+
+      <g transform="translate(95,55)">
+        <!-- 카메라 + ON 배지 -->
+        <rect width="70" height="70" rx="10" fill="url(#ph-burst)" stroke="#3b5bdb" stroke-width="2"/>
+        <text x="35" y="50" text-anchor="middle" font-size="32" fill="#fff">📷</text>
+        <rect x="56" y="56" width="20" height="16" rx="8" fill="#fff"/>
+        <text x="66" y="68" text-anchor="middle" font-size="10" font-weight="900" fill="#3b5bdb">∞</text>
+
+        <!-- 토글 버튼 -->
+        <rect x="90" y="20" width="80" height="30" rx="5" fill="#3b5bdb"/>
+        <text x="130" y="40" text-anchor="middle" font-size="11" font-weight="900" fill="#fff">📸×N ON</text>
+      </g>
+
+      <text x="160" y="160" text-anchor="middle" font-size="11" font-weight="700" fill="#1e40af">한 장 찍으면 자동 재오픈</text>
+      <text x="160" y="180" text-anchor="middle" font-size="10" fill="#3b5bdb">현장에서 연속 촬영용 ⭐</text>
+
+      <line x1="20" y1="200" x2="300" y2="200" stroke="#bfdbfe"/>
+      <text x="20" y="222" font-size="10" font-weight="700" fill="#1e40af">사용 시나리오</text>
+      <text x="20" y="240" font-size="10" fill="#1e3a8a">• 시설 점검 여러 각도</text>
+      <text x="20" y="256" font-size="10" fill="#1e3a8a">• 재고 박스 6면 촬영</text>
+    </g>
+  </g>
+
+  <!-- 일괄 카메라 모드 단계별 흐름 -->
+  <g transform="translate(50,760)">
+    <rect width="1100" height="380" rx="14" fill="#fff" filter="url(#ph-sh)"/>
+    <text x="20" y="35" font-size="20" font-weight="900" fill="#0f172a">📸×N 일괄 카메라 모드 — 단계별 흐름</text>
+
+    <!-- Step 1 -->
+    <g transform="translate(30,70)">
+      <circle cx="40" cy="40" r="36" fill="#3b5bdb"/>
+      <text x="40" y="50" text-anchor="middle" font-size="24" font-weight="900" fill="#fff">1</text>
+      <text x="40" y="105" text-anchor="middle" font-size="11" font-weight="800" fill="#0f172a">토글 ON</text>
+      <text x="40" y="125" text-anchor="middle" font-size="9" fill="#64748b">📸×N 버튼</text>
+      <text x="40" y="140" text-anchor="middle" font-size="9" fill="#64748b">클릭 (파랑 활성)</text>
+    </g>
+
+    <line x1="85" y1="100" x2="195" y2="100" stroke="#3b5bdb" stroke-width="3" marker-end="url(#ph-arr)"/>
+
+    <!-- Step 2 -->
+    <g transform="translate(210,70)">
+      <circle cx="40" cy="40" r="36" fill="#3b5bdb"/>
+      <text x="40" y="50" text-anchor="middle" font-size="24" font-weight="900" fill="#fff">2</text>
+      <text x="40" y="105" text-anchor="middle" font-size="11" font-weight="800" fill="#0f172a">📷 카메라</text>
+      <text x="40" y="125" text-anchor="middle" font-size="9" fill="#64748b">버튼 클릭 →</text>
+      <text x="40" y="140" text-anchor="middle" font-size="9" fill="#64748b">사진 촬영</text>
+    </g>
+
+    <line x1="265" y1="100" x2="375" y2="100" stroke="#3b5bdb" stroke-width="3" marker-end="url(#ph-arr)"/>
+
+    <!-- Step 3 -->
+    <g transform="translate(390,70)">
+      <circle cx="40" cy="40" r="36" fill="#10b981"/>
+      <text x="40" y="50" text-anchor="middle" font-size="24" font-weight="900" fill="#fff">3</text>
+      <text x="40" y="105" text-anchor="middle" font-size="11" font-weight="800" fill="#065f46">자동 압축</text>
+      <text x="40" y="125" text-anchor="middle" font-size="9" fill="#64748b">1600px JPEG</text>
+      <text x="40" y="140" text-anchor="middle" font-size="9" fill="#64748b">75% 품질</text>
+    </g>
+
+    <line x1="445" y1="100" x2="555" y2="100" stroke="#3b5bdb" stroke-width="3" marker-end="url(#ph-arr)"/>
+
+    <!-- Step 4 -->
+    <g transform="translate(570,70)">
+      <circle cx="40" cy="40" r="36" fill="#f59e0b"/>
+      <text x="40" y="50" text-anchor="middle" font-size="24" font-weight="900" fill="#fff">4</text>
+      <text x="40" y="105" text-anchor="middle" font-size="11" font-weight="800" fill="#92400e">카메라 재오픈</text>
+      <text x="40" y="125" text-anchor="middle" font-size="9" fill="#64748b">자동 (수동 X)</text>
+      <text x="40" y="140" text-anchor="middle" font-size="9" fill="#64748b">또 찍기 가능</text>
+    </g>
+
+    <line x1="625" y1="100" x2="735" y2="100" stroke="#3b5bdb" stroke-width="3" marker-end="url(#ph-arr)" stroke-dasharray="5,5"/>
+    <text x="680" y="92" text-anchor="middle" font-size="9" fill="#3b5bdb">반복</text>
+
+    <!-- Step 5 -->
+    <g transform="translate(750,70)">
+      <circle cx="40" cy="40" r="36" fill="#7c3aed"/>
+      <text x="40" y="50" text-anchor="middle" font-size="24" font-weight="900" fill="#fff">5</text>
+      <text x="40" y="105" text-anchor="middle" font-size="11" font-weight="800" fill="#5b21b6">끝났을 때</text>
+      <text x="40" y="125" text-anchor="middle" font-size="9" fill="#64748b">취소 누르거나</text>
+      <text x="40" y="140" text-anchor="middle" font-size="9" fill="#64748b">📸×N OFF</text>
+    </g>
+
+    <line x1="805" y1="100" x2="915" y2="100" stroke="#3b5bdb" stroke-width="3" marker-end="url(#ph-arr)"/>
+
+    <!-- Step 6 -->
+    <g transform="translate(930,70)">
+      <circle cx="40" cy="40" r="36" fill="#dc2626"/>
+      <text x="40" y="50" text-anchor="middle" font-size="24" font-weight="900" fill="#fff">✓</text>
+      <text x="40" y="105" text-anchor="middle" font-size="11" font-weight="800" fill="#991b1b">완료</text>
+      <text x="40" y="125" text-anchor="middle" font-size="9" fill="#64748b">N장 모두</text>
+      <text x="40" y="140" text-anchor="middle" font-size="9" fill="#64748b">자동 저장됨</text>
+    </g>
+
+    <!-- 진행률 표시 미리보기 -->
+    <g transform="translate(30,200)">
+      <rect width="1040" height="150" rx="10" fill="#0f172a"/>
+      <text x="20" y="30" font-size="13" font-weight="800" fill="#86efac">⏳ 실시간 업로드 진행률</text>
+      <text x="20" y="55" font-size="11" fill="#cbd5e1">사진 업로드 중에는 카메라/갤러리 버튼 아래에 검은 배경 툴팁이 표시:</text>
+
+      <rect x="20" y="75" width="240" height="40" rx="6" fill="#0f172a" stroke="#475569"/>
+      <text x="40" y="100" font-size="14" font-weight="800" fill="#fbbf24">⏳ 3/12 (25%)</text>
+
+      <text x="290" y="100" font-size="11" fill="#94a3b8">← 12장 중 3번째 압축 완료 표시</text>
+
+      <text x="20" y="135" font-size="10" fill="#94a3b8">• 업로드 중에는 모든 버튼 비활성화 (중복 클릭 방지)</text>
+    </g>
+  </g>
+
+  <!-- 자동 압축 효과 -->
+  <g transform="translate(50,1160)">
+    <rect width="1100" height="200" rx="14" fill="#fff" filter="url(#ph-sh)"/>
+    <text x="20" y="35" font-size="20" font-weight="900" fill="#0f172a">🗜️ 자동 압축 효과</text>
+
+    <!-- 원본 -->
+    <g transform="translate(40,65)">
+      <rect width="300" height="105" rx="10" fill="#fef2f2" stroke="#fca5a5"/>
+      <text x="150" y="30" text-anchor="middle" font-size="13" font-weight="900" fill="#991b1b">원본 이미지</text>
+      <text x="150" y="58" text-anchor="middle" font-size="22" font-weight="900" fill="#dc2626">3.2 MB</text>
+      <text x="150" y="80" text-anchor="middle" font-size="10" fill="#64748b">4032 × 3024 (스마트폰)</text>
+      <text x="150" y="96" text-anchor="middle" font-size="10" fill="#64748b">JPEG 95% 원본</text>
+    </g>
+
+    <text x="370" y="125" font-size="28" fill="#3b5bdb">→</text>
+
+    <!-- 압축 후 -->
+    <g transform="translate(410,65)">
+      <rect width="300" height="105" rx="10" fill="#dcfce7" stroke="#86efac"/>
+      <text x="150" y="30" text-anchor="middle" font-size="13" font-weight="900" fill="#065f46">자동 압축 후</text>
+      <text x="150" y="58" text-anchor="middle" font-size="22" font-weight="900" fill="#10b981">≈ 380 KB</text>
+      <text x="150" y="80" text-anchor="middle" font-size="10" fill="#64748b">1600 × 1200</text>
+      <text x="150" y="96" text-anchor="middle" font-size="10" fill="#64748b">JPEG 75%</text>
+    </g>
+
+    <text x="740" y="125" font-size="28" fill="#3b5bdb">→</text>
+
+    <!-- 절감 효과 -->
+    <g transform="translate(780,65)">
+      <rect width="280" height="105" rx="10" fill="#fef3c7" stroke="#fde68a"/>
+      <text x="140" y="30" text-anchor="middle" font-size="13" font-weight="900" fill="#92400e">📉 88% 용량 감소</text>
+      <text x="140" y="55" text-anchor="middle" font-size="11" fill="#78350f">• localStorage 쿼터 보호</text>
+      <text x="140" y="72" text-anchor="middle" font-size="11" fill="#78350f">• 클라우드 sync 빠름</text>
+      <text x="140" y="89" text-anchor="middle" font-size="11" fill="#78350f">• 5MB 차단 회피</text>
+    </g>
+  </g>
+
+  <!-- Footer -->
+  <text x="600" y="1580" text-anchor="middle" font-size="11" fill="#94a3b8">한국잠사박물관 통합관리 시스템 · PR #61 · 사진 다중 입력 + 일괄 카메라 모드</text>
+</svg>
