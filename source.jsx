@@ -7170,6 +7170,16 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
     setModal(null);
   };
   const doDel=id=>{const p=prods.find(x=>x.id===id);if(p&&confirm(`"${p.name}" 삭제?`)){setProds(pr=>pr.filter(x=>x.id!==id));addH("삭제",p.name,"삭제",0);setSelP(null);}};
+  const doBulkDel=(ids)=>{
+    if(!ids||ids.length===0)return;
+    const items=prods.filter(p=>ids.includes(p.id));
+    if(items.length===0)return;
+    if(!confirm(`선택한 ${items.length}개 품목을 모두 삭제할까요?\n\n${items.slice(0,5).map(p=>`• ${p.name}`).join("\n")}${items.length>5?`\n외 ${items.length-5}개`:""}\n\n이 작업은 되돌릴 수 있습니다 (백업 관리자에서 복원).`))return;
+    const idSet=new Set(ids);
+    setProds(pr=>pr.filter(x=>!idSet.has(x.id)));
+    addH("일괄삭제","",`${items.length}개 품목 일괄 삭제: ${items.slice(0,3).map(p=>p.name).join(", ")}${items.length>3?` 외 ${items.length-3}건`:""}`,items.length);
+    setSelP(null);
+  };
 
   const doAddPhoto=(pid,dataUrl)=>{
     setProds(pr=>pr.map(x=>x.id!==pid?x:{...x,photos:[...(x.photos||[]),{id:Date.now(),url:dataUrl,date:new Date().toISOString()}]}));
@@ -7740,7 +7750,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
           )}
 
           {page==="products"&&<PList prods={filtered} totalQ={totalQ} search={search} setSearch={setSearch} fLoc={fLoc} setFLoc={setFLoc} fCat={fCat} setFCat={setFCat} sortBy={sortBy} setSortBy={setSortBy} cats={invCats} locs={invLocs}
-            selP={selP} setSelP={setSelP} onIn={p=>setModal({type:"in",p})} onOut={p=>setModal({type:"out",p})} onAdj={p=>setModal({type:"adj",p})} onEdit={p=>setModal({type:"edit",p})} onDel={doDel} onShowQR={p=>setModal({type:"qr",p})}/>}
+            selP={selP} setSelP={setSelP} onIn={p=>setModal({type:"in",p})} onOut={p=>setModal({type:"out",p})} onAdj={p=>setModal({type:"adj",p})} onEdit={p=>setModal({type:"edit",p})} onDel={doDel} onBulkDel={doBulkDel} onShowQR={p=>setModal({type:"qr",p})}/>}
 
           {(page==="stockin"||page==="stockout"||page==="adjust")&&<SPg type={page==="stockin"?"in":page==="stockout"?"out":"adj"} prods={prods} locs={invLocs} onIn={doIn} onOut={doOut} onAdj={doAdj}/>}
           {page==="history"&&<HPg hist={hist} prods={prods}/>}
@@ -13251,8 +13261,36 @@ function ZoneBottom({zone,prods,hist,allLocs,onClose,doIn,doOut,doAdj,doAdd,doDe
 }
 
 // ========== PRODUCTS LIST ==========
-function PList({prods,totalQ,search,setSearch,fLoc,setFLoc,fCat,setFCat,sortBy="recent_desc",setSortBy=()=>{},cats= CATS,locs= LOCS,selP,setSelP,onIn,onOut,onAdj,onEdit,onDel,onShowQR}){
+function PList({prods,totalQ,search,setSearch,fLoc,setFLoc,fCat,setFCat,sortBy="recent_desc",setSortBy=()=>{},cats= CATS,locs= LOCS,selP,setSelP,onIn,onOut,onAdj,onEdit,onDel,onBulkDel,onShowQR}){
   const sp=selP?prods.find(p=>p.id===selP.id)||selP:null;
+  const PAGE_SIZE=100;
+  const [page,setPage]=useState(1);
+  const [sel,setSel]=useState(()=>new Set());
+  // 필터/정렬/검색 바뀌면 페이지 리셋
+  useEffect(()=>{setPage(1);},[search,fLoc,fCat,sortBy]);
+  const totalPages=Math.max(1,Math.ceil(prods.length/PAGE_SIZE));
+  const pageProds=prods.slice((page-1)*PAGE_SIZE,page*PAGE_SIZE);
+  const toggleOne=(id)=>{
+    const next=new Set(sel);
+    if(next.has(id))next.delete(id);else next.add(id);
+    setSel(next);
+  };
+  const togglePageAll=()=>{
+    const allOnPage=pageProds.every(p=>sel.has(p.id));
+    const next=new Set(sel);
+    pageProds.forEach(p=>{ if(allOnPage)next.delete(p.id);else next.add(p.id); });
+    setSel(next);
+  };
+  const toggleAllFiltered=()=>{
+    if(prods.every(p=>sel.has(p.id))){setSel(new Set());}
+    else{setSel(new Set(prods.map(p=>p.id)));}
+  };
+  const clearSel=()=>setSel(new Set());
+  const bulkDelete=()=>{
+    if(sel.size===0)return;
+    onBulkDel&&onBulkDel(Array.from(sel));
+    setSel(new Set());
+  };
   return(
     <div style={{display:"flex",height:"100%"}}>
       <div style={{flex:1,display:"flex",flexDirection:"column"}}>
@@ -13272,18 +13310,51 @@ function PList({prods,totalQ,search,setSearch,fLoc,setFLoc,fCat,setFCat,sortBy="
             <option value="qty_asc">재고 적은 순</option>
           </select>
         </div>
-        <div style={{padding:"7px 16px",display:"flex",justifyContent:"space-between",fontSize:11,color:"#94a3b8",fontWeight:600,borderBottom:"1px solid #f1f3f5",background:"#fafbfc"}}>
-          <span>{prods.length}개</span><span style={{color:"#3b5bdb",fontWeight:700}}>총 {totalQ.toLocaleString()}</span>
+        {/* 선택 액션 바 */}
+        <div style={{padding:"6px 16px",display:"flex",alignItems:"center",gap:8,fontSize:11,borderBottom:"1px solid #f1f3f5",background:sel.size>0?"#fef3c7":"#fafbfc",flexWrap:"wrap"}}>
+          <label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontWeight:700,color:"#475569"}} title="현재 페이지 전체 선택/해제">
+            <input type="checkbox" checked={pageProds.length>0 && pageProds.every(p=>sel.has(p.id))} onChange={togglePageAll}/>
+            현재 페이지 ({pageProds.length})
+          </label>
+          <button type="button" onClick={toggleAllFiltered} style={{padding:"3px 8px",fontSize:10,background:"#eef2ff",color:"#3730a3",border:"none",borderRadius:4,cursor:"pointer",fontWeight:700}}>
+            전체 {prods.length}개 {prods.every(p=>sel.has(p.id))?"해제":"선택"}
+          </button>
+          {sel.size>0 && (
+            <>
+              <span style={{padding:"2px 8px",background:"#fbbf24",color:"#78350f",borderRadius:4,fontWeight:800}}>✓ {sel.size}개 선택됨</span>
+              <button type="button" onClick={clearSel} style={{padding:"3px 8px",fontSize:10,background:"#fff",color:"#64748b",border:"1px solid #cbd5e1",borderRadius:4,cursor:"pointer",fontWeight:700}}>선택 해제</button>
+              <button type="button" onClick={bulkDelete} style={{padding:"4px 14px",fontSize:11,background:"#dc2626",color:"#fff",border:"none",borderRadius:5,cursor:"pointer",fontWeight:700,marginLeft:"auto"}}>
+                🗑️ 선택 {sel.size}개 삭제
+              </button>
+            </>
+          )}
+          <div style={{flex:1}}/>
+          <span style={{color:"#94a3b8"}}>{prods.length}개</span>
+          <span style={{color:"#3b5bdb",fontWeight:700}}>총 {totalQ.toLocaleString()}</span>
         </div>
-        <div style={{flex:1,overflow:"auto"}}>{prods.map(p=>(
-          <div key={p.id} className="rh" onClick={()=>setSelP(p)} style={{display:"flex",alignItems:"center",padding:"9px 16px",borderBottom:"1px solid #f1f3f5",cursor:"pointer",background:sp?.id===p.id?"#eef2ff":"#fff"}}>
+        <div style={{flex:1,overflow:"auto"}}>{pageProds.map(p=>{
+          const isSel=sel.has(p.id);
+          return(
+          <div key={p.id} className="rh" onClick={()=>setSelP(p)} style={{display:"flex",alignItems:"center",padding:"9px 16px",borderBottom:"1px solid #f1f3f5",cursor:"pointer",background:isSel?"#fef3c7":sp?.id===p.id?"#eef2ff":"#fff"}}>
+            <input type="checkbox" checked={isSel} onClick={e=>e.stopPropagation()} onChange={()=>toggleOne(p.id)} style={{marginRight:8,cursor:"pointer",width:16,height:16}}/>
             <button onClick={e=>{e.stopPropagation();onShowQR(p);}} style={{background:"none",border:"1px solid #e5e7eb",borderRadius:5,padding:2,cursor:"pointer",marginRight:8,lineHeight:0}}>
               <QRCodeSVG text={p.code} size={28} color="#333"/>
             </button>
             <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:700}}>{p.name}</div><div style={{fontSize:10,color:"#94a3b8"}}><span className="badge" style={{background:`hsl(${(p.cat.charCodeAt(0)*73)%360},25%,93%)`,color:`hsl(${(p.cat.charCodeAt(0)*73)%360},35%,40%)`,marginRight:4}}>{p.cat}</span>{p.code} · {p.loc}</div></div>
             <div style={{fontSize:16,fontWeight:900,color:p.qty===0?"#ef4444":p.qty<5?"#f59e0b":"#3b5bdb"}}>{p.qty}</div>
           </div>
-        ))}</div>
+        );})}</div>
+        {/* 페이지네이션 */}
+        {totalPages>1 && (
+          <div style={{padding:"8px 16px",display:"flex",alignItems:"center",justifyContent:"center",gap:6,borderTop:"1px solid #f1f3f5",background:"#fafbfc"}}>
+            <button type="button" onClick={()=>setPage(1)} disabled={page===1} style={{padding:"4px 10px",fontSize:11,background:"#fff",border:"1px solid #e5e7eb",borderRadius:4,cursor:page===1?"not-allowed":"pointer",opacity:page===1?0.4:1}}>« 처음</button>
+            <button type="button" onClick={()=>setPage(p=>Math.max(1,p-1))} disabled={page===1} style={{padding:"4px 10px",fontSize:11,background:"#fff",border:"1px solid #e5e7eb",borderRadius:4,cursor:page===1?"not-allowed":"pointer",opacity:page===1?0.4:1}}>‹</button>
+            <span style={{padding:"4px 14px",fontSize:11,fontWeight:700,color:"#0f172a",background:"#fff",border:"1px solid #cbd5e1",borderRadius:4}}>{page} / {totalPages}</span>
+            <button type="button" onClick={()=>setPage(p=>Math.min(totalPages,p+1))} disabled={page===totalPages} style={{padding:"4px 10px",fontSize:11,background:"#fff",border:"1px solid #e5e7eb",borderRadius:4,cursor:page===totalPages?"not-allowed":"pointer",opacity:page===totalPages?0.4:1}}>›</button>
+            <button type="button" onClick={()=>setPage(totalPages)} disabled={page===totalPages} style={{padding:"4px 10px",fontSize:11,background:"#fff",border:"1px solid #e5e7eb",borderRadius:4,cursor:page===totalPages?"not-allowed":"pointer",opacity:page===totalPages?0.4:1}}>끝 »</button>
+            <span style={{fontSize:10,color:"#94a3b8",marginLeft:8}}>페이지당 {PAGE_SIZE}개</span>
+          </div>
+        )}
       </div>
       {sp&&<DPan p={sp} onIn={onIn} onOut={onOut} onAdj={onAdj} onEdit={onEdit} onDel={onDel} onShowQR={onShowQR} onClose={()=>setSelP(null)}/>}
     </div>
