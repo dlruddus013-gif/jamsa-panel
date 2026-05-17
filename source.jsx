@@ -557,18 +557,37 @@ const normalizeInventoryImportRow = (row, defaults = {}) => {
   };
 };
 
+// CSV/\uC5D1\uC140 \uC778\uCF54\uB529 \uC790\uB3D9 \uAC10\uC9C0 \u2014 UTF-8 \uC6B0\uC120, \uC2E4\uD328 \uC2DC EUC-KR/CP949 \uD3F4\uBC31
+// Windows \uC5D1\uC140\uC5D0\uC11C "CSV(\uC27C\uD45C\uB85C \uBD84\uB9AC)" \uC800\uC7A5\uD558\uBA74 \uAC70\uC758 EUC-KR (\uD55C\uAE00 \uAE68\uC9D0 \uBC29\uC9C0\uC6A9)
+const decodeBytesAsText = (buf) => {
+  // 1\uCC28: UTF-8 strict \u2014 \uD55C\uAE00\uC774 \uC798\uBABB\uB41C \uC704\uCE58\uC5D0 \uC788\uC73C\uBA74 throw
+  try {
+    const utf8 = new TextDecoder("utf-8", { fatal: true }).decode(buf);
+    return utf8;
+  } catch (e) { /* fallback */ }
+  // 2\uCC28: EUC-KR (Windows-949 \uB3D9\uB4F1) \u2014 \uD55C\uAD6D \uC708\uB3C4\uC6B0 \uC5D1\uC140 \uAE30\uBCF8
+  try { return new TextDecoder("euc-kr", { fatal: false }).decode(buf); }
+  catch (e) { /* try cp949 */ }
+  try { return new TextDecoder("cp949", { fatal: false }).decode(buf); }
+  catch (e) { /* final fallback */ }
+  // 3\uCC28: UTF-8 lenient (\uFFFD \uCE58\uD658 \uD5C8\uC6A9)
+  return new TextDecoder("utf-8", { fatal: false }).decode(buf);
+};
+
 const parseInventorySpreadsheet = async (file) => {
   const ext = file.name.split(".").pop()?.toLowerCase();
   if (ext === "csv") {
-    const text = await file.text();
-    const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter(Boolean);
+    const buf = await file.arrayBuffer();
+    const text = decodeBytesAsText(buf).replace(/^\uFEFF/, "");
+    const lines = text.split(/\r?\n/).filter(Boolean);
     const rows = lines.map(line => line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(v => v.replace(/^"|"$/g, "").replace(/""/g, '"').trim()));
     const headers = rows.shift() || [];
     return rows.map(cols => Object.fromEntries(headers.map((h, i) => [h, cols[i] ?? ""])));
   }
   const XLSX = await loadXLSX();
   const buf = await file.arrayBuffer();
-  const wb = XLSX.read(buf, { type: "array", cellDates: false, raw: false });
+  // .xls(\uAD6C\uBC84\uC804)\uB3C4 codepage \uC790\uB3D9 \uAC10\uC9C0
+  const wb = XLSX.read(buf, { type: "array", cellDates: false, raw: false, codepage: 949 });
   const ws = wb.Sheets[wb.SheetNames[0]];
   return XLSX.utils.sheet_to_json(ws, { defval: "", raw: false });
 };
