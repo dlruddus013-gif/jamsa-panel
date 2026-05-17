@@ -9931,6 +9931,8 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
   const [editPosMode, setEditPosMode] = useState(false);
   const [draggingZoneId, setDraggingZoneId] = useState(null);
   const [dragOffset, setDragOffset] = useState({ dx: 0, dy: 0 });
+  const [renamingZoneId, setRenamingZoneId] = useState(null);
+  const [renameValue, setRenameValue] = useState("");
   const [drawPreview, setDrawPreview] = useState(null); // {lat, lng, x%, y%}
   const [newZoneForm, setNewZoneForm] = useState(null); // { x%, y%, lat, lng }
 
@@ -10689,9 +10691,50 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
                 userSelect: "none",
               }}>
               <div style={{fontSize:usingGps?9:11,fontWeight:700,color:isClosest?"#fff":"#333",lineHeight:1.3}}>
-                {usingGps?z.icon+" ":""}{z.name.length>9?z.name.slice(0,9)+"…":z.name}
-                {z.custom && <span style={{fontSize:8,marginLeft:3,padding:"0 3px",borderRadius:2,background:isClosest?"#fff":"#fbbf24",color:isClosest?"#059669":"#000"}}>사용자</span>}
-                {editPosMode && <span style={{fontSize:8,marginLeft:4,color:"#7c2d12",fontWeight:900}}>↔ 드래그</span>}
+                {renamingZoneId === z.id ? (
+                  <input
+                    autoFocus
+                    value={renameValue}
+                    onChange={e => setRenameValue(e.target.value)}
+                    onClick={e => e.stopPropagation()}
+                    onMouseDown={e => e.stopPropagation()}
+                    onKeyDown={e => {
+                      e.stopPropagation();
+                      if (e.key === "Enter") {
+                        if (onUpdateZone && renameValue.trim()) onUpdateZone(z.id, { name: renameValue.trim() });
+                        setRenamingZoneId(null);
+                      } else if (e.key === "Escape") {
+                        setRenamingZoneId(null);
+                      }
+                    }}
+                    onBlur={() => {
+                      if (onUpdateZone && renameValue.trim() && renameValue.trim() !== z.name) {
+                        onUpdateZone(z.id, { name: renameValue.trim() });
+                      }
+                      setRenamingZoneId(null);
+                    }}
+                    style={{ padding: "2px 6px", border: "1px solid #f59e0b", borderRadius: 3, fontSize: 11, width: 100, fontFamily: "inherit" }}
+                  />
+                ) : (
+                  <>
+                    {usingGps?z.icon+" ":""}{z.name.length>9?z.name.slice(0,9)+"…":z.name}
+                    {z.custom && <span style={{fontSize:8,marginLeft:3,padding:"0 3px",borderRadius:2,background:isClosest?"#fff":"#fbbf24",color:isClosest?"#059669":"#000"}}>사용자</span>}
+                    {editPosMode && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={e => { e.stopPropagation(); setRenameValue(z.name); setRenamingZoneId(z.id); }}
+                          onMouseDown={e => e.stopPropagation()}
+                          style={{ marginLeft: 4, padding: "0 4px", fontSize: 9, background: "#fff", color: "#7c2d12", border: "1px solid #f59e0b", borderRadius: 3, cursor: "pointer", fontWeight: 800 }}
+                          title="구역 이름 변경"
+                        >
+                          ✏️
+                        </button>
+                        <span style={{fontSize:8,marginLeft:4,color:"#7c2d12",fontWeight:900}}>↔ 드래그</span>
+                      </>
+                    )}
+                  </>
+                )}
               </div>
               <div style={{fontSize:usingGps?13:16,fontWeight:900,color:isClosest?"#fff":(q===0?"#ef4444":z.color),lineHeight:1.2}}>{q.toLocaleString()}</div>
             </div>);
