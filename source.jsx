@@ -25666,29 +25666,40 @@ window.onload = () => {
                     <strong>한 번만 자동 시작 등록하면 PC 켜질 때마다 자동 실행됩니다 ↓</strong>
                   </div>
 
-                  {/* 방법 1: 자동 시작 등록 */}
-                  <div style={{ padding: 14, background: "#fef3c7", border: "2px solid #fbbf24", borderRadius: 8, marginBottom: 12 }}>
-                    <div style={{ fontSize: 14, fontWeight: 800, color: "#78350f", marginBottom: 8 }}>
-                      🔧 방법 1: 자동 시작 등록 (권장 · 한 번만)
+                  {/* 방법 1: 24/7 자동 가동 (최강 권장) */}
+                  <div style={{ padding: 14, background: "linear-gradient(135deg,#dcfce7,#d1fae5)", border: "2px solid #10b981", borderRadius: 8, marginBottom: 12 }}>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: "#065f46", marginBottom: 8 }}>
+                      🏆 방법 1: 24/7 자동 가동 설치 (최강 권장 · 한 번만)
                     </div>
-                    <div style={{ fontSize: 12, lineHeight: 1.7, color: "#78350f" }}>
-                      박물관 PC에서:<br />
-                      1. <strong>Win+R</strong> 키 → <code style={{ background: "#fff", padding: "1px 6px", borderRadius: 3 }}>shell:startup</code> 입력 → Enter<br />
-                      2. 시작 프로그램 폴더가 열림<br />
-                      3. 다운로드 받은 <strong><code style={{ background: "#fff", padding: "1px 6px", borderRadius: 3 }}>jamsa-cctv-autostart.bat</code></strong>를 그 폴더에 복사<br />
-                      4. 다음에 PC 켜질 때마다 <strong>자동으로 CCTV 서버 + Cloudflare Tunnel 가동</strong>
+                    <div style={{ fontSize: 12, lineHeight: 1.7, color: "#065f46" }}>
+                      박물관 PC가 켜져 있는 동안 <strong>항상 자동 가동 + 죽으면 자동 재시작</strong> 보장:<br />
+                      1. <a href="/jamsa-cctv-install.bat" download style={{ color: "#047857", fontWeight: 800, textDecoration: "underline" }}>📥 jamsa-cctv-install.bat 다운로드</a><br />
+                      2. 파일 <strong>우클릭 → "관리자 권한으로 실행"</strong><br />
+                      3. cctv.py 경로 입력 (또는 Enter로 기본값 사용)<br />
+                      4. 끝! Windows 작업 스케줄러에 등록됨
+                    </div>
+                    <div style={{ marginTop: 8, padding: 8, background: "#fff", borderRadius: 5, fontSize: 11, color: "#065f46" }}>
+                      ✅ <strong>자동 처리되는 것:</strong><br />
+                      • PC 부팅 시 자동 시작 (사용자 로그인 안 해도 OK)<br />
+                      • 서버가 죽으면 1분 후 자동 재시작 (최대 999회)<br />
+                      • 방화벽 5555 포트 자동 허용<br />
+                      • 클라우드 cctv.thejamsa.com과 자동 연결
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 10, color: "#047857" }}>
+                      제거: <a href="/jamsa-cctv-uninstall.bat" download style={{ color: "#065f46", textDecoration: "underline" }}>jamsa-cctv-uninstall.bat</a> 관리자 권한 실행
                     </div>
                   </div>
 
-                  {/* 방법 2: 지금 바로 켜기 */}
+                  {/* 방법 2: 임시 가동 */}
                   <div style={{ padding: 14, background: "#dbeafe", border: "2px solid #60a5fa", borderRadius: 8, marginBottom: 12 }}>
                     <div style={{ fontSize: 14, fontWeight: 800, color: "#1e3a8a", marginBottom: 8 }}>
-                      ⚡ 방법 2: 지금 바로 켜기
+                      ⚡ 방법 2: 지금 바로 켜기 (창 닫으면 멈춤)
                     </div>
                     <div style={{ fontSize: 12, lineHeight: 1.7, color: "#1e3a8a" }}>
-                      박물관 PC에서 <strong><code style={{ background: "#fff", padding: "1px 6px", borderRadius: 3 }}>jamsa-cctv-start.bat</code></strong> 더블클릭<br />
-                      → 검은 창이 뜨면서 서버 가동<br />
-                      → 5-10초 후 이 화면 새로고침 (Ctrl+Shift+R)
+                      1. <a href="/jamsa-cctv-start.bat" download style={{ color: "#1e40af", fontWeight: 800, textDecoration: "underline" }}>📥 jamsa-cctv-start.bat 다운로드</a> → cctv.py와 같은 폴더에 두기<br />
+                      2. 더블클릭 → 검은 창이 뜨면서 서버 가동 + 죽으면 자동 재시작<br />
+                      3. 5-10초 후 이 화면 새로고침 (Ctrl+Shift+R)<br />
+                      <strong style={{ color: "#991b1b" }}>⚠️ 검은 창을 닫으면 서버 멈춤 — 24/7 가동은 방법 1 권장</strong>
                     </div>
                   </div>
 
