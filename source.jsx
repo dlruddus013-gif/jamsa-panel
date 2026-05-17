@@ -12260,43 +12260,76 @@ function PhotoThumb({src,date,onDel,label,size}){
 function PhotoBtn({pid,onAdd}){
   const fileRef=useRef(null);
   const camRef=useRef(null);
+  const [busy,setBusy]=useState({total:0,done:0});
+  const [burstMode,setBurstMode]=useState(false);
 
-  const handleFile=(e)=>{
-    const files=e.target.files;
-    if(!files||!files.length)return;
-    Array.from(files).forEach(f=>{
-      const reader=new FileReader();
-      reader.onload=ev=>{
-        const img=new Image();
-        img.onload=()=>{
-          const max=800;
-          let w=img.width,h=img.height;
-          if(w>max||h>max){const r=Math.min(max/w,max/h);w*=r;h*=r;}
-          const c=document.createElement("canvas");c.width=w;c.height=h;
-          c.getContext("2d").drawImage(img,0,0,w,h);
-          onAdd(pid,c.toDataURL("image/jpeg",0.7));
-        };
-        img.src=ev.target.result;
+  const compressOne=(file)=>new Promise((resolve)=>{
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      const img=new Image();
+      img.onload=()=>{
+        const max=1600;
+        let w=img.width,h=img.height;
+        if(w>max||h>max){const r=Math.min(max/w,max/h);w*=r;h*=r;}
+        const c=document.createElement("canvas");c.width=w;c.height=h;
+        c.getContext("2d").drawImage(img,0,0,w,h);
+        resolve(c.toDataURL("image/jpeg",0.75));
       };
-      reader.readAsDataURL(f);
-    });
+      img.onerror=()=>resolve(null);
+      img.src=ev.target.result;
+    };
+    reader.onerror=()=>resolve(null);
+    reader.readAsDataURL(file);
+  });
+
+  const handleFile=async(e)=>{
+    const files=Array.from(e.target.files||[]);
     e.target.value="";
+    if(files.length===0)return;
+    setBusy({total:files.length,done:0});
+    for(let i=0;i<files.length;i++){
+      const url=await compressOne(files[i]);
+      if(url)onAdd(pid,url);
+      setBusy({total:files.length,done:i+1});
+    }
+    setTimeout(()=>setBusy({total:0,done:0}),800);
+    // 카메라 일괄 모드: 한 장 찍은 후 다시 카메라 열기
+    if(burstMode && e.target===camRef.current){
+      setTimeout(()=>camRef.current?.click(),300);
+    }
   };
 
+  const isUploading=busy.total>0;
+  const pct=busy.total>0?Math.round((busy.done/busy.total)*100):0;
+
   return(
-    <div style={{display:"inline-flex",gap:3}}>
+    <div style={{display:"inline-flex",gap:3,alignItems:"center",position:"relative"}}>
       <input ref={fileRef} type="file" accept="image/*" multiple onChange={handleFile} style={{display:"none"}}/>
       <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={handleFile} style={{display:"none"}}/>
-      <button onClick={()=>camRef.current?.click()} title="카메라 촬영"
-        style={{width:40,height:40,borderRadius:8,border:"1.5px dashed #3b5bdb",background:"#eef2ff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#3b5bdb",flexShrink:0,
-          WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+      <button onClick={()=>camRef.current?.click()} title={burstMode?"카메라 일괄 촬영 모드 (한 장 찍으면 자동으로 다시 열림)":"카메라 촬영"}
+        disabled={isUploading}
+        style={{width:40,height:40,borderRadius:8,border:`1.5px ${burstMode?"solid":"dashed"} #3b5bdb`,background:burstMode?"#dbeafe":"#eef2ff",cursor:isUploading?"wait":"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#3b5bdb",flexShrink:0,
+          WebkitTapHighlightColor:"transparent",touchAction:"manipulation",position:"relative"}}>
         <IC.Cam/>
+        {burstMode && <span style={{position:"absolute",bottom:-2,right:-2,fontSize:8,background:"#3b5bdb",color:"#fff",borderRadius:8,padding:"1px 4px",fontWeight:900}}>∞</span>}
       </button>
-      <button onClick={()=>fileRef.current?.click()} title="사진 첨부"
-        style={{width:40,height:40,borderRadius:8,border:"1.5px dashed #64748b",background:"#f8fafc",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#64748b",flexShrink:0,
-          WebkitTapHighlightColor:"transparent",touchAction:"manipulation"}}>
+      <button onClick={()=>fileRef.current?.click()} title="사진 첨부 (여러 장 동시 선택 가능)"
+        disabled={isUploading}
+        style={{width:40,height:40,borderRadius:8,border:"1.5px dashed #64748b",background:"#f8fafc",cursor:isUploading?"wait":"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#64748b",flexShrink:0,
+          WebkitTapHighlightColor:"transparent",touchAction:"manipulation",position:"relative"}}>
         <IC.Img/>
+        <span style={{position:"absolute",bottom:-2,right:-2,fontSize:8,background:"#64748b",color:"#fff",borderRadius:8,padding:"1px 4px",fontWeight:900}}>다중</span>
       </button>
+      <button onClick={()=>setBurstMode(m=>!m)}
+        title={burstMode?"카메라 일괄 모드 해제":"카메라 일괄 모드 활성화 (한 장 찍으면 카메라가 다시 열림)"}
+        style={{padding:"3px 6px",fontSize:9,fontWeight:700,borderRadius:5,border:"none",background:burstMode?"#3b5bdb":"#f1f5f9",color:burstMode?"#fff":"#475569",cursor:"pointer"}}>
+        {burstMode?"📸×N ON":"📸×N"}
+      </button>
+      {isUploading && (
+        <div style={{position:"absolute",top:"100%",left:0,marginTop:4,padding:"3px 8px",background:"#0f172a",color:"#fff",borderRadius:5,fontSize:10,fontWeight:700,whiteSpace:"nowrap",zIndex:50}}>
+          ⏳ {busy.done}/{busy.total} ({pct}%)
+        </div>
+      )}
     </div>
   );
 }
