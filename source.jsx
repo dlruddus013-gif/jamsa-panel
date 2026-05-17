@@ -25195,9 +25195,68 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           {qrModalOpen && (() => {
             const visitorUrl = `${window.location.origin}/?role=visitor`;
             const staffUrl = `${window.location.origin}/`;
-            // QR 코드 생성: api.qrserver.com (무료 공개 API)
             const visitorQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(visitorUrl)}&margin=10`;
             const staffQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(staffUrl)}&margin=10`;
+            // 큰 사이즈 QR (인쇄용 600x600)
+            const visitorQrLarge = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&data=${encodeURIComponent(visitorUrl)}&margin=20&ecc=H`;
+            const staffQrLarge = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&data=${encodeURIComponent(staffUrl)}&margin=20&ecc=H`;
+            // 개별 인쇄 함수
+            const printQR = (title, subtitle, qrUrl, url, bgColor, accentColor) => {
+              const w = window.open("", "_blank", "width=800,height=900");
+              if (!w) { alert("팝업 차단을 해제해주세요."); return; }
+              w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title} QR 인쇄</title>
+<style>
+@page { size: A4; margin: 15mm; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Pretendard','Noto Sans KR',sans-serif; padding: 0; background: #fff; }
+.sheet { width: 180mm; margin: 0 auto; padding: 20mm 0; text-align: center; }
+.title { font-size: 32pt; font-weight: 900; color: ${accentColor}; margin-bottom: 8pt; }
+.subtitle { font-size: 14pt; color: #475569; margin-bottom: 24pt; }
+.qrbox { display: inline-block; padding: 12mm; background: ${bgColor}; border: 4mm solid ${accentColor}; border-radius: 8mm; }
+.qrbox img { display: block; width: 120mm; height: 120mm; }
+.url { font-size: 11pt; color: ${accentColor}; margin-top: 16pt; font-family: monospace; word-break: break-all; }
+.guide { margin-top: 24pt; padding: 12pt; background: #f8fafc; border-radius: 6pt; font-size: 11pt; color: #475569; line-height: 1.8; text-align: left; max-width: 140mm; margin-left: auto; margin-right: auto; }
+.guide-title { font-weight: 800; color: ${accentColor}; margin-bottom: 8pt; font-size: 13pt; }
+.footer { margin-top: 20pt; font-size: 9pt; color: #94a3b8; }
+@media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+</style></head><body>
+<div class="sheet">
+  <div class="title">${title}</div>
+  <div class="subtitle">${subtitle}</div>
+  <div class="qrbox"><img src="${qrUrl}" alt="QR"></div>
+  <div class="url">${url}</div>
+  <div class="guide">
+    <div class="guide-title">📱 스캔 방법</div>
+    1. 휴대폰 카메라 앱 실행<br>
+    2. QR 코드에 카메라 비추기<br>
+    3. 화면에 뜨는 링크 터치 → 즉시 접속
+  </div>
+  <div class="footer">한국잠사박물관 통합관리 시스템 · ${new Date().toLocaleDateString("ko-KR")}</div>
+</div>
+<script>
+window.onload = () => {
+  const img = document.querySelector('img');
+  if (img.complete) { setTimeout(() => window.print(), 300); }
+  else { img.onload = () => setTimeout(() => window.print(), 300); }
+};
+</script>
+</body></html>`);
+              w.document.close();
+            };
+            const printVisitor = () => printQR("관람객용 QR 코드", "스캔하면 관람객 모드로 자동 진입", visitorQrLarge, visitorUrl, "#fefce8", "#d97706");
+            const printStaff = () => printQR("직원용 QR 코드", "스캔하면 통합 관리 시스템으로 접속", staffQrLarge, staffUrl, "#eff6ff", "#1e40af");
+            // 이미지 다운로드
+            const downloadQR = async (url, filename) => {
+              try {
+                const res = await fetch(url);
+                const blob = await res.blob();
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(blob);
+                a.download = filename;
+                document.body.appendChild(a); a.click();
+                setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(a.href); }, 200);
+              } catch (e) { alert("다운로드 실패: " + e.message); }
+            };
             return (
               <div onClick={() => setQrModalOpen(false)}
                 style={{ position: "fixed", inset: 0, zIndex: 10100, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
@@ -25223,6 +25282,16 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                         ✓ 위치 공유 안내<br />
                         ✓ 추천 동선 표시
                       </div>
+                      <div style={{ marginTop: 10, display: "flex", gap: 4 }}>
+                        <button type="button" onClick={printVisitor}
+                          style={{ flex: 1, padding: "8px 6px", background: "#d97706", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 800, cursor: "pointer" }}>
+                          🖨️ 인쇄
+                        </button>
+                        <button type="button" onClick={() => downloadQR(visitorQrLarge, "관람객용_QR.png")}
+                          style={{ flex: 1, padding: "8px 6px", background: "#fff", color: "#d97706", border: "1px solid #d97706", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                          📥 저장
+                        </button>
+                      </div>
                     </div>
                     {/* 직원 QR */}
                     <div style={{ border: "2px solid #3b82f6", borderRadius: 10, padding: 14, background: "#eff6ff" }}>
@@ -25235,14 +25304,24 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                         ✓ PWA 설치 가능<br />
                         ✓ 통합 관리 화면
                       </div>
+                      <div style={{ marginTop: 10, display: "flex", gap: 4 }}>
+                        <button type="button" onClick={printStaff}
+                          style={{ flex: 1, padding: "8px 6px", background: "#1e40af", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 800, cursor: "pointer" }}>
+                          🖨️ 인쇄
+                        </button>
+                        <button type="button" onClick={() => downloadQR(staffQrLarge, "직원용_QR.png")}
+                          style={{ flex: 1, padding: "8px 6px", background: "#fff", color: "#1e40af", border: "1px solid #1e40af", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                          📥 저장
+                        </button>
+                      </div>
                     </div>
                   </div>
                   <div style={{ padding: "12px 20px", background: "#fafafa", borderTop: "1px solid #e5e7eb" }}>
                     <div style={{ fontSize: 11, color: "#475569", marginBottom: 8, fontWeight: 700 }}>💡 사용 팁</div>
                     <div style={{ fontSize: 10, color: "#64748b", lineHeight: 1.6 }}>
-                      • 관람객 QR을 입구 안내문에 인쇄해서 부착<br />
-                      • 직원 QR은 사무실/탕비실에 부착해서 신규 직원 접속 안내<br />
-                      • QR 이미지 우클릭 → "이미지 저장"으로 다운로드 후 인쇄
+                      • 🖨️ <strong>인쇄</strong> 버튼: A4 1장에 큰 QR + 안내문 자동 배치 (즉시 인쇄)<br />
+                      • 📥 <strong>저장</strong> 버튼: 고해상도 PNG로 다운로드 → 별도 디자인 작업 가능<br />
+                      • 관람객 QR은 입구·매표소에, 직원 QR은 사무실·탕비실에 부착
                     </div>
                   </div>
                 </div>
