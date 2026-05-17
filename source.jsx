@@ -7546,6 +7546,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
             {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"categoryManager"})} style={{fontSize:12,background:"#fefce8",color:"#854d0e",border:"1px solid #fde68a"}}>카테고리</button>}
             {can("add")&&<button className="btn bs" onClick={()=>setShowZoneScheduler(true)} style={{fontSize:12,background:"linear-gradient(135deg,#dbeafe,#ede9fe)",color:"#5b21b6",border:"1px solid #c4b5fd"}} title="구역별 AI 분석 + 월간 캘린더 + 사진 인증 체크리스트">📅 구역 스케줄러</button>}
             {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"batchAdd"})} style={{fontSize:12,background:"#f0fdf4",color:"#047857",border:"1px solid #bbf7d0"}}>일괄등록</button>}
+            {can("add")&&<button className="btn bs" onClick={()=>setModal({type:"photoBulk"})} style={{fontSize:12,background:"linear-gradient(135deg,#fef3c7,#fde68a)",color:"#92400e",border:"1px solid #fcd34d"}} title="파일명이 제품코드와 일치하면 자동으로 매칭되어 등록됨 (예: JB-0001.jpg)">🖼️ 사진 일괄등록</button>}
             <button className="btn bs" onClick={()=>setModal({type:"reqPayments"})} style={{fontSize:12,background:"#fef3c7",color:"#92400e",border:"1px solid #fcd34d"}} title="품의·카드결제·이체 통합 관리">📋 품의/결제{requisitions.filter(r=>!["received","cancelled","rejected"].includes(r.status)).length>0&&<span style={{marginLeft:4,padding:"1px 5px",background:"#dc2626",color:"#fff",borderRadius:8,fontSize:9}}>{requisitions.filter(r=>!["received","cancelled","rejected"].includes(r.status)).length}</span>}</button>
             {can("add")&&<button className="btn bp" onClick={()=>setModal({type:"add"})} style={{fontSize:12}}><IC.Plus/>제품 추가</button>}
           </div>
@@ -7786,6 +7787,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
       }} onClose={()=>setModal(null)} defaultLoc={modal.zone.name} zoneInfo={modal.zone} cats={invCats} locs={invLocs} storageSections={storageSections}/>}
       {modal?.type==="batchAdd"&&<BatchAddModal cats={invCats} locs={invLocs} storageSections={storageSections} onAdd={doBatchAdd} onClose={()=>setModal(null)}/>}
       {modal?.type==="excelImport"&&<InventoryExcelImportModal onImport={importInventorySheet} onDownloadTemplate={csv} onDownloadXlsx={downloadInvXlsx} curUser={curUser} onClose={()=>setModal(null)}/>}
+      {modal?.type==="photoBulk"&&<PhotoBulkUploadModal prods={prods} onAddPhoto={doAddPhoto} onClose={()=>setModal(null)}/>}
       {modal?.type==="inventoryRecovery"&&<InventoryRecoveryModal currentCount={prods.length} onRestore={restoreInventoryProducts} onClose={()=>setModal(null)}/>}
       {modal?.type==="categoryManager"&&<CategoryManagerModal cats={invCats} customCats={customCats} onSave={saveCategoryManager} onDelete={saveCategoryDelete} onClose={()=>setModal(null)}/>}
       {modal?.type==="locationManager"&&<LocationManagerModal locs={invLocs} customLocs={customLocs} onSave={saveLocationManager} onClose={()=>setModal(null)}/>}
@@ -14610,6 +14612,154 @@ function InventoryExcelImportModal({ onImport, onDownloadTemplate, onDownloadXls
       <BackupHistoryPanel curUserName={curUser?.name}/>
     </div>
   </Modal>;
+}
+
+// ─── 사진 일괄등록 모달 — 파일명이 제품코드와 일치하면 자동 매칭 ───
+function PhotoBulkUploadModal({prods,onAddPhoto,onClose}){
+  const [progress,setProgress]=useState({total:0,done:0});
+  const [results,setResults]=useState([]); // [{file, code, productName, status: matched/unmatched/done/error}]
+  const [busy,setBusy]=useState(false);
+
+  // 파일명에서 제품코드 추출 (예: "JB-0001.jpg", "jb0001_back.png", "수장고_JB-0023.jpeg")
+  const extractCode=(filename)=>{
+    const name=filename.replace(/\.[^.]+$/,"").toUpperCase();
+    // JB-NNNN 또는 JBNNNN 패턴
+    const m=name.match(/JB-?(\d{3,5})/);
+    if(m) return `JB-${m[1].padStart(4,"0")}`;
+    return null;
+  };
+
+  // 코드 → 제품 매칭
+  const codeMap=useMemo(()=>{
+    const m=new Map();
+    prods.forEach(p=>{ if(p.code) m.set(p.code.toUpperCase(),p); });
+    return m;
+  },[prods]);
+
+  // 이미지 압축 (1600px·JPEG 75%)
+  const compress=(file)=>new Promise(resolve=>{
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      const img=new Image();
+      img.onload=()=>{
+        const max=1600;
+        let w=img.width,h=img.height;
+        if(w>max||h>max){const r=Math.min(max/w,max/h);w*=r;h*=r;}
+        const c=document.createElement("canvas");c.width=w;c.height=h;
+        c.getContext("2d").drawImage(img,0,0,w,h);
+        resolve(c.toDataURL("image/jpeg",0.75));
+      };
+      img.onerror=()=>resolve(null);
+      img.src=ev.target.result;
+    };
+    reader.onerror=()=>resolve(null);
+    reader.readAsDataURL(file);
+  });
+
+  const handleFiles=async(e)=>{
+    const files=Array.from(e.target.files||[]);
+    e.target.value="";
+    if(files.length===0)return;
+    setBusy(true);
+    setProgress({total:files.length,done:0});
+
+    // 1차 분석: 매칭 여부 표시
+    const initial=files.map(f=>{
+      const code=extractCode(f.name);
+      const prod=code?codeMap.get(code):null;
+      return {file:f, code, productName: prod?.name||null, productId: prod?.id||null, status: prod?"matched":"unmatched"};
+    });
+    setResults(initial);
+
+    // 2차: 매칭된 것만 압축 후 등록
+    let done=0;
+    const next=[...initial];
+    for(let i=0;i<initial.length;i++){
+      const r=initial[i];
+      if(r.status==="matched" && r.productId){
+        const url=await compress(r.file);
+        if(url){
+          onAddPhoto(r.productId, url);
+          next[i]={...r, status:"done"};
+        } else {
+          next[i]={...r, status:"error"};
+        }
+      }
+      done++;
+      setProgress({total:initial.length,done});
+      setResults([...next]);
+    }
+    setBusy(false);
+  };
+
+  const matchedCount=results.filter(r=>r.status==="done").length;
+  const unmatchedCount=results.filter(r=>r.status==="unmatched").length;
+  const errorCount=results.filter(r=>r.status==="error").length;
+
+  return(<Modal title="🖼️ 사진 일괄등록 (파일명 → 제품코드 자동 매칭)" onClose={onClose} w={760}>
+    <div style={{display:"grid",gap:12}}>
+      <div style={{padding:12,background:"linear-gradient(135deg,#fef3c7,#fde68a)",border:"2px solid #fcd34d",borderRadius:10,fontSize:12,color:"#78350f",lineHeight:1.6}}>
+        💡 <strong>사용 방법</strong>:
+        <ol style={{marginTop:6,paddingLeft:20}}>
+          <li>사진 파일명을 제품코드로 저장 (예: <code style={{background:"#fff",padding:"1px 5px",borderRadius:3,fontFamily:"monospace"}}>JB-0001.jpg</code>, <code style={{background:"#fff",padding:"1px 5px",borderRadius:3,fontFamily:"monospace"}}>jb0023.png</code>)</li>
+          <li>한 제품에 여러 장 등록 시: <code style={{background:"#fff",padding:"1px 5px",borderRadius:3,fontFamily:"monospace"}}>JB-0001_정면.jpg</code>, <code style={{background:"#fff",padding:"1px 5px",borderRadius:3,fontFamily:"monospace"}}>JB-0001_2.jpg</code> 등</li>
+          <li>여러 파일 선택 → 자동으로 매칭되는 제품에 등록 (1600px·JPEG 75% 압축)</li>
+        </ol>
+      </div>
+
+      <label style={{padding:30,border:"2px dashed #f59e0b",borderRadius:12,background:"#fffbeb",textAlign:"center",cursor:busy?"wait":"pointer"}}>
+        <div style={{fontSize:36,marginBottom:8}}>🖼️</div>
+        <div style={{fontSize:15,fontWeight:900,color:"#92400e"}}>{busy?"⏳ 등록 중...":"사진 파일 선택 (여러 장)"}</div>
+        <div style={{fontSize:11,color:"#78350f",marginTop:4}}>.jpg, .png, .webp 지원 · 무제한</div>
+        <input type="file" accept="image/*" multiple disabled={busy} onChange={handleFiles} style={{display:"none"}}/>
+      </label>
+
+      {progress.total>0 && (
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:4}}>
+            <strong>진행률 {progress.done}/{progress.total}</strong>
+            <span>{Math.round((progress.done/progress.total)*100)}%</span>
+          </div>
+          <div style={{height:8,background:"#f1f5f9",borderRadius:4,overflow:"hidden"}}>
+            <div style={{width:`${(progress.done/progress.total)*100}%`,height:"100%",background:"linear-gradient(90deg,#f59e0b,#10b981)",transition:"width 0.3s"}}/>
+          </div>
+        </div>
+      )}
+
+      {results.length>0 && (
+        <div>
+          <div style={{display:"flex",gap:8,fontSize:11,marginBottom:8,flexWrap:"wrap"}}>
+            <span style={{padding:"3px 10px",background:"#dcfce7",color:"#065f46",borderRadius:5,fontWeight:800}}>✅ 등록 {matchedCount}</span>
+            {unmatchedCount>0 && <span style={{padding:"3px 10px",background:"#fee2e2",color:"#991b1b",borderRadius:5,fontWeight:800}}>❌ 매칭 안됨 {unmatchedCount}</span>}
+            {errorCount>0 && <span style={{padding:"3px 10px",background:"#fef3c7",color:"#92400e",borderRadius:5,fontWeight:800}}>⚠️ 오류 {errorCount}</span>}
+          </div>
+          <div style={{maxHeight:280,overflowY:"auto",border:"1px solid #e5e7eb",borderRadius:6}}>
+            {results.map((r,i)=>(
+              <div key={i} style={{padding:"6px 10px",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"center",gap:8,fontSize:11,background:r.status==="done"?"#f0fdf4":r.status==="unmatched"?"#fef2f2":r.status==="error"?"#fffbeb":"#fff"}}>
+                <span style={{fontSize:14,minWidth:18,textAlign:"center"}}>
+                  {r.status==="done"?"✅":r.status==="matched"?"⏳":r.status==="unmatched"?"❌":r.status==="error"?"⚠️":"•"}
+                </span>
+                <span style={{fontFamily:"monospace",fontSize:10,color:"#475569",minWidth:140}}>{r.file.name}</span>
+                {r.code ? (
+                  <span style={{padding:"1px 6px",background:"#dbeafe",color:"#1e40af",borderRadius:3,fontWeight:700,fontSize:10}}>{r.code}</span>
+                ) : (
+                  <span style={{padding:"1px 6px",background:"#fee2e2",color:"#991b1b",borderRadius:3,fontWeight:700,fontSize:10}}>코드 추출 실패</span>
+                )}
+                <span style={{flex:1,minWidth:0,color:r.productName?"#0f172a":"#94a3b8",fontWeight:r.productName?700:400,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                  {r.productName || (r.code?"매칭되는 제품 없음":"")}
+                </span>
+                <span style={{fontSize:9,color:"#94a3b8"}}>{(r.file.size/1024).toFixed(0)}KB</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
+        <button type="button" className="btn bs" onClick={onClose}>{busy?"중단":(matchedCount>0?"닫기":"취소")}</button>
+      </div>
+    </div>
+  </Modal>);
 }
 
 function BatchAddModal({cats,locs,storageSections,onAdd,onClose}){
