@@ -45,6 +45,8 @@ export function BeaconGatewayModal({ onClose, zones = [], curUser }) {
   const [bleSupported, setBleSupported] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [detected, setDetected] = useState([]); // 현재 스캔에서 발견된 비콘들
+  const [showManualEntry, setShowManualEntry] = useState(false);
+  const [manualBeacon, setManualBeacon] = useState({ id: "", name: "", zone: "" });
   const [liveRssi, setLiveRssi] = useState({}); // {id: rssi}
   const [testResult, setTestResult] = useState(null);
   const watchersRef = useRef([]);
@@ -83,15 +85,28 @@ export function BeaconGatewayModal({ onClose, zones = [], curUser }) {
     setHistState(next); saveHist(next);
   };
 
-  // ── BLE 단일 비콘 페어링 (Web Bluetooth requestDevice) ──────────
+  // ── BLE 단일 비콘 페어링 (필터로 비콘만 표시) ──────────────────
+  const [scanFilter, setScanFilter] = useState("beacon"); // "beacon" | "all"
   const scanOnce = async () => {
     if (!navigator.bluetooth) return alert("Bluetooth 미지원\nChrome (Android) 또는 데스크톱 Chrome/Edge 사용");
     setScanning(true);
     try {
-      const device = await navigator.bluetooth.requestDevice({
+      // 비콘 모드: 일반적 비콘 이름 prefix + Eddystone 서비스 필터 (잡음 제거)
+      const reqOpts = scanFilter === "beacon" ? {
+        filters: [
+          { namePrefix: "Minew" }, { namePrefix: "iBKS" }, { namePrefix: "B-Fon" },
+          { namePrefix: "Beacon" }, { namePrefix: "iB" }, { namePrefix: "MS" },
+          { namePrefix: "Eddystone" }, { namePrefix: "Kontakt" }, { namePrefix: "Estimote" },
+          { namePrefix: "HC-" }, { namePrefix: "JM-" },
+          { services: ["0000feaa-0000-1000-8000-00805f9b34fb"] }, // Eddystone
+          { services: ["0000fff0-0000-1000-8000-00805f9b34fb"] }, // Common beacon service
+        ],
+        optionalServices: ["battery_service", "device_information"],
+      } : {
         acceptAllDevices: true,
         optionalServices: ["battery_service", "device_information", "0000feaa-0000-1000-8000-00805f9b34fb"],
-      });
+      };
+      const device = await navigator.bluetooth.requestDevice(reqOpts);
       const beacon = {
         id: device.id,
         name: device.name || `Beacon-${device.id?.slice(0, 6)}`,
@@ -123,7 +138,26 @@ export function BeaconGatewayModal({ onClose, zones = [], curUser }) {
 
   // ── BLE 연속 스캔 (Bluetooth LE Scan API — 일부 기기만) ─────────
   const watchAdvertising = async () => {
-    if (!navigator.bluetooth?.requestLEScan) return alert("연속 스캔 미지원\n(Chrome flags: enable-experimental-web-platform-features 필요)");
+    if (!navigator.bluetooth?.requestLEScan) {
+      const enable = confirm(
+        "⚠️ 연속 스캔 미지원\n\n" +
+        "Chrome flags 활성화 필요:\n" +
+        "1. 새 탭에서 chrome://flags/#enable-experimental-web-platform-features 열기\n" +
+        "2. Enabled 선택 → Relaunch\n" +
+        "3. 이 페이지 새로고침\n\n" +
+        "💡 활성화가 어려우시면 '수동 등록' 버튼으로 비콘 UUID 직접 입력 가능합니다.\n" +
+        "💡 또는 게이트웨이(Minew G1)를 사용하면 모든 비콘이 자동으로 수집됩니다.\n\n" +
+        "Chrome flags 페이지를 지금 열까요?"
+      );
+      if (enable) {
+        try {
+          window.open("chrome://flags/#enable-experimental-web-platform-features", "_blank");
+        } catch (e) {
+          alert("브라우저 주소창에 직접 입력:\nchrome://flags/#enable-experimental-web-platform-features");
+        }
+      }
+      return;
+    }
     setScanning(true);
     try {
       const scan = await navigator.bluetooth.requestLEScan({ acceptAllAdvertisements: true });
@@ -238,11 +272,17 @@ export function BeaconGatewayModal({ onClose, zones = [], curUser }) {
                   ⚠️ 이 브라우저는 Web Bluetooth를 지원하지 않습니다. <strong>Chrome (Android) 또는 데스크톱 Chrome/Edge</strong>를 사용하세요. iOS Safari는 미지원이며 게이트웨이 모드로 사용하세요.
                 </div>
               )}
-              <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
                 <button type="button" onClick={scanOnce} disabled={!bleSupported || scanning}
                   style={{ padding: "8px 16px", background: "#0ea5e9", color: "#fff", border: "none", borderRadius: 6, fontWeight: 700, fontSize: 12, cursor: bleSupported ? "pointer" : "not-allowed", opacity: bleSupported ? 1 : 0.5 }}>
                   📡 1회 스캔 (페어링)
                 </button>
+                <select value={scanFilter} onChange={e => setScanFilter(e.target.value)}
+                  style={{ padding: "8px 10px", fontSize: 11, border: "1px solid #cbd5e1", borderRadius: 6, background: "#fff", cursor: "pointer" }}
+                  title="페어링 다이얼로그에 표시될 기기 필터">
+                  <option value="beacon">🎯 비콘만 (Minew/iBKS/Eddystone 등)</option>
+                  <option value="all">📋 전체 기기 (잡음 많음)</option>
+                </select>
                 {!scanning ? (
                   <button type="button" onClick={watchAdvertising} disabled={!bleSupported}
                     style={{ padding: "8px 16px", background: "#10b981", color: "#fff", border: "none", borderRadius: 6, fontWeight: 700, fontSize: 12, cursor: bleSupported ? "pointer" : "not-allowed", opacity: bleSupported ? 1 : 0.5 }}>
@@ -254,7 +294,41 @@ export function BeaconGatewayModal({ onClose, zones = [], curUser }) {
                     ⏹️ 스캔 중지
                   </button>
                 )}
+                <button type="button" onClick={() => setShowManualEntry(s => !s)}
+                  style={{ padding: "8px 16px", background: "#fff", color: "#7c3aed", border: "1px solid #c4b5fd", borderRadius: 6, fontWeight: 700, fontSize: 12, cursor: "pointer", marginLeft: "auto" }}>
+                  ✏️ 수동 등록
+                </button>
               </div>
+
+              {/* 수동 비콘 등록 */}
+              {showManualEntry && (
+                <div style={{ padding: 12, marginBottom: 10, background: "#f5f3ff", border: "1px solid #c4b5fd", borderRadius: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "#5b21b6", marginBottom: 6 }}>✏️ 수동 비콘 등록 (자동 스캔 불가 시)</div>
+                  <div style={{ fontSize: 10, color: "#6b21a8", marginBottom: 8 }}>제조사 라벨에 적힌 UUID/MAC 주소를 직접 입력하세요. iOS Safari, 연속 스캔 미지원 환경 등에서 사용.</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 6 }}>
+                    <input value={manualBeacon.id} onChange={e => setManualBeacon({...manualBeacon, id: e.target.value})}
+                      placeholder="UUID 또는 MAC (예: AA:BB:CC:11:22:33)"
+                      style={{ padding: "6px 10px", border: "1px solid #c4b5fd", borderRadius: 5, fontSize: 11, fontFamily: "monospace" }}/>
+                    <input value={manualBeacon.name} onChange={e => setManualBeacon({...manualBeacon, name: e.target.value})}
+                      placeholder="비콘 이름 (예: 수장고 정문)"
+                      style={{ padding: "6px 10px", border: "1px solid #c4b5fd", borderRadius: 5, fontSize: 11 }}/>
+                    <select value={manualBeacon.zone} onChange={e => setManualBeacon({...manualBeacon, zone: e.target.value})}
+                      style={{ padding: "6px 10px", border: "1px solid #c4b5fd", borderRadius: 5, fontSize: 11 }}>
+                      <option value="">구역 선택</option>
+                      {zones.map(z => <option key={z.id || z} value={z.name || z}>{z.name || z}</option>)}
+                    </select>
+                    <button type="button" onClick={() => {
+                      if (!manualBeacon.id.trim()) return alert("UUID/MAC 입력 필수");
+                      const beacon = { id: manualBeacon.id.trim(), name: manualBeacon.name || `수동-${manualBeacon.id.slice(0,6)}`, uuid: manualBeacon.id.trim(), rssi: null, connected: false, manual: true };
+                      setDetected(prev => [beacon, ...prev.filter(b => b.id !== beacon.id)]);
+                      if (manualBeacon.zone) assignZone(beacon.id, beacon.name, manualBeacon.zone);
+                      addHist({ kind: "manual_add", beaconId: beacon.id, beaconName: beacon.name });
+                      setManualBeacon({ id: "", name: "", zone: "" });
+                    }}
+                      style={{ padding: "6px 14px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>＋ 추가</button>
+                  </div>
+                </div>
+              )}
 
               {nearest && (
                 <div style={{ padding: 14, background: "linear-gradient(135deg,#dbeafe,#fff)", border: "2px solid #3b82f6", borderRadius: 10, marginBottom: 10 }}>
