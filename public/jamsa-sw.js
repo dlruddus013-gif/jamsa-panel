@@ -1,12 +1,10 @@
 // jamsa-sw.js — Service Worker
 // 캐시 정책: 정적 자원만 캐시, API/동적 자원은 무조건 네트워크
 
-const CACHE_NAME = 'jamsa-v2-2026-05-01';
+const CACHE_NAME = 'jamsa-v3-2026-05-17';  // 캐시 버전 bump — 충돌 마커 캐시 정리용
 const STATIC_ASSETS = [
-  '/',
-  '/index.html',
   '/manifest.json',
-];
+];  // index.html은 절대 캐시 안 함 (항상 최신)
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -18,14 +16,14 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then(names => {
-      return Promise.all(
-        names.map(name => {
-          if (name !== CACHE_NAME && name.startsWith('jamsa-')) {
-            return caches.delete(name);
-          }
-        })
-      );
-    }).then(() => self.clients.claim())
+      // 모든 이전 캐시 삭제 (jamsa-* 전부)
+      return Promise.all(names.filter(n => n !== CACHE_NAME).map(n => caches.delete(n)));
+    }).then(() => self.clients.claim()).then(() => {
+      // 모든 클라이언트에게 "새 버전이 활성화됨" 알림 → 자동 새로고침
+      return self.clients.matchAll({ type: 'window' }).then(clients => {
+        clients.forEach(client => client.postMessage({ type: 'SW_UPDATED', version: CACHE_NAME }));
+      });
+    })
   );
 });
 
@@ -37,10 +35,10 @@ self.addEventListener('fetch', (event) => {
     return; // 기본 fetch 동작
   }
 
-  // app.bundle.js는 항상 새로 받기 (업데이트 보장)
-  if (url.pathname === '/app.bundle.js' || url.pathname === '/index.html') {
+  // HTML/번들은 항상 네트워크 우선 (캐시 폴백)
+  if (url.pathname === '/' || url.pathname === '/index.html' || url.pathname === '/app.bundle.js') {
     event.respondWith(
-      fetch(event.request).catch(() => caches.match(event.request))
+      fetch(event.request, { cache: 'no-store' }).catch(() => caches.match(event.request))
     );
     return;
   }
@@ -49,14 +47,13 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     caches.match(event.request).then(cached => {
       return cached || fetch(event.request).then(res => {
-        // 같은 출처만 캐시
         if (res.ok && url.origin === self.location.origin) {
           const clone = res.clone();
           caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
         }
         return res;
       });
-    }).catch(() => caches.match('/'))
+    }).catch(() => null)
   );
 });
 
@@ -79,3 +76,4 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   event.waitUntil(clients.openWindow(event.notification.data || '/'));
 });
+

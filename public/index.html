@@ -483,9 +483,15 @@
             }
           });
         }).catch(() => {});
-        // 새 SW 등록
+        // 새 SW 등록 + 업데이트 발생 시 자동 reload (옛 캐시 즉시 폐기)
         window.addEventListener('load', () => {
           navigator.serviceWorker.register('/jamsa-sw.js', { scope: '/' }).catch(() => {});
+        });
+        navigator.serviceWorker.addEventListener('message', (e) => {
+          if (e.data && e.data.type === 'SW_UPDATED') {
+            try { sessionStorage.setItem('jamsa_sw_updated', e.data.version || '1'); } catch (_) {}
+            location.reload();
+          }
         });
       }
       // CacheStorage 정리
