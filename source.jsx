@@ -7,6 +7,7 @@ import { SafetyIotControlPage } from "./safety-iot-control.jsx";
 import { ZoneScheduler, ZoneScheduleTodayBanner } from "./inventory-zone-scheduler.jsx";
 import { ProductIntelligenceModal, ProductIntelInline, LogPhotoStrip } from "./product-intelligence.jsx";
 import { BackupHistoryPanel, logFileEvent, maybeAutoBackup } from "./inventory-backup-history.jsx";
+import { BeaconGatewayModal } from "./beacon-gateway.jsx";
 
 const DEFAULT_CCTV_SERVER_URL = "https://cctv.thejamsa.com";
 const DEFAULT_OKPOS_BRIDGE_URL = "http://127.0.0.1:5566";
@@ -21817,6 +21818,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   const [bleScanning, setBleScanning] = useState(false);
   const [bleSupported, setBleSupported] = useState(false);
   const [nearestBeacon, setNearestBeacon] = useState(null);
+  const [showBeaconMgr, setShowBeaconMgr] = useState(false);
 
   useEffect(() => {
     // Web Bluetooth API 지원 여부 (안드로이드 크롬, 데스크톱 크롬만)
@@ -23308,6 +23310,16 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                   🔵 {bleScanning ? "검색중..." : nearestBeacon ? `비콘 ${nearestBeacon.name?.slice(0, 8)}` : "비콘 연결"}
                 </button>
               )}
+              <button onClick={() => setShowBeaconMgr(true)}
+                title="비콘·게이트웨이 통합 관리 (스캔/등록/테스트/가이드)"
+                style={{
+                  flex: 1, padding: "4px 6px", fontSize: 9, fontWeight: 700,
+                  border: "1px solid #0ea5e9", background: "linear-gradient(135deg,#0ea5e9,#7c3aed)",
+                  color: "#fff", borderRadius: 4, cursor: "pointer",
+                }}>
+                📡 비콘 관리자
+              </button>
+              {showBeaconMgr && <BeaconGatewayModal onClose={() => setShowBeaconMgr(false)} zones={allZones || ZONES || []} curUser={userCtx}/>}
               {pwaInstallable && !pwaInstalled && (
                 <button onClick={installPwa}
                   title="홈 화면에 앱 설치"

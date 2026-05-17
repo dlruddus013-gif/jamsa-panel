@@ -1,0 +1,86 @@
+// /api/beacon-webhook — Minew G1, 현승코리아 B-Fon 등 BLE 게이트웨이 수신 엔드포인트
+//
+// POST: 게이트웨이가 감지한 비콘 데이터 수신
+// GET ?ping=1: 헬스체크
+// GET ?recent=1: 최근 수신 데이터 1건 조회 (테스트용)
+
+const _recentByGateway = new Map(); // 메모리 캐시 (서버리스 cold start 시 리셋)
+let _lastReceived = null;
+
+export default async function handler(req, res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+  if (req.method === "OPTIONS") return res.status(204).end();
+
+  // 헬스체크
+  if (req.method === "GET") {
+    const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    if (url.searchParams.get("ping") === "1") {
+      return res.status(200).json({ ok: true, service: "jamsa-beacon-webhook", time: new Date().toISOString() });
+    }
+    if (url.searchParams.get("recent") === "1") {
+      return res.status(200).json({ ok: true, last: _lastReceived });
+    }
+    return res.status(200).json({
+      ok: true,
+      service: "jamsa-beacon-webhook",
+      gateways: Array.from(_recentByGateway.keys()),
+      docs: "POST { gatewaySerial, beacons: [{uuid, rssi, name}], timestamp } to register beacon detections",
+    });
+  }
+
+  if (req.method !== "POST") return res.status(405).json({ ok: false, error: "method not allowed" });
+
+  try {
+    let payload = req.body;
+    if (typeof payload === "string") { try { payload = JSON.parse(payload); } catch (e) {} }
+    if (!payload || typeof payload !== "object") return res.status(400).json({ ok: false, error: "invalid body" });
+
+    const gw = payload.gatewaySerial || payload.gateway || payload.gw || "unknown";
+    const beacons = payload.beacons || payload.advertisements || payload.data || [];
+    const ts = payload.timestamp || new Date().toISOString();
+
+    _recentByGateway.set(gw, { at: new Date().toISOString(), payload, beaconCount: Array.isArray(beacons) ? beacons.length : 0 });
+    _lastReceived = { receivedAt: new Date().toISOString(), gateway: gw, payload };
+
+    // 옵션: Supabase에 저장 (테이블 beacon_detections가 있을 때만)
+    try {
+      if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY && Array.isArray(beacons)) {
+        const rows = beacons.map(b => ({
+          gateway_serial: gw,
+          beacon_uuid: b.uuid || b.id || b.mac,
+          beacon_name: b.name || null,
+          rssi: b.rssi || null,
+          tx_power: b.txPower || null,
+          raw: b,
+          detected_at: ts,
+        }));
+        await fetch(`${process.env.SUPABASE_URL}/rest/v1/beacon_detections`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "apikey": process.env.SUPABASE_SERVICE_ROLE_KEY,
+            "Authorization": `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+            "Prefer": "return=minimal",
+          },
+          body: JSON.stringify(rows),
+        }).catch(() => {});
+      }
+    } catch (e) {
+      // DB 저장 실패해도 200 반환 (게이트웨이가 재시도하지 않도록)
+      console.warn("[beacon-webhook] supabase insert failed:", e.message);
+    }
+
+    return res.status(200).json({
+      ok: true,
+      received: Array.isArray(beacons) ? beacons.length : 0,
+      gateway: gw,
+      test: !!payload.test,
+    });
+  } catch (e) {
+    console.error("[beacon-webhook]", e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+}
