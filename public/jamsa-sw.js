@@ -1,7 +1,7 @@
 // jamsa-sw.js — Service Worker
 // 캐시 정책: 정적 자원만 캐시, API/동적 자원은 무조건 네트워크
 
-const CACHE_NAME = 'jamsa-v3-2026-05-17';  // 캐시 버전 bump — 충돌 마커 캐시 정리용
+const CACHE_NAME = 'jamsa-v4-2026-05-17b';  // bump again to force re-activate
 const STATIC_ASSETS = [
   '/manifest.json',
 ];  // index.html은 절대 캐시 안 함 (항상 최신)
@@ -19,9 +19,13 @@ self.addEventListener('activate', (event) => {
       // 모든 이전 캐시 삭제 (jamsa-* 전부)
       return Promise.all(names.filter(n => n !== CACHE_NAME).map(n => caches.delete(n)));
     }).then(() => self.clients.claim()).then(() => {
-      // 모든 클라이언트에게 "새 버전이 활성화됨" 알림 → 자동 새로고침
-      return self.clients.matchAll({ type: 'window' }).then(clients => {
-        clients.forEach(client => client.postMessage({ type: 'SW_UPDATED', version: CACHE_NAME }));
+      // 모든 클라이언트에게 강제 새로고침 (메시지 + navigate 둘 다)
+      return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
+        clients.forEach(client => {
+          // 옛 클라이언트가 메시지 리스너 없을 수 있으므로 navigate도 시도
+          try { client.postMessage({ type: 'SW_UPDATED', version: CACHE_NAME }); } catch (e) {}
+          try { client.navigate(client.url); } catch (e) {}
+        });
       });
     })
   );
