@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>잠사 관리 — 캐시 초기화</title>
+  <style>
+    body { font-family: 'Pretendard','Noto Sans KR',sans-serif; margin:0; padding:0; min-height:100vh; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#0f172a,#1e293b); color:#fff; }
+    .card { max-width:460px; padding:32px; background:rgba(255,255,255,0.08); border-radius:16px; text-align:center; backdrop-filter:blur(20px); }
+    .logo { font-size:48px; margin-bottom:8px; }
+    h1 { font-size:20px; margin:0 0 6px; }
+    .sub { font-size:13px; opacity:0.7; margin-bottom:20px; }
+    .status { padding:14px; background:rgba(0,0,0,0.3); border-radius:8px; margin-bottom:16px; font-family:monospace; font-size:11px; text-align:left; max-height:200px; overflow-y:auto; line-height:1.6; }
+    .status .ok { color:#86efac; }
+    .status .err { color:#fca5a5; }
+    .status .info { color:#fde68a; }
+    button { padding:12px 24px; background:#3b82f6; color:#fff; border:none; border-radius:8px; font-size:14px; font-weight:700; cursor:pointer; font-family:inherit; }
+    button:hover { background:#2563eb; }
+    button:disabled { opacity:0.5; cursor:wait; }
+    .home { display:inline-block; margin-top:12px; color:#bfdbfe; text-decoration:underline; font-size:12px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">🧹</div>
+    <h1>잠사 관리 시스템</h1>
+    <div class="sub">캐시 초기화 + Service Worker 재설치</div>
+    <div id="status" class="status">준비 중...</div>
+    <button id="goBtn" onclick="reset()">🚀 지금 초기화하고 홈으로</button>
+    <div><a class="home" href="/">홈으로 (초기화 안 함)</a></div>
+  </div>
+  <script>
+    const log = (msg, type='info') => {
+      const s = document.getElementById('status');
+      const t = new Date().toLocaleTimeString('ko-KR');
+      s.innerHTML += `<div class="${type}">[${t}] ${msg}</div>`;
+      s.scrollTop = s.scrollHeight;
+    };
+
+    async function reset() {
+      const btn = document.getElementById('goBtn');
+      btn.disabled = true;
+      btn.textContent = '⏳ 초기화 중...';
+
+      log('🧹 캐시 초기화 시작', 'info');
+
+      // 1. 모든 Service Worker 등록 해제
+      try {
+        if ('serviceWorker' in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          log(`발견된 SW: ${regs.length}개`, 'info');
+          for (const reg of regs) {
+            await reg.unregister();
+            log(`✓ SW unregister: ${reg.scope}`, 'ok');
+          }
+        }
+      } catch (e) { log(`SW 해제 실패: ${e.message}`, 'err'); }
+
+      // 2. 모든 Cache Storage 삭제
+      try {
+        if ('caches' in window) {
+          const names = await caches.keys();
+          log(`발견된 캐시: ${names.length}개`, 'info');
+          for (const name of names) {
+            await caches.delete(name);
+            log(`✓ 캐시 삭제: ${name}`, 'ok');
+          }
+        }
+      } catch (e) { log(`캐시 삭제 실패: ${e.message}`, 'err'); }
+
+      // 3. sessionStorage 삭제 (jamsa_ 데이터는 보존)
+      try {
+        sessionStorage.clear();
+        log('✓ sessionStorage 삭제', 'ok');
+      } catch (e) {}
+
+      // 4. localStorage는 보존 — 사용자 데이터(재고/품의 등)는 절대 지우면 안 됨
+      log('💾 localStorage(재고·품의 등 사용자 데이터): 그대로 유지', 'info');
+
+      // 5. IndexedDB는 보존 — 사진/백업 데이터
+      log('💾 IndexedDB(사진·백업): 그대로 유지', 'info');
+
+      log('✅ 완료! 3초 후 홈으로 이동', 'ok');
+      btn.textContent = '✅ 완료';
+
+      setTimeout(() => {
+        location.replace('/?fresh=' + Date.now());
+      }, 3000);
+    }
+
+    // 자동 초기화는 안 함 — 사용자 명시적 클릭 필요
+    log('🔍 진단 정보', 'info');
+    log(`User-Agent: ${navigator.userAgent.slice(0, 80)}...`, 'info');
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(regs => {
+        log(`현재 SW: ${regs.length}개 등록됨`, regs.length>0?'info':'ok');
+      });
+    }
+    if ('caches' in window) {
+      caches.keys().then(names => log(`현재 캐시: ${names.length}개 (${names.join(', ')})`, 'info'));
+    }
+  </script>
+</body>
+</html>
