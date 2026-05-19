@@ -43,6 +43,18 @@
       ]
     },
     {
+      "source": "/hr.bundle.js",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=300, must-revalidate" }
+      ]
+    },
+    {
+      "source": "/hr.html",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+      ]
+    },
+    {
       "source": "/(.*)\\.(png|jpg|jpeg|svg|ico|woff2?|ttf|otf)",
       "headers": [
         { "key": "Cache-Control", "value": "public, max-age=2592000, immutable" }
@@ -51,6 +63,7 @@
   ],
   "rewrites": [
     { "source": "/api/:path*", "destination": "/api?path=:path*" },
+    { "source": "/hr", "destination": "/hr.html" },
     { "source": "/", "destination": "/index.html" }
   ]
 }

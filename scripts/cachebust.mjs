@@ -55,3 +55,18 @@ for (const file of targets) {
   }
 }
 
+// hr.bundle.js — public/hr.html 캐시버스트
+const hrBundle = path.join(root, "public", "hr.bundle.js");
+if (fs.existsSync(hrBundle)) {
+  const hrHash = crypto.createHash("md5").update(fs.readFileSync(hrBundle)).digest("hex").slice(0, 8);
+  const hrHtml = path.join(root, "public", "hr.html");
+  if (fs.existsSync(hrHtml)) {
+    let html = fs.readFileSync(hrHtml, "utf8");
+    const r = html.replace(/\/hr\.bundle\.js(\?v=[a-f0-9]+)?/g, `/hr.bundle.js?v=${hrHash}`);
+    if (r !== html) {
+      fs.writeFileSync(hrHtml, r);
+      console.log(`✓ cachebust ${path.relative(root, hrHtml)} → ?v=${hrHash}`);
+    }
+  }
+}
+
