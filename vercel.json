@@ -51,6 +51,7 @@
   ],
   "rewrites": [
     { "source": "/api/:path*", "destination": "/api?path=:path*" },
+    { "source": "/attendance", "destination": "/attendance.html" },
     { "source": "/", "destination": "/index.html" }
   ]
 }

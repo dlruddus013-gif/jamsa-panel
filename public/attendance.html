@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="theme-color" content="#0f172a">
+<title>잠사플레이팜 · 출퇴근 시스템</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --bg:#0f172a;
+    --bg-deep:#0b1220;
+    --surface:#1e293b;
+    --surface-hi:#334155;
+    --line:#1e293b;
+    --line-soft:#334155;
+    --text:#f1f5f9;
+    --text-soft:#94a3b8;
+    --text-mute:#64748b;
+    --text-dim:#475569;
+    --accent:#34d399;
+    --accent-deep:#10b981;
+    --accent-bg:#0b3a2a;
+    --warn:#fbbf24;
+    --warn-bg:#b45309;
+    --warn-text:#fef3c7;
+    --danger:#f87171;
+    --danger-bg:#7f1d1d;
+    --danger-text:#fecaca;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:'IBM Plex Sans KR', -apple-system, 'Pretendard', sans-serif;
+    background:var(--bg);
+    color:var(--text);
+    font-size:14px;
+    line-height:1.5;
+    overflow-x:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+  button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+  .mono{font-family:'JetBrains Mono', ui-monospace, monospace;font-variant-numeric:tabular-nums}
+
+  #setup{
+    position:fixed;inset:0;
+    background:var(--bg);
+    display:none;
+    align-items:center;justify-content:center;
+    z-index:1000;
+    padding:24px;
+  }
+  #setup.show{display:flex}
+  .setup-card{
+    background:var(--surface);
+    border:1px solid var(--line-soft);
+    border-radius:10px;
+    padding:36px 32px;
+    max-width:440px;
+    width:100%;
+  }
+  .setup-card h1{font-size:22px;font-weight:600;color:var(--text);margin-bottom:6px;letter-spacing:-.015em}
+  .setup-card .sub{color:var(--text-soft);margin-bottom:28px;font-size:13px}
+  .setup-field{margin-bottom:14px}
+  .setup-field label{
+    display:block;font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--accent);font-weight:600;margin-bottom:6px;
+  }
+  .setup-field input{
+    width:100%;padding:11px 13px;border:1px solid var(--line-soft);border-radius:6px;
+    font-family:'JetBrains Mono', monospace;font-size:11px;
+    background:var(--bg-deep);color:var(--text);transition:.15s;
+  }
+  .setup-field input:focus{outline:none;border-color:var(--accent)}
+  .setup-btn{
+    width:100%;padding:12px;background:var(--accent-deep);color:#f0fdf4;
+    font-weight:600;letter-spacing:.03em;border-radius:6px;margin-top:6px;
+    transition:.15s;font-size:13px;
+  }
+  .setup-btn:hover{background:var(--accent)}
+  .setup-hint{
+    margin-top:18px;padding-top:18px;border-top:1px solid var(--line-soft);
+    font-size:11px;color:var(--text-soft);line-height:1.7;
+  }
+  .setup-hint code{
+    background:var(--bg-deep);padding:1px 6px;border-radius:3px;
+    font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--accent);
+  }
+
+  header{
+    background:var(--bg-deep);border-bottom:1px solid var(--line);
+    padding:14px 22px;display:flex;align-items:center;justify-content:space-between;
+    gap:24px;position:sticky;top:0;z-index:50;backdrop-filter:blur(8px);
+  }
+  .brand{display:flex;align-items:center;gap:12px;flex-shrink:0}
+  .brand .logo{
+    width:36px;height:36px;border-radius:8px;
+    background:linear-gradient(135deg, var(--accent-deep), #059669);
+    display:grid;place-items:center;color:#f0fdf4;font-weight:500;font-size:15px;
+  }
+  .brand h1{font-size:15px;font-weight:600;color:var(--text);letter-spacing:-.01em;line-height:1.25}
+  .brand h1 small{
+    display:block;font-size:10px;font-weight:400;letter-spacing:.12em;
+    color:var(--text-mute);text-transform:uppercase;margin-top:2px;
+  }
+  .header-right{display:flex;align-items:center;gap:12px;font-size:12px}
+  .pill{
+    padding:4px 10px;border:1px solid var(--line-soft);border-radius:6px;
+    color:var(--text-mute);font-family:'JetBrains Mono',monospace;font-size:11px;
+  }
+  .pill-cloud{color:var(--accent);border-color:var(--accent-bg);display:flex;align-items:center;gap:5px}
+  .pill-cloud::before{
+    content:'';display:inline-block;width:6px;height:6px;border-radius:50%;
+    background:var(--accent);animation:pulse 2.5s infinite;
+  }
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+  .clock{text-align:right}
+  .clock .time{
+    font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:500;
+    color:var(--accent);letter-spacing:.02em;line-height:1;
+  }
+  .clock .date{font-size:10px;color:var(--text-mute);letter-spacing:.08em;margin-top:3px}
+  .reset-btn{
+    font-size:11px;color:var(--text-mute);padding:4px 10px;
+    border:1px solid var(--line-soft);border-radius:6px;transition:.15s;
+  }
+  .reset-btn:hover{border-color:var(--accent);color:var(--accent)}
+
+  main{
+    max-width:1400px;margin:0 auto;padding:24px 22px;
+    display:grid;grid-template-columns:1fr 320px;gap:24px;
+  }
+  @media (max-width:980px){
+    main{grid-template-columns:1fr;padding:18px}
+    header{padding:12px 16px;gap:12px;flex-wrap:wrap}
+    .clock{order:-1}
+  }
+
+  .section-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px}
+  .section-head h2{font-size:18px;font-weight:600;color:var(--text);letter-spacing:-.015em}
+  .section-head .sub{font-size:11px;color:var(--text-mute);margin-top:3px;letter-spacing:.03em}
+  .live-dot{
+    display:inline-block;width:5px;height:5px;border-radius:50%;
+    background:var(--accent);margin-right:5px;animation:pulse 2s infinite;transform:translateY(-1px);
+  }
+
+  .tabs{display:flex;gap:2px;margin-bottom:18px;border-bottom:1px solid var(--line-soft);overflow-x:auto}
+  .tab{
+    padding:9px 16px;font-size:13px;font-weight:500;color:var(--text-mute);
+    white-space:nowrap;position:relative;transition:.15s;letter-spacing:-.005em;
+  }
+  .tab:hover{color:var(--text-soft)}
+  .tab.active{color:var(--text)}
+  .tab.active::after{content:'';position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--accent)}
+  .tab .count{display:inline-block;margin-left:5px;color:var(--text-mute);font-family:'JetBrains Mono',monospace;font-size:11px}
+  .tab.active .count{color:var(--accent)}
+
+  .staff-grid{display:grid;grid-template-columns:repeat(auto-fill, minmax(200px, 1fr));gap:12px}
+  .staff-card{
+    background:var(--surface);border:1px solid var(--line-soft);border-radius:8px;
+    padding:14px;transition:.15s;position:relative;overflow:hidden;
+  }
+  .staff-card:hover{border-color:var(--text-mute);transform:translateY(-1px)}
+  .staff-card.checked-in{background:var(--accent-bg);border-color:var(--accent-deep)}
+  .staff-card.checked-in::before{content:'';position:absolute;top:0;left:0;bottom:0;width:3px;background:var(--accent)}
+  .sc-name{font-size:14px;font-weight:600;color:var(--text);margin-bottom:2px;letter-spacing:-.01em}
+  .sc-meta{font-size:10.5px;color:var(--text-soft);letter-spacing:.04em;margin-bottom:10px}
+  .sc-status{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-mute);margin-bottom:10px;min-height:16px}
+  .sc-status.working{color:var(--accent)}
+  .sc-btn{
+    width:100%;padding:8px;background:var(--accent-deep);color:#f0fdf4;
+    border-radius:5px;font-weight:600;font-size:12px;letter-spacing:.03em;transition:.15s;
+  }
+  .sc-btn:hover{background:var(--accent)}
+  .sc-btn.checkout{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+  .sc-btn.checkout:hover{background:var(--accent);color:#0f172a}
+  .sc-btn.done{background:var(--bg-deep);color:var(--text-dim);border:1px solid var(--line-soft);cursor:not-allowed}
+  .sc-btn:disabled{opacity:.6}
+
+  aside{display:flex;flex-direction:column;gap:14px}
+  .panel{background:var(--surface);border:1px solid var(--line-soft);border-radius:8px;padding:16px}
+  .panel h3{
+    font-size:11px;font-weight:600;color:var(--text-soft);letter-spacing:.12em;
+    text-transform:uppercase;margin-bottom:12px;padding-bottom:8px;
+    border-bottom:1px solid var(--line-soft);display:flex;align-items:center;justify-content:space-between;
+  }
+  .panel h3 .badge{
+    font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;
+    padding:1px 6px;border-radius:8px;background:var(--line-soft);color:var(--text);
+    letter-spacing:0;text-transform:none;
+  }
+  .panel h3 .badge.alert{background:var(--danger-bg);color:var(--danger-text)}
+
+  .stat-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;font-size:12px}
+  .stat-label{color:var(--text-soft)}
+  .stat-value{font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:500;color:var(--text)}
+  .stat-value.ok{color:var(--accent)}
+  .stat-value.warn{color:var(--warn)}
+
+  .row-item{
+    padding:7px 0;border-bottom:1px dotted var(--line-soft);
+    display:flex;align-items:center;justify-content:space-between;gap:8px;
+  }
+  .row-item:last-child{border:none}
+  .row-name{font-size:12.5px;font-weight:500;color:var(--text)}
+  .row-sub{font-size:10px;color:var(--text-mute);letter-spacing:.04em;margin-top:1px}
+  .badge-days{
+    font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:600;
+    padding:2px 7px;border-radius:3px;background:var(--accent-bg);color:var(--accent);
+  }
+  .badge-days.warn{background:var(--warn-bg);color:var(--warn-text)}
+  .badge-days.danger{background:var(--danger-bg);color:var(--danger-text)}
+  .empty-msg{text-align:center;color:var(--text-mute);font-size:12px;padding:18px 0}
+
+  #toast{
+    position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);
+    background:var(--accent-deep);color:#f0fdf4;padding:11px 22px;border-radius:6px;
+    font-size:13px;font-weight:500;opacity:0;pointer-events:none;transition:.25s;
+    z-index:100;letter-spacing:.02em;box-shadow:0 8px 24px rgba(0,0,0,.4);
+  }
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  #toast.error{background:#dc2626}
+
+  .loader{text-align:center;color:var(--text-mute);font-size:12px;padding:48px 20px;letter-spacing:.1em}
+  .loader::after{
+    content:'';display:inline-block;width:5px;height:5px;background:var(--accent);
+    border-radius:50%;margin-left:4px;animation:dot 1.4s infinite;
+  }
+  @keyframes dot{0%,80%,100%{opacity:0}40%{opacity:1}}
+
+  footer{
+    text-align:center;padding:18px 22px;font-size:10.5px;color:var(--text-dim);
+    letter-spacing:.1em;border-top:1px solid var(--line);margin-top:32px;background:var(--bg-deep);
+  }
+  footer .sep{margin:0 8px;opacity:.5}
+</style>
+</head>
+<body>
+
+<div id="setup" class="show">
+  <div class="setup-card">
+    <h1>잠사플레이팜 · 출퇴근</h1>
+    <p class="sub">최초 1회만 Supabase 연결 정보를 입력합니다. 이후 브라우저에 저장됩니다.</p>
+
+    <div class="setup-field">
+      <label>SUPABASE URL</label>
+      <input id="cfgUrl" placeholder="https://ewxquecxsxsfhyzfaaci.supabase.co" value="https://ewxquecxsxsfhyzfaaci.supabase.co">
+    </div>
+
+    <div class="setup-field">
+      <label>ANON PUBLIC KEY</label>
+      <input id="cfgKey" placeholder="eyJhbGciOiJIUzI1NiIs..." autocomplete="off">
+    </div>
+
+    <button class="setup-btn" onclick="saveSetup()">연결하기 →</button>
+
+    <div class="setup-hint">
+      <strong>ANON KEY 찾는 법</strong><br>
+      Supabase 대시보드 → <code>Settings</code> → <code>API</code> → <code>Project API keys</code><br>
+      섹션의 <code>anon · public</code> 키를 복사
+      <br><br>
+      <span style="color:var(--danger);">⚠ service_role 키는 절대 사용 금지</span>
+    </div>
+  </div>
+</div>
+
+<header>
+  <div class="brand">
+    <div class="logo">蠶</div>
+    <h1>잠사플레이팜 출퇴근<small>HR · BLE BEACON · ATTENDANCE</small></h1>
+  </div>
+  <div class="header-right">
+    <span class="pill">⌘K</span>
+    <span class="pill pill-cloud">클라우드</span>
+    <div class="clock">
+      <div class="time mono" id="clockTime">--:--:--</div>
+      <div class="date" id="clockDate">YYYY-MM-DD</div>
+    </div>
+    <button class="reset-btn" onclick="resetSetup()">연결 재설정</button>
+  </div>
+</header>
+
+<main>
+  <section>
+    <div class="section-head">
+      <div>
+        <h2>출퇴근 현황</h2>
+        <div class="sub"><span class="live-dot"></span><span id="todayLabel">실시간 동기화 중</span></div>
+      </div>
+    </div>
+
+    <div class="tabs" id="tabs"><div class="loader">부서 정보 불러오는 중</div></div>
+    <div class="staff-grid" id="staffGrid">
+      <div class="loader" style="grid-column:1/-1">직원 명단 불러오는 중</div>
+    </div>
+  </section>
+
+  <aside>
+    <div class="panel">
+      <h3>오늘 현황 <span class="badge mono" id="todayDate"></span></h3>
+      <div class="stat-row"><span class="stat-label">전체 직원</span><span class="stat-value" id="statTotal">0</span></div>
+      <div class="stat-row"><span class="stat-label">출근</span><span class="stat-value ok" id="statIn">0</span></div>
+      <div class="stat-row"><span class="stat-label">근무중</span><span class="stat-value ok" id="statWorking">0</span></div>
+      <div class="stat-row"><span class="stat-label">퇴근 완료</span><span class="stat-value" id="statOut">0</span></div>
+      <div class="stat-row"><span class="stat-label">미출근</span><span class="stat-value warn" id="statAbsent">0</span></div>
+    </div>
+
+    <div class="panel">
+      <h3>비자 만료 임박 <span class="badge alert" id="visaBadge" style="display:none">!</span></h3>
+      <div id="visaList"><div class="empty-msg">불러오는 중...</div></div>
+    </div>
+
+    <div class="panel">
+      <h3>이번주 근무시간</h3>
+      <div id="weekList"><div class="empty-msg">불러오는 중...</div></div>
+    </div>
+  </aside>
+</main>
+
+<footer>
+  잠사플레이팜 · 출퇴근 v1.0
+  <span class="sep">·</span> Supabase Realtime
+  <span class="sep">·</span> 2026.05.20
+</footer>
+
+<div id="toast"></div>
+
+<script>
+let sb = null;
+let allStaff = [];
+let allDepts = [];
+let todayAttendance = [];
+let currentDept = 'all';
+
+function saveSetup(){
+  const url = document.getElementById('cfgUrl').value.trim();
+  const key = document.getElementById('cfgKey').value.trim();
+  if(!url || !key){ alert('URL과 ANON KEY를 모두 입력해주세요'); return; }
+  localStorage.setItem('jamsa_sb_url', url);
+  localStorage.setItem('jamsa_sb_key', key);
+  initApp();
+}
+function resetSetup(){
+  if(!confirm('연결 정보를 재설정합니다. 계속할까요?')) return;
+  localStorage.removeItem('jamsa_sb_url');
+  localStorage.removeItem('jamsa_sb_key');
+  location.reload();
+}
+
+const pad = n => String(n).padStart(2,'0');
+
+function tickClock(){
+  const d = new Date();
+  document.getElementById('clockTime').textContent =
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  const wd = ['일','월','화','수','목','금','토'][d.getDay()];
+  document.getElementById('clockDate').textContent =
+    `${d.getFullYear()}.${pad(d.getMonth()+1)}.${pad(d.getDate())} ${wd}`;
+  const el = document.getElementById('todayDate');
+  if(el) el.textContent = `${pad(d.getMonth()+1)}/${pad(d.getDate())}`;
+  const lbl = document.getElementById('todayLabel');
+  if(lbl) lbl.textContent = `${d.getFullYear()}.${pad(d.getMonth()+1)}.${pad(d.getDate())} ${wd}요일 · 실시간 동기화 중`;
+}
+
+function toast(msg, isErr=false){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.toggle('error', isErr);
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 2400);
+}
+
+async function initApp(){
+  const url = localStorage.getItem('jamsa_sb_url');
+  const key = localStorage.getItem('jamsa_sb_key');
+  if(!url || !key){ document.getElementById('setup').classList.add('show'); return; }
+  document.getElementById('setup').classList.remove('show');
+
+  try{
+    sb = supabase.createClient(url, key);
+    await loadDepts();
+    await loadStaff();
+    await loadTodayAttendance();
+    await loadVisaAlerts();
+    await loadWeekHours();
+    render();
+    subscribeRealtime();
+  }catch(e){
+    console.error(e);
+    toast('연결 실패: ANON KEY를 확인하세요', true);
+    document.getElementById('setup').classList.add('show');
+  }
+}
+
+async function loadDepts(){
+  const { data, error } = await sb.from('beacon_dept').select('*').order('id');
+  if(error) throw error;
+  allDepts = data || [];
+}
+async function loadStaff(){
+  const { data, error } = await sb.from('staff').select('*').order('name');
+  if(error) throw error;
+  allStaff = data || [];
+}
+async function loadTodayAttendance(){
+  const today = new Date().toISOString().slice(0,10);
+  const { data, error } = await sb.from('attendance').select('*')
+    .gte('checked_in_at', today+'T00:00:00')
+    .lte('checked_in_at', today+'T23:59:59');
+  if(error){ console.warn(error); todayAttendance=[]; return; }
+  todayAttendance = data || [];
+}
+async function loadVisaAlerts(){
+  try{
+    const { data, error } = await sb.from('v_foreign_workers').select('*').order('visa_expiry');
+    if(error) throw error;
+    renderVisa(data || []);
+  }catch(e){
+    document.getElementById('visaList').innerHTML = '<div class="empty-msg">데이터 없음</div>';
+  }
+}
+async function loadWeekHours(){
+  try{
+    const { data, error } = await sb.from('v_work_hours').select('*').limit(5);
+    if(error) throw error;
+    renderWeek(data || []);
+  }catch(e){
+    document.getElementById('weekList').innerHTML = '<div class="empty-msg">아직 근무 기록이 없습니다</div>';
+  }
+}
+
+async function checkIn(staffId){
+  const { error } = await sb.from('attendance').insert({ staff_id: staffId });
+  if(error){ toast('출근 실패: '+error.message, true); return; }
+  toast('출근 처리되었습니다');
+  await loadTodayAttendance();
+  render();
+}
+async function checkOut(staffId){
+  const today = new Date().toISOString().slice(0,10);
+  const { data: rows, error: e1 } = await sb.from('attendance').select('id')
+    .eq('staff_id', staffId).is('checked_out_at', null)
+    .gte('checked_in_at', today+'T00:00:00')
+    .order('checked_in_at', { ascending:false }).limit(1);
+  if(e1 || !rows || rows.length===0){ toast('출근 기록이 없습니다', true); return; }
+
+  const { error: e2 } = await sb.from('attendance')
+    .update({ checked_out_at: new Date().toISOString() }).eq('id', rows[0].id);
+  if(e2){ toast('퇴근 실패: '+e2.message, true); return; }
+  toast('퇴근 처리되었습니다');
+  await loadTodayAttendance();
+  render();
+}
+
+function render(){ renderTabs(); renderStaff(); renderStats(); }
+
+function renderTabs(){
+  const tabsEl = document.getElementById('tabs');
+  const counts = { all: allStaff.length };
+  allDepts.forEach(d => counts[d.id] = allStaff.filter(s => s.dept_id===d.id).length);
+
+  let html = `<div class="tab ${currentDept==='all'?'active':''}" onclick="setDept('all')">
+    전체 <span class="count mono">${counts.all}</span></div>`;
+  allDepts.forEach(d => {
+    html += `<div class="tab ${currentDept===d.id?'active':''}" onclick="setDept(${d.id})">
+      ${d.name} <span class="count mono">${counts[d.id]||0}</span></div>`;
+  });
+  tabsEl.innerHTML = html;
+}
+function setDept(id){ currentDept = id; render(); }
+
+function renderStaff(){
+  const grid = document.getElementById('staffGrid');
+  const list = currentDept==='all' ? allStaff : allStaff.filter(s => s.dept_id===currentDept);
+
+  if(list.length === 0){
+    grid.innerHTML = '<div class="loader" style="grid-column:1/-1">등록된 직원이 없습니다 — 01_직원명단_일괄등록.sql 을 실행하세요</div>';
+    return;
+  }
+
+  grid.innerHTML = list.map(s => {
+    const att = todayAttendance.filter(a => a.staff_id===s.id);
+    const lastAtt = att[att.length-1];
+    const working = lastAtt && !lastAtt.checked_out_at;
+    const dept = allDepts.find(d => d.id===s.dept_id);
+
+    let status = '';
+    if(working){
+      const t = new Date(lastAtt.checked_in_at);
+      status = `<div class="sc-status working">● 출근 ${pad(t.getHours())}:${pad(t.getMinutes())}</div>`;
+    } else if(lastAtt){
+      const t = new Date(lastAtt.checked_out_at);
+      status = `<div class="sc-status">퇴근 완료 · ${pad(t.getHours())}:${pad(t.getMinutes())}</div>`;
+    } else {
+      status = `<div class="sc-status">미출근</div>`;
+    }
+
+    const btn = working
+      ? `<button class="sc-btn checkout" onclick="checkOut(${s.id})">퇴근</button>`
+      : lastAtt
+        ? `<button class="sc-btn done" disabled>완료</button>`
+        : `<button class="sc-btn" onclick="checkIn(${s.id})">출근</button>`;
+
+    return `<div class="staff-card ${working?'checked-in':''}">
+      <div class="sc-name">${s.name}</div>
+      <div class="sc-meta">${dept?dept.name:'미지정'} · ${s.beacon_id||'비콘 미배정'}</div>
+      ${status}${btn}
+    </div>`;
+  }).join('');
+}
+
+function renderStats(){
+  const total = allStaff.length;
+  const checkedIn = new Set();
+  const checkedOut = new Set();
+  todayAttendance.forEach(a => {
+    checkedIn.add(a.staff_id);
+    if(a.checked_out_at) checkedOut.add(a.staff_id);
+  });
+  document.getElementById('statTotal').textContent = total;
+  document.getElementById('statIn').textContent = checkedIn.size;
+  document.getElementById('statWorking').textContent = checkedIn.size - checkedOut.size;
+  document.getElementById('statOut').textContent = checkedOut.size;
+  document.getElementById('statAbsent').textContent = total - checkedIn.size;
+}
+
+function renderVisa(rows){
+  const today = new Date();
+  const within90 = rows.filter(r => {
+    if(!r.visa_expiry) return false;
+    const days = (new Date(r.visa_expiry) - today) / 86400000;
+    return days <= 90;
+  });
+
+  const badge = document.getElementById('visaBadge');
+  if(within90.length > 0){
+    badge.style.display = 'inline-block';
+    badge.textContent = within90.length;
+  } else { badge.style.display = 'none'; }
+
+  if(rows.length === 0){
+    document.getElementById('visaList').innerHTML = '<div class="empty-msg">외국인 직원이 없습니다</div>';
+    return;
+  }
+
+  document.getElementById('visaList').innerHTML = rows.slice(0,5).map(r => {
+    const exp = new Date(r.visa_expiry);
+    const days = Math.round((exp - today) / 86400000);
+    const cls = days <= 30 ? 'danger' : (days <= 90 ? 'warn' : '');
+    return `<div class="row-item">
+      <div>
+        <div class="row-name">${r.name||'-'}</div>
+        <div class="row-sub">${r.visa_type||'-'} · ${r.visa_expiry||'-'}</div>
+      </div>
+      <span class="badge-days mono ${cls}">${days}일</span>
+    </div>`;
+  }).join('');
+}
+
+function renderWeek(rows){
+  if(rows.length === 0){
+    document.getElementById('weekList').innerHTML = '<div class="empty-msg">아직 근무 기록이 없습니다</div>';
+    return;
+  }
+  document.getElementById('weekList').innerHTML = rows.map(r => `
+    <div class="row-item">
+      <div>
+        <div class="row-name">${r.name||r.staff_name||'-'}</div>
+        <div class="row-sub">${r.work_date||r.date||''}</div>
+      </div>
+      <span class="badge-days mono">${Number(r.hours||r.work_hours||0).toFixed(1)}h</span>
+    </div>`).join('');
+}
+
+function subscribeRealtime(){
+  sb.channel('attendance-live')
+    .on('postgres_changes', { event:'*', schema:'public', table:'attendance' }, async () => {
+      await loadTodayAttendance();
+      render();
+    })
+    .subscribe();
+}
+
+tickClock();
+setInterval(tickClock, 1000);
+initApp();
+</script>
+</body>
+</html>
