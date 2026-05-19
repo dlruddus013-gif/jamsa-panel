@@ -1,0 +1,173 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 2200" font-family="'Pretendard','Noto Sans KR',sans-serif">
+  <defs>
+    <linearGradient id="hdr" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#0ea5e9"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <filter id="sh" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="2200" fill="#f8fafc"/>
+
+  <!-- Header -->
+  <rect x="0" y="0" width="1200" height="140" fill="url(#hdr)"/>
+  <text x="600" y="55" text-anchor="middle" font-size="30" font-weight="900" fill="#fff">📡 Minew G1 + TagCloud → 잠사 패널 연동</text>
+  <text x="600" y="95" text-anchor="middle" font-size="14" fill="#e0f2fe">5분 설정으로 비콘 데이터 실시간 수신</text>
+  <text x="600" y="120" text-anchor="middle" font-size="12" fill="#bae6fd">한국잠사박물관 통합관리 · v1.0</text>
+
+  <!-- 현재 vs 목표 -->
+  <g transform="translate(50,170)">
+    <rect width="1100" height="190" rx="14" fill="#fff" filter="url(#sh)"/>
+    <text x="20" y="35" font-size="20" font-weight="900" fill="#0f172a">📊 현재 상태 vs 목표</text>
+
+    <!-- 현재 -->
+    <g transform="translate(20,55)">
+      <rect width="525" height="120" rx="10" fill="#fef2f2" stroke="#fca5a5"/>
+      <text x="15" y="25" font-size="13" font-weight="900" fill="#991b1b">❌ 현재: TagCloud만 수신</text>
+      <text x="15" y="50" font-size="12" fill="#0f172a">[비콘] → [G1] → tagcloud.minew.com ✅</text>
+      <text x="15" y="72" font-size="12" fill="#0f172a">                     → 잠사 패널 ❌</text>
+      <text x="15" y="98" font-size="11" fill="#991b1b">→ Minew 클라우드에서만 데이터 확인 가능</text>
+      <text x="15" y="114" font-size="11" fill="#991b1b">→ 잠사 시스템에 통합 불가</text>
+    </g>
+
+    <!-- 목표 -->
+    <g transform="translate(560,55)">
+      <rect width="525" height="120" rx="10" fill="#dcfce7" stroke="#86efac"/>
+      <text x="15" y="25" font-size="13" font-weight="900" fill="#065f46">✅ 목표: 둘 다 동시 수신</text>
+      <text x="15" y="50" font-size="12" fill="#0f172a">[비콘] → [G1] → tagcloud.minew.com ✅</text>
+      <text x="15" y="72" font-size="12" fill="#0f172a">                     → 잠사 패널 ✅</text>
+      <text x="15" y="98" font-size="11" fill="#065f46">→ TagCloud는 그대로 모니터링용 유지</text>
+      <text x="15" y="114" font-size="11" fill="#065f46">→ 잠사 패널에 실시간 통합</text>
+    </g>
+  </g>
+
+  <!-- 방법 A: 게이트웨이 웹 UI 직접 설정 (최강 권장) -->
+  <g transform="translate(50,390)">
+    <rect width="1100" height="900" rx="14" fill="#fff" filter="url(#sh)"/>
+    <rect x="0" y="0" width="1100" height="50" rx="14" fill="#10b981"/>
+    <text x="20" y="33" font-size="18" font-weight="900" fill="#fff">🏆 방법 A: G1 게이트웨이 웹 UI 직접 설정 (5분, 권장)</text>
+
+    <!-- Step 1 -->
+    <g transform="translate(30,70)">
+      <circle cx="30" cy="30" r="26" fill="#10b981"/>
+      <text x="30" y="38" text-anchor="middle" font-size="20" font-weight="900" fill="#fff">1</text>
+      <text x="75" y="25" font-size="15" font-weight="900" fill="#0f172a">G1 게이트웨이 IP 주소 찾기</text>
+      <text x="75" y="48" font-size="12" fill="#475569">방법 ①: TagCloud → Devices → 게이트웨이 클릭 → IP 표시됨</text>
+      <text x="75" y="65" font-size="12" fill="#475569">방법 ②: 라우터 관리자 페이지 → 연결된 기기 목록 → "Minew" 검색</text>
+      <text x="75" y="82" font-size="12" fill="#475569">예: 192.168.0.50 · 192.168.1.100 등</text>
+    </g>
+
+    <!-- Step 2 -->
+    <g transform="translate(30,180)">
+      <circle cx="30" cy="30" r="26" fill="#10b981"/>
+      <text x="30" y="38" text-anchor="middle" font-size="20" font-weight="900" fill="#fff">2</text>
+      <text x="75" y="25" font-size="15" font-weight="900" fill="#0f172a">브라우저로 게이트웨이 접속</text>
+      <text x="75" y="48" font-size="12" fill="#475569">URL: http://192.168.0.50 (위에서 찾은 IP)</text>
+      <text x="75" y="65" font-size="12" fill="#475569">기본 계정: ID <tspan font-family="monospace" fill="#0f172a">admin</tspan> / PW <tspan font-family="monospace" fill="#0f172a">minew123</tspan></text>
+      <text x="75" y="82" font-size="12" fill="#475569">(기본값과 다르면 게이트웨이 뒷면 라벨 또는 매뉴얼 참고)</text>
+    </g>
+
+    <!-- Step 3 -->
+    <g transform="translate(30,290)">
+      <circle cx="30" cy="30" r="26" fill="#10b981"/>
+      <text x="30" y="38" text-anchor="middle" font-size="20" font-weight="900" fill="#fff">3</text>
+      <text x="75" y="25" font-size="15" font-weight="900" fill="#0f172a">"Application Settings" 또는 "Data Upload" 메뉴</text>
+      <text x="75" y="48" font-size="12" fill="#475569">G1 펌웨어에 따라 메뉴 이름 다름:</text>
+      <text x="75" y="68" font-size="12" fill="#475569">• 신형: Configuration → MQTT/HTTP → Data Forwarding</text>
+      <text x="75" y="85" font-size="12" fill="#475569">• 구형: System → Application Mode → URL Push</text>
+    </g>
+
+    <!-- Step 4 -->
+    <g transform="translate(30,400)">
+      <circle cx="30" cy="30" r="26" fill="#10b981"/>
+      <text x="30" y="38" text-anchor="middle" font-size="20" font-weight="900" fill="#fff">4</text>
+      <text x="75" y="25" font-size="15" font-weight="900" fill="#0f172a">HTTP POST 모드로 추가 endpoint 설정</text>
+      <text x="75" y="50" font-size="12" fill="#475569">기존 TagCloud 설정은 그대로 두고, "추가 endpoint" 또는 "Secondary URL" 옵션 사용:</text>
+
+      <rect x="75" y="65" width="970" height="190" rx="8" fill="#0f172a"/>
+      <text x="90" y="92" font-size="12" fill="#86efac" font-family="monospace">📍 Server URL / Endpoint URL:</text>
+      <text x="90" y="115" font-size="13" fill="#fff" font-weight="900" font-family="monospace">https://jamsa-panel.vercel.app/api/beacon-webhook</text>
+
+      <text x="90" y="148" font-size="12" fill="#86efac" font-family="monospace">📦 Format / Content-Type:</text>
+      <text x="90" y="170" font-size="13" fill="#fff" font-family="monospace">application/json</text>
+
+      <text x="90" y="200" font-size="12" fill="#86efac" font-family="monospace">🔄 Upload Interval:</text>
+      <text x="90" y="222" font-size="13" fill="#fff" font-family="monospace">10 seconds (또는 기본값 유지)</text>
+
+      <text x="90" y="248" font-size="11" fill="#cbd5e1">💡 인증(Authorization): 불필요 (공개 webhook)</text>
+    </g>
+
+    <!-- Step 5 -->
+    <g transform="translate(30,680)">
+      <circle cx="30" cy="30" r="26" fill="#10b981"/>
+      <text x="30" y="38" text-anchor="middle" font-size="20" font-weight="900" fill="#fff">5</text>
+      <text x="75" y="25" font-size="15" font-weight="900" fill="#0f172a">Save & Apply → 게이트웨이 자동 재시작 (1분)</text>
+      <text x="75" y="48" font-size="12" fill="#475569">설정 저장 후 게이트웨이 LED가 깜빡이고 재부팅됨</text>
+      <text x="75" y="65" font-size="12" fill="#475569">약 60초 후 자동으로 새 endpoint로 데이터 push 시작</text>
+    </g>
+
+    <!-- Step 6 -->
+    <g transform="translate(30,780)">
+      <circle cx="30" cy="30" r="26" fill="#dc2626"/>
+      <text x="30" y="38" text-anchor="middle" font-size="20" font-weight="900" fill="#fff">✓</text>
+      <text x="75" y="25" font-size="15" font-weight="900" fill="#0f172a">검증: 잠사 패널에서 확인</text>
+      <text x="75" y="48" font-size="12" fill="#475569">통합지도 → 📡 비콘 관리자 → 🌐 게이트웨이 탭</text>
+      <text x="75" y="65" font-size="12" fill="#475569">→ "최근 게이트웨이 데이터 수신" 영역에 JSON 표시되면 ✅</text>
+      <text x="75" y="82" font-size="12" fill="#475569">→ 또는 URL 직접 확인: https://jamsa-panel.vercel.app/api/beacon-webhook?recent=1</text>
+    </g>
+  </g>
+
+  <!-- 방법 B: TagCloud Webhook -->
+  <g transform="translate(50,1320)">
+    <rect width="1100" height="380" rx="14" fill="#fff" filter="url(#sh)"/>
+    <rect x="0" y="0" width="1100" height="50" rx="14" fill="#0ea5e9"/>
+    <text x="20" y="33" font-size="18" font-weight="900" fill="#fff">⚡ 방법 B: TagCloud에서 Webhook 포워딩 (게이트웨이 만지기 어려울 때)</text>
+
+    <g transform="translate(30,75)">
+      <text x="0" y="20" font-size="13" font-weight="800" fill="#0f172a">1️⃣ tagcloud.minew.com 로그인 (admin 권한 필요)</text>
+
+      <text x="0" y="55" font-size="13" font-weight="800" fill="#0f172a">2️⃣ 게이트웨이 클릭 → "Data Forwarding" / "3rd Party" / "Webhook" 메뉴</text>
+      <text x="0" y="73" font-size="11" fill="#475569">(영문 UI: Devices → Click Gateway → Data Output / Forwarding)</text>
+
+      <text x="0" y="105" font-size="13" font-weight="800" fill="#0f172a">3️⃣ Add Webhook / Add Endpoint 클릭</text>
+
+      <rect x="0" y="120" width="1030" height="130" rx="8" fill="#0f172a"/>
+      <text x="20" y="145" font-size="12" fill="#86efac" font-family="monospace">URL:</text>
+      <text x="20" y="167" font-size="13" fill="#fff" font-weight="900" font-family="monospace">https://jamsa-panel.vercel.app/api/beacon-webhook</text>
+      <text x="20" y="195" font-size="12" fill="#86efac" font-family="monospace">Method: POST   ·   Content-Type: application/json</text>
+      <text x="20" y="220" font-size="11" fill="#fbbf24">⚠️ Authorization Header / API Key 항목은 비워두기 (공개 webhook)</text>
+
+      <text x="0" y="282" font-size="13" font-weight="800" fill="#0f172a">4️⃣ Save → 1분 내 데이터 수신 시작</text>
+    </g>
+  </g>
+
+  <!-- Minew G1 데이터 포맷 -->
+  <g transform="translate(50,1730)">
+    <rect width="1100" height="350" rx="14" fill="#0f172a" filter="url(#sh)"/>
+    <text x="20" y="35" font-size="18" font-weight="900" fill="#fff">📦 잠사 patel webhook이 받는 Minew G1 JSON 포맷</text>
+    <text x="20" y="58" font-size="11" fill="#94a3b8">이 포맷을 받도록 webhook이 이미 업데이트됨 (gw_mac, obj 배열 자동 인식)</text>
+
+    <rect x="20" y="75" width="1060" height="255" rx="8" fill="#1e293b"/>
+    <text x="40" y="100" font-size="12" fill="#86efac" font-family="monospace">{</text>
+    <text x="60" y="120" font-size="12" fill="#fde68a" font-family="monospace">"msg_type"</text>
+    <text x="160" y="120" font-size="12" fill="#fff" font-family="monospace">: "ble_data",</text>
+    <text x="60" y="140" font-size="12" fill="#fde68a" font-family="monospace">"gw_mac"</text>
+    <text x="160" y="140" font-size="12" fill="#fff" font-family="monospace">: "AC233F123456",</text>
+    <text x="60" y="160" font-size="12" fill="#fde68a" font-family="monospace">"timestamp"</text>
+    <text x="160" y="160" font-size="12" fill="#fff" font-family="monospace">: 1730000000,</text>
+    <text x="60" y="180" font-size="12" fill="#fde68a" font-family="monospace">"obj"</text>
+    <text x="160" y="180" font-size="12" fill="#fff" font-family="monospace">: [</text>
+    <text x="80" y="200" font-size="12" fill="#fff" font-family="monospace">{ "mac": "AC233F654321", "rssi": -65, "name": "BLE_BCon_Z1", "type": 16, ... },</text>
+    <text x="80" y="220" font-size="12" fill="#fff" font-family="monospace">{ "mac": "AC233F654322", "rssi": -78, "name": "Beacon_2",    "type": 16, ... }</text>
+    <text x="60" y="240" font-size="12" fill="#fff" font-family="monospace">]</text>
+    <text x="40" y="260" font-size="12" fill="#86efac" font-family="monospace">}</text>
+
+    <text x="40" y="295" font-size="11" fill="#cbd5e1">✅ 잠사 패널이 자동 매핑:</text>
+    <text x="40" y="315" font-size="11" fill="#94a3b8">gw_mac → gatewaySerial · obj → beacons · 각 항목의 mac/rssi/name 자동 추출</text>
+  </g>
+
+  <!-- Footer -->
+  <text x="600" y="2180" text-anchor="middle" font-size="11" fill="#94a3b8">한국잠사박물관 · Minew G1 연동 가이드 · jamsa-panel.vercel.app/api/beacon-webhook</text>
+</svg>

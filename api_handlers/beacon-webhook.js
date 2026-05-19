@@ -38,24 +38,36 @@ export default async function handler(req, res) {
     if (typeof payload === "string") { try { payload = JSON.parse(payload); } catch (e) {} }
     if (!payload || typeof payload !== "object") return res.status(400).json({ ok: false, error: "invalid body" });
 
-    const gw = payload.gatewaySerial || payload.gateway || payload.gw || "unknown";
-    const beacons = payload.beacons || payload.advertisements || payload.data || [];
-    const ts = payload.timestamp || new Date().toISOString();
+    const gw = payload.gatewaySerial || payload.gateway || payload.gw || payload.gw_mac || payload.deviceMac || payload.gmac || "unknown";
+    // Minew G1 포맷: payload.obj 배열, 각 항목 { mac, rssi, ts, type, data, name? }
+    const rawBeacons = payload.beacons || payload.advertisements || payload.data || payload.obj || payload.devices || [];
+    const beacons = Array.isArray(rawBeacons) ? rawBeacons.map(b => ({
+      uuid: b.uuid || b.id || b.mac || b.macAddress || b.bleMac || b.device_mac,
+      mac: b.mac || b.macAddress || b.bleMac || b.device_mac || b.uuid,
+      name: b.name || b.deviceName || null,
+      rssi: b.rssi != null ? Number(b.rssi) : null,
+      txPower: b.txPower || b.tx_power || null,
+      type: b.type || null,
+      data: b.data || b.adv || null,
+      ts: b.ts || b.timestamp || null,
+      raw: b,
+    })) : [];
+    const ts = payload.timestamp || payload.ts || new Date().toISOString();
 
     _recentByGateway.set(gw, { at: new Date().toISOString(), payload, beaconCount: Array.isArray(beacons) ? beacons.length : 0 });
     _lastReceived = { receivedAt: new Date().toISOString(), gateway: gw, payload };
 
     // 옵션: Supabase에 저장 (테이블 beacon_detections가 있을 때만)
     try {
-      if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY && Array.isArray(beacons)) {
+      if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY && Array.isArray(beacons) && beacons.length > 0) {
         const rows = beacons.map(b => ({
           gateway_serial: gw,
-          beacon_uuid: b.uuid || b.id || b.mac,
+          beacon_uuid: b.uuid || b.mac,
           beacon_name: b.name || null,
-          rssi: b.rssi || null,
+          rssi: b.rssi,
           tx_power: b.txPower || null,
-          raw: b,
-          detected_at: ts,
+          raw: b.raw || b,
+          detected_at: typeof ts === "number" ? new Date(ts * (ts < 1e12 ? 1000 : 1)).toISOString() : ts,
         }));
         await fetch(`${process.env.SUPABASE_URL}/rest/v1/beacon_detections`, {
           method: "POST",

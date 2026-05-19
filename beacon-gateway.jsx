@@ -437,7 +437,7 @@ export function BeaconGatewayModal({ onClose, zones = [], curUser }) {
                 </div>
               </div>
 
-              <div style={{ padding: 12, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8 }}>
+              <div style={{ padding: 12, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, marginBottom: 10 }}>
                 <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>📥 최근 게이트웨이 데이터 수신</div>
                 {recentWebhook ? (
                   <div style={{ padding: 8, background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 5, fontSize: 11 }}>
@@ -447,6 +447,36 @@ export function BeaconGatewayModal({ onClose, zones = [], curUser }) {
                 ) : (
                   <div style={{ padding: 14, textAlign: "center", color: "#94a3b8", fontSize: 11 }}>아직 수신된 데이터 없음 (게이트웨이 설정 후 자동 표시)</div>
                 )}
+              </div>
+
+              {/* Minew G1 + TagCloud 특화 설정 안내 */}
+              <div style={{ padding: 14, background: "linear-gradient(135deg,#eff6ff,#dcfce7)", border: "2px solid #10b981", borderRadius: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
+                  <div style={{ fontSize: 13, fontWeight: 900, color: "#065f46" }}>📡 Minew G1 + TagCloud 자동 연동 (5분)</div>
+                  <a href="/minew-g1-setup.svg" target="_blank" rel="noreferrer"
+                    style={{ padding: "5px 10px", background: "#10b981", color: "#fff", borderRadius: 5, fontSize: 11, fontWeight: 700, textDecoration: "none" }}>
+                    📥 인포그래픽 가이드 보기
+                  </a>
+                </div>
+                <ol style={{ paddingLeft: 18, fontSize: 11, lineHeight: 1.8, color: "#0f172a", margin: 0 }}>
+                  <li><strong>tagcloud.minew.com 로그인</strong> (admin 권한 필요)</li>
+                  <li>좌측 메뉴 → <strong>Devices</strong> → 게이트웨이 클릭</li>
+                  <li>상세 페이지 → <strong>Data Forwarding</strong> / <strong>3rd Party</strong> / <strong>Webhook</strong> 메뉴 클릭
+                    <br/>(G1 펌웨어에 따라 메뉴명 다름)
+                  </li>
+                  <li><strong>＋ Add Webhook</strong> 또는 <strong>＋ Add Endpoint</strong> 클릭</li>
+                  <li>URL 입력: <code style={{ background: "#fff", padding: "2px 6px", borderRadius: 3, fontFamily: "monospace", fontWeight: 700 }}>{gw.webhookUrl}</code></li>
+                  <li>Method: <strong>POST</strong>, Content-Type: <strong>application/json</strong></li>
+                  <li>Authorization / API Key: <strong>비워두기</strong> (공개 webhook)</li>
+                  <li><strong>Save</strong> → 1분 내 위쪽 "최근 데이터 수신" 영역에 JSON 자동 표시</li>
+                </ol>
+                <div style={{ marginTop: 10, padding: 8, background: "#fff", borderRadius: 5, fontSize: 10, color: "#065f46" }}>
+                  💡 <strong>호환 자동:</strong> Minew G1의 <code>{`{ gw_mac, obj: [{mac, rssi, ...}] }`}</code> 포맷 자동 인식.
+                  TagCloud는 그대로 작동, 잠사 패널이 추가로 받음 (이중 모니터링).
+                </div>
+                <div style={{ marginTop: 6, padding: 8, background: "#fef3c7", borderRadius: 5, fontSize: 10, color: "#92400e" }}>
+                  ⚠️ <strong>대안</strong>: TagCloud 메뉴에 webhook 옵션이 없으면 게이트웨이 IP 직접 접속 (http://192.168.x.x → admin/minew123 → Application Settings → HTTP Push)
+                </div>
               </div>
             </div>
           )}
