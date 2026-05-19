@@ -9,6 +9,7 @@ import { ProductIntelligenceModal, ProductIntelInline, LogPhotoStrip } from "./p
 import { BackupHistoryPanel, logFileEvent, maybeAutoBackup } from "./inventory-backup-history.jsx";
 import { BeaconGatewayModal } from "./beacon-gateway.jsx";
 import { StaffAttendanceLivePanel } from "./staff-attendance-live.jsx";
+import { PresenceTrackingPanel } from "./presence-tracking.jsx";
 
 const DEFAULT_CCTV_SERVER_URL = "https://cctv.thejamsa.com";
 const DEFAULT_OKPOS_BRIDGE_URL = "http://127.0.0.1:5566";
@@ -23113,6 +23114,9 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
       `}</style>
       {/* ─── 실시간 출퇴근/위치/CCTV/행동로그 통합 패널 ─── */}
       <StaffAttendanceLivePanel onAddFacAction={onAddFacAction} />
+
+      {/* ─── BLE 게이트웨이 → 구역 → CCTV → 행동 로그 (실시간) ─── */}
+      <PresenceTrackingPanel />
 
       <div style={{ background: "#0f172a", color: "#fff", padding: "14px 20px", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
         <div style={{ fontSize: 13, fontWeight: 800 }}>🗺️ 통합 상황판</div>

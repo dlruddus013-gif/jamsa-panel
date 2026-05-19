@@ -57,9 +57,11 @@ export default async function handler(req, res) {
     _recentByGateway.set(gw, { at: new Date().toISOString(), payload, beaconCount: Array.isArray(beacons) ? beacons.length : 0 });
     _lastReceived = { receivedAt: new Date().toISOString(), gateway: gw, payload };
 
-    // 옵션: Supabase에 저장 (테이블 beacon_detections가 있을 때만)
+    // Supabase 자동 저장 (service_role 우선, 없으면 anon RLS 정책에 의지)
     try {
-      if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY && Array.isArray(beacons) && beacons.length > 0) {
+      const supaUrl = process.env.SUPABASE_URL;
+      const supaKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+      if (supaUrl && supaKey && Array.isArray(beacons) && beacons.length > 0) {
         const rows = beacons.map(b => ({
           gateway_serial: gw,
           beacon_uuid: b.uuid || b.mac,
@@ -68,17 +70,23 @@ export default async function handler(req, res) {
           tx_power: b.txPower || null,
           raw: b.raw || b,
           detected_at: typeof ts === "number" ? new Date(ts * (ts < 1e12 ? 1000 : 1)).toISOString() : ts,
-        }));
-        await fetch(`${process.env.SUPABASE_URL}/rest/v1/beacon_detections`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "apikey": process.env.SUPABASE_SERVICE_ROLE_KEY,
-            "Authorization": `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-            "Prefer": "return=minimal",
-          },
-          body: JSON.stringify(rows),
-        }).catch(() => {});
+        })).filter(r => r.beacon_uuid);
+        if (rows.length > 0) {
+          const res = await fetch(`${supaUrl}/rest/v1/beacon_detections`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "apikey": supaKey,
+              "Authorization": `Bearer ${supaKey}`,
+              "Prefer": "return=minimal",
+            },
+            body: JSON.stringify(rows),
+          });
+          if (!res.ok) {
+            const txt = await res.text().catch(() => "");
+            console.warn("[beacon-webhook] supabase insert failed:", res.status, txt.slice(0, 200));
+          }
+        }
       }
     } catch (e) {
       // DB 저장 실패해도 200 반환 (게이트웨이가 재시도하지 않도록)
