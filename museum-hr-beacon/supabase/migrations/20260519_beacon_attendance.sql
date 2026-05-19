@@ -221,14 +221,19 @@ create policy attendance_delete on public.attendance
   for delete using (public.current_user_is_admin_dept());
 
 -- ── 9. 편의 뷰 — UI에서 자주 사용 ────────────────────────────────
-create or replace view public.v_attendance_today as
-  select a.*,
+-- v_attendance_today: a.* 에 이미 beacon_* 컬럼이 들어있으므로 staff 측은 alias 필수
+drop view if exists public.v_attendance_today;
+create view public.v_attendance_today as
+  select a.id, a.staff_id, a.checked_in_at, a.checked_out_at,
+         a.raw_rssi, a.estimated_distance_m,
+         a.beacon_mac, a.beacon_namespace, a.beacon_instance,
+         a.gateway_id, a.dept_code,
          s.name              as staff_name,
-         s.beacon_instance,
-         s.contract_type,
-         s.visa_type,
-         s.visa_expires_at,
-         s.country,
+         s.beacon_instance   as staff_beacon_instance,
+         s.contract_type     as staff_contract_type,
+         s.visa_type         as staff_visa_type,
+         s.visa_expires_at   as staff_visa_expires_at,
+         s.country           as staff_country,
          d.name              as dept_name,
          d.color             as dept_color
     from public.attendance a
@@ -237,15 +242,17 @@ create or replace view public.v_attendance_today as
    where a.checked_in_at::date = current_date
    order by a.checked_in_at desc;
 
-create or replace view public.v_foreign_workers as
+-- v_foreign_workers: staff.dept_name 컬럼이 없으므로 d.name → dept_name 그대로 안전
+drop view if exists public.v_foreign_workers;
+create view public.v_foreign_workers as
   select s.*,
          d.name  as dept_name,
          d.color as dept_color,
          case
-           when s.visa_expires_at is null                          then 'unknown'
-           when s.visa_expires_at <  current_date                   then 'expired'
-           when s.visa_expires_at <  current_date + interval '30 day' then 'warning'
-           when s.visa_expires_at <  current_date + interval '90 day' then 'soon'
+           when s.visa_expires_at is null                              then 'unknown'
+           when s.visa_expires_at <  current_date                       then 'expired'
+           when s.visa_expires_at <  current_date + interval '30 day'   then 'warning'
+           when s.visa_expires_at <  current_date + interval '90 day'   then 'soon'
            else 'ok'
          end as visa_status
     from public.staff s
