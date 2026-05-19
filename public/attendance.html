@@ -389,8 +389,21 @@ async function initApp(){
     render();
     subscribeRealtime();
   }catch(e){
-    console.error(e);
-    toast('연결 실패: ANON KEY를 확인하세요', true);
+    console.error('[attendance init]', e);
+    const msg = (e && e.message) || String(e);
+    let hint = '연결 실패';
+    if(/relation .* does not exist|table .* not found|schema cache/i.test(msg)){
+      hint = '⚠ DB 테이블 없음 — attendance_setup_all_in_one.sql 실행 필요';
+    } else if(/JWT|invalid api key|Invalid API key/i.test(msg)){
+      hint = '⚠ ANON KEY 가 잘못됐습니다';
+    } else if(/permission denied|RLS|row-level security/i.test(msg)){
+      hint = '⚠ RLS 정책 차단 — attendance_setup_all_in_one.sql 실행 필요';
+    } else if(/Failed to fetch|NetworkError|CORS/i.test(msg)){
+      hint = '⚠ 네트워크/CORS — Supabase URL 확인';
+    } else {
+      hint = '⚠ ' + msg.slice(0, 80);
+    }
+    toast(hint, true);
     document.getElementById('setup').classList.add('show');
   }
 }
