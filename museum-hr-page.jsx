@@ -115,6 +115,8 @@ export default function MuseumHrPage() {
   const [tab, setTab] = useState("dashboard");
   const TABS = [
     { k: "dashboard", l: "📊 실시간 출근" },
+    { k: "hours",     l: "⏱️ 근무시간" },
+    { k: "absence",   l: "📅 결근·지각" },
     { k: "staff",     l: "👥 직원 관리" },
     { k: "register",  l: "📡 비콘 등록" },
     { k: "foreign",   l: "🌏 외국인 노동자" },
@@ -144,6 +146,8 @@ export default function MuseumHrPage() {
 
       <div style={{ display:"grid", gap:16 }}>
         {tab === "dashboard" && <AttendanceDashboard/>}
+        {tab === "hours"     && <WorkHoursTab/>}
+        {tab === "absence"   && <AbsenceTab/>}
         {tab === "staff"     && <StaffList/>}
         {tab === "register"  && <BeaconRegister/>}
         {tab === "foreign"   && <ForeignWorkerTab/>}
@@ -523,6 +527,323 @@ function ForeignWorkerTab() {
                         <td style={{ padding:"8px 10px", borderBottom:"1px solid #f1f5f9", fontFamily:"monospace", fontSize:11 }}>
                           {s.beacon_instance ? s.beacon_instance.slice(-6) : <span style={{ color:"#e11d48" }}>미등록</span>}
                         </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ─── 5) 근무시간 요약 (Phase 2 — v_daily_summary / v_work_hours) ─
+function WorkHoursTab() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [running, setRunning] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const sb = getSupabase();
+      const { data, error } = await sb
+        .from("v_daily_summary")
+        .select("*")
+        .eq("work_date", date)
+        .order("dept_code", { ascending: true });
+      if (error) throw error;
+      setRows(data || []);
+      setError(null);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }, [date]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const runAutoClose = async () => {
+    setRunning(true);
+    try {
+      const sb = getSupabase();
+      const { data, error } = await sb.rpc("auto_close_stale_attendance");
+      if (error) throw error;
+      alert(`자동 체크아웃 ${data ?? 0}건 처리됨`);
+      load();
+    } catch (e) { alert("실패: " + e.message); }
+    finally { setRunning(false); }
+  };
+
+  const summary = useMemo(() => {
+    const byDept = {};
+    let totalHours = 0;
+    for (const r of rows) {
+      const dc = r.dept_code ?? 0;
+      if (!byDept[dc]) byDept[dc] = { count: 0, hours: 0 };
+      byDept[dc].count += 1;
+      byDept[dc].hours += Number(r.total_hours) || 0;
+      totalHours += Number(r.total_hours) || 0;
+    }
+    return { byDept, totalHours };
+  }, [rows]);
+
+  if (error && error.includes("v_daily_summary")) {
+    return <Alert kind="warn" title="⚠ Phase 2 스키마 미적용">
+      <div>이 탭을 사용하려면 <code>20260620_phase2_auto_checkout.sql</code> 마이그레이션을 먼저 적용하세요.</div>
+      <div style={{ fontSize:11, marginTop:6, opacity:.7 }}>오류: {error}</div>
+    </Alert>;
+  }
+  if (error) return <Alert kind="error" title="로드 실패">{error}</Alert>;
+
+  return (
+    <div style={{ display:"grid", gap:14 }}>
+      <Card>
+        <div style={{ padding:14, display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:12 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+            <label style={{ fontWeight:900, fontSize:13, color:"#0f172a" }}>📅 날짜</label>
+            <input type="date" value={date} onChange={e=>setDate(e.target.value)}
+              style={{ padding:"7px 10px", border:"1px solid #cbd5e1", borderRadius:7, fontSize:13 }}/>
+            <button onClick={load}
+              style={{ padding:"7px 12px", border:"1px solid #cbd5e1", borderRadius:7, background:"#fff", fontSize:12, fontWeight:800, cursor:"pointer" }}>
+              새로고침
+            </button>
+          </div>
+          <button onClick={runAutoClose} disabled={running}
+            style={{ padding:"8px 14px", border:"none", borderRadius:8,
+                     background: running ? "#cbd5e1" : "#0f172a",
+                     color:"#fff", fontSize:12, fontWeight:900, cursor: running ? "not-allowed" : "pointer" }}>
+            {running ? "처리 중..." : "🔁 자동 체크아웃 실행"}
+          </button>
+        </div>
+      </Card>
+
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(180px, 1fr))", gap:12 }}>
+        {Object.values(BEACON_DEPT_MAP).map(d => {
+          const s = summary.byDept[d.code] || { count: 0, hours: 0 };
+          return (
+            <Card key={d.code} style={{ background:d.bg, border:`2px solid ${d.border}` }}>
+              <div style={{ padding:14 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4 }}>
+                  <span style={{ width:8, height:8, borderRadius:"50%", background:d.solid, display:"inline-block" }}/>
+                  <span style={{ color:d.text, fontWeight:900, fontSize:13 }}>{d.name}</span>
+                </div>
+                <div style={{ fontSize:24, fontWeight:900, color:"#0f172a" }}>
+                  {s.hours.toFixed(1)}<span style={{ fontSize:12, fontWeight:700, color:"#64748b", marginLeft:4 }}>시간</span>
+                </div>
+                <div style={{ fontSize:11, color:"#64748b" }}>{s.count}명 출근 · 평균 {s.count > 0 ? (s.hours / s.count).toFixed(1) : "—"}h</div>
+              </div>
+            </Card>
+          );
+        })}
+        <Card style={{ background:"#0f172a", color:"#fff" }}>
+          <div style={{ padding:14 }}>
+            <div style={{ fontWeight:900, fontSize:13, opacity:.8 }}>전체 합계</div>
+            <div style={{ fontSize:24, fontWeight:900, marginTop:4 }}>
+              {summary.totalHours.toFixed(1)}<span style={{ fontSize:12, opacity:.7, marginLeft:4 }}>시간</span>
+            </div>
+            <div style={{ fontSize:11, opacity:.7 }}>{rows.length}명 합산</div>
+          </div>
+        </Card>
+      </div>
+
+      <Card>
+        <div style={{ padding:14, borderBottom:"1px solid #f1f5f9" }}>
+          <div style={{ fontWeight:900, fontSize:14, color:"#0f172a" }}>{date} 근무 상세 ({rows.length}명)</div>
+          <div style={{ fontSize:11, color:"#64748b", marginTop:2 }}>야간 22~06시 = 1.5배, 일요일 = 1.5배 가산 추정치</div>
+        </div>
+        <div style={{ padding:14 }}>
+          {loading ? <div style={{ textAlign:"center", padding:30, color:"#94a3b8" }}>로딩...</div>
+          : rows.length === 0 ? <div style={{ textAlign:"center", padding:30, color:"#94a3b8" }}>해당 날짜에 출근 기록이 없습니다.</div>
+          : (
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                <thead style={{ background:"#f8fafc", color:"#475569" }}>
+                  <tr>{["이름","부서","최초 출근","마지막 퇴근","총 근무","자동종료 횟수"].map(h =>
+                    <th key={h} style={{ padding:"9px 10px", textAlign:"left", borderBottom:"1px solid #e5e7eb", fontWeight:800 }}>{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {rows.map(r => {
+                    const d = deptOf(r.dept_code);
+                    return (
+                      <tr key={r.staff_id}>
+                        <td style={{ padding:"8px 10px", borderBottom:"1px solid #f1f5f9", fontWeight:800 }}>{r.staff_name}</td>
+                        <td style={{ padding:"8px 10px", borderBottom:"1px solid #f1f5f9" }}><SolidBadge color={d.solid}>{d.name}</SolidBadge></td>
+                        <td style={{ padding:"8px 10px", borderBottom:"1px solid #f1f5f9", fontFamily:"monospace" }}>{r.first_in ? new Date(r.first_in).toLocaleTimeString("ko-KR") : "—"}</td>
+                        <td style={{ padding:"8px 10px", borderBottom:"1px solid #f1f5f9", fontFamily:"monospace" }}>{r.last_out ? new Date(r.last_out).toLocaleTimeString("ko-KR") : "—"}</td>
+                        <td style={{ padding:"8px 10px", borderBottom:"1px solid #f1f5f9", fontWeight:800 }}>{r.total_hours != null ? `${r.total_hours}h` : "—"}</td>
+                        <td style={{ padding:"8px 10px", borderBottom:"1px solid #f1f5f9" }}>
+                          {r.auto_closed_sessions > 0 ? <Badge color="#92400e" bg="#fef3c7">자동 {r.auto_closed_sessions}회</Badge> : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ─── 6) 결근·지각·조퇴 (Phase 2 — absence_records) ───────────────
+function AbsenceTab() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [from, setFrom] = useState(() => {
+    const d = new Date(); d.setDate(d.getDate() - 7);
+    return d.toISOString().slice(0, 10);
+  });
+  const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
+
+  const [form, setForm] = useState({ staff_id: "", date: "", type: "late", minutes: "", note: "" });
+  const [staff, setStaff] = useState([]);
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const sb = getSupabase();
+      const { data, error } = await sb
+        .from("absence_records")
+        .select("*, staff:staff_id ( name, dept_code )")
+        .gte("date", from).lte("date", to)
+        .order("date", { ascending: false });
+      if (error) throw error;
+      setRows(data || []);
+      setError(null);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  }, [from, to]);
+
+  useEffect(() => {
+    load();
+    (async () => {
+      try { const sb = getSupabase();
+        const { data } = await sb.from("staff").select("id,name,dept_code").order("name");
+        setStaff(data || []);
+      } catch (_) {}
+    })();
+  }, [load]);
+
+  const save = async () => {
+    if (!form.staff_id || !form.date) { alert("직원 + 날짜는 필수입니다"); return; }
+    setSaving(true);
+    try {
+      const sb = getSupabase();
+      const { error } = await sb.from("absence_records").insert({
+        staff_id: Number(form.staff_id),
+        date: form.date,
+        type: form.type,
+        minutes: form.minutes ? Number(form.minutes) : null,
+        note: form.note || null,
+      });
+      if (error) throw error;
+      setForm({ staff_id: "", date: "", type: "late", minutes: "", note: "" });
+      load();
+    } catch (e) { alert("저장 실패: " + e.message); }
+    finally { setSaving(false); }
+  };
+
+  const TYPE_META = {
+    absent:         { label: "결근",       color: "#dc2626", bg: "#fee2e2" },
+    late:           { label: "지각",       color: "#d97706", bg: "#fef3c7" },
+    early_leave:    { label: "조퇴",       color: "#7c3aed", bg: "#ede9fe" },
+    sick:           { label: "병가",       color: "#0891b2", bg: "#cffafe" },
+    vacation:       { label: "휴가",       color: "#059669", bg: "#d1fae5" },
+    public_holiday: { label: "공휴일",     color: "#475569", bg: "#f1f5f9" },
+  };
+
+  if (error && error.includes("absence_records")) {
+    return <Alert kind="warn" title="⚠ Phase 2 스키마 미적용">
+      <div>이 탭을 사용하려면 <code>20260620_phase2_auto_checkout.sql</code> 마이그레이션을 먼저 적용하세요.</div>
+      <div style={{ fontSize:11, marginTop:6, opacity:.7 }}>오류: {error}</div>
+    </Alert>;
+  }
+  if (error) return <Alert kind="error" title="로드 실패">{error}</Alert>;
+
+  return (
+    <div style={{ display:"grid", gap:14 }}>
+      <Card>
+        <div style={{ padding:14, borderBottom:"1px solid #f1f5f9" }}>
+          <div style={{ fontWeight:900, fontSize:14, color:"#0f172a" }}>📝 결근·지각·휴가 등록</div>
+        </div>
+        <div style={{ padding:14, display:"grid", gap:10, gridTemplateColumns:"repeat(auto-fit, minmax(140px, 1fr))", alignItems:"end" }}>
+          <div>
+            <label style={{ fontSize:11, fontWeight:800, color:"#475569", display:"block", marginBottom:4 }}>직원</label>
+            <select value={form.staff_id} onChange={e=>setForm({...form, staff_id:e.target.value})}
+              style={{ width:"100%", padding:"8px 10px", border:"1px solid #cbd5e1", borderRadius:7, fontSize:12, background:"#fff" }}>
+              <option value="">— 선택 —</option>
+              {staff.map(s => <option key={s.id} value={s.id}>{s.name} ({deptOf(s.dept_code).name})</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize:11, fontWeight:800, color:"#475569", display:"block", marginBottom:4 }}>날짜</label>
+            <input type="date" value={form.date} onChange={e=>setForm({...form, date:e.target.value})}
+              style={{ width:"100%", padding:"8px 10px", border:"1px solid #cbd5e1", borderRadius:7, fontSize:12 }}/>
+          </div>
+          <div>
+            <label style={{ fontSize:11, fontWeight:800, color:"#475569", display:"block", marginBottom:4 }}>유형</label>
+            <select value={form.type} onChange={e=>setForm({...form, type:e.target.value})}
+              style={{ width:"100%", padding:"8px 10px", border:"1px solid #cbd5e1", borderRadius:7, fontSize:12, background:"#fff" }}>
+              {Object.entries(TYPE_META).map(([k, m]) => <option key={k} value={k}>{m.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize:11, fontWeight:800, color:"#475569", display:"block", marginBottom:4 }}>분 (지각/조퇴)</label>
+            <input type="number" min="0" value={form.minutes} onChange={e=>setForm({...form, minutes:e.target.value})}
+              style={{ width:"100%", padding:"8px 10px", border:"1px solid #cbd5e1", borderRadius:7, fontSize:12 }}/>
+          </div>
+          <div style={{ gridColumn:"1 / -1" }}>
+            <label style={{ fontSize:11, fontWeight:800, color:"#475569", display:"block", marginBottom:4 }}>비고</label>
+            <input type="text" value={form.note} onChange={e=>setForm({...form, note:e.target.value})} placeholder="(선택)"
+              style={{ width:"100%", padding:"8px 10px", border:"1px solid #cbd5e1", borderRadius:7, fontSize:12 }}/>
+          </div>
+          <button onClick={save} disabled={saving}
+            style={{ gridColumn:"1 / -1", padding:"10px 14px", border:"none", borderRadius:8,
+                     background: saving ? "#cbd5e1" : "#0f172a",
+                     color:"#fff", fontWeight:900, fontSize:13, cursor: saving ? "not-allowed" : "pointer" }}>
+            {saving ? "저장 중..." : "+ 기록 추가"}
+          </button>
+        </div>
+      </Card>
+
+      <Card>
+        <div style={{ padding:14, borderBottom:"1px solid #f1f5f9", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+          <div style={{ fontWeight:900, fontSize:14, color:"#0f172a" }}>기간 조회</div>
+          <input type="date" value={from} onChange={e=>setFrom(e.target.value)} style={{ padding:"6px 10px", border:"1px solid #cbd5e1", borderRadius:7, fontSize:12 }}/>
+          <span style={{ color:"#94a3b8" }}>~</span>
+          <input type="date" value={to}   onChange={e=>setTo(e.target.value)}   style={{ padding:"6px 10px", border:"1px solid #cbd5e1", borderRadius:7, fontSize:12 }}/>
+          <button onClick={load} style={{ padding:"6px 12px", border:"1px solid #cbd5e1", borderRadius:7, background:"#fff", fontSize:11, fontWeight:800, cursor:"pointer" }}>조회</button>
+        </div>
+        <div style={{ padding:14 }}>
+          {loading ? <div style={{ textAlign:"center", padding:30, color:"#94a3b8" }}>로딩...</div>
+          : rows.length === 0 ? <div style={{ textAlign:"center", padding:30, color:"#94a3b8" }}>기간 내 기록이 없습니다.</div>
+          : (
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                <thead style={{ background:"#f8fafc", color:"#475569" }}>
+                  <tr>{["날짜","이름","부서","유형","분","비고"].map(h =>
+                    <th key={h} style={{ padding:"9px 10px", textAlign:"left", borderBottom:"1px solid #e5e7eb", fontWeight:800 }}>{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {rows.map(r => {
+                    const m = TYPE_META[r.type] || { label: r.type, color:"#475569", bg:"#f1f5f9" };
+                    const d = deptOf(r.staff?.dept_code);
+                    return (
+                      <tr key={r.id}>
+                        <td style={{ padding:"8px 10px", borderBottom:"1px solid #f1f5f9", fontFamily:"monospace" }}>{r.date}</td>
+                        <td style={{ padding:"8px 10px", borderBottom:"1px solid #f1f5f9", fontWeight:800 }}>{r.staff?.name || "—"}</td>
+                        <td style={{ padding:"8px 10px", borderBottom:"1px solid #f1f5f9" }}><SolidBadge color={d.solid}>{d.name}</SolidBadge></td>
+                        <td style={{ padding:"8px 10px", borderBottom:"1px solid #f1f5f9" }}><Badge color={m.color} bg={m.bg}>{m.label}</Badge></td>
+                        <td style={{ padding:"8px 10px", borderBottom:"1px solid #f1f5f9" }}>{r.minutes ? `${r.minutes}분` : "—"}</td>
+                        <td style={{ padding:"8px 10px", borderBottom:"1px solid #f1f5f9", color:"#64748b" }}>{r.note || "—"}</td>
                       </tr>
                     );
                   })}
