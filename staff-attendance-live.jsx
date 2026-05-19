@@ -23,10 +23,28 @@ const sinceMinutes = (iso) => {
   return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
 };
 
+// localStorage 값에서 양쪽 따옴표/공백 제거 + 프로토콜 검증
+// (JSON.stringify 로 잘못 저장돼서 "http://..." 처럼 들어간 경우 404 페이지로 가는 문제 방지)
+function normalizeUrl(raw) {
+  let s = String(raw ?? "").trim();
+  if (!s || s === "null" || s === "undefined") return "";
+  try {
+    if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+      s = JSON.parse(s);
+    }
+  } catch (e) {
+    s = s.replace(/^['"]+|['"]+$/g, "");
+  }
+  s = String(s ?? "").trim().replace(/^['"]+|['"]+$/g, "");
+  if (!s) return "";
+  if (!/^https?:\/\//i.test(s)) return "";    // 프로토콜 없으면 무효 (브라우저가 상대경로로 잘못 해석)
+  return s.replace(/\/+$/, "");
+}
+
 // CCTV URL 생성 (jamsa_cctv_guard_url 우선)
 function getCctvUrl(channel) {
   try {
-    const base = (localStorage.getItem("jamsa_cctv_guard_url") || "").replace(/\/+$/, "");
+    const base = normalizeUrl(localStorage.getItem("jamsa_cctv_guard_url"));
     if (!base) return null;
     if (channel == null) return base;
     return `${base}/?channel=${channel}`;

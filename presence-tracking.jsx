@@ -32,9 +32,26 @@ const sinceMin = (iso) => {
   if (!iso) return 0;
   return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
 };
+// localStorage 값에서 양쪽 따옴표/공백 제거 + 프로토콜 검증
+// (JSON.stringify 로 잘못 저장돼서 "http://..." 처럼 들어간 경우 404 페이지로 가는 문제 방지)
+const normalizeUrl = (raw) => {
+  let s = String(raw ?? "").trim();
+  if (!s || s === "null" || s === "undefined") return "";
+  try {
+    if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+      s = JSON.parse(s);
+    }
+  } catch (e) {
+    s = s.replace(/^['"]+|['"]+$/g, "");
+  }
+  s = String(s ?? "").trim().replace(/^['"]+|['"]+$/g, "");
+  if (!s) return "";
+  if (!/^https?:\/\//i.test(s)) return "";    // 프로토콜 없으면 무효 (브라우저가 상대경로로 잘못 해석)
+  return s.replace(/\/+$/, "");
+};
 const getCctvUrl = (channel) => {
   try {
-    const base = (localStorage.getItem("jamsa_cctv_guard_url") || "").replace(/\/+$/, "");
+    const base = normalizeUrl(localStorage.getItem("jamsa_cctv_guard_url"));
     if (!base) return null;
     if (channel == null) return base;
     return `${base}/?channel=${channel}`;
@@ -221,13 +238,10 @@ export function PresenceTrackingPanel() {
       {loading ? (
         <div style={{ padding: 30, textAlign: "center", color: "#64748b", fontSize: 12 }}>⏳ 데이터 불러오는 중...</div>
       ) : err ? (
-        <div style={{ padding: 16, fontSize: 12, color: "#fca5a5", background: "rgba(220,38,38,0.1)" }}>
-          ⚠ 로드 실패: {err}
-          <div style={{ marginTop: 6, color: "#94a3b8", fontSize: 11 }}>
-            <strong>presence_tracking_setup.sql</strong> 이 실행되지 않았을 수 있습니다.
-            Supabase SQL Editor 에서 실행하세요.
-          </div>
-        </div>
+        <SetupSqlMissingHint
+          err={err}
+          onRetry={() => supabaseRef.current && loadAll(supabaseRef.current)}
+        />
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "280px 1fr 360px", gap: 0 }}>
           {/* ─── (1) 구역별 인원 + CCTV ─── */}
@@ -413,6 +427,151 @@ function EmptyHint({ children }) {
   return (
     <div style={{ padding: "20px 8px", textAlign: "center", color: "#64748b", fontSize: 11, lineHeight: 1.5 }}>
       {children}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+//  presence_tracking_setup.sql 미실행 안내 (스키마 캐시 미스 처리)
+// ────────────────────────────────────────────────────────────
+const SQL_FILE_NAME = "presence_tracking_setup.sql";
+const SQL_LOCAL_URL = "/migrations/" + SQL_FILE_NAME;
+const SQL_RAW_URL =
+  "https://raw.githubusercontent.com/dlruddus013-gif/jamsa-panel/main/supabase/" +
+  SQL_FILE_NAME;
+const SQL_VIEW_URL =
+  "https://github.com/dlruddus013-gif/jamsa-panel/blob/main/supabase/" +
+  SQL_FILE_NAME;
+
+function getSupabaseProjectRef() {
+  try {
+    const url = (typeof window !== "undefined")
+      ? (window.__SUPABASE_URL__ || window.__supabase?.supabaseUrl || "")
+      : "";
+    const m = String(url).match(/^https?:\/\/([a-z0-9]+)\.supabase\.(co|in)/i);
+    return m ? m[1] : null;
+  } catch (e) { return null; }
+}
+
+function SetupSqlMissingHint({ err, onRetry }) {
+  const msg = String(err || "");
+  const looksLikeSchemaMiss = /schema cache|not find the table|does not exist|relation .* does not exist/i.test(msg);
+  const [copyState, setCopyState] = useState("idle"); // idle / loading / ok / err
+  const [copyMsg, setCopyMsg] = useState("");
+
+  const projectRef = getSupabaseProjectRef();
+  const sqlEditorUrl = projectRef
+    ? `https://supabase.com/dashboard/project/${projectRef}/sql/new`
+    : "https://supabase.com/dashboard/project/_/sql/new";
+
+  async function fetchSql() {
+    const urls = [SQL_LOCAL_URL, SQL_RAW_URL];
+    let lastErr = null;
+    for (const u of urls) {
+      try {
+        const r = await fetch(u, { cache: "no-store" });
+        if (!r.ok) { lastErr = `HTTP ${r.status}`; continue; }
+        const t = await r.text();
+        if (t && t.length > 100) return t;
+        lastErr = "empty";
+      } catch (e) { lastErr = e?.message || String(e); }
+    }
+    throw new Error(lastErr || "fetch failed");
+  }
+
+  async function copySql() {
+    setCopyState("loading"); setCopyMsg("");
+    try {
+      const sql = await fetchSql();
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(sql);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = sql; ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      setCopyState("ok");
+      setCopyMsg(`복사 완료 (${(sql.length/1024).toFixed(1)}KB)`);
+      setTimeout(() => { setCopyState("idle"); setCopyMsg(""); }, 4000);
+    } catch (e) {
+      setCopyState("err");
+      setCopyMsg(e?.message || "복사 실패 — 아래 GitHub 링크에서 직접 복사하세요");
+    }
+  }
+
+  if (!looksLikeSchemaMiss) {
+    return (
+      <div style={{ padding: 16, fontSize: 12, color: "#fca5a5", background: "rgba(220,38,38,0.1)" }}>
+        ⚠ 로드 실패: {msg}
+        {onRetry && (
+          <button onClick={onRetry}
+            style={{ marginLeft: 10, padding: "3px 10px", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 4, fontSize: 11, color: "#fff", cursor: "pointer" }}>
+            ⟳ 다시 시도
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  const btn = {
+    padding: "7px 14px", borderRadius: 5, fontSize: 11, fontWeight: 800,
+    cursor: "pointer", border: "none", textDecoration: "none",
+    display: "inline-flex", alignItems: "center", gap: 5,
+  };
+
+  return (
+    <div style={{ padding: 16, background: "rgba(220,38,38,0.08)", borderTop: "1px solid rgba(220,38,38,0.25)" }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: "#fca5a5", marginBottom: 4 }}>
+        ⚠ DB 초기 설치가 필요합니다
+      </div>
+      <div style={{ fontSize: 11, color: "#cbd5e1", lineHeight: 1.55, marginBottom: 10 }}>
+        <code style={{ color: "#fbbf24", background: "rgba(0,0,0,0.3)", padding: "1px 5px", borderRadius: 3 }}>public.v_current_presence</code>{" "}
+        뷰가 아직 생성되지 않았습니다. 아래 3단계로 1분 안에 해결됩니다.
+      </div>
+
+      <ol style={{ margin: "0 0 10px 18px", padding: 0, fontSize: 11, color: "#e2e8f0", lineHeight: 1.7 }}>
+        <li>아래 <strong style={{ color: "#a78bfa" }}>📋 SQL 복사</strong> 버튼을 누르세요. (<code>{SQL_FILE_NAME}</code> 전체를 클립보드에 복사)</li>
+        <li><strong style={{ color: "#a78bfa" }}>🔗 Supabase SQL Editor 열기</strong> 버튼으로 새 쿼리 창을 엽니다.</li>
+        <li>복사된 SQL을 붙여넣고 <strong>Run</strong> 버튼을 누른 뒤, 이 페이지에서 <strong>⟳ 다시 시도</strong>를 클릭하세요.</li>
+      </ol>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 7, alignItems: "center", marginBottom: 8 }}>
+        <button onClick={copySql} disabled={copyState === "loading"}
+          style={{ ...btn,
+            background: copyState === "ok" ? "#059669" : "#7c3aed",
+            color: "#fff", opacity: copyState === "loading" ? 0.7 : 1 }}>
+          {copyState === "loading" ? "⏳ 가져오는 중..." :
+           copyState === "ok"      ? "✓ 복사됨" :
+                                      "📋 SQL 복사"}
+        </button>
+        <a href={sqlEditorUrl} target="_blank" rel="noopener"
+          style={{ ...btn, background: "#10b981", color: "#fff" }}>
+          🔗 Supabase SQL Editor 열기 ↗
+        </a>
+        <a href={SQL_VIEW_URL} target="_blank" rel="noopener"
+          style={{ ...btn, background: "rgba(255,255,255,0.08)", color: "#cbd5e1", border: "1px solid rgba(255,255,255,0.15)" }}>
+          📄 GitHub에서 SQL 보기 ↗
+        </a>
+        {onRetry && (
+          <button onClick={onRetry}
+            style={{ ...btn, background: "rgba(167,139,250,0.18)", color: "#ddd6fe", border: "1px solid rgba(167,139,250,0.4)" }}>
+            ⟳ 다시 시도
+          </button>
+        )}
+      </div>
+
+      {copyMsg && (
+        <div style={{ fontSize: 11, color: copyState === "err" ? "#fca5a5" : "#86efac", marginTop: 4 }}>
+          {copyState === "err" ? "✗ " : "✓ "}{copyMsg}
+        </div>
+      )}
+
+      <details style={{ marginTop: 10, fontSize: 11, color: "#94a3b8" }}>
+        <summary style={{ cursor: "pointer", color: "#cbd5e1" }}>원본 오류 메시지 보기</summary>
+        <pre style={{ marginTop: 6, padding: 8, background: "rgba(0,0,0,0.35)", borderRadius: 4, fontSize: 10, color: "#fca5a5", overflowX: "auto", whiteSpace: "pre-wrap" }}>{msg}</pre>
+      </details>
     </div>
   );
 }

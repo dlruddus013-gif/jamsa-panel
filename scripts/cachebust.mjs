@@ -35,6 +35,20 @@ if (found.length > 0) {
   process.exit(2);
 }
 
+// ─── supabase/*.sql → public/migrations/*.sql 동기화 ─────────
+// 프론트엔드의 셋업 안내 UI가 /migrations/<name>.sql 을 fetch 해서
+// 클립보드에 복사할 수 있도록 정적 자산으로 노출한다.
+const sqlSrcDir = path.join(root, "supabase");
+const sqlOutDir = path.join(root, "public", "migrations");
+if (fs.existsSync(sqlSrcDir)) {
+  if (!fs.existsSync(sqlOutDir)) fs.mkdirSync(sqlOutDir, { recursive: true });
+  for (const name of fs.readdirSync(sqlSrcDir)) {
+    if (!name.endsWith(".sql")) continue;
+    fs.copyFileSync(path.join(sqlSrcDir, name), path.join(sqlOutDir, name));
+  }
+  console.log(`✓ migrations synced → public/migrations/`);
+}
+
 // ─── cachebust ───────────────────────────────────────────────
 const bundlePath = path.join(root, "public", "app.bundle.js");
 if (!fs.existsSync(bundlePath)) { console.error("bundle not found:", bundlePath); process.exit(1); }
