@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>잠사 비콘 엣지 서버 — 대시보드</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,'Noto Sans KR','Pretendard',sans-serif;background:#0f172a;color:#e2e8f0;padding:20px}
+  h1{font-size:22px;margin-bottom:4px}
+  .sub{font-size:12px;color:#94a3b8;margin-bottom:16px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:16px}
+  .card{background:#1e293b;padding:14px;border-radius:8px;border:1px solid #334155}
+  .card .label{font-size:11px;color:#94a3b8;margin-bottom:4px}
+  .card .value{font-size:22px;font-weight:900}
+  .status-ok{color:#10b981}
+  .status-err{color:#ef4444}
+  .panel{background:#1e293b;padding:14px;border-radius:8px;border:1px solid #334155;margin-bottom:16px}
+  .panel h2{font-size:14px;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{background:#334155;text-align:left;padding:8px;color:#cbd5e1;font-weight:700}
+  td{padding:7px 8px;border-bottom:1px solid #334155;color:#e2e8f0}
+  tr:hover td{background:#334155}
+  .badge{padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;display:inline-block}
+  .badge-loc{background:#1e40af;color:#dbeafe}
+  .badge-staff{background:#7c3aed;color:#ede9fe}
+  .badge-unknown{background:#475569;color:#cbd5e1}
+  .badge-fresh{background:#10b981;color:#fff;animation:pulse 2s infinite}
+  @keyframes pulse{50%{opacity:0.6}}
+  .mono{font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8}
+  .controls{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+  button,select{padding:6px 12px;background:#334155;color:#e2e8f0;border:none;border-radius:5px;font-size:12px;cursor:pointer;font-family:inherit}
+  button:hover{background:#475569}
+  button.primary{background:#3b82f6}
+  .pulse{display:inline-block;width:8px;height:8px;border-radius:50%;background:#10b981;animation:pulse 1.5s infinite}
+  .pulse.off{background:#64748b;animation:none}
+  .dim{color:#64748b}
+</style>
+</head>
+<body>
+<h1>🛰️ 잠사 비콘 엣지 서버 — 실시간 대시보드</h1>
+<div class="sub">게이트웨이가 POST /api/beacon/log로 보낸 로그를 실시간 표시</div>
+
+<div class="grid">
+  <div class="card"><div class="label">서버 상태</div><div class="value" id="health-status">⏳</div></div>
+  <div class="card"><div class="label">SSE 연결</div><div class="value"><span class="pulse off" id="sse-pulse"></span> <span id="sse-status">대기</span></div></div>
+  <div class="card"><div class="label">총 수신 로그</div><div class="value" id="total-logs">0</div></div>
+  <div class="card"><div class="label">활성 비콘</div><div class="value" id="active-beacons">0</div></div>
+  <div class="card"><div class="label">활성 게이트웨이</div><div class="value" id="active-gw">0</div></div>
+</div>
+
+<div class="panel">
+  <h2>📡 가장 최근 비콘 (beacon_id 또는 major/minor 기준)</h2>
+  <table id="latest-table">
+    <thead><tr><th>위치/직원</th><th>major</th><th>minor</th><th>RSSI</th><th>Gateway</th><th>마지막 수신</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<div class="panel">
+  <h2>📜 실시간 수신 로그 <span id="live-indicator" class="badge badge-unknown">대기</span></h2>
+  <div class="controls">
+    <label class="dim">표시 수:
+      <select id="limit-select">
+        <option value="50">50</option>
+        <option value="100" selected>100</option>
+        <option value="500">500</option>
+        <option value="1000">1000</option>
+      </select>
+    </label>
+    <button onclick="refresh()">🔄 새로고침</button>
+    <button class="primary" onclick="window.location.reload()">전체 리로드</button>
+    <span class="dim" style="margin-left:auto;align-self:center;font-size:11px" id="last-update">-</span>
+  </div>
+  <table id="log-table">
+    <thead><tr><th>시각</th><th>해석</th><th>maj/min</th><th>RSSI</th><th>Gateway</th><th>UUID/MAC</th><th>IP</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<script>
+const fmt = (iso) => {
+  if (!iso) return "-";
+  try { return new Date(iso).toLocaleTimeString("ko-KR", { hour12:false }); } catch(e) { return iso; }
+};
+const fmtFull = (iso) => {
+  if (!iso) return "-";
+  try { return new Date(iso).toLocaleString("ko-KR"); } catch(e) { return iso; }
+};
+
+const tdEscape = (v) => v == null ? "" : String(v).replace(/[<>&]/g, s => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[s]));
+
+function badgeFor(resolved) {
+  if (!resolved) return '<span class="badge badge-unknown">미등록</span>';
+  if (resolved.kind === 'location') return `<span class="badge badge-loc">📍 ${tdEscape(resolved.name)}</span>`;
+  if (resolved.kind === 'staff') return `<span class="badge badge-staff">👤 ${tdEscape(resolved.name)}</span>`;
+  return `<span class="badge badge-unknown">${tdEscape(resolved.name||'')}</span>`;
+}
+
+async function loadHealth() {
+  try {
+    const r = await fetch('/health', {cache:'no-store'});
+    const d = await r.json();
+    document.getElementById('health-status').innerHTML = `<span class="status-ok">✓ ${d.status}</span>`;
+  } catch(e) {
+    document.getElementById('health-status').innerHTML = '<span class="status-err">✗ 오류</span>';
+  }
+}
+
+async function loadLatest() {
+  try {
+    const r = await fetch('/api/beacon/latest', {cache:'no-store'});
+    const d = await r.json();
+    const tbody = document.querySelector('#latest-table tbody');
+    tbody.innerHTML = d.beacons.map(b => `
+      <tr>
+        <td>${badgeFor(b.resolved)}</td>
+        <td>${b.major ?? '-'}</td>
+        <td>${b.minor ?? '-'}</td>
+        <td><strong>${b.rssi ?? '-'}</strong></td>
+        <td class="mono">${tdEscape(b.gateway_id ?? '-')}</td>
+        <td class="mono">${fmtFull(b.received_at)}</td>
+      </tr>
+    `).join('') || '<tr><td colspan="6" class="dim" style="text-align:center;padding:20px">수신된 비콘이 아직 없습니다</td></tr>';
+    document.getElementById('active-beacons').textContent = d.beacons.length;
+    const gws = new Set(d.beacons.map(b=>b.gateway_id).filter(Boolean));
+    document.getElementById('active-gw').textContent = gws.size;
+  } catch(e) {
+    console.warn('loadLatest:', e);
+  }
+}
+
+async function loadLogs() {
+  try {
+    const limit = document.getElementById('limit-select').value;
+    const r = await fetch(`/api/beacon/logs?limit=${limit}`, {cache:'no-store'});
+    const d = await r.json();
+    const tbody = document.querySelector('#log-table tbody');
+    tbody.innerHTML = d.logs.map(l => `
+      <tr>
+        <td class="mono">${fmt(l.received_at)}</td>
+        <td>${badgeFor(l.resolved)}</td>
+        <td>${l.major ?? '-'}/${l.minor ?? '-'}</td>
+        <td><strong>${l.rssi ?? '-'}</strong></td>
+        <td class="mono">${tdEscape(l.gateway_id ?? '-')}</td>
+        <td class="mono">${tdEscape(l.uuid || l.mac || l.beacon_id || '-')}</td>
+        <td class="mono">${tdEscape(l.source_ip ?? '-')}</td>
+      </tr>
+    `).join('') || '<tr><td colspan="7" class="dim" style="text-align:center;padding:20px">수신된 로그가 아직 없습니다. <code>curl -X POST http://localhost:8088/api/beacon/log -H "Content-Type: application/json" -d \\\'{"gateway_id":"test","major":1,"minor":1,"rssi":-60}\\\'</code> 로 테스트</td></tr>';
+    document.getElementById('total-logs').textContent = d.count;
+    document.getElementById('last-update').textContent = '마지막 갱신: ' + new Date().toLocaleTimeString('ko-KR');
+  } catch(e) {
+    console.warn('loadLogs:', e);
+  }
+}
+
+function refresh() {
+  loadHealth();
+  loadLatest();
+  loadLogs();
+}
+
+let evtSrc = null;
+function startSSE() {
+  if (evtSrc) return;
+  evtSrc = new EventSource('/api/beacon/events');
+  evtSrc.addEventListener('hello', () => {
+    document.getElementById('sse-pulse').classList.remove('off');
+    document.getElementById('sse-status').textContent = '연결됨';
+    document.getElementById('live-indicator').textContent = '실시간';
+    document.getElementById('live-indicator').className = 'badge badge-fresh';
+  });
+  evtSrc.addEventListener('beacon_log', (e) => {
+    try {
+      JSON.parse(e.data);
+      refresh();
+    } catch(_) {}
+  });
+  evtSrc.onerror = () => {
+    document.getElementById('sse-pulse').classList.add('off');
+    document.getElementById('sse-status').textContent = '재연결 중...';
+    document.getElementById('live-indicator').textContent = '폴링';
+    document.getElementById('live-indicator').className = 'badge badge-unknown';
+  };
+}
+
+refresh();
+startSSE();
+setInterval(refresh, 5000); // 폴링 백업
+document.getElementById('limit-select').addEventListener('change', loadLogs);
+</script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "locations": [
+    { "major": 1, "minor": 1, "name": "전시실 1" },
+    { "major": 1, "minor": 2, "name": "전시실 2" },
+    { "major": 1, "minor": 3, "name": "체험실" },
+    { "major": 1, "minor": 4, "name": "매점" }
+  ],
+  "staff": [
+    { "major": 100, "minor": 1, "name": "직원 테스트 태그" }
+  ]
+}
