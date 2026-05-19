@@ -25680,20 +25680,22 @@ window.onload = () => {
                     </div>
                     <div style={{ fontSize: 12, lineHeight: 1.7, color: "#065f46" }}>
                       박물관 PC가 켜져 있는 동안 <strong>항상 자동 가동 + 죽으면 자동 재시작</strong> 보장:<br />
-                      1. <a href="/jamsa-cctv-install.bat" download style={{ color: "#047857", fontWeight: 800, textDecoration: "underline" }}>📥 jamsa-cctv-install.bat 다운로드</a><br />
+                      1. <a href="/jamsa-cctv-install.bat" download style={{ color: "#047857", fontWeight: 800, textDecoration: "underline" }}>📥 jamsa-cctv-install.bat 다운로드</a> (cctv.py 자동 다운로드 포함)<br />
                       2. 파일 <strong>우클릭 → "관리자 권한으로 실행"</strong><br />
-                      3. cctv.py 경로 입력 (또는 Enter로 기본값 사용)<br />
+                      3. (Python 없으면 자동 안내 → Microsoft Store 설치)<br />
                       4. 끝! Windows 작업 스케줄러에 등록됨
                     </div>
                     <div style={{ marginTop: 8, padding: 8, background: "#fff", borderRadius: 5, fontSize: 11, color: "#065f46" }}>
                       ✅ <strong>자동 처리되는 것:</strong><br />
+                      • Python 설치 확인 (없으면 Microsoft Store 안내)<br />
+                      • cctv.py 자동 다운로드 (jamsa-panel.vercel.app에서)<br />
                       • PC 부팅 시 자동 시작 (사용자 로그인 안 해도 OK)<br />
                       • 서버가 죽으면 1분 후 자동 재시작 (최대 999회)<br />
                       • 방화벽 5555 포트 자동 허용<br />
-                      • 클라우드 cctv.thejamsa.com과 자동 연결
+                      • <strong>설치 후</strong>: <code style={{ background: "#f1f5f9", padding: "0 4px", borderRadius: 3 }}>%USERPROFILE%\jamsa-cctv\cctv_config.json</code>에서 NVR IP/계정 수정 → 재시작
                     </div>
                     <div style={{ marginTop: 6, fontSize: 10, color: "#047857" }}>
-                      제거: <a href="/jamsa-cctv-uninstall.bat" download style={{ color: "#065f46", textDecoration: "underline" }}>jamsa-cctv-uninstall.bat</a> 관리자 권한 실행
+                      개별 다운로드: <a href="/cctv.py" download style={{ color: "#065f46", textDecoration: "underline" }}>cctv.py</a> · 제거: <a href="/jamsa-cctv-uninstall.bat" download style={{ color: "#065f46", textDecoration: "underline" }}>jamsa-cctv-uninstall.bat</a> (관리자 권한)
                     </div>
                   </div>
 
