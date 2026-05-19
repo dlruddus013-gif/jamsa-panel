@@ -8,6 +8,7 @@ import { ZoneScheduler, ZoneScheduleTodayBanner } from "./inventory-zone-schedul
 import { ProductIntelligenceModal, ProductIntelInline, LogPhotoStrip } from "./product-intelligence.jsx";
 import { BackupHistoryPanel, logFileEvent, maybeAutoBackup } from "./inventory-backup-history.jsx";
 import { BeaconGatewayModal } from "./beacon-gateway.jsx";
+import { StaffAttendanceLivePanel } from "./staff-attendance-live.jsx";
 
 const DEFAULT_CCTV_SERVER_URL = "https://cctv.thejamsa.com";
 const DEFAULT_OKPOS_BRIDGE_URL = "http://127.0.0.1:5566";
@@ -23110,36 +23111,8 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         .jamsa-cctv-mini { transition:transform 0.15s; transform-origin:left center; }
         .jamsa-cctv-mini:hover { transform:scale(1.5); z-index:1000; }
       `}</style>
-      {/* ─── 출퇴근 시스템 배너 (메인 진입 즉시 표시) ─── */}
-      <a href="/attendance" target="_blank" rel="noopener"
-        style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          gap: 14, padding: "12px 20px",
-          background: "linear-gradient(90deg, #0b3a2a 0%, #10b981 100%)",
-          color: "#f0fdf4", textDecoration: "none",
-          borderBottom: "1px solid rgba(0,0,0,0.2)",
-          transition: "filter 0.15s",
-        }}
-        onMouseEnter={(e) => { e.currentTarget.style.filter = "brightness(1.1)"; }}
-        onMouseLeave={(e) => { e.currentTarget.style.filter = "brightness(1)"; }}
-        title="출퇴근 페이지 열기 (새 탭)"
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-          <div style={{ fontSize: 26, lineHeight: 1 }}>👥</div>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "-0.01em" }}>
-              BLE 출퇴근 시스템
-              <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "rgba(255,255,255,0.18)", letterSpacing: "0.08em", textTransform: "uppercase" }}>HR · BEACON</span>
-            </div>
-            <div style={{ fontSize: 11, opacity: 0.85, marginTop: 2, letterSpacing: "0.02em" }}>
-              직원 출퇴근 처리 · 비자 만료 알림 · 주간 근무시간 집계
-            </div>
-          </div>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 14px", background: "rgba(15,23,42,0.35)", border: "1px solid rgba(255,255,255,0.25)", borderRadius: 6, fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>
-          출퇴근 페이지 열기 <span style={{ fontSize: 10, opacity: 0.7 }}>↗</span>
-        </div>
-      </a>
+      {/* ─── 실시간 출퇴근/위치/CCTV/행동로그 통합 패널 ─── */}
+      <StaffAttendanceLivePanel onAddFacAction={onAddFacAction} />
 
       <div style={{ background: "#0f172a", color: "#fff", padding: "14px 20px", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
         <div style={{ fontSize: 13, fontWeight: 800 }}>🗺️ 통합 상황판</div>
