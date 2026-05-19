@@ -252,10 +252,83 @@ INSERT INTO tag_aliases (tag_id, alias_type, alias_value) VALUES
 7. 미등록 식별자가 나타나면 SQL로 `beacon_tags` 추가 → 자동으로 활성 태그 목록에 사람 이름 표시
 8. RSSI가 -55 이상으로 가까이 갈 때 "매우 가까움"/"가까움" 배지 확인
 
-## ⚠️ 중요 주의
+## 📶 TP-Link Omada AP 연동 (지원됨)
 
-- **TP-Link AP**는 일반적으로 **BLE 스캔 기능이 없습니다.** TP-Link Omada 일부 모델만 BLE 스캔/HTTP push를 지원합니다. 모델명(예: EAP610/EAP620 HD)의 spec sheet에서 "BLE Scanning" 확인 후 사용하세요. 그 외 일반 가정용 TP-Link AP는 게이트웨이로 쓸 수 없습니다.
-- **Minew G1**은 BLE 스캔 + HTTP/MQTT push 모두 지원하므로 권장.
+이 서버는 **TP-Link Omada BLE 스캐닝 AP**도 지원합니다. (EAP610, EAP620 HD, EAP650, EAP650-Wall, EAP670 등 BLE 스캔 지원 모델)
+
+### TP-Link Omada 수신 경로
+```
+POST /tplink · /api/tplink · /webhook/tplink · /api/omada
+POST /api/beacon-any   ← Minew/TP-Link 자동 감지
+```
+
+### 자동 매핑되는 TP-Link 필드
+| 우리 표준 | TP-Link Omada 키 |
+|---|---|
+| `gateway_mac` | `deviceMac` / `ap_mac` / `ap` / `apMac` |
+| `beacon_mac` | `scannedDevices[].mac` / `scans[].mac` / `beacon.mac` |
+| `packet_type` | `advType` (iBeacon/Eddystone-UID/Eddystone-TLM → ibeacon/uid/tlm 자동 변환) |
+| `uuid` / `major` / `minor` | iBeacon 표준 |
+| `namespace` / `instance` | Eddystone UID |
+| `rssi` | dBm |
+
+### 방법 A — Omada Controller Webhook (가장 쉬움)
+1. **Omada Controller** 로그인 (Cloud 또는 Self-hosted)
+2. **Settings → Site → BLE Scanning** 활성화
+3. **Notifications / Webhook** 메뉴
+4. URL: `http://<이서버PC_IP>:3000/api/tplink`
+5. Method: `POST`, Content-Type: `application/json`
+6. Save → 1~2분 대기 → 대시보드 게이트웨이 패널에 EAP MAC 등장
+
+### 방법 B — Omada Controller MQTT (대규모 권장)
+1. `cd minew-server && npm install mqtt`
+2. `.env` 추가:
+   ```
+   MQTT_URL=mqtt://192.168.0.10:1883
+   MQTT_TOPIC=omada/ble/#
+   MQTT_USERNAME=...
+   MQTT_PASSWORD=...
+   ```
+3. Omada Controller → **Settings → Cloud Access → MQTT Broker** 설정
+4. 서버 재시작 → 콘솔에 `[mqtt] ✓ 연결됨` 표시
+5. 이후 자동 수신 (HTTP webhook 불필요)
+
+### 테스트 curl (TP-Link 포맷)
+```bash
+curl -X POST http://localhost:3000/api/tplink \
+  -H "Content-Type: application/json" \
+  -d '{
+    "deviceName":"EAP650-Office","deviceMac":"AA-BB-CC-11-22-33",
+    "siteName":"잠사박물관","timestamp":1730000000,
+    "scannedDevices":[
+      {"mac":"DD:EE:FF:00:11:22","rssi":-65,"advType":"iBeacon",
+       "uuid":"e2c56db5dffb48d2b060d0f5a71096e0","major":101,"minor":1},
+      {"mac":"DD:EE:FF:00:11:22","rssi":-65,"advType":"Eddystone-UID",
+       "namespace":"00112233445566778899","instance":"000000000001"}
+    ]
+  }'
+```
+
+### ⚠️ TP-Link 주의사항
+- **일반 가정용 TP-Link AP는 BLE 스캔 기능이 없습니다.** Archer/Deco 시리즈 대부분 제외.
+- **Omada 비즈니스 라인** 중에서도 spec sheet에 **"BLE Scanning"** 또는 **"Bluetooth Low Energy"** 명시된 모델만 가능.
+- 확인 가능 모델 예시 (2024~2026 출시 기준):
+  - EAP610 / EAP620 HD / EAP650 / EAP650-Wall / EAP670 / EAP683 LR
+- 가능한지 의심되는 모델은 Omada Controller에서 **Settings → Site → BLE Scanning** 메뉴 존재 여부로 즉시 확인 가능.
+
+## 권장 게이트웨이 비교
+
+| 항목 | Minew G1 | TP-Link Omada EAP |
+|---|---|---|
+| 가격 | ~67,000원 (G1), ~253,000원 (G1-E) | 12만~30만원 (BLE 모델) |
+| 전용 BLE 게이트웨이? | ✅ Yes | ❌ Wi-Fi AP 부가기능 |
+| HTTP Push | ✅ 직접 | ✅ Controller 경유 |
+| MQTT | ✅ 직접 | ✅ Controller 경유 |
+| 추가 인프라 | 없음 | Omada Controller (소프트웨어 무료) |
+| 기존 인프라 활용 | ❌ 별도 설치 | ✅ Wi-Fi AP 겸용 |
+| 잠사 추천 | ✅ 빠른 시작용 | ✅ Wi-Fi 이미 Omada면 추가비용 0 |
+
+→ **이미 Omada AP 설치되어 있으면 TP-Link 활용. 없으면 Minew G1 신규 구매가 더 빠름.**
 
 ## 폴더 구조
 
