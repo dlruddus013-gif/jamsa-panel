@@ -22010,8 +22010,15 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   const [userLocations, setUserLocations] = useState([]); // [{id, name, lat, lng, source, role, ...}]
   const [locationFilter, setLocationFilter] = useState("all"); // all | staff | visitor
   const [shareMyLocation, setShareMyLocation] = useState(() => {
-    try { return window.localStorage?.getItem("jamsa_share_location") === "1"; }
-    catch (e) { return false; }
+    try {
+      // 사용자가 명시적으로 OFF했으면 OFF (기억)
+      const saved = window.localStorage?.getItem("jamsa_share_location");
+      if (saved === "0") return false;
+      if (saved === "1") return true;
+      // 미설정 + 모바일이면 자동 ON (Wi-Fi/GPS 자동 인식)
+      const isMobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent || "");
+      return isMobile;
+    } catch (e) { return false; }
   });
   const [myLocationStatus, setMyLocationStatus] = useState({ source: null, lat: null, lng: null, accuracy: null, error: null });
   // 수동 위치 모드 - PC 사용자가 지도 클릭으로 본인 위치 직접 지정

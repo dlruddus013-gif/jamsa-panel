@@ -53,17 +53,38 @@ export function BeaconGatewayModal({ onClose, zones = [], curUser }) {
 
   useEffect(() => { setBleSupported(typeof navigator !== "undefined" && !!navigator.bluetooth); }, []);
 
-  // 백엔드 webhook 도착 이벤트 폴링 (테스트용)
+  // 백엔드 webhook 도착 이벤트 폴링 — scan/gateway/test 탭 어디서나
   const [recentWebhook, setRecentWebhook] = useState(null);
   useEffect(() => {
-    if (tab !== "gateway") return;
+    if (tab !== "gateway" && tab !== "scan" && tab !== "test") return;
     let stop = false;
     const poll = async () => {
       try {
         const r = await fetch("/api/beacon-webhook?recent=1", { cache: "no-store" });
         if (r.ok) {
           const d = await r.json();
-          if (!stop && d.last) setRecentWebhook(d.last);
+          if (!stop && d.last) {
+            setRecentWebhook(d.last);
+            // 게이트웨이가 보낸 비콘들을 detected 목록에 자동 추가/갱신
+            const payload = d.last.payload || {};
+            const obj = payload.obj || payload.beacons || payload.advertisements || payload.data || [];
+            if (Array.isArray(obj) && obj.length > 0) {
+              setDetected(prev => {
+                const next = [...prev];
+                obj.forEach(b => {
+                  const id = b.mac || b.uuid || b.id || b.macAddress;
+                  if (!id) return;
+                  const name = b.name || b.deviceName || `Beacon-${String(id).slice(-6)}`;
+                  const rssi = b.rssi != null ? Number(b.rssi) : null;
+                  const idx = next.findIndex(x => x.id === id);
+                  const entry = { id, name, uuid: id, rssi, connected: false, fromGateway: true, lastSeen: Date.now() };
+                  if (idx >= 0) next[idx] = { ...next[idx], ...entry };
+                  else next.unshift(entry);
+                });
+                return next;
+              });
+            }
+          }
         }
       } catch (e) {}
     };
@@ -342,9 +363,18 @@ export function BeaconGatewayModal({ onClose, zones = [], curUser }) {
                 </div>
               )}
 
-              <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>🔍 감지된 비콘 ({detected.length})</div>
+              <div style={{ fontSize: 12, fontWeight: 800, marginBottom: 6, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span>🔍 감지된 비콘 ({detected.length})</span>
+                <span style={{ fontSize: 9, fontWeight: 600, color: "#10b981" }}>🌐 게이트웨이 자동 수신 5초마다 갱신</span>
+              </div>
               {detected.length === 0 ? (
-                <div style={{ padding: 20, textAlign: "center", color: "#94a3b8", fontSize: 12, background: "#fff", borderRadius: 6 }}>아직 감지된 비콘이 없습니다</div>
+                <div style={{ padding: 20, textAlign: "center", color: "#94a3b8", fontSize: 12, background: "#fff", borderRadius: 6 }}>
+                  <div>아직 감지된 비콘이 없습니다</div>
+                  <div style={{ fontSize: 10, marginTop: 6, color: "#475569" }}>
+                    💡 웹 Bluetooth는 클릭 페어링이 필요합니다.<br/>
+                    Minew G1 게이트웨이를 연동하면 여기에 자동으로 표시됩니다.
+                  </div>
+                </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {detected.map(b => {
@@ -361,6 +391,7 @@ export function BeaconGatewayModal({ onClose, zones = [], curUser }) {
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontWeight: 800, color: "#0f172a" }}>
                             {b.name}
+                            {b.fromGateway && <span style={{ marginLeft: 6, padding: "1px 5px", background: "#fef3c7", color: "#92400e", borderRadius: 3, fontSize: 9, fontWeight: 800 }}>🌐 게이트웨이</span>}
                             {b.connected && <span style={{ marginLeft: 6, padding: "1px 5px", background: "#dcfce7", color: "#065f46", borderRadius: 3, fontSize: 9, fontWeight: 800 }}>✓ 연결</span>}
                             {isReg && <span style={{ marginLeft: 6, padding: "1px 5px", background: "#dbeafe", color: "#1e40af", borderRadius: 3, fontSize: 9, fontWeight: 800 }}>📍 {isReg.zone}</span>}
                           </div>
