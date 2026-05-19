@@ -8,6 +8,7 @@ const express = require("express");
 
 const db = require("./db");
 const minewRoutes = require("./routes/minewRoutes");
+const mqttAdapter = require("./adapters/mqtt");
 
 const PORT = parseInt(process.env.PORT) || 3000;
 const PUBLIC_DIR = path.resolve(__dirname, "..", "public");
@@ -63,10 +64,14 @@ app.use((err, req, res, _next) => {
 const HOST = "0.0.0.0";
 app.listen(PORT, HOST, () => {
   console.log("═".repeat(64));
-  console.log(`  🛰️  Jamsa Minew Edge Server`);
+  console.log(`  🛰️  Jamsa BLE Edge Server (Minew + TP-Link Omada)`);
   console.log(`  📡  http://${HOST}:${PORT}`);
   console.log(`  📊  Dashboard: http://localhost:${PORT}/dashboard`);
-  console.log(`  ⬇️   POST 엔드포인트:`);
-  console.log(`        /minew  /api/minew  /webhook/minew  /api/beacon`);
+  console.log(`  ⬇️   Minew:   /minew  /api/minew  /webhook/minew  /api/beacon`);
+  console.log(`  ⬇️   TP-Link: /tplink /api/tplink /webhook/tplink /api/omada`);
+  console.log(`  ⬇️   자동:    /api/beacon-any  (payload 자동 감지)`);
   console.log("═".repeat(64));
+
+  // MQTT 어댑터 (MQTT_URL 환경변수 있을 때만)
+  mqttAdapter.start();
 });
