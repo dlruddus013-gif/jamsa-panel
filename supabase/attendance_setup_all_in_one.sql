@@ -1,21 +1,37 @@
 -- ════════════════════════════════════════════════════════════
 -- 잠사플레이팜 BLE 출퇴근 시스템 — 전체 설치 (테이블 + 뷰 + RLS)
--- 작성일: 2026-05-19
+-- 작성일: 2026-05-20 (v2: 기존 스키마 충돌 처리)
 -- ════════════════════════════════════════════════════════════
 -- 사용법:
 --   1. Supabase 대시보드 → SQL Editor → New Query
 --   2. 이 파일 전체 복사 → 붙여넣기 → Run
 --   3. 이후 /attendance 페이지에서 ANON KEY 입력 시 정상 동작
 --
--- 안전성:
---   - 모든 구문이 IF NOT EXISTS / OR REPLACE / DROP IF EXISTS 패턴
---   - 여러 번 실행해도 데이터 손실 없음
+-- ⚠ 주의 (v2 변경):
+--   이전 시도에서 만들어진 beacon_dept / staff / attendance /
+--   absence_records 테이블을 DROP CASCADE 합니다.
+--   기존 데이터가 있으면 백업 후 실행하세요.
 -- ════════════════════════════════════════════════════════════
+
+-- ───────────────────────────────────────────────
+-- 0. 기존 스키마 초기화 (충돌 방지)
+-- ───────────────────────────────────────────────
+-- 뷰는 테이블 의존성 때문에 먼저 명시적으로 drop
+drop view if exists public.v_attendance_today cascade;
+drop view if exists public.v_foreign_workers  cascade;
+drop view if exists public.v_work_hours       cascade;
+drop view if exists public.v_daily_summary    cascade;
+
+-- 테이블 drop (CASCADE 로 FK / 뷰 / 정책 모두 정리)
+drop table if exists public.attendance      cascade;
+drop table if exists public.absence_records cascade;
+drop table if exists public.staff           cascade;
+drop table if exists public.beacon_dept     cascade;
 
 -- ───────────────────────────────────────────────
 -- 1. 부서 마스터 (beacon_dept)
 -- ───────────────────────────────────────────────
-create table if not exists public.beacon_dept (
+create table public.beacon_dept (
   id          smallserial primary key,
   name        text not null unique,
   beacon_uuid text,
@@ -35,7 +51,7 @@ select setval(pg_get_serial_sequence('public.beacon_dept','id'),
 -- ───────────────────────────────────────────────
 -- 2. 직원 마스터 (staff)
 -- ───────────────────────────────────────────────
-create table if not exists public.staff (
+create table public.staff (
   id            bigserial primary key,
   name          text not null unique,
   dept_id       smallint references public.beacon_dept(id) on delete set null,
@@ -66,7 +82,7 @@ create trigger staff_updated_at
 -- ───────────────────────────────────────────────
 -- 3. 출퇴근 기록 (attendance)
 -- ───────────────────────────────────────────────
-create table if not exists public.attendance (
+create table public.attendance (
   id              bigserial primary key,
   staff_id        bigint not null references public.staff(id) on delete cascade,
   checked_in_at   timestamptz not null default now(),
@@ -86,7 +102,7 @@ create index if not exists attendance_open_idx        on public.attendance(staff
 -- ───────────────────────────────────────────────
 -- 4. 결근 기록 (absence_records)
 -- ───────────────────────────────────────────────
-create table if not exists public.absence_records (
+create table public.absence_records (
   id          bigserial primary key,
   staff_id    bigint not null references public.staff(id) on delete cascade,
   date        date not null,
