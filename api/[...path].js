@@ -1,7 +1,9 @@
 import agentRealtimeAnalysis from '../api_handlers/agent-realtime-analysis.js';
 import autoAlerts from '../api_handlers/auto-alerts.js';
 import bankWebhook from '../api_handlers/bank-webhook.js';
+import beaconWebhook from '../api_handlers/beacon-webhook.js';
 import cctvAiAnalyze from '../api_handlers/cctv-ai-analyze.js';
+import spotLayoutVision from '../api_handlers/spot-layout-vision.js';
 import chatbot from '../api_handlers/chatbot.js';
 import config from '../api_handlers/config.js';
 import dataBulk from '../api_handlers/data-bulk.js';
@@ -32,7 +34,9 @@ const routes = {
   'agent-realtime-analysis': agentRealtimeAnalysis,
   'auto-alerts': autoAlerts,
   'bank-webhook': bankWebhook,
+  'beacon-webhook': beaconWebhook,
   'cctv-ai-analyze': cctvAiAnalyze,
+  'spot-layout-vision': spotLayoutVision,
   'chatbot': chatbot,
   'config': config,
   'data-bulk': dataBulk,
