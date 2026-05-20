@@ -26759,6 +26759,90 @@ function ZoneEditPanel({ zone, allCameras, onUpdate, onDelete, onClose }) {
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [cctvFilter, setCctvFilter] = useState("");
 
+  // ── 시설 사진 (zone별) ─────────────────────────────────────
+  const [photos, setPhotos] = useState(() => {
+    try {
+      const all = JSON.parse(localStorage.getItem("jamsa_zone_photos") || "{}");
+      return Array.isArray(all[zone.id]) ? all[zone.id] : [];
+    } catch (e) { return []; }
+  });
+  const [photoViewer, setPhotoViewer] = useState(null); // {url, idx}
+  const [photoUploading, setPhotoUploading] = useState(false);
+
+  const persistPhotos = (next) => {
+    try {
+      const all = JSON.parse(localStorage.getItem("jamsa_zone_photos") || "{}");
+      all[zone.id] = next;
+      localStorage.setItem("jamsa_zone_photos", JSON.stringify(all));
+    } catch (e) {}
+  };
+  const handlePhotoUpload = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    setPhotoUploading(true);
+    try {
+      const newOnes = [];
+      for (const f of files) {
+        if (!f.type.startsWith("image/")) continue;
+        try {
+          const dataUrl = await facCompressPhoto(f, 1200);
+          newOnes.push({ url: dataUrl, at: new Date().toISOString(), name: f.name });
+        } catch (err) { console.warn("photo compress failed:", err); }
+      }
+      const next = [...photos, ...newOnes];
+      setPhotos(next);
+      persistPhotos(next);
+    } finally {
+      setPhotoUploading(false);
+      e.target.value = "";
+    }
+  };
+  const removePhoto = (idx) => {
+    if (!confirm("이 사진을 삭제할까요?")) return;
+    const next = photos.filter((_, i) => i !== idx);
+    setPhotos(next);
+    persistPhotos(next);
+    setPhotoViewer(null);
+  };
+
+  // ── 보관 재고 (zone에 매핑된 location의 재고만 필터) ─────────
+  const inventoryItems = useMemo(() => {
+    try {
+      const all = JSON.parse(localStorage.getItem("jamsa_inv_prods") || "[]");
+      if (!Array.isArray(all)) return [];
+      // 매칭 대상 location 이름: Z_LOCS의 미리 정의된 매핑 + zone.name 자체
+      const presetLocs = (typeof Z_LOCS !== "undefined" && Z_LOCS[zone.id]) ? Z_LOCS[zone.id] : [];
+      const candidates = Array.from(new Set([...(presetLocs || []), zone.name].filter(Boolean)));
+      if (candidates.length === 0) return [];
+      return all.filter(p => {
+        const loc = String(p.loc || "");
+        if (candidates.some(c => loc.includes(c))) return true;
+        // locs 객체에 candidate 키가 있고 수량 >0
+        if (p.locs && typeof p.locs === "object") {
+          for (const c of candidates) {
+            if (typeof p.locs[c] === "number" && p.locs[c] > 0) return true;
+          }
+        }
+        return false;
+      });
+    } catch (e) { return []; }
+  }, [zone.id, zone.name, photos.length /* refresh trigger */]);
+
+  const inventoryStats = useMemo(() => {
+    const totalQty = inventoryItems.reduce((s, p) => s + (Number(p.qty) || 0), 0);
+    const lowStock = inventoryItems.filter(p => {
+      const min = Number(p.minQty) || 0;
+      const qty = Number(p.qty) || 0;
+      return min > 0 ? qty <= min : qty <= 2;
+    });
+    const byCat = {};
+    inventoryItems.forEach(p => {
+      const k = p.cat || "기타";
+      byCat[k] = (byCat[k] || 0) + 1;
+    });
+    return { totalQty, lowStock, byCat };
+  }, [inventoryItems]);
+
   // Sync when switching zones
   useEffect(() => {
     setName(zone.name || "");
@@ -26766,6 +26850,10 @@ function ZoneEditPanel({ zone, allCameras, onUpdate, onDelete, onClose }) {
     setColor(zone.color || "#0891b2");
     setDesc(zone.desc || "");
     setCctvChannels(zone.cctvChannels || []);
+    try {
+      const all = JSON.parse(localStorage.getItem("jamsa_zone_photos") || "{}");
+      setPhotos(Array.isArray(all[zone.id]) ? all[zone.id] : []);
+    } catch (e) { setPhotos([]); }
   }, [zone.id]);
 
   // Available icons by category
@@ -26926,11 +27014,158 @@ function ZoneEditPanel({ zone, allCameras, onUpdate, onDelete, onClose }) {
           )}
         </div>
 
+        {/* ─── 시설 사진 ─── */}
+        <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid #e5e7eb" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+            <label style={{ fontSize: 11, fontWeight: 800, color: "#475569" }}>
+              🖼️ 시설 사진 ({photos.length}장)
+            </label>
+            <label style={{
+              padding: "4px 10px", borderRadius: 5,
+              background: photoUploading ? "#e5e7eb" : "linear-gradient(135deg,#10b981,#059669)",
+              color: photoUploading ? "#94a3b8" : "#fff",
+              fontSize: 10, fontWeight: 800, cursor: photoUploading ? "wait" : "pointer", display: "inline-flex", alignItems: "center", gap: 4,
+            }}>
+              {photoUploading ? "업로드 중…" : "＋ 사진 추가"}
+              <input type="file" accept="image/*" multiple onChange={handlePhotoUpload} disabled={photoUploading}
+                style={{ display: "none" }} />
+            </label>
+          </div>
+          {photos.length === 0 ? (
+            <div style={{
+              padding: 18, textAlign: "center", color: "#94a3b8", fontSize: 11,
+              border: "1px dashed #cbd5e1", borderRadius: 6, background: "#f8fafc",
+            }}>
+              📷 등록된 사진 없음<br />
+              <span style={{ fontSize: 10, color: "#cbd5e1" }}>사진 추가 버튼으로 업로드 (자동 압축 1200px)</span>
+            </div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 4 }}>
+              {photos.map((p, i) => (
+                <div key={i} onClick={() => setPhotoViewer({ ...p, idx: i })}
+                  style={{
+                    position: "relative", aspectRatio: "1", borderRadius: 6, overflow: "hidden",
+                    cursor: "pointer", border: "1px solid #e5e7eb", background: "#f1f5f9",
+                  }}>
+                  <img src={p.url} alt={p.name || `사진${i+1}`}
+                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                  <button onClick={(e) => { e.stopPropagation(); removePhoto(i); }}
+                    style={{
+                      position: "absolute", top: 2, right: 2, width: 18, height: 18, borderRadius: "50%",
+                      background: "rgba(0,0,0,0.65)", color: "#fff", border: "none", cursor: "pointer",
+                      fontSize: 11, fontWeight: 900, padding: 0, lineHeight: 1,
+                    }} title="삭제">×</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ─── 보관 재고 ─── */}
+        <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid #e5e7eb" }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 6 }}>
+            <label style={{ fontSize: 11, fontWeight: 800, color: "#475569" }}>
+              📦 보관 재고 ({inventoryItems.length}건)
+            </label>
+            <span style={{ fontSize: 10, color: "#64748b", fontFamily: "ui-monospace,monospace" }}>
+              총 {inventoryStats.totalQty.toLocaleString()}개
+              {inventoryStats.lowStock.length > 0 && (
+                <span style={{ marginLeft: 6, color: "#dc2626", fontWeight: 800 }}>
+                  ⚠ 부족 {inventoryStats.lowStock.length}
+                </span>
+              )}
+            </span>
+          </div>
+
+          {inventoryItems.length === 0 ? (
+            <div style={{
+              padding: 14, textAlign: "center", color: "#94a3b8", fontSize: 11,
+              border: "1px dashed #cbd5e1", borderRadius: 6, background: "#f8fafc",
+            }}>
+              📭 이 스팟에 매핑된 재고가 없습니다<br />
+              <span style={{ fontSize: 10, color: "#cbd5e1" }}>재고 항목의 위치(loc)에 "{zone.name}"을 포함하면 자동 표시</span>
+            </div>
+          ) : (
+            <div style={{
+              maxHeight: 240, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 6, background: "#fff",
+            }}>
+              {/* 카테고리 칩 */}
+              {Object.keys(inventoryStats.byCat).length > 0 && (
+                <div style={{ padding: "6px 8px", borderBottom: "1px solid #f1f5f9", display: "flex", gap: 3, flexWrap: "wrap" }}>
+                  {Object.entries(inventoryStats.byCat).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([cat, cnt]) => (
+                    <span key={cat} style={{
+                      padding: "1px 6px", background: "#eff6ff", color: "#1e40af",
+                      borderRadius: 8, fontSize: 9, fontWeight: 700, whiteSpace: "nowrap",
+                    }}>{cat} · {cnt}</span>
+                  ))}
+                </div>
+              )}
+              {inventoryItems.slice(0, 30).map(p => {
+                const min = Number(p.minQty) || 0;
+                const qty = Number(p.qty) || 0;
+                const isLow = min > 0 ? qty <= min : qty <= 2;
+                return (
+                  <div key={p.id} style={{
+                    padding: "6px 10px", borderBottom: "1px solid #f8fafc",
+                    display: "grid", gridTemplateColumns: "1fr auto", gap: 6, alignItems: "center",
+                    background: isLow ? "rgba(254,202,202,0.25)" : "#fff",
+                  }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {p.name}
+                      </div>
+                      <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 1 }}>
+                        {p.cat && <span style={{ padding: "0 5px", background: "#f1f5f9", borderRadius: 4, marginRight: 4 }}>{p.cat}</span>}
+                        <span style={{ color: "#cbd5e1" }}>{p.loc || "위치 미상"}</span>
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "right", flexShrink: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 900, color: isLow ? "#dc2626" : "#16a34a", fontFamily: "ui-monospace,monospace" }}>
+                        {qty.toLocaleString()}<span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 600 }}>{p.unit || "개"}</span>
+                      </div>
+                      {min > 0 && <div style={{ fontSize: 8, color: "#94a3b8" }}>적정 {min}+</div>}
+                    </div>
+                  </div>
+                );
+              })}
+              {inventoryItems.length > 30 && (
+                <div style={{ padding: 8, textAlign: "center", fontSize: 10, color: "#64748b", background: "#f8fafc" }}>
+                  외 {inventoryItems.length - 30}건 · 재고관리 메뉴에서 전체 확인
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Delete button */}
         <button onClick={onDelete}
-          style={{ width: "100%", padding: 10, borderRadius: 6, background: "#fff", border: "1px solid #fecaca", color: "#991b1b", fontSize: 11, fontWeight: 700, cursor: "pointer", marginTop: 8 }}>
+          style={{ width: "100%", padding: 10, borderRadius: 6, background: "#fff", border: "1px solid #fecaca", color: "#991b1b", fontSize: 11, fontWeight: 700, cursor: "pointer", marginTop: 16 }}>
           🗑 이 스팟 삭제
         </button>
+
+        {/* 사진 확대 보기 */}
+        {photoViewer && (
+          <div onClick={() => setPhotoViewer(null)}
+            style={{
+              position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 11000,
+              display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+            }}>
+            <div onClick={e => e.stopPropagation()} style={{ position: "relative", maxWidth: "92vw", maxHeight: "92vh" }}>
+              <img src={photoViewer.url} alt={photoViewer.name || ""}
+                style={{ maxWidth: "92vw", maxHeight: "85vh", display: "block", borderRadius: 8, boxShadow: "0 8px 32px rgba(0,0,0,0.5)" }} />
+              <div style={{ position: "absolute", top: -38, right: 0, display: "flex", gap: 6 }}>
+                <button onClick={() => removePhoto(photoViewer.idx)}
+                  style={{ padding: "5px 12px", background: "rgba(220,38,38,0.95)", color: "#fff", border: "none", borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>🗑 삭제</button>
+                <button onClick={() => setPhotoViewer(null)}
+                  style={{ padding: "5px 12px", background: "rgba(255,255,255,0.2)", color: "#fff", border: "1px solid rgba(255,255,255,0.4)", borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>× 닫기</button>
+              </div>
+              <div style={{ position: "absolute", bottom: 6, left: 8, color: "#fff", fontSize: 10, background: "rgba(0,0,0,0.5)", padding: "2px 8px", borderRadius: 4 }}>
+                {photoViewer.name || `사진 ${photoViewer.idx + 1}`}
+                {photoViewer.at && <span style={{ marginLeft: 6, opacity: 0.7 }}>· {new Date(photoViewer.at).toLocaleString("ko-KR")}</span>}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Help */}
         <div style={{ marginTop: 12, padding: 8, background: "#f8fafc", borderRadius: 6, fontSize: 10, color: "#64748b", lineHeight: 1.5 }}>
