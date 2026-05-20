@@ -10,6 +10,7 @@
 //  6. 연결 상태 종합 진단
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { BeaconAlertRulesPanel, evaluateAndTrigger } from "./beacon-alert-rules.jsx";
 
 const REG_KEY = "jamsa_beacons";          // 등록된 비콘 (UUID → zone)
 const HIST_KEY = "jamsa_beacon_history";  // 감지 이력 (최근 N건)
@@ -80,6 +81,16 @@ export function BeaconGatewayModal({ onClose, zones = [], curUser }) {
                   const entry = { id, name, uuid: id, rssi, connected: false, fromGateway: true, lastSeen: Date.now() };
                   if (idx >= 0) next[idx] = { ...next[idx], ...entry };
                   else next.unshift(entry);
+
+                  // 🔔 비콘 알림 규칙 평가 → SMS 자동 발송
+                  try {
+                    evaluateAndTrigger(
+                      { id, name, rssi },
+                      { beaconReg: loadReg(), zones: zones || [] }
+                    );
+                  } catch (err) {
+                    console.warn("[beacon-alert] eval failed:", err);
+                  }
                 });
                 return next;
               });
@@ -193,6 +204,10 @@ export function BeaconGatewayModal({ onClose, zones = [], curUser }) {
           return [{ id, name, rssi, uuid: id }, ...prev];
         });
         setLiveRssi(prev => ({ ...prev, [id]: rssi }));
+        // 🔔 알림 규칙 평가
+        try {
+          evaluateAndTrigger({ id, name, rssi }, { beaconReg: loadReg(), zones: zones || [] });
+        } catch (err) { /* silent */ }
       };
       navigator.bluetooth.addEventListener("advertisementreceived", handler);
       watchersRef.current.push({ stop: () => navigator.bluetooth.removeEventListener("advertisementreceived", handler) });
@@ -274,6 +289,7 @@ export function BeaconGatewayModal({ onClose, zones = [], curUser }) {
             { id: "scan", label: "📡 비콘 스캔" },
             { id: "registry", label: `🗂️ 등록 (${Object.keys(reg).length})` },
             { id: "gateway", label: "🌐 게이트웨이" },
+            { id: "alerts", label: "🔔 자동 알림" },
             { id: "test", label: "🧪 실시간 테스트" },
             { id: "guide", label: "📚 연동 가이드" },
           ].map(t => (
@@ -510,6 +526,11 @@ export function BeaconGatewayModal({ onClose, zones = [], curUser }) {
                 </div>
               </div>
             </div>
+          )}
+
+          {/* 자동 알림 규칙 */}
+          {tab === "alerts" && (
+            <BeaconAlertRulesPanel zones={zones} beaconReg={reg} />
           )}
 
           {/* 실시간 테스트 */}
