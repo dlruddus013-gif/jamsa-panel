@@ -23387,6 +23387,17 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         addNewZone(e.coord.lat(), e.coord.lng());
       });
     }
+
+    // ✨ ZoneEditPanel의 "🗺️ 지도 클릭으로 위치 선택" 모드 — 활성화되어 있으면 클릭 시 좌표를 콜백
+    if (naverMapRef.current && naver.maps.Event) {
+      naver.maps.Event.addListener(naverMapRef.current, "click", (e) => {
+        if (window.__jamsaSpotMoveTarget && typeof window.__jamsaSpotMoveCallback === "function") {
+          const lat = e.coord.lat();
+          const lng = e.coord.lng();
+          try { window.__jamsaSpotMoveCallback(lat, lng); } catch (err) { console.error("[spot move]", err); }
+        }
+      });
+    }
   }, [zoneStatus, naverLoaded, mapProvider, bgMode, viewMode, editMode, cctvSnapshotData, zoneCrowdStats, cctvMap, cctvEditMode]);
 
 
@@ -27044,11 +27055,71 @@ function ZoneEditPanel({ zone, allCameras, onUpdate, onDelete, onClose }) {
 
       {/* Body */}
       <div style={{ flex: 1, overflow: "auto", padding: 16 }}>
-        {/* Coordinates display */}
-        <div style={{ padding: 10, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 6, marginBottom: 14 }}>
-          <div style={{ fontSize: 10, color: "#065f46", fontWeight: 700, marginBottom: 4 }}>📍 현재 좌표 (드래그로 이동)</div>
-          <div style={{ fontSize: 11, color: "#0f172a", fontFamily: "monospace" }}>
-            {zone.lat?.toFixed(6)}, {zone.lng?.toFixed(6)}
+        {/* 좌표 (편집/이동 3가지 방법) */}
+        <div style={{ padding: 12, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 6, marginBottom: 14 }}>
+          <div style={{ fontSize: 10, color: "#065f46", fontWeight: 800, marginBottom: 6, letterSpacing: ".04em" }}>
+            📍 위치 좌표 — 3가지 방법으로 조정 가능
+          </div>
+
+          {/* lat/lng 직접 입력 */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 6 }}>
+            <div>
+              <div style={{ fontSize: 9, color: "#065f46", marginBottom: 2 }}>위도 (lat)</div>
+              <input type="number" step="0.000001" defaultValue={zone.lat?.toFixed(6)}
+                onBlur={(e) => {
+                  const v = parseFloat(e.target.value);
+                  if (!isNaN(v) && v >= 36 && v <= 37) onUpdate({ lat: v });
+                  else e.target.value = zone.lat?.toFixed(6) || "";
+                }}
+                style={{ width: "100%", padding: "5px 8px", borderRadius: 4, border: "1px solid #86efac", fontSize: 11, fontFamily: "ui-monospace,monospace", background: "#fff" }} />
+            </div>
+            <div>
+              <div style={{ fontSize: 9, color: "#065f46", marginBottom: 2 }}>경도 (lng)</div>
+              <input type="number" step="0.000001" defaultValue={zone.lng?.toFixed(6)}
+                onBlur={(e) => {
+                  const v = parseFloat(e.target.value);
+                  if (!isNaN(v) && v >= 127 && v <= 128) onUpdate({ lng: v });
+                  else e.target.value = zone.lng?.toFixed(6) || "";
+                }}
+                style={{ width: "100%", padding: "5px 8px", borderRadius: 4, border: "1px solid #86efac", fontSize: 11, fontFamily: "ui-monospace,monospace", background: "#fff" }} />
+            </div>
+          </div>
+
+          {/* 지도 클릭으로 위치 선택 + 박물관 중심으로 되돌리기 */}
+          <div style={{ display: "flex", gap: 4 }}>
+            <button
+              onClick={() => {
+                // 전역 클릭 모드 활성화 (소스의 cctvEditMode 등과 유사한 방식 — window 전역 핸들러 등록)
+                window.__jamsaSpotMoveTarget = zone.id;
+                window.__jamsaSpotMoveCallback = (lat, lng) => {
+                  onUpdate({ lat, lng });
+                  alert(`✅ "${zone.name}" 위치를 (${lat.toFixed(6)}, ${lng.toFixed(6)})로 이동했습니다.`);
+                  window.__jamsaSpotMoveTarget = null;
+                  window.__jamsaSpotMoveCallback = null;
+                };
+                alert(`📍 "${zone.name}" 의 새 위치를 지도에서 클릭하세요.\n\n취소: 같은 스팟 편집 패널을 다시 열면 초기화됩니다.`);
+              }}
+              style={{
+                flex: 1, padding: "6px 8px", borderRadius: 4,
+                background: "linear-gradient(135deg,#10b981,#059669)", color: "#fff",
+                border: "none", fontSize: 10, fontWeight: 800, cursor: "pointer", letterSpacing: ".02em",
+              }}
+              title="이 버튼 클릭 후 지도에서 정확한 위치를 클릭하면 spot이 그곳으로 이동합니다">
+              🗺️ 지도 클릭으로 위치 선택
+            </button>
+            <button
+              onClick={() => {
+                if (!confirm(`"${zone.name}" 위치를 박물관 중심(${JAMSA_CENTER.lat}, ${JAMSA_CENTER.lng})으로 되돌릴까요?`)) return;
+                onUpdate({ lat: JAMSA_CENTER.lat, lng: JAMSA_CENTER.lng });
+              }}
+              style={{ padding: "6px 10px", borderRadius: 4, background: "rgba(255,255,255,0.6)", border: "1px solid #86efac", color: "#065f46", fontSize: 10, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}
+              title="박물관 중심 좌표로 초기화">
+              ↺ 초기화
+            </button>
+          </div>
+
+          <div style={{ marginTop: 6, fontSize: 9, color: "#065f46", lineHeight: 1.5 }}>
+            💡 <strong>드래그</strong>: 지도에서 핀을 직접 끌어 이동 · <strong>입력</strong>: 위/경도 직접 입력 (Tab 또는 Enter로 저장) · <strong>클릭</strong>: 버튼 후 지도 클릭
           </div>
         </div>
 
