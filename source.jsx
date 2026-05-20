@@ -3522,6 +3522,43 @@ severity 기준:
 };
 
 // Main analysis entry point
+// 서버 응답(level/score)을 클라이언트 기존 형식(severity/confidence/suggestions/autoAction)으로 매핑
+const _mapServerAiResponse = (server, camName) => {
+  const score = Math.max(0, Math.min(100, parseInt(server.score) || 0));
+  let severity;
+  if (server.level === "DANGER" || score >= 80) severity = "URGENT";
+  else if (server.level === "WARNING" || score >= 50) severity = "WARNING";
+  else if (score >= 30) severity = "CAUTION";
+  else severity = "NORMAL";
+
+  // shouldNotify이거나 score≥50이면 자동과제 생성
+  let autoAction = null;
+  if (severity !== "NORMAL" && (server.shouldNotify || score >= 50)) {
+    autoAction = {
+      title: `${server.summary || "이상 감지"} — 현장 확인 필요`,
+      sev: severity === "URGENT" ? "URGENT" : severity === "WARNING" ? "HIGH" : "MEDIUM",
+      type: server.category || "AI 점검",
+    };
+  }
+  const suggestions = [];
+  if (server.actionRequired && server.actionRequired !== "조치 불필요") {
+    suggestions.push(server.actionRequired);
+  }
+  if (Array.isArray(server.objects) && server.objects.length > 0) {
+    const objStr = server.objects.map(o => `${o.type}×${o.count}`).join(", ");
+    suggestions.push(`감지 객체: ${objStr}`);
+  }
+
+  return {
+    severity,
+    confidence: score,
+    finding: server.summary || "분석 결과",
+    detail: server.detail || "",
+    suggestions: suggestions.length > 0 ? suggestions : ["현장 확인 후 판단"],
+    autoAction,
+  };
+};
+
 const analyzeCctvFeedAI = async (ch, camName, opts = {}) => {
   const { snapServerUrl, useRealAI, zone, strict } = opts;
 
@@ -3532,6 +3569,56 @@ const analyzeCctvFeedAI = async (ch, camName, opts = {}) => {
   // Track error for upstream reporting
   let lastError = null;
 
+  // ─── 서버사이드 프록시 경로 (Vercel env ANTHROPIC_API_KEY 사용) ───
+  //  클라이언트 키 없어도 동작. snapServerUrl만 있으면 됨.
+  //  이게 실패할 때만 fallback (클라이언트 키 직접 호출 or 시뮬레이션)
+  if (snapServerUrl && typeof window !== "undefined" && window.__authToken) {
+    try {
+      console.log(`[AI CH${ch}] 🌐 Server proxy: fetching snapshot + /api/cctv-ai-analyze`);
+      const base64Img = await fetchCctvSnapshotAsBase64(snapServerUrl, ch);
+      if (base64Img) {
+        const r = await fetch("/api/cctv-ai-analyze", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + window.__authToken,
+          },
+          body: JSON.stringify({ ch, zone: zone || camName, image: base64Img }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (r.ok && data.ok && data.result) {
+          console.log(`[AI CH${ch}] ✅ Server-proxy success: ${data.result.level} (${data.result.score}%)`);
+          const mapped = _mapServerAiResponse(data.result, camName);
+          return { ...mapped, capture: base64Img, _mode: "real-proxy" };
+        }
+        // 서버 응답이 ok 아님 → 원인 기록
+        if (data.error === "api_key_not_configured") {
+          lastError = "Vercel 환경변수 ANTHROPIC_API_KEY 미설정 (Vercel Dashboard → Settings → Environment Variables)";
+        } else if (data.error === "missing_token" || data.error === "invalid_token") {
+          lastError = "로그인 세션 만료 — 다시 로그인 필요";
+        } else if (data.error === "rate_limit_exceeded") {
+          lastError = "분당 API 호출 한도 초과 — 잠시 후 재시도";
+        } else {
+          lastError = `서버 프록시 오류: ${data.error || r.status}${data.message ? ` (${data.message})` : ""}`;
+        }
+        console.warn(`[AI CH${ch}] ⚠️ Server proxy returned: ${lastError}`);
+        if (strict) {
+          return {
+            severity: "NORMAL", confidence: 0,
+            finding: "❌ 서버사이드 AI 호출 실패",
+            detail: `오류: ${lastError}\n\n[해결 방법]\n1. Vercel Dashboard → Settings → Environment Variables → ANTHROPIC_API_KEY 추가\n2. 추가 후 Deployments → Redeploy\n3. 로그인 세션 확인 (재로그인)`,
+            suggestions: ["Vercel 환경변수 설정", "Redeploy 후 재시도"],
+            autoAction: null, capture: base64Img, _mode: "error", _error: lastError,
+          };
+        }
+      }
+    } catch (e) {
+      lastError = `프록시 호출 예외: ${e.message}`;
+      console.warn(`[AI CH${ch}] ${lastError}`);
+    }
+  }
+
+  // ─── 클라이언트 직접 호출 경로 (기존) — 사용자가 자기 API 키 입력한 경우 ───
   // Try real AI path
   if (useRealAI && apiKey && snapServerUrl) {
     let base64Img = null;
@@ -3717,7 +3804,9 @@ function FacCctvPage({ go, setActions, addAudit, user }) {
     // Check AI mode eligibility with explicit user confirmation
     let anthropicKey = "";
     try { anthropicKey = window.localStorage?.getItem("jamsa_anthropic_api_key") || ""; } catch(e){}
-    const useRealAI = !!(snapServerUrl && anthropicKey);
+    // 서버 프록시 사용 가능 여부: 로그인 토큰만 있으면 서버 env 키 사용
+    const hasServerProxy = !!(snapServerUrl && typeof window !== "undefined" && window.__authToken);
+    const useRealAI = !!(snapServerUrl && (anthropicKey || hasServerProxy));
 
     // ─── PREFLIGHT CHECK for Real AI Mode ───
     if (useRealAI) {
@@ -3770,11 +3859,14 @@ function FacCctvPage({ go, setActions, addAudit, user }) {
     // Warn user about mode
     let modeMsg = "";
     if (useRealAI) {
+      const keySource = anthropicKey
+        ? `클라이언트 ${anthropicKey.slice(0, 12)}...`
+        : `Vercel 환경변수 (서버사이드 프록시 /api/cctv-ai-analyze)`;
       modeMsg = `🧠 실제 AI Vision 모드로 ${totalScans}회 분석합니다.\n\n`
               + `• NVR 서버: ${snapServerUrl}\n`
-              + `• API 키: ${anthropicKey.slice(0, 12)}...\n`
+              + `• API 키: ${keySource}\n`
               + `• 예상 비용: 약 $${(totalScans * 0.003).toFixed(3)} (약 ${Math.ceil(totalScans * 0.003 * 1400)}원)\n\n`
-              + `※ 실패하면 명확한 오류 메시지로 표시됩니다 (시뮬레이션 fallback 없음)\n\n`
+              + `※ 환경변수에 ANTHROPIC_API_KEY가 없으면 서버 프록시는 실패하고 시뮬레이션으로 fallback됩니다.\n\n`
               + `계속하시겠습니까?`;
     } else {
       const reasons = [];
@@ -3806,7 +3898,7 @@ function FacCctvPage({ go, setActions, addAudit, user }) {
             // strict: true means show error in UI instead of silently fall back
             const r = await analyzeCctvFeedAI(ch, camName + "_" + h, { snapServerUrl, useRealAI, zone: cam?.zone, strict: useRealAI });
             if (useRealAI) {
-              if (r._mode === "real") realSuccess++;
+              if (r._mode === "real" || r._mode === "real-proxy") realSuccess++;
               else {
                 realFail++;
                 if (!firstError && r._error) firstError = r._error;
@@ -5069,7 +5161,27 @@ function BatchScanPreviewModal({ results, filter, setFilter, selectedItems, setS
         {/* Header */}
         <div style={{ padding: "14px 20px", background: "linear-gradient(135deg,#0f172a,#1e293b)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", borderRadius: "12px 12px 0 0" }}>
           <div>
-            <div style={{ fontSize: 11, opacity: 0.85 }}>AI 일괄점검 결과</div>
+            <div style={{ fontSize: 11, opacity: 0.85, display: "flex", alignItems: "center", gap: 6 }}>
+              AI 일괄점검 결과
+              {(() => {
+                const realCount = results.filter(r => r._mode === "real" || r._mode === "real-proxy").length;
+                const mockCount = results.filter(r => !r._mode || r._mode === "mock" || r._mode === "mock-real-image").length;
+                const errCount = results.filter(r => r._mode === "error").length;
+                if (realCount === results.length) {
+                  return <span style={{ background: "rgba(52,211,153,0.25)", color: "#6ee7b7", padding: "1px 8px", borderRadius: 10, fontSize: 10, fontWeight: 800, letterSpacing: ".04em" }}>✅ 실제 AI</span>;
+                }
+                if (mockCount === results.length) {
+                  return <span style={{ background: "rgba(245,158,11,0.25)", color: "#fcd34d", padding: "1px 8px", borderRadius: 10, fontSize: 10, fontWeight: 800, letterSpacing: ".04em" }} title="ANTHROPIC_API_KEY 환경변수가 Vercel에 설정되어 있지 않습니다. Settings → Environment Variables → ANTHROPIC_API_KEY 추가 후 Redeploy">⚠ 시뮬레이션 모드</span>;
+                }
+                return (
+                  <span style={{ display: "flex", gap: 4 }}>
+                    {realCount > 0 && <span style={{ background: "rgba(52,211,153,0.25)", color: "#6ee7b7", padding: "1px 6px", borderRadius: 8, fontSize: 9, fontWeight: 800 }}>실제 {realCount}</span>}
+                    {mockCount > 0 && <span style={{ background: "rgba(245,158,11,0.25)", color: "#fcd34d", padding: "1px 6px", borderRadius: 8, fontSize: 9, fontWeight: 800 }}>시뮬 {mockCount}</span>}
+                    {errCount > 0 && <span style={{ background: "rgba(220,38,38,0.25)", color: "#fca5a5", padding: "1px 6px", borderRadius: 8, fontSize: 9, fontWeight: 800 }}>오류 {errCount}</span>}
+                  </span>
+                );
+              })()}
+            </div>
             <div style={{ fontSize: 17, fontWeight: 900 }}>📋 일괄점검 상세 내역 · 총 {results.length}건</div>
           </div>
           <button onClick={onClose} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", fontSize: 22, cursor: "pointer", width: 30, height: 30, borderRadius: "50%", lineHeight: 1 }}>×</button>
