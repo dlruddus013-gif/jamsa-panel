@@ -121,15 +121,18 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
     setLoading(true);
     setErr(null);
     try {
+      // KST(UTC+9) 등 로컬 시간대의 "오늘 0시 ~ 24시"를 UTC 타임스탬프로 변환해서 질의.
+      // (이전: toISOString().slice(0,10) 으로 자르면 자정 직후 KST 가 UTC 기준 어제로 밀려서
+      //   오늘 출근 기록이 today 필터에 안 잡혀 카드가 영원히 "미출근"으로 표시되는 버그)
       const today00 = new Date(); today00.setHours(0,0,0,0);
-      const todayStr = today00.toISOString().slice(0,10);
+      const todayEnd = new Date(today00); todayEnd.setHours(23,59,59,999);
 
       const [dRes, sRes, aRes, rRes] = await Promise.all([
         sb.from("beacon_dept").select("*").order("id"),
         sb.from("staff").select("*").order("name"),
         sb.from("attendance").select("*")
-          .gte("checked_in_at", todayStr + "T00:00:00")
-          .lte("checked_in_at", todayStr + "T23:59:59")
+          .gte("checked_in_at", today00.toISOString())
+          .lte("checked_in_at", todayEnd.toISOString())
           .order("checked_in_at", { ascending: false }),
         sb.from("attendance").select("*, staff:staff_id(name,dept_id)")
           .order("checked_in_at", { ascending: false })
