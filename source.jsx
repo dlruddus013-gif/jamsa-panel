@@ -22699,14 +22699,27 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   const [zoneQrModalOpen, setZoneQrModalOpen] = useState(false);
 
   // CCTV 서버 자동 헬스체크 + 안내 모달
-  const [cctvServerStatus, setCctvServerStatus] = useState({ status: "checking", checkedAt: null }); // checking | online | offline
+  const [cctvServerStatus, setCctvServerStatus] = useState({
+    status: "checking", checkedAt: null, consecutiveFailures: 0
+  }); // checking | online | offline
   const [cctvGuideOpen, setCctvGuideOpen] = useState(false);
+  // dismiss 정책: 세션(이번 탭) / 영구(다시는 자동 표시 안 함) / 24시간 자동 만료
   const [cctvGuideDismissed, setCctvGuideDismissed] = useState(() => {
-    try { return window.sessionStorage?.getItem("jamsa_cctv_guide_dismissed") === "1"; }
-    catch (e) { return false; }
+    try {
+      if (window.sessionStorage?.getItem("jamsa_cctv_guide_dismissed") === "1") return true;
+      const ls = window.localStorage?.getItem("jamsa_cctv_guide_dismissed_until");
+      if (ls) {
+        const until = parseInt(ls, 10);
+        if (!isNaN(until) && Date.now() < until) return true;
+        // 만료된 값은 삭제
+        if (!isNaN(until)) window.localStorage?.removeItem("jamsa_cctv_guide_dismissed_until");
+      }
+      if (window.localStorage?.getItem("jamsa_cctv_guide_dismissed_perm") === "1") return true;
+    } catch (e) {}
+    return false;
   });
 
-  // CCTV 서버 헬스체크 (5초마다 한 번)
+  // CCTV 서버 헬스체크 (15초마다 한 번)
   useEffect(() => {
     let cancelled = false;
     const checkServer = async () => {
@@ -22720,21 +22733,34 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         }
       }
       if (cancelled) return;
-      setCctvServerStatus({ status: result.ok ? "online" : "offline", checkedAt: Date.now(), detail: result });
+      setCctvServerStatus(prev => ({
+        status: result.ok ? "online" : "offline",
+        checkedAt: Date.now(),
+        detail: result,
+        // 성공 시 카운터 리셋, 실패 시 +1 — 연속 실패만 의미있는 offline 판정
+        consecutiveFailures: result.ok ? 0 : (prev.consecutiveFailures || 0) + 1,
+      }));
     };
     checkServer();
     const tid = setInterval(checkServer, 15000);
     return () => { cancelled = true; clearInterval(tid); };
   }, []);
 
-  // 서버 미가동 감지 시 자동으로 가이드 모달 띄우기 (한 번만, 세션 동안)
+  // ── 안내 모달 자동 표시 조건 (까다롭게) ──
+  // 1) 연속 3회 이상 헬스체크 실패 (간헐적 끊김으로 인한 노이즈 제거)
+  // 2) 사용자가 영구/24h/세션 dismiss 하지 않음
+  // 3) 현재 실제로 들어오는 영상 스냅샷이 0개 (정상 작동 중이면 안 띄움)
   useEffect(() => {
-    if (cctvServerStatus.status === "offline" && !cctvGuideDismissed && cctvServerStatus.checkedAt) {
-      // 첫 체크 후 3초 뒤에만 모달 띄움 (사용자 화면 적응 후)
-      const tid = setTimeout(() => setCctvGuideOpen(true), 3000);
-      return () => clearTimeout(tid);
-    }
-  }, [cctvServerStatus.status, cctvServerStatus.checkedAt]);
+    if (cctvServerStatus.status !== "offline") return;
+    if (cctvGuideDismissed) return;
+    if ((cctvServerStatus.consecutiveFailures || 0) < 3) return;
+    // 영상이 하나라도 들어오면 안 띄움
+    const snaps = cctvSnapshotData?.snapshots || {};
+    const liveCount = Object.values(snaps).filter(s => s?.url && !s?.error).length;
+    if (liveCount > 0) return;
+    const tid = setTimeout(() => setCctvGuideOpen(true), 5000);
+    return () => clearTimeout(tid);
+  }, [cctvServerStatus.status, cctvServerStatus.consecutiveFailures, cctvGuideDismissed, cctvSnapshotData]);
 
   // CCTV 편집 모드 (드래그로 매핑 변경)
   const [cctvEditMode, setCctvEditMode] = useState(false);
@@ -25804,16 +25830,38 @@ window.onload = () => {
               )}
             </div>
 
-            {/* 푸터 */}
-            <div style={{ padding: "12px 20px", background: "#fafafa", borderTop: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <button onClick={() => {
-                setCctvGuideDismissed(true);
-                try { window.sessionStorage?.setItem("jamsa_cctv_guide_dismissed", "1"); } catch (e) {}
-                setCctvGuideOpen(false);
-              }}
-                style={{ padding: "6px 12px", background: "transparent", border: "none", color: "#64748b", fontSize: 11, cursor: "pointer" }}>
-                이번 세션 동안 다시 보지 않기
-              </button>
+            {/* 푸터 — dismiss 옵션 3종 */}
+            <div style={{ padding: "12px 20px", background: "#fafafa", borderTop: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <button onClick={() => {
+                  setCctvGuideDismissed(true);
+                  try { window.sessionStorage?.setItem("jamsa_cctv_guide_dismissed", "1"); } catch (e) {}
+                  setCctvGuideOpen(false);
+                }}
+                  style={{ padding: "6px 10px", background: "transparent", border: "1px solid #e5e7eb", borderRadius: 4, color: "#64748b", fontSize: 11, cursor: "pointer" }}>
+                  이번 세션만 숨김
+                </button>
+                <button onClick={() => {
+                  setCctvGuideDismissed(true);
+                  try {
+                    const until = Date.now() + 24 * 60 * 60 * 1000;
+                    window.localStorage?.setItem("jamsa_cctv_guide_dismissed_until", String(until));
+                  } catch (e) {}
+                  setCctvGuideOpen(false);
+                }}
+                  style={{ padding: "6px 10px", background: "transparent", border: "1px solid #e5e7eb", borderRadius: 4, color: "#64748b", fontSize: 11, cursor: "pointer" }}>
+                  24시간 숨김
+                </button>
+                <button onClick={() => {
+                  if (!confirm("자동 안내 모달이 더 이상 자동으로 뜨지 않습니다. (재설정: 브라우저 설정에서 localStorage 삭제)")) return;
+                  setCctvGuideDismissed(true);
+                  try { window.localStorage?.setItem("jamsa_cctv_guide_dismissed_perm", "1"); } catch (e) {}
+                  setCctvGuideOpen(false);
+                }}
+                  style={{ padding: "6px 10px", background: "transparent", border: "1px solid #fca5a5", borderRadius: 4, color: "#dc2626", fontSize: 11, cursor: "pointer" }}>
+                  다시는 자동으로 띄우지 않기
+                </button>
+              </div>
               <button onClick={() => setCctvGuideOpen(false)}
                 style={{ padding: "8px 18px", background: "#0f172a", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
                 확인
