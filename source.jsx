@@ -23150,16 +23150,30 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
       return;
     }
 
-    // 구역 → CCTV 채널 역매핑 (cctvSnapshotData에서 추출)
+    // ✨ 구역 → CCTV 채널 매핑: cctvMap(localStorage) 직접 사용 — CCTV 오버레이 OFF여도 동작
+    //    cctvSnapshotData는 라이브 분석 결과만 보조로 사용
     const _snaps = cctvSnapshotData?.snapshots || {};
     const _ana = cctvSnapshotData?.analyses || {};
-    const _chToZone = cctvSnapshotData?.chToZone || {};
-    const _cctvEnabled = cctvSnapshotData?.enabled !== false;
+    // 오버레이 토글과 무관하게 spot 위 영상은 항상 표시 (매핑된 채널이 있을 때만)
+    const _cctvEnabled = true;
+    // cctvMap은 부모 state — { zoneId: [ch1, ch2, ...] } 직접 구조
     const _zoneToCh = {};
-    Object.entries(_chToZone).forEach(([ch, zid]) => {
-      if (!_zoneToCh[zid]) _zoneToCh[zid] = [];
-      _zoneToCh[zid].push(parseInt(ch, 10));
-    });
+    if (cctvMap && typeof cctvMap === "object") {
+      Object.entries(cctvMap).forEach(([zid, chs]) => {
+        if (Array.isArray(chs) && chs.length > 0) {
+          _zoneToCh[zid] = chs.map(c => parseInt(c, 10)).filter(n => !isNaN(n)).sort((a, b) => a - b);
+        }
+      });
+    }
+    // CCTV 라이브 오버레이가 켜져있으면 chToZone 정보도 보강 (역방향 추론)
+    if (cctvSnapshotData?.chToZone) {
+      Object.entries(cctvSnapshotData.chToZone).forEach(([ch, zid]) => {
+        const chNum = parseInt(ch, 10);
+        if (isNaN(chNum)) return;
+        if (!_zoneToCh[zid]) _zoneToCh[zid] = [];
+        if (!_zoneToCh[zid].includes(chNum)) _zoneToCh[zid].push(chNum);
+      });
+    }
 
     // 각 스팟마다 마커 생성 (상태별 색상 뱃지)
     zoneStatus.forEach(s => {
@@ -23304,7 +23318,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         addNewZone(e.coord.lat(), e.coord.lng());
       });
     }
-  }, [zoneStatus, naverLoaded, mapProvider, bgMode, viewMode, editMode, cctvSnapshotData, zoneCrowdStats]);
+  }, [zoneStatus, naverLoaded, mapProvider, bgMode, viewMode, editMode, cctvSnapshotData, zoneCrowdStats, cctvMap, cctvEditMode]);
 
 
   const createQuickAction = (zone, template) => {
@@ -26407,16 +26421,26 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
     markersRef.current.forEach(m => map.removeLayer(m));
     markersRef.current = [];
 
-    // 구역 → CCTV 채널 역매핑 (cctvSnapshotData에서 추출)
+    // ✨ 구역 → CCTV 채널 매핑: cctvMap(localStorage) 직접 사용 — 오버레이 OFF여도 동작
     const snaps = cctvSnapshotData?.snapshots || {};
     const ana = cctvSnapshotData?.analyses || {};
-    const chToZone = cctvSnapshotData?.chToZone || {};
-    const cctvEnabled = cctvSnapshotData?.enabled !== false;
+    const cctvEnabled = true; // spot 위 영상은 오버레이 토글과 무관하게 항상 시도
     const zoneToCh = {};
-    Object.entries(chToZone).forEach(([ch, zid]) => {
-      if (!zoneToCh[zid]) zoneToCh[zid] = [];
-      zoneToCh[zid].push(parseInt(ch, 10));
-    });
+    if (cctvMap && typeof cctvMap === "object") {
+      Object.entries(cctvMap).forEach(([zid, chs]) => {
+        if (Array.isArray(chs) && chs.length > 0) {
+          zoneToCh[zid] = chs.map(c => parseInt(c, 10)).filter(n => !isNaN(n)).sort((a, b) => a - b);
+        }
+      });
+    }
+    if (cctvSnapshotData?.chToZone) {
+      Object.entries(cctvSnapshotData.chToZone).forEach(([ch, zid]) => {
+        const chNum = parseInt(ch, 10);
+        if (isNaN(chNum)) return;
+        if (!zoneToCh[zid]) zoneToCh[zid] = [];
+        if (!zoneToCh[zid].includes(chNum)) zoneToCh[zid].push(chNum);
+      });
+    }
 
     // 새 마커 추가
     zoneStatus.forEach(s => {
@@ -26492,7 +26516,7 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
         .on("click", () => onSelectZone(s));
       markersRef.current.push(marker);
     });
-  }, [zoneStatus, leafletLoaded, cctvSnapshotData, cctvEditMode]);
+  }, [zoneStatus, leafletLoaded, cctvSnapshotData, cctvEditMode, cctvMap]);
 
   // CCTV 편집 모드 - 드래그앤드롭 핸들러
   React.useEffect(() => {
