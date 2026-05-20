@@ -27408,6 +27408,18 @@ function SpotLayoutAiModal({ zones, mapRef, onApply, onClose }) {
   const [result, setResult] = useState(null); // { matches, uncertain, notes }
   const [error, setError] = useState("");
   const [hint, setHint] = useState("");
+  const [provider, setProvider] = useState("auto"); // 'auto' | 'claude' | 'openai'
+  const [providerInfo, setProviderInfo] = useState(null); // { claude, openai, default, models }
+
+  // 서버에서 사용 가능한 provider 정보 조회
+  useEffect(() => {
+    fetch("/api/spot-layout-vision", {
+      method: "GET",
+      headers: { ...(window.__authToken ? { "Authorization": "Bearer " + window.__authToken } : {}) },
+    }).then(r => r.json()).then(d => {
+      if (d.ok) setProviderInfo(d);
+    }).catch(() => {});
+  }, []);
 
   // 현재 지도의 영역(bbox) 자동 추출
   const bounds = useMemo(() => {
@@ -27465,7 +27477,10 @@ function SpotLayoutAiModal({ zones, mapRef, onApply, onClose }) {
           "Content-Type": "application/json",
           ...(window.__authToken ? { "Authorization": "Bearer " + window.__authToken } : {}),
         },
-        body: JSON.stringify({ image: imageFile, spots: spotPayload, bounds, hint }),
+        body: JSON.stringify({
+          image: imageFile, spots: spotPayload, bounds, hint,
+          provider: provider === "auto" ? undefined : provider,
+        }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
@@ -27546,6 +27561,30 @@ function SpotLayoutAiModal({ zones, mapRef, onApply, onClose }) {
             </div>
           )}
 
+          {/* AI Provider 선택 */}
+          <label style={{ fontSize: 11, fontWeight: 800, color: "#475569", marginBottom: 4, display: "block" }}>
+            🧠 AI Provider
+          </label>
+          <select value={provider} onChange={e => setProvider(e.target.value)}
+            style={{ width: "100%", padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 11, marginBottom: 6, background: "#fff" }}>
+            <option value="auto">⚡ 자동 (서버 기본값)</option>
+            <option value="claude" disabled={providerInfo && !providerInfo.claude}>
+              🧬 Claude {providerInfo?.models?.claude || ""} {providerInfo && !providerInfo.claude ? "(미설정)" : ""}
+            </option>
+            <option value="openai" disabled={providerInfo && !providerInfo.openai}>
+              💬 ChatGPT (OpenAI) {providerInfo?.models?.openai || ""} {providerInfo && !providerInfo.openai ? "(미설정)" : ""}
+            </option>
+          </select>
+          {providerInfo && (
+            <div style={{ fontSize: 10, color: "#64748b", marginBottom: 10, padding: "4px 8px", background: "#f8fafc", borderRadius: 4 }}>
+              {providerInfo.claude && providerInfo.openai
+                ? `✓ 두 API 모두 사용 가능 · 기본: ${providerInfo.default}`
+                : providerInfo.claude ? "✓ Claude만 설정됨 (OPENAI_API_KEY 추가하면 ChatGPT도 사용)"
+                : providerInfo.openai ? "✓ OpenAI만 설정됨 (ANTHROPIC_API_KEY 추가하면 Claude도 사용)"
+                : "⚠ 환경변수 미설정 — Vercel Dashboard에서 ANTHROPIC_API_KEY 또는 OPENAI_API_KEY 추가 필요"}
+            </div>
+          )}
+
           {/* 3단계: 컨텍스트 힌트 (옵션) */}
           <label style={{ fontSize: 11, fontWeight: 800, color: "#475569", marginBottom: 4, display: "block" }}>
             💡 추가 힌트 (선택) — AI에게 알려줄 정보
@@ -27578,8 +27617,15 @@ function SpotLayoutAiModal({ zones, mapRef, onApply, onClose }) {
           {/* 4단계: 결과 */}
           {result && (
             <div style={{ marginTop: 16, padding: 12, background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 8 }}>
-              <div style={{ fontSize: 13, fontWeight: 800, color: "#0f172a", marginBottom: 8 }}>
-                📋 AI 분석 결과 ({result.matches?.length || 0}건)
+              <div style={{ fontSize: 13, fontWeight: 800, color: "#0f172a", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span>📋 AI 분석 결과 ({result.matches?.length || 0}건)</span>
+                {result.provider && (
+                  <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 10, fontWeight: 700,
+                    background: result.provider === "openai" ? "rgba(16,163,127,0.15)" : "rgba(217,119,87,0.15)",
+                    color: result.provider === "openai" ? "#0d9488" : "#c2410c" }}>
+                    {result.provider === "openai" ? "💬 ChatGPT" : "🧬 Claude"} · {result.model}
+                  </span>
+                )}
               </div>
               {result.notes && (
                 <div style={{ fontSize: 11, color: "#475569", marginBottom: 10, padding: 8, background: "#fff", borderRadius: 6, border: "1px solid #e5e7eb" }}>

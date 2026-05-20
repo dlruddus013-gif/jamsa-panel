@@ -1,29 +1,32 @@
 // api/spot-layout-vision.js
-// 위성지도 이미지를 Claude Vision으로 분석하여 박물관 시설(spot)들의 픽셀 좌표 추정
-// 환경변수: ANTHROPIC_API_KEY
+// 위성지도 이미지를 Claude/OpenAI Vision으로 분석하여 박물관 시설(spot)들의 픽셀 좌표 추정
+// 환경변수: ANTHROPIC_API_KEY, OPENAI_API_KEY (둘 중 하나 이상)
 
 import { requireAuth } from '../lib/auth.js';
-
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514';
+import { callVision, getAvailableProviders } from '../lib/ai-vision.js';
 
 export default async function handler(req, res) {
   const ctx = await requireAuth(req, res);
   if (!ctx) return;
 
+  if (req.method === 'GET') {
+    return res.json({ ok: true, ...getAvailableProviders() });
+  }
+
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'method_not_allowed' });
   }
 
-  if (!ANTHROPIC_API_KEY) {
+  const avail = getAvailableProviders();
+  if (!avail.claude && !avail.openai) {
     return res.status(500).json({
       error: 'api_key_not_configured',
-      message: 'Vercel 환경변수에 ANTHROPIC_API_KEY를 설정해 주세요.',
+      message: 'Vercel 환경변수에 ANTHROPIC_API_KEY 또는 OPENAI_API_KEY를 설정해 주세요.',
     });
   }
 
   try {
-    const { image, spots, bounds, hint } = req.body || {};
+    const { image, spots, bounds, hint, provider } = req.body || {};
 
     if (!image || typeof image !== 'string') {
       return res.status(400).json({ error: 'missing_image', message: '위성지도 이미지(base64)가 필요합니다.' });
@@ -88,56 +91,26 @@ JSON으로만 응답하세요 (코드블록/설명 절대 금지, 순수 JSON):
 - 식별 어려운 spot은 confidence < 0.4로 표시
 - 좌표는 반드시 0.0~1.0 범위`;
 
-    const messages = [{
-      role: 'user',
-      content: [
-        { type: 'text', text: promptText },
-        { type: 'image', source: { type: 'base64', media_type: m[1], data: m[2] } },
-      ],
-    }];
-
-    const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: ANTHROPIC_MODEL,
-        max_tokens: 3000,
-        messages,
-      }),
-    });
-
-    if (!claudeResponse.ok) {
-      const errText = await claudeResponse.text();
-      console.error('[spot-vision] Claude API error:', claudeResponse.status, errText.slice(0, 300));
-      return res.status(claudeResponse.status === 429 ? 429 : 502).json({
-        error: 'claude_api_error',
-        status: claudeResponse.status,
-        message: claudeResponse.status === 429
-          ? 'Claude API 사용량 한도 초과. 잠시 후 다시 시도하세요.'
-          : `Claude API 오류 (${claudeResponse.status})`,
+    const vis = await callVision({ prompt: promptText, imageB64: image, provider, maxTokens: 3000 });
+    if (!vis.ok) {
+      console.error('[spot-vision] vision call failed:', vis);
+      return res.status(vis.status === 429 ? 429 : 502).json({
+        error: vis.error || 'vision_api_error',
+        status: vis.status,
+        message: vis.message || (vis.status === 429
+          ? `${vis.provider || 'AI'} API 사용량 한도 초과. 잠시 후 다시 시도하세요.`
+          : `${vis.provider || 'AI'} API 오류${vis.status ? ' (' + vis.status + ')' : ''}`),
+        raw: vis.raw,
       });
     }
-
-    const data = await claudeResponse.json();
-    const text = data.content
-      .map(b => b.text || '')
-      .join('')
-      .replace(/```json|```/g, '')
-      .trim();
-
-    let parsed;
-    try {
-      parsed = JSON.parse(text);
-    } catch (e) {
-      console.error('[spot-vision] JSON parse failed:', text.slice(0, 400));
+    const parsed = vis.parsed;
+    if (!parsed || typeof parsed !== 'object') {
+      console.error('[spot-vision] JSON parse failed:', vis.text?.slice(0, 400));
       return res.status(502).json({
         error: 'invalid_ai_response',
         message: 'AI 응답을 파싱할 수 없습니다.',
-        raw: text.slice(0, 500),
+        provider: vis.provider,
+        raw: vis.text?.slice(0, 500),
       });
     }
 
@@ -167,7 +140,8 @@ JSON으로만 응답하세요 (코드블록/설명 절대 금지, 순수 JSON):
       matches: withCoords,
       uncertain: Array.isArray(parsed.uncertain) ? parsed.uncertain : [],
       notes: parsed.notes || '',
-      model: ANTHROPIC_MODEL,
+      provider: vis.provider,
+      model: vis.model,
     });
   } catch (e) {
     console.error('[spot-vision] error:', e);
