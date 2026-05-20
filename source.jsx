@@ -6024,6 +6024,75 @@ const CCTV_AUTO_MAP = {
   basic:   [],                          // 기본 창고 (CCTV 없음)
 };
 
+// 🔍 zone별 키워드 — 채널 이름에서 매칭되면 그 zone에 자동 분류
+const ZONE_KEYWORDS = {
+  bldg:    ["입구", "로비", "전시", "복도", "사무실", "박물관", "본관"],
+  storage: ["창고", "수장고"],
+  shop:    ["식당", "매점", "매표", "ticket", "티켓", "체험접수"],
+  dome:    ["누에", "과학관", "돔"],
+  field:   ["체험장", "후문", "외부", "애견", "검정", "비닐", "천막", "왼쪽", "중앙", "오른쪽"],
+  park:    ["주차", "슬로프", "야외광장", "광장", "야외"],
+  forest:  ["양떼", "산책", "숲", "Half", "라인", "양우리", "가운데", "금중어", "키오스크"],
+  farm:    ["뽕", "농경"],
+  gh:      ["온실"],
+  water:   ["물놀이", "수영"],
+  garden:  ["텃밭", "정원", "화단"],
+  rest:    ["쉼터", "휴게"],
+  basic:   ["기본"],
+};
+
+// 🤖 미할당 채널을 spot에 자동 매핑하는 알고리즘
+// - 1차: 채널 이름/zone 텍스트에 키워드 매칭
+// - 2차: 매칭 안 되는 채널은 fallback zone(기본 창고 > 본관 > 첫 zone)에 추가
+function autoMapUnassignedChannels(currentMap, allChannelInfo, availableZones) {
+  const newMap = {};
+  // 기존 매핑 복사 (set으로 중복 제거)
+  Object.entries(currentMap || {}).forEach(([zid, chs]) => {
+    if (Array.isArray(chs) && chs.length > 0) {
+      newMap[zid] = Array.from(new Set(chs.map(c => parseInt(c, 10)).filter(n => !isNaN(n))));
+    }
+  });
+  const used = new Set(Object.values(newMap).flat());
+
+  // 사용 가능한 zone ID들
+  const validZoneIds = new Set((availableZones || []).map(z => z.id));
+
+  // fallback zone 결정
+  const fallbackPriority = ["basic", "bldg", "storage", "field"];
+  let fallbackZone = fallbackPriority.find(zid => validZoneIds.has(zid));
+  if (!fallbackZone && availableZones && availableZones.length > 0) {
+    fallbackZone = availableZones[0].id;
+  }
+
+  // 미할당 채널 각각 매핑
+  for (const info of (allChannelInfo || [])) {
+    const ch = parseInt(info.ch, 10);
+    if (isNaN(ch) || used.has(ch)) continue;
+
+    const text = `${info.name || ""} ${info.zone || ""}`.toLowerCase();
+    let target = null;
+    for (const [zid, keywords] of Object.entries(ZONE_KEYWORDS)) {
+      if (!validZoneIds.has(zid)) continue;
+      if (keywords.some(k => text.includes(k.toLowerCase()))) {
+        target = zid;
+        break;
+      }
+    }
+    if (!target) target = fallbackZone;
+    if (!target) continue;
+
+    if (!newMap[target]) newMap[target] = [];
+    newMap[target].push(ch);
+    used.add(ch);
+  }
+
+  // 채널 정렬
+  Object.keys(newMap).forEach(zid => {
+    newMap[zid] = newMap[zid].sort((a, b) => a - b);
+  });
+  return newMap;
+}
+
 // 사용자 수동 매핑 (localStorage에 저장)
 function loadCctvMap() {
   try {
@@ -23582,17 +23651,56 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                 </div>
 
                 {/* 미할당 채널 패널 (우측 하단) */}
-                <div style={{ position: "absolute", bottom: 12, right: 12, background: "rgba(15,23,42,0.95)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 8, padding: "10px 12px", maxWidth: 320, maxHeight: 200, overflow: "auto", zIndex: 700, color: "#fff", fontSize: 11 }}>
-                  <div style={{ fontWeight: 800, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ position: "absolute", bottom: 12, right: 12, background: "rgba(15,23,42,0.95)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 8, padding: "10px 12px", maxWidth: 360, maxHeight: 240, overflow: "auto", zIndex: 700, color: "#fff", fontSize: 11 }}>
+                  <div style={{ fontWeight: 800, marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
                     <span>📦 미할당 채널 ({_unassigned.length})</span>
-                    <button onClick={() => {
-                      if (typeof CCTV_AUTO_MAP !== "undefined") {
-                        setCctvMap({ ...CCTV_AUTO_MAP });
-                        try { window.localStorage.setItem("jamsa_cctv_zone_map", JSON.stringify(CCTV_AUTO_MAP)); } catch (e) {}
-                      }
-                    }} style={{ padding: "3px 8px", background: "rgba(255,255,255,0.15)", color: "#fff", border: "none", borderRadius: 4, fontSize: 9, fontWeight: 700, cursor: "pointer" }}>
-                      ↻ 자동 매핑 복구
-                    </button>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      <button
+                        onClick={() => {
+                          if (_unassigned.length === 0) { alert("이미 모든 채널이 매핑되어 있습니다."); return; }
+                          // 채널 정보 수집: FAC_CCTV_CAMERAS + NVR에서 추가된 채널 모두 포함
+                          const camMap = new Map();
+                          (typeof FAC_CCTV_CAMERAS !== "undefined" ? FAC_CCTV_CAMERAS : []).forEach(c => {
+                            camMap.set(c.ch, { ch: c.ch, name: c.name, zone: c.zone });
+                          });
+                          // 1~44 모든 채널 정보 (없으면 빈 이름)
+                          const allInfo = _allPossible.map(ch => camMap.get(ch) || { ch, name: "", zone: "" });
+                          const availableZones = _zoneOrder.filter(z => z && z.id);
+                          const next = autoMapUnassignedChannels(cctvMap, allInfo, availableZones);
+                          const before = Object.values(cctvMap || {}).flat().length;
+                          const after = Object.values(next).flat().length;
+                          const added = after - before;
+                          if (added <= 0) { alert("자동 매칭으로 추가할 채널이 없습니다."); return; }
+                          if (!confirm(`미할당 채널 ${_unassigned.length}개 중 ${added}개를 자동으로 매핑할까요?\n\n매칭 규칙:\n• 채널 이름 키워드 (입구→본관, 양떼→산책로 등)\n• 매칭 안 되는 채널은 기본 spot에 추가`)) return;
+                          setCctvMap(next);
+                          try { window.localStorage.setItem("jamsa_cctv_zone_map", JSON.stringify(next)); } catch (e) {}
+                          // 매핑 결과 요약
+                          const summary = {};
+                          Object.entries(next).forEach(([zid, chs]) => {
+                            const before = (cctvMap?.[zid] || []).length;
+                            const delta = chs.length - before;
+                            if (delta > 0) {
+                              const zname = availableZones.find(z => z.id === zid)?.name || zid;
+                              summary[zname] = delta;
+                            }
+                          });
+                          const msg = Object.entries(summary).map(([n, c]) => `• ${n}: +${c}`).join("\n");
+                          alert(`✅ ${added}개 채널 자동 매핑 완료\n\n${msg}`);
+                        }}
+                        style={{ padding: "3px 8px", background: "linear-gradient(135deg,#10b981,#0ea5e9)", color: "#fff", border: "none", borderRadius: 4, fontSize: 9, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}
+                        title="채널 이름을 분석해서 적절한 spot에 자동 매핑">
+                        ⚡ 전체 자동 매칭
+                      </button>
+                      <button onClick={() => {
+                        if (!confirm("자동 매핑 규칙(CCTV_AUTO_MAP)으로 초기화할까요?\n사용자 수동 매핑은 모두 사라집니다.")) return;
+                        if (typeof CCTV_AUTO_MAP !== "undefined") {
+                          setCctvMap({ ...CCTV_AUTO_MAP });
+                          try { window.localStorage.setItem("jamsa_cctv_zone_map", JSON.stringify(CCTV_AUTO_MAP)); } catch (e) {}
+                        }
+                      }} style={{ padding: "3px 8px", background: "rgba(255,255,255,0.15)", color: "#fff", border: "none", borderRadius: 4, fontSize: 9, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                        ↻ 초기화
+                      </button>
+                    </div>
                   </div>
                   {_unassigned.length === 0 ? (
                     <div style={{ fontSize: 10, opacity: 0.7, textAlign: "center", padding: 8 }}>모든 채널이 매핑됨</div>
