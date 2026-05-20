@@ -11,7 +11,21 @@ import { BeaconGatewayModal } from "./beacon-gateway.jsx";
 import { StaffAttendanceLivePanel } from "./staff-attendance-live.jsx";
 import { PresenceTrackingPanel } from "./presence-tracking.jsx";
 
-const DEFAULT_CCTV_SERVER_URL = "https://cctv.thejamsa.com";
+// 메인 패널을 LAN(박물관 PC 자체 또는 같은 네트워크)에서 보고 있으면
+// cloudflared 터널이 끊겨도 localhost:5556 으로 직접 접근하여 CCTV가 끊기지 않게 함
+const DEFAULT_CCTV_SERVER_URL = (() => {
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      const h = window.location.hostname;
+      if (h === "localhost" || h === "127.0.0.1" ||
+          h.startsWith("192.168.") || h.startsWith("10.") ||
+          /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(h)) {
+        return "http://localhost:5556";
+      }
+    }
+  } catch (e) {}
+  return "https://cctv.thejamsa.com";
+})();
 const DEFAULT_OKPOS_BRIDGE_URL = "http://127.0.0.1:5566";
 const JAMSA_PROTECTED_KEYS = [
   "jamsa_inv_prods",
@@ -5855,6 +5869,31 @@ function nextId(){ return _nextId++; }
    아래 lat/lng 값을 직접 덮어쓰면 됩니다. */
 const JAMSA_CENTER = { lat: 36.6383333, lng: 127.3827778 };
 
+// ── 지도 뷰(중심·줌) 영속화 ──────────────────────────────
+// 사용자가 마지막으로 보던 위치를 localStorage에 저장 → 다음 진입시 자동 복원
+const MAP_VIEW_KEY = "jamsa_map_view";
+function loadMapView() {
+  try {
+    const raw = localStorage.getItem(MAP_VIEW_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw);
+    // 잠사박물관 부근(±2도) 안의 좌표만 유효 — 잘못 저장된 값 방어
+    if (
+      typeof v.lat === "number" && typeof v.lng === "number" && typeof v.zoom === "number" &&
+      Math.abs(v.lat - JAMSA_CENTER.lat) < 2 &&
+      Math.abs(v.lng - JAMSA_CENTER.lng) < 2 &&
+      v.zoom >= 10 && v.zoom <= 21
+    ) return v;
+    return null;
+  } catch (e) { return null; }
+}
+function saveMapView(lat, lng, zoom) {
+  try { localStorage.setItem(MAP_VIEW_KEY, JSON.stringify({ lat, lng, zoom, at: Date.now() })); } catch (e) {}
+}
+function clearMapView() {
+  try { localStorage.removeItem(MAP_VIEW_KEY); } catch (e) {}
+}
+
 // ── CCTV-구역 자동 매핑 (구역 ID → 채널 배열) ──
 // 자동 매핑은 zone.name과 카메라.zone을 키워드 매칭. 수동 매핑은 localStorage에 저장됨.
 const CCTV_AUTO_MAP = {
@@ -10123,11 +10162,18 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
       return;
     }
     // Already initialized? Just resize in case container dimensions changed
+    // 저장된 뷰가 있으면 그쪽을, 없으면 JAMSA_CENTER로 재중심
     if (naverMapRef.current) {
       try {
         if (window.naver?.maps?.Event) {
           window.naver.maps.Event.trigger(naverMapRef.current, "resize");
-          naverMapRef.current.setCenter(new window.naver.maps.LatLng(JAMSA_CENTER.lat, JAMSA_CENTER.lng));
+          const saved = loadMapView();
+          const targetLat = saved ? saved.lat : JAMSA_CENTER.lat;
+          const targetLng = saved ? saved.lng : JAMSA_CENTER.lng;
+          naverMapRef.current.setCenter(new window.naver.maps.LatLng(targetLat, targetLng));
+          if (saved && typeof saved.zoom === "number") {
+            try { naverMapRef.current.setZoom(saved.zoom); } catch (e) {}
+          }
         }
       } catch(e) {}
       return;
@@ -10142,9 +10188,16 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
         return;
       }
       try {
+        // 저장된 마지막 뷰가 있으면 복원, 없으면 잠사박물관 기본 중심 + 줌 18
+        const savedView = loadMapView();
+        const initialCenter = savedView
+          ? new naver.maps.LatLng(savedView.lat, savedView.lng)
+          : new naver.maps.LatLng(JAMSA_CENTER.lat, JAMSA_CENTER.lng);
+        const initialZoom = savedView ? savedView.zoom : 18;
+
         const map = new naver.maps.Map(naverMapContainerRef.current, {
-          center: new naver.maps.LatLng(JAMSA_CENTER.lat, JAMSA_CENTER.lng),
-          zoom: 18,
+          center: initialCenter,
+          zoom: initialZoom,
           mapTypeId: naver.maps.MapTypeId?.HYBRID || "hybrid", // satellite + labels
           zoomControl: true,
           zoomControlOptions: naver.maps.Position ? { position: naver.maps.Position.TOP_RIGHT } : undefined,
@@ -10164,6 +10217,26 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
               setDrawMode(false);
             }
           });
+
+          // 지도 이동/줌이 끝날 때마다 현재 뷰를 localStorage에 자동 저장 (디바운스 600ms)
+          let _saveTimer = null;
+          const persistView = () => {
+            try {
+              if (_saveTimer) clearTimeout(_saveTimer);
+              _saveTimer = setTimeout(() => {
+                const c = map.getCenter();
+                const z = map.getZoom();
+                if (c && typeof z === "number") {
+                  const lat = typeof c.lat === "function" ? c.lat() : c.lat;
+                  const lng = typeof c.lng === "function" ? c.lng() : c.lng;
+                  saveMapView(lat, lng, z);
+                }
+              }, 600);
+            } catch (e) {}
+          };
+          naver.maps.Event.addListener(map, "idle", persistView);
+          naver.maps.Event.addListener(map, "dragend", persistView);
+          naver.maps.Event.addListener(map, "zoom_changed", persistView);
         }
 
         // Force resize after a brief tick — common fix for Naver map not rendering
@@ -25895,16 +25968,25 @@ window.onload = () => {
                   style={{ padding: "10px 8px", borderRadius: 6, background: "linear-gradient(135deg,#ea580c,#dc2626)", color: "#fff", border: "none", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>
                   🛡️ 안전관리
                 </button>
-                <button onClick={() => {
-                  const url = localStorage.getItem("jamsa_cctv_guard_url") || "";
-                  if (!url) {
-                    const newUrl = prompt("CCTV 안전관제 URL 입력:", "http://localhost:3000");
-                    if (!newUrl) return;
-                    localStorage.setItem("jamsa_cctv_guard_url", newUrl);
-                    window.open(`${newUrl}/live?zone=${encodeURIComponent(selectedZone.zone.id)}`, "_blank");
-                  } else {
-                    window.open(`${url}/live?zone=${encodeURIComponent(selectedZone.zone.id)}`, "_blank");
+                <button onClick={(e) => {
+                  const DEFAULT = DEFAULT_CCTV_SERVER_URL; // LAN이면 localhost:5556, 외부면 cctv.thejamsa.com
+                  const isValid = (s) => s && /^https?:\/\//i.test(s)
+                    && !/jamsa-panel\.vercel\.app/i.test(s)
+                    && !/\/(404|not[-_]?found)/i.test(s);
+                  let url = (localStorage.getItem("jamsa_cctv_guard_url") || "").replace(/\/+$/, "");
+                  if (e.shiftKey || e.altKey || (url && !isValid(url))) {
+                    const newUrl = prompt("CCTV 안전관제 URL (비우면 기본값):", isValid(url) ? url : DEFAULT);
+                    if (newUrl === null) return;
+                    const trimmed = (newUrl || "").trim().replace(/\/+$/, "");
+                    url = isValid(trimmed) ? trimmed : DEFAULT;
+                    try { localStorage.setItem("jamsa_cctv_guard_url", url); } catch (err) {}
+                  } else if (!url) {
+                    url = DEFAULT;
+                    try { localStorage.setItem("jamsa_cctv_guard_url", url); } catch (err) {}
                   }
+                  const target = `${url}/?zone=${encodeURIComponent(selectedZone.zone.id)}`;
+                  const w = window.open(target, "_blank", "noopener");
+                  if (!w) { try { location.href = target; } catch (err) {} }
                   setSelectedZone(null);
                 }}
                   style={{ padding: "10px 8px", borderRadius: 6, background: "linear-gradient(135deg,#0891b2,#059669)", color: "#fff", border: "none", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>
@@ -26935,17 +27017,40 @@ function AppInner() {
                 color: module === "clouddb" ? "#fff" : "rgba(255,255,255,0.6)", textDecoration: "none", display: "inline-flex", alignItems: "center" }}>
               ☁️ DB 클라우드
             </a>
-            <button onClick={() => {
-              const url = localStorage.getItem("jamsa_cctv_guard_url") || "";
-              if (!url) {
-                const newUrl = prompt("CCTV 안전관제 시스템 URL을 입력하세요:\n(예: http://localhost:3000 또는 https://cctv.jamsafarm.kr)", "http://localhost:3000");
-                if (!newUrl) return;
-                localStorage.setItem("jamsa_cctv_guard_url", newUrl);
-                window.open(newUrl, "_blank", "noopener");
-              } else {
-                window.open(url, "_blank", "noopener");
-              }
-            }} title="CCTV 실시간 안전관제 (별도 탭)"
+            <button
+              onClick={(e) => {
+                const DEFAULT = "https://cctv.thejamsa.com";
+                const isValid = (s) => s && /^https?:\/\//i.test(s)
+                  && !/jamsa-panel\.vercel\.app/i.test(s)
+                  && !/\/(404|not[-_]?found)/i.test(s);
+                let url = (localStorage.getItem("jamsa_cctv_guard_url") || "").replace(/\/+$/, "");
+                // Shift/Alt + 클릭 또는 잘못된 값이면 URL 재설정 prompt
+                if (e.shiftKey || e.altKey || (url && !isValid(url))) {
+                  const newUrl = prompt(
+                    "CCTV 안전관제 시스템 URL:\n(기본: https://cctv.thejamsa.com — Cloudflare 터널)\n비우면 기본값으로 자동 설정",
+                    isValid(url) ? url : DEFAULT
+                  );
+                  if (newUrl === null) return; // 취소
+                  const trimmed = (newUrl || "").trim().replace(/\/+$/, "");
+                  url = isValid(trimmed) ? trimmed : DEFAULT;
+                  try { localStorage.setItem("jamsa_cctv_guard_url", url); } catch (err) {}
+                } else if (!url) {
+                  url = DEFAULT;
+                  try { localStorage.setItem("jamsa_cctv_guard_url", url); } catch (err) {}
+                }
+                const w = window.open(url, "_blank", "noopener");
+                if (!w) { try { location.href = url; } catch (err) {} }
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                const cur = localStorage.getItem("jamsa_cctv_guard_url") || "https://cctv.thejamsa.com";
+                const newUrl = prompt("CCTV 관제 URL 변경 (비우면 기본값):", cur);
+                if (newUrl === null) return;
+                const trimmed = (newUrl || "").trim().replace(/\/+$/, "");
+                if (!trimmed) { try { localStorage.removeItem("jamsa_cctv_guard_url"); } catch (err) {} }
+                else { try { localStorage.setItem("jamsa_cctv_guard_url", trimmed); } catch (err) {} }
+              }}
+              title="CCTV 실시간 안전관제 (Shift+클릭 또는 우클릭: URL 변경)"
               style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
                 background: "linear-gradient(135deg,#0891b2,#059669)",
                 color: "#fff", display: "flex", alignItems: "center", gap: 4 }}>

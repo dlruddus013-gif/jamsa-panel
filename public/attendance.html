@@ -117,6 +117,22 @@
     background:var(--accent);animation:pulse 2.5s infinite;
   }
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+  .pill-cctv{
+    display:flex;align-items:center;gap:5px;cursor:pointer;transition:.15s;
+    color:var(--text-mute);
+  }
+  .pill-cctv:hover{border-color:var(--accent);color:var(--text)}
+  .pill-cctv .cctv-dot{
+    display:inline-block;width:6px;height:6px;border-radius:50%;
+    background:var(--text-mute);transition:.2s;
+  }
+  .pill-cctv.ok{color:var(--accent);border-color:var(--accent-bg)}
+  .pill-cctv.ok .cctv-dot{background:var(--accent);animation:pulse 2s infinite}
+  .pill-cctv.warn{color:var(--warn);border-color:var(--warn-bg)}
+  .pill-cctv.warn .cctv-dot{background:var(--warn)}
+  .pill-cctv.danger{color:var(--danger);border-color:var(--danger-bg)}
+  .pill-cctv.danger .cctv-dot{background:var(--danger)}
   .clock{text-align:right}
   .clock .time{
     font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:500;
@@ -236,6 +252,237 @@
     letter-spacing:.1em;border-top:1px solid var(--line);margin-top:32px;background:var(--bg-deep);
   }
   footer .sep{margin:0 8px;opacity:.5}
+
+  /* ── 직원 카드 상세 진입 ── */
+  .staff-card{cursor:pointer}
+  .sc-detail-btn{
+    width:100%;padding:6px;margin-top:6px;background:var(--bg-deep);
+    color:var(--text-soft);border:1px solid var(--line-soft);border-radius:5px;
+    font-size:11px;letter-spacing:.04em;transition:.15s;
+  }
+  .sc-detail-btn:hover{border-color:var(--accent);color:var(--accent)}
+
+  /* ── 직원 상세 분석 모달 ── */
+  #detail{
+    position:fixed;inset:0;background:rgba(2,6,12,.78);
+    display:none;align-items:flex-start;justify-content:center;
+    z-index:900;padding:24px 16px;overflow-y:auto;backdrop-filter:blur(4px);
+  }
+  #detail.show{display:flex}
+  .dt-card{
+    background:var(--bg);border:1px solid var(--line-soft);border-radius:12px;
+    width:100%;max-width:1100px;margin:auto;
+    box-shadow:0 20px 60px rgba(0,0,0,.5);
+  }
+  .dt-head{
+    padding:18px 22px;border-bottom:1px solid var(--line-soft);
+    display:flex;align-items:center;justify-content:space-between;gap:14px;
+    position:sticky;top:0;background:var(--bg);border-radius:12px 12px 0 0;z-index:5;
+  }
+  .dt-head-info h2{font-size:19px;font-weight:600;color:var(--text);letter-spacing:-.015em;line-height:1.2}
+  .dt-head-info .dt-sub{font-size:11px;color:var(--text-mute);letter-spacing:.05em;margin-top:4px;
+    font-family:'JetBrains Mono',monospace;}
+  .dt-head-tools{display:flex;align-items:center;gap:8px}
+  .dt-btn{
+    padding:7px 12px;font-size:12px;font-weight:500;letter-spacing:.02em;
+    background:var(--surface);border:1px solid var(--line-soft);color:var(--text-soft);
+    border-radius:5px;transition:.15s;
+  }
+  .dt-btn:hover{border-color:var(--accent);color:var(--accent)}
+  .dt-btn.primary{background:var(--accent-deep);color:#f0fdf4;border-color:var(--accent-deep)}
+  .dt-btn.primary:hover{background:var(--accent);color:#0f172a}
+  .dt-close{
+    width:30px;height:30px;display:grid;place-items:center;border-radius:6px;
+    color:var(--text-mute);font-size:20px;transition:.15s;
+  }
+  .dt-close:hover{background:var(--surface);color:var(--text)}
+
+  .dt-body{padding:20px 22px;display:flex;flex-direction:column;gap:18px}
+
+  .dt-range-bar{
+    background:var(--surface);border:1px solid var(--line-soft);border-radius:8px;
+    padding:14px 16px;display:flex;flex-wrap:wrap;align-items:center;gap:12px;
+  }
+  .dt-range-bar label{font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--accent);font-weight:600;display:block;margin-bottom:4px;}
+  .dt-date-group{display:flex;align-items:center;gap:6px}
+  .dt-range-bar input[type=date]{
+    padding:7px 10px;background:var(--bg-deep);color:var(--text);
+    border:1px solid var(--line-soft);border-radius:5px;
+    font-family:'JetBrains Mono',monospace;font-size:12px;color-scheme:dark;
+  }
+  .dt-range-bar input[type=date]:focus{outline:none;border-color:var(--accent)}
+  .dt-presets{display:flex;flex-wrap:wrap;gap:5px;margin-left:auto}
+  .dt-preset{
+    padding:5px 10px;font-size:11px;background:transparent;color:var(--text-soft);
+    border:1px solid var(--line-soft);border-radius:4px;transition:.15s;letter-spacing:.02em;
+  }
+  .dt-preset:hover{border-color:var(--accent);color:var(--accent)}
+  .dt-preset.active{background:var(--accent-bg);border-color:var(--accent-deep);color:var(--accent)}
+
+  .dt-loader{text-align:center;padding:60px 20px;color:var(--text-mute);font-size:13px;letter-spacing:.08em}
+
+  .dt-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+  .dt-stat{
+    background:var(--surface);border:1px solid var(--line-soft);border-radius:8px;
+    padding:12px 14px;
+  }
+  .dt-stat .lbl{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-mute);margin-bottom:6px}
+  .dt-stat .val{
+    font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:600;
+    color:var(--text);line-height:1.1;letter-spacing:-.01em;
+  }
+  .dt-stat .val.ok{color:var(--accent)}
+  .dt-stat .val.warn{color:var(--warn)}
+  .dt-stat .val.danger{color:var(--danger)}
+  .dt-stat .delta{font-size:10px;color:var(--text-mute);margin-top:3px;letter-spacing:.04em}
+
+  /* 평가 카드 */
+  .dt-eval{
+    background:linear-gradient(135deg, var(--surface), var(--bg-deep));
+    border:1px solid var(--line-soft);border-radius:10px;padding:18px 22px;
+    display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:center;
+  }
+  .dt-grade{
+    width:90px;height:90px;border-radius:50%;
+    display:grid;place-items:center;font-family:'JetBrains Mono',monospace;
+    font-size:42px;font-weight:700;letter-spacing:-.02em;
+    border:3px solid currentColor;
+  }
+  .dt-grade.A{color:var(--accent);background:var(--accent-bg)}
+  .dt-grade.B{color:#60a5fa;background:rgba(30,58,138,.4)}
+  .dt-grade.C{color:var(--warn);background:var(--warn-bg)}
+  .dt-grade.D{color:var(--danger);background:var(--danger-bg)}
+  .dt-eval-body{display:flex;flex-direction:column;gap:8px}
+  .dt-eval-title{font-size:13px;font-weight:600;color:var(--text);letter-spacing:.02em}
+  .dt-eval-bars{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .dt-bar-row{display:flex;flex-direction:column;gap:4px}
+  .dt-bar-row .name{font-size:10px;color:var(--text-mute);letter-spacing:.06em;text-transform:uppercase}
+  .dt-bar-row .val{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;color:var(--text)}
+  .dt-bar{height:5px;background:var(--bg-deep);border-radius:3px;overflow:hidden}
+  .dt-bar > div{height:100%;background:var(--accent);transition:width .4s}
+  .dt-eval-comment{
+    font-size:12px;color:var(--text-soft);line-height:1.6;
+    padding-top:8px;border-top:1px dotted var(--line-soft);margin-top:4px;
+  }
+
+  /* 차트 */
+  .dt-chart-wrap{
+    background:var(--surface);border:1px solid var(--line-soft);border-radius:8px;
+    padding:16px;
+  }
+  .dt-chart-wrap h4{
+    font-size:11px;font-weight:600;color:var(--text-soft);letter-spacing:.12em;
+    text-transform:uppercase;margin-bottom:12px;
+  }
+  .dt-chart-grid{display:grid;grid-template-columns:2fr 1fr;gap:14px}
+  @media (max-width:760px){ .dt-chart-grid{grid-template-columns:1fr} }
+  .dt-chart svg{width:100%;height:auto;display:block;font-family:'JetBrains Mono',monospace}
+  .dt-chart .bar{fill:var(--accent-deep);transition:fill .15s}
+  .dt-chart .bar:hover{fill:var(--accent)}
+  .dt-chart .bar.weekend{fill:#475569}
+  .dt-chart .bar.absent{fill:var(--danger-bg)}
+  .dt-chart .axis{stroke:var(--line-soft);stroke-width:1}
+  .dt-chart .label{fill:var(--text-mute);font-size:9px}
+  .dt-chart .vlabel{fill:var(--text-soft);font-size:10px}
+
+  /* 세부 로그 테이블 */
+  .dt-table-wrap{
+    background:var(--surface);border:1px solid var(--line-soft);border-radius:8px;
+    overflow:hidden;
+  }
+  .dt-table-head{
+    padding:12px 16px;border-bottom:1px solid var(--line-soft);
+    display:flex;align-items:center;justify-content:space-between;
+  }
+  .dt-table-head h4{
+    font-size:11px;font-weight:600;color:var(--text-soft);letter-spacing:.12em;text-transform:uppercase;
+  }
+  .dt-table-head .count{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-mute)}
+  .dt-table{width:100%;border-collapse:collapse;font-size:12px}
+  .dt-table th{
+    text-align:left;padding:9px 16px;background:var(--bg-deep);
+    font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-mute);font-weight:600;
+    border-bottom:1px solid var(--line-soft);position:sticky;top:0;
+  }
+  .dt-table td{
+    padding:8px 16px;border-bottom:1px dotted var(--line-soft);color:var(--text);
+    font-family:'JetBrains Mono',monospace;font-size:11.5px;
+  }
+  .dt-table tr:last-child td{border-bottom:none}
+  .dt-table tr:hover td{background:var(--surface-hi)}
+  .dt-table td.day-name{font-family:inherit;font-size:11px;color:var(--text-soft);letter-spacing:.04em}
+  .dt-table td.wknd{color:var(--text-mute)}
+  .dt-table td.status .pill{
+    display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;
+    letter-spacing:.04em;font-family:'JetBrains Mono',monospace;
+  }
+  .dt-table .pill.ok{background:var(--accent-bg);color:var(--accent)}
+  .dt-table .pill.warn{background:var(--warn-bg);color:var(--warn-text)}
+  .dt-table .pill.danger{background:var(--danger-bg);color:var(--danger-text)}
+  .dt-table .pill.dim{background:var(--bg-deep);color:var(--text-dim)}
+  .dt-empty{padding:40px 20px;text-align:center;color:var(--text-mute);font-size:12px}
+
+  /* CCTV 라이브 그리드 (직원 상세 모달용) */
+  .dt-cctv-wrap{
+    background:var(--surface);border:1px solid var(--line-soft);border-radius:8px;padding:14px 16px;
+  }
+  .dt-cctv-head{
+    display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;flex-wrap:wrap;
+  }
+  .dt-cctv-head h4{
+    font-size:11px;font-weight:600;color:var(--text-soft);letter-spacing:.12em;text-transform:uppercase;
+  }
+  .dt-cctv-tools{display:flex;align-items:center;gap:6px;font-size:11px}
+  .dt-cctv-tools select{
+    padding:5px 8px;background:var(--bg-deep);color:var(--text);border:1px solid var(--line-soft);
+    border-radius:4px;font-size:11px;color-scheme:dark;
+  }
+  .dt-cctv-tools button{
+    padding:5px 10px;font-size:11px;background:transparent;color:var(--text-soft);
+    border:1px solid var(--line-soft);border-radius:4px;transition:.15s;
+  }
+  .dt-cctv-tools button:hover{border-color:var(--accent);color:var(--accent)}
+  .dt-cctv-tools button.active{background:var(--accent-bg);border-color:var(--accent-deep);color:var(--accent)}
+  .dt-cctv-grid{
+    display:grid;gap:4px;background:var(--bg-deep);padding:4px;border-radius:6px;
+  }
+  .dt-cctv-grid.g3{grid-template-columns:repeat(3,1fr)}
+  .dt-cctv-grid.g4{grid-template-columns:repeat(4,1fr)}
+  .dt-cctv-grid.g5{grid-template-columns:repeat(5,1fr)}
+  .dt-cctv-cell{
+    position:relative;aspect-ratio:16/9;background:#000;border-radius:3px;overflow:hidden;
+    border:1px solid var(--line);
+  }
+  .dt-cctv-cell img{width:100%;height:100%;object-fit:cover;display:block}
+  .dt-cctv-cell .cell-label{
+    position:absolute;top:3px;left:5px;color:#fff;font-size:9.5px;
+    text-shadow:0 1px 2px rgba(0,0,0,.9);letter-spacing:.04em;font-weight:500;
+    background:rgba(0,0,0,.4);padding:1px 5px;border-radius:2px;
+  }
+  .dt-cctv-cell .cell-live{
+    position:absolute;top:3px;right:5px;
+    background:#dc2626;color:#fff;font-size:8px;font-weight:700;letter-spacing:.06em;
+    padding:1px 4px;border-radius:2px;
+  }
+  .dt-cctv-cell .cell-off{
+    position:absolute;inset:0;display:grid;place-items:center;
+    color:var(--text-mute);font-size:10px;letter-spacing:.06em;background:#0b1220;
+  }
+  .dt-cctv-empty{padding:30px 20px;text-align:center;color:var(--text-mute);font-size:11.5px}
+
+  /* 인쇄 */
+  @media print{
+    header, footer, #toast, .dt-head-tools, .dt-presets{display:none !important}
+    #detail{position:static;background:white;color:black;padding:0;display:block !important}
+    .dt-card{box-shadow:none;border:none;max-width:none}
+    .dt-body{padding:8px 0}
+    .dt-eval, .dt-stat, .dt-table-wrap, .dt-chart-wrap, .dt-range-bar{
+      background:white !important;color:black !important;border:1px solid #ccc !important;
+    }
+    .dt-table td, .dt-table th, .dt-stat .val, .dt-eval-title, .dt-stat .lbl{color:black !important}
+    .dt-bar{background:#eee}
+  }
 </style>
 </head>
 <body>
@@ -275,6 +522,9 @@
   <div class="header-right">
     <span class="pill">⌘K</span>
     <span class="pill pill-cloud">클라우드</span>
+    <span class="pill pill-cctv" id="cctvHealth" title="CCTV 상태 (5초마다 갱신)" onclick="probeCctvHealth(true)">
+      <span class="cctv-dot"></span><span id="cctvHealthText">CCTV 확인중</span>
+    </span>
     <div class="clock">
       <div class="time mono" id="clockTime">--:--:--</div>
       <div class="date" id="clockDate">YYYY-MM-DD</div>
@@ -327,6 +577,51 @@
 </footer>
 
 <div id="toast"></div>
+
+<!-- ============ 직원 상세 분석 모달 ============ -->
+<div id="detail" role="dialog" aria-modal="true" onclick="if(event.target===this)closeDetail()">
+  <div class="dt-card">
+    <div class="dt-head">
+      <div class="dt-head-info">
+        <h2 id="dtName">—</h2>
+        <div class="dt-sub" id="dtMeta">—</div>
+      </div>
+      <div class="dt-head-tools">
+        <button class="dt-btn" onclick="exportDetailCSV()" title="CSV 다운로드">↓ CSV</button>
+        <button class="dt-btn" onclick="window.print()" title="인쇄">🖨 인쇄</button>
+        <button class="dt-close" onclick="closeDetail()" aria-label="닫기">×</button>
+      </div>
+    </div>
+
+    <div class="dt-body">
+      <div class="dt-range-bar">
+        <div class="dt-date-group">
+          <div>
+            <label>시작일</label>
+            <input type="date" id="dtFrom" onchange="onRangeChange()">
+          </div>
+          <div style="color:var(--text-mute);align-self:flex-end;padding-bottom:8px">~</div>
+          <div>
+            <label>종료일</label>
+            <input type="date" id="dtTo" onchange="onRangeChange()">
+          </div>
+        </div>
+        <div class="dt-presets" id="dtPresets">
+          <button class="dt-preset" data-p="today" onclick="applyPreset('today')">오늘</button>
+          <button class="dt-preset" data-p="7" onclick="applyPreset('7')">7일</button>
+          <button class="dt-preset active" data-p="30" onclick="applyPreset('30')">30일</button>
+          <button class="dt-preset" data-p="thismonth" onclick="applyPreset('thismonth')">이번달</button>
+          <button class="dt-preset" data-p="lastmonth" onclick="applyPreset('lastmonth')">지난달</button>
+          <button class="dt-preset" data-p="90" onclick="applyPreset('90')">90일</button>
+        </div>
+      </div>
+
+      <div id="dtContent">
+        <div class="dt-loader">불러오는 중</div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script>
 let sb = null;
@@ -389,21 +684,8 @@ async function initApp(){
     render();
     subscribeRealtime();
   }catch(e){
-    console.error('[attendance init]', e);
-    const msg = (e && e.message) || String(e);
-    let hint = '연결 실패';
-    if(/relation .* does not exist|table .* not found|schema cache/i.test(msg)){
-      hint = '⚠ DB 테이블 없음 — attendance_setup_all_in_one.sql 실행 필요';
-    } else if(/JWT|invalid api key|Invalid API key/i.test(msg)){
-      hint = '⚠ ANON KEY 가 잘못됐습니다';
-    } else if(/permission denied|RLS|row-level security/i.test(msg)){
-      hint = '⚠ RLS 정책 차단 — attendance_setup_all_in_one.sql 실행 필요';
-    } else if(/Failed to fetch|NetworkError|CORS/i.test(msg)){
-      hint = '⚠ 네트워크/CORS — Supabase URL 확인';
-    } else {
-      hint = '⚠ ' + msg.slice(0, 80);
-    }
-    toast(hint, true);
+    console.error(e);
+    toast('연결 실패: ANON KEY를 확인하세요', true);
     document.getElementById('setup').classList.add('show');
   }
 }
@@ -517,10 +799,12 @@ function renderStaff(){
         ? `<button class="sc-btn done" disabled>완료</button>`
         : `<button class="sc-btn" onclick="checkIn(${s.id})">출근</button>`;
 
-    return `<div class="staff-card ${working?'checked-in':''}">
+    return `<div class="staff-card ${working?'checked-in':''}" onclick="openDetail(${s.id}, event)">
       <div class="sc-name">${s.name}</div>
       <div class="sc-meta">${dept?dept.name:'미지정'} · ${s.beacon_id||'비콘 미배정'}</div>
-      ${status}${btn}
+      ${status}
+      <div onclick="event.stopPropagation()">${btn}</div>
+      <button class="sc-detail-btn" onclick="event.stopPropagation();openDetail(${s.id})">📊 기간 분석 · 평가</button>
     </div>`;
   }).join('');
 }
@@ -600,6 +884,588 @@ function subscribeRealtime(){
 tickClock();
 setInterval(tickClock, 1000);
 initApp();
+
+/* ============================================================
+   직원 상세 분석 · 평가 모듈
+   ============================================================ */
+let dtState = {
+  staffId: null,
+  from: null,
+  to: null,
+  rows: [],   // 원본 attendance 행
+  daily: [],  // 일자별 집계
+};
+
+const STANDARD_START = 9;       // 정시 출근 기준 (09:00)
+const STANDARD_HOURS = 8;       // 표준 일근무시간
+const LATE_GRACE_MIN = 10;      // 10분까지 허용
+
+function ymd(d){
+  if(typeof d === 'string') d = new Date(d);
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+function addDays(d, n){ const x = new Date(d); x.setDate(x.getDate()+n); return x; }
+function startOfMonth(d){ return new Date(d.getFullYear(), d.getMonth(), 1); }
+function endOfMonth(d){ return new Date(d.getFullYear(), d.getMonth()+1, 0); }
+
+function openDetail(staffId, ev){
+  if(ev){ ev.stopPropagation(); }
+  dtState.staffId = staffId;
+  document.getElementById('detail').classList.add('show');
+  document.body.style.overflow = 'hidden';
+
+  const s = allStaff.find(x => x.id === staffId);
+  const dept = s && allDepts.find(d => d.id === s.dept_id);
+  document.getElementById('dtName').textContent = s ? s.name : '직원';
+  const visa = s && s.visa_type ? ` · ${s.visa_type}${s.visa_expiry?' ('+s.visa_expiry+')':''}` : '';
+  document.getElementById('dtMeta').textContent =
+    [dept?dept.name:'부서 미지정', s?(s.beacon_id||'비콘 미배정'):'', s?(s.phone||''):''].filter(Boolean).join('  ·  ') + visa;
+
+  applyPreset('30');
+}
+
+function closeDetail(){
+  document.getElementById('detail').classList.remove('show');
+  document.body.style.overflow = '';
+}
+
+function applyPreset(p){
+  document.querySelectorAll('#dtPresets .dt-preset').forEach(b => b.classList.toggle('active', b.dataset.p === p));
+  const today = new Date();
+  let from, to = new Date(today);
+  if(p === 'today'){ from = new Date(today); }
+  else if(p === '7'){ from = addDays(today, -6); }
+  else if(p === '30'){ from = addDays(today, -29); }
+  else if(p === '90'){ from = addDays(today, -89); }
+  else if(p === 'thismonth'){ from = startOfMonth(today); }
+  else if(p === 'lastmonth'){
+    const lm = new Date(today.getFullYear(), today.getMonth()-1, 1);
+    from = startOfMonth(lm); to = endOfMonth(lm);
+  }
+  document.getElementById('dtFrom').value = ymd(from);
+  document.getElementById('dtTo').value = ymd(to);
+  loadDetail();
+}
+
+function onRangeChange(){
+  document.querySelectorAll('#dtPresets .dt-preset').forEach(b => b.classList.remove('active'));
+  loadDetail();
+}
+
+async function loadDetail(){
+  const fromStr = document.getElementById('dtFrom').value;
+  const toStr = document.getElementById('dtTo').value;
+  if(!fromStr || !toStr){ return; }
+  if(fromStr > toStr){
+    document.getElementById('dtContent').innerHTML =
+      `<div class="dt-empty">시작일이 종료일보다 늦습니다</div>`;
+    return;
+  }
+  dtState.from = fromStr; dtState.to = toStr;
+  document.getElementById('dtContent').innerHTML = `<div class="dt-loader">분석 중</div>`;
+
+  try{
+    const { data, error } = await sb.from('attendance').select('*')
+      .eq('staff_id', dtState.staffId)
+      .gte('checked_in_at', fromStr + 'T00:00:00')
+      .lte('checked_in_at', toStr + 'T23:59:59.999')
+      .order('checked_in_at', { ascending: true });
+    if(error) throw error;
+    dtState.rows = data || [];
+    dtState.daily = aggregateDaily(dtState.rows, fromStr, toStr);
+    renderDetail();
+  }catch(e){
+    console.error(e);
+    document.getElementById('dtContent').innerHTML =
+      `<div class="dt-empty" style="color:var(--danger)">조회 실패: ${e.message||e}</div>`;
+  }
+}
+
+/* 일자별 집계 — 결근일도 빈 행으로 포함 */
+function aggregateDaily(rows, fromStr, toStr){
+  const map = new Map(); // key=YYYY-MM-DD
+  rows.forEach(r => {
+    const inT = new Date(r.checked_in_at);
+    const k = ymd(inT);
+    if(!map.has(k)) map.set(k, { date:k, sessions:[], inFirst:null, outLast:null, totalMs:0 });
+    const day = map.get(k);
+    const outT = r.checked_out_at ? new Date(r.checked_out_at) : null;
+    const ms = outT ? (outT - inT) : 0;
+    day.sessions.push({ in: inT, out: outT, ms, raw: r });
+    if(!day.inFirst || inT < day.inFirst) day.inFirst = inT;
+    if(outT && (!day.outLast || outT > day.outLast)) day.outLast = outT;
+    day.totalMs += ms;
+  });
+
+  const out = [];
+  const start = new Date(fromStr); const end = new Date(toStr);
+  for(let d = new Date(start); d <= end; d = addDays(d, 1)){
+    const k = ymd(d);
+    const wknd = d.getDay() === 0 || d.getDay() === 6;
+    const day = map.get(k) || { date:k, sessions:[], inFirst:null, outLast:null, totalMs:0 };
+    day.weekday = d.getDay();
+    day.weekend = wknd;
+    day.hours = day.totalMs / 3600000;
+
+    // 지각 판정
+    if(day.inFirst){
+      const startMin = day.inFirst.getHours()*60 + day.inFirst.getMinutes();
+      const limit = STANDARD_START*60 + LATE_GRACE_MIN;
+      day.late = !wknd && startMin > limit;
+      day.lateMin = !wknd ? Math.max(0, startMin - STANDARD_START*60) : 0;
+    } else {
+      day.late = false; day.lateMin = 0;
+    }
+    // 상태
+    if(!day.inFirst){
+      day.status = wknd ? 'off' : 'absent';
+    } else if(!day.outLast){
+      day.status = 'open'; // 퇴근 미완료
+    } else if(day.late){
+      day.status = 'late';
+    } else {
+      day.status = 'ok';
+    }
+    out.push(day);
+  }
+  return out;
+}
+
+function renderDetail(){
+  const days = dtState.daily;
+  const total = days.length;
+  const workdays = days.filter(d => !d.weekend).length;
+  const present = days.filter(d => d.inFirst).length;
+  const absent = days.filter(d => d.status === 'absent').length;
+  const lateCount = days.filter(d => d.status === 'late').length;
+  const openCount = days.filter(d => d.status === 'open').length;
+  const totalHours = days.reduce((s,d) => s + d.hours, 0);
+  const avgHours = present > 0 ? (totalHours / present) : 0;
+  const presentWorkdays = days.filter(d => !d.weekend && d.inFirst).length;
+
+  const attendanceRate = workdays > 0 ? (presentWorkdays / workdays * 100) : 100;
+  const punctualityRate = presentWorkdays > 0 ? ((presentWorkdays - lateCount) / presentWorkdays * 100) : 100;
+  const hoursRate = workdays > 0 ? Math.min(100, (totalHours / (workdays * STANDARD_HOURS) * 100)) : 0;
+
+  // 일관성 (출근시각 표준편차 → 점수)
+  const startMins = days.filter(d => d.inFirst && !d.weekend)
+    .map(d => d.inFirst.getHours()*60 + d.inFirst.getMinutes());
+  let stdDev = 0;
+  if(startMins.length > 1){
+    const mean = startMins.reduce((a,b)=>a+b,0)/startMins.length;
+    stdDev = Math.sqrt(startMins.reduce((s,v)=>s+(v-mean)**2,0)/startMins.length);
+  }
+  const consistencyScore = Math.max(0, 100 - stdDev * 1.5);
+
+  const score = Math.round(attendanceRate*0.4 + punctualityRate*0.3 + hoursRate*0.2 + consistencyScore*0.1);
+  const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : 'D';
+
+  const comment = buildComment({ grade, attendanceRate, punctualityRate, hoursRate, consistencyScore,
+    lateCount, absent, openCount, avgHours, totalHours, workdays });
+
+  document.getElementById('dtContent').innerHTML = `
+    ${renderEvalCard({ grade, score, attendanceRate, punctualityRate, hoursRate, consistencyScore, comment })}
+    ${renderSummary({ total, workdays, presentWorkdays, absent, lateCount, openCount, totalHours, avgHours })}
+    <div class="dt-chart-grid">
+      <div class="dt-chart-wrap">
+        <h4>일별 근무시간 (시간)</h4>
+        <div class="dt-chart">${renderDailyBarChart(days)}</div>
+      </div>
+      <div class="dt-chart-wrap">
+        <h4>출근 시간대 분포</h4>
+        <div class="dt-chart">${renderStartHourChart(days)}</div>
+      </div>
+    </div>
+    ${renderLogTable(days)}
+    ${renderCctvBlock()}
+  `;
+  // CCTV 채널 로드 (모달 열릴 때마다 새로)
+  loadCctvChannels();
+}
+
+function renderCctvBlock(){
+  return `
+    <div class="dt-cctv-wrap" id="dtCctvWrap">
+      <div class="dt-cctv-head">
+        <h4>실시간 CCTV <span style="color:var(--text-mute);font-weight:400;font-family:'JetBrains Mono',monospace;font-size:10px;margin-left:6px" id="dtCctvMeta">연결 확인중</span></h4>
+        <div class="dt-cctv-tools">
+          <select id="dtCctvNvr" onchange="renderCctvGrid()"><option value="all">전체 NVR</option></select>
+          <button data-g="3" onclick="setCctvGridSize(3)">3×</button>
+          <button data-g="4" class="active" onclick="setCctvGridSize(4)">4×</button>
+          <button data-g="5" onclick="setCctvGridSize(5)">5×</button>
+          <button onclick="refreshCctvSnaps()" title="스냅샷 즉시 갱신">↻ 새로고침</button>
+        </div>
+      </div>
+      <div id="dtCctvBody"><div class="dt-cctv-empty">CCTV 채널 불러오는 중</div></div>
+    </div>`;
+}
+
+function renderEvalCard({ grade, score, attendanceRate, punctualityRate, hoursRate, consistencyScore, comment }){
+  const fmt = v => v.toFixed(1) + '%';
+  return `
+    <div class="dt-eval">
+      <div class="dt-grade ${grade}">${grade}</div>
+      <div class="dt-eval-body">
+        <div class="dt-eval-title">종합 평가 ${score}점 · ${grade}등급</div>
+        <div class="dt-eval-bars">
+          <div class="dt-bar-row">
+            <div style="display:flex;justify-content:space-between"><span class="name">출근률</span><span class="val">${fmt(attendanceRate)}</span></div>
+            <div class="dt-bar"><div style="width:${attendanceRate}%"></div></div>
+          </div>
+          <div class="dt-bar-row">
+            <div style="display:flex;justify-content:space-between"><span class="name">시간엄수</span><span class="val">${fmt(punctualityRate)}</span></div>
+            <div class="dt-bar"><div style="width:${punctualityRate}%"></div></div>
+          </div>
+          <div class="dt-bar-row">
+            <div style="display:flex;justify-content:space-between"><span class="name">근무시간 충족</span><span class="val">${fmt(hoursRate)}</span></div>
+            <div class="dt-bar"><div style="width:${hoursRate}%"></div></div>
+          </div>
+        </div>
+        <div class="dt-eval-comment">${comment}</div>
+      </div>
+    </div>`;
+}
+
+function buildComment(m){
+  const lines = [];
+  if(m.grade === 'A') lines.push('근태 우수 · 모범 사례로 활용 가능합니다.');
+  else if(m.grade === 'B') lines.push('대체로 양호한 근태를 유지하고 있습니다.');
+  else if(m.grade === 'C') lines.push('주의 필요 — 시간 엄수 또는 결근 관리 검토가 필요합니다.');
+  else lines.push('관리 필요 — 면담을 통한 사유 파악을 권장합니다.');
+
+  if(m.absent > 0) lines.push(`결근 ${m.absent}회 발생 (영업일 ${m.workdays}일 중).`);
+  if(m.lateCount > 0) lines.push(`지각 ${m.lateCount}회 — 기준 ${STANDARD_START.toString().padStart(2,'0')}:${pad(LATE_GRACE_MIN)} 초과.`);
+  if(m.openCount > 0) lines.push(`퇴근 미체크 ${m.openCount}건 — 보정 필요.`);
+  if(m.avgHours > 0) lines.push(`평균 일근무 ${m.avgHours.toFixed(1)}시간, 누계 ${m.totalHours.toFixed(1)}시간.`);
+  if(m.consistencyScore < 60) lines.push('출근 시각 편차가 큽니다 — 패턴 안정화 권장.');
+
+  return lines.join(' ');
+}
+
+function renderSummary({ total, workdays, presentWorkdays, absent, lateCount, openCount, totalHours, avgHours }){
+  const absentCls = absent === 0 ? 'ok' : absent <= 2 ? 'warn' : 'danger';
+  const lateCls = lateCount === 0 ? 'ok' : lateCount <= 2 ? 'warn' : 'danger';
+  return `
+    <div class="dt-summary">
+      <div class="dt-stat"><div class="lbl">조회 기간</div><div class="val">${total}<small style="font-size:13px;color:var(--text-mute)">일</small></div><div class="delta">영업일 ${workdays}일</div></div>
+      <div class="dt-stat"><div class="lbl">출근일수</div><div class="val ok">${presentWorkdays}</div><div class="delta">/ ${workdays} 영업일</div></div>
+      <div class="dt-stat"><div class="lbl">결근일수</div><div class="val ${absentCls}">${absent}</div><div class="delta">영업일 기준</div></div>
+      <div class="dt-stat"><div class="lbl">지각</div><div class="val ${lateCls}">${lateCount}<small style="font-size:13px;color:var(--text-mute)">회</small></div><div class="delta">${STANDARD_START}:${pad(LATE_GRACE_MIN)} 이후</div></div>
+      <div class="dt-stat"><div class="lbl">퇴근 미체크</div><div class="val ${openCount?'warn':'ok'}">${openCount}</div><div class="delta">보정 대상</div></div>
+      <div class="dt-stat"><div class="lbl">총 근무시간</div><div class="val">${totalHours.toFixed(1)}<small style="font-size:13px;color:var(--text-mute)">h</small></div><div class="delta">평균 ${avgHours.toFixed(1)}h/일</div></div>
+    </div>`;
+}
+
+function renderDailyBarChart(days){
+  if(days.length === 0) return `<div class="dt-empty">데이터 없음</div>`;
+  const W = 720, H = 200, PAD = { l: 30, r: 8, t: 12, b: 28 };
+  const maxH = Math.max(STANDARD_HOURS, ...days.map(d => d.hours));
+  const barW = (W - PAD.l - PAD.r) / days.length;
+  const innerH = H - PAD.t - PAD.b;
+  const yScale = v => PAD.t + innerH - (v / maxH) * innerH;
+
+  const bars = days.map((d, i) => {
+    const h = (d.hours / maxH) * innerH;
+    let cls = 'bar';
+    if(d.weekend) cls += ' weekend';
+    else if(!d.inFirst) cls += ' absent';
+    const x = PAD.l + i * barW;
+    const y = yScale(d.hours);
+    const title = `${d.date} · ${d.hours.toFixed(1)}h${d.late?' · 지각':''}`;
+    return `<rect class="${cls}" x="${x+1}" y="${y}" width="${Math.max(1, barW-2)}" height="${Math.max(1,h)}"><title>${title}</title></rect>`;
+  }).join('');
+
+  // 표준 근무시간 가이드라인
+  const stdY = yScale(STANDARD_HOURS);
+  // X축 라벨 (간격 조정)
+  const step = Math.max(1, Math.ceil(days.length / 8));
+  const xLabels = days.map((d, i) => {
+    if(i % step !== 0 && i !== days.length-1) return '';
+    const x = PAD.l + i * barW + barW/2;
+    const label = d.date.slice(5); // MM-DD
+    return `<text class="label" x="${x}" y="${H - PAD.b + 14}" text-anchor="middle">${label}</text>`;
+  }).join('');
+
+  // Y축 라벨
+  const ySteps = 4;
+  const yLabels = Array.from({length: ySteps+1}, (_, i) => {
+    const v = (maxH / ySteps) * i;
+    const y = yScale(v);
+    return `<text class="vlabel" x="${PAD.l - 5}" y="${y+3}" text-anchor="end">${v.toFixed(0)}</text>
+            <line class="axis" x1="${PAD.l}" y1="${y}" x2="${W-PAD.r}" y2="${y}" style="stroke-opacity:.25"/>`;
+  }).join('');
+
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+    ${yLabels}
+    ${bars}
+    <line x1="${PAD.l}" y1="${stdY}" x2="${W-PAD.r}" y2="${stdY}" stroke="var(--accent)" stroke-dasharray="3 3" stroke-width="1"/>
+    <text class="vlabel" x="${W-PAD.r}" y="${stdY-4}" text-anchor="end" fill="var(--accent)">표준 ${STANDARD_HOURS}h</text>
+    <line class="axis" x1="${PAD.l}" y1="${PAD.t}" x2="${PAD.l}" y2="${H-PAD.b}"/>
+    <line class="axis" x1="${PAD.l}" y1="${H-PAD.b}" x2="${W-PAD.r}" y2="${H-PAD.b}"/>
+    ${xLabels}
+  </svg>`;
+}
+
+function renderStartHourChart(days){
+  const buckets = new Array(24).fill(0);
+  days.forEach(d => { if(d.inFirst) buckets[d.inFirst.getHours()]++; });
+  const max = Math.max(1, ...buckets);
+  if(buckets.every(b => b === 0)) return `<div class="dt-empty">출근 기록 없음</div>`;
+
+  const W = 360, H = 200, PAD = { l: 26, r: 8, t: 12, b: 28 };
+  const innerH = H - PAD.t - PAD.b;
+  // 6시~20시 범위만 표시
+  const startH = 6, endH = 21;
+  const visible = endH - startH;
+  const barW = (W - PAD.l - PAD.r) / visible;
+
+  const bars = [];
+  for(let h = startH; h < endH; h++){
+    const v = buckets[h];
+    const bh = (v / max) * innerH;
+    const x = PAD.l + (h - startH) * barW;
+    const y = PAD.t + innerH - bh;
+    const cls = (h >= STANDARD_START && h < STANDARD_START + STANDARD_HOURS) ? 'bar' : 'bar weekend';
+    bars.push(`<rect class="${cls}" x="${x+1}" y="${y}" width="${Math.max(1,barW-2)}" height="${Math.max(1,bh)}"><title>${pad(h)}시 · ${v}회</title></rect>`);
+    if(h % 2 === 0){
+      bars.push(`<text class="label" x="${x+barW/2}" y="${H-PAD.b+14}" text-anchor="middle">${pad(h)}</text>`);
+    }
+  }
+  // 표준 출근시각 표시선
+  const stdX = PAD.l + (STANDARD_START - startH) * barW;
+  bars.push(`<line x1="${stdX}" y1="${PAD.t}" x2="${stdX}" y2="${H-PAD.b}" stroke="var(--accent)" stroke-dasharray="3 3" stroke-width="1"/>`);
+  bars.push(`<text class="vlabel" x="${stdX+3}" y="${PAD.t+9}" fill="var(--accent)">정시 ${STANDARD_START}시</text>`);
+
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+    <line class="axis" x1="${PAD.l}" y1="${H-PAD.b}" x2="${W-PAD.r}" y2="${H-PAD.b}"/>
+    ${bars.join('')}
+  </svg>`;
+}
+
+function renderLogTable(days){
+  const wd = ['일','월','화','수','목','금','토'];
+  const fmtTime = d => d ? `${pad(d.getHours())}:${pad(d.getMinutes())}` : '—';
+  const rows = days.map(d => {
+    const date = new Date(d.date);
+    const dayName = wd[date.getDay()];
+    const statusPill = {
+      ok:    '<span class="pill ok">정상</span>',
+      late:  '<span class="pill warn">지각</span>',
+      absent:'<span class="pill danger">결근</span>',
+      open:  '<span class="pill warn">미퇴근</span>',
+      off:   '<span class="pill dim">휴무</span>',
+    }[d.status] || '—';
+    const sessions = d.sessions.length > 1 ? ` <small style="color:var(--text-mute)">(${d.sessions.length}회)</small>` : '';
+    return `<tr>
+      <td>${d.date.slice(5)}</td>
+      <td class="day-name ${d.weekend?'wknd':''}">${dayName}</td>
+      <td>${fmtTime(d.inFirst)}${sessions}</td>
+      <td>${fmtTime(d.outLast)}</td>
+      <td>${d.hours > 0 ? d.hours.toFixed(2)+'h' : '—'}</td>
+      <td>${d.lateMin > 0 ? '+' + d.lateMin + '분' : '—'}</td>
+      <td class="status">${statusPill}</td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div class="dt-table-wrap">
+      <div class="dt-table-head">
+        <h4>세부 로그</h4>
+        <span class="count">${days.length}일</span>
+      </div>
+      <div style="max-height:380px;overflow-y:auto">
+        <table class="dt-table">
+          <thead>
+            <tr><th>날짜</th><th>요일</th><th>출근</th><th>퇴근</th><th>근무</th><th>지각</th><th>상태</th></tr>
+          </thead>
+          <tbody>${rows || `<tr><td colspan="7" class="dt-empty">데이터 없음</td></tr>`}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function exportDetailCSV(){
+  if(!dtState.daily.length){ toast('내보낼 데이터가 없습니다', true); return; }
+  const wd = ['일','월','화','수','목','금','토'];
+  const name = document.getElementById('dtName').textContent || 'staff';
+  const rows = [['날짜','요일','출근','퇴근','근무시간(h)','지각(분)','상태']];
+  dtState.daily.forEach(d => {
+    const date = new Date(d.date);
+    const fmtTime = x => x ? `${pad(x.getHours())}:${pad(x.getMinutes())}` : '';
+    const stat = { ok:'정상', late:'지각', absent:'결근', open:'미퇴근', off:'휴무' }[d.status] || '';
+    rows.push([d.date, wd[date.getDay()], fmtTime(d.inFirst), fmtTime(d.outLast),
+               d.hours.toFixed(2), d.lateMin || 0, stat]);
+  });
+  const csv = '﻿' + rows.map(r => r.map(c => {
+    const s = String(c ?? '');
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+  }).join(',')).join('\n');
+  const blob = new Blob([csv], { type:'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `attendance_${name}_${dtState.from}_${dtState.to}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  toast('CSV 내보내기 완료');
+}
+
+// ESC로 닫기
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape' && document.getElementById('detail').classList.contains('show')) closeDetail();
+});
+
+/* ============================================================
+   CCTV 실시간 연동 (cctv.thejamsa.com → localhost:5556 터널)
+   ============================================================ */
+const CCTV_BASE = (() => {
+  // 같은 PC에서 보고있으면 직접 LAN 호출 (빠르고 무료), 그 외엔 도메인
+  const h = location.hostname;
+  if(h === 'localhost' || h === '127.0.0.1' || h.startsWith('192.168.') || h.startsWith('10.')){
+    return 'http://localhost:5556';
+  }
+  return 'https://cctv.thejamsa.com';
+})();
+
+let cctvHealthTimer = null;
+let cctvSnapTimer = null;
+let cctvState = {
+  channels: [],
+  status: null,
+  gridSize: 4,
+  failCount: 0,
+};
+
+async function probeCctvHealth(silent){
+  const pill = document.getElementById('cctvHealth');
+  const txt = document.getElementById('cctvHealthText');
+  if(!pill || !txt) return;
+  if(!silent) txt.textContent = 'CCTV 확인중';
+  try{
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 6000);
+    const r = await fetch(`${CCTV_BASE}/api/status?_t=${Date.now()}`, { signal: ctrl.signal, cache: 'no-store' });
+    clearTimeout(t);
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    cctvState.status = j;
+    cctvState.failCount = 0;
+    pill.classList.remove('warn','danger'); pill.classList.add('ok');
+    // /api/status 응답 두 가지 호환: {live,total,online,...} 또는 {ok,nvrs,channels}
+    if(typeof j.live === 'number' && typeof j.total === 'number'){
+      const cls = j.live === j.total ? 'ok' : j.live === 0 ? 'danger' : 'warn';
+      pill.classList.remove('ok','warn','danger'); pill.classList.add(cls);
+      txt.textContent = `CCTV ${j.live}/${j.total}`;
+    } else if(j.ok){
+      txt.textContent = `CCTV ${j.nvrs || 0}NVR`;
+    } else {
+      txt.textContent = 'CCTV ON';
+    }
+  }catch(e){
+    cctvState.failCount++;
+    pill.classList.remove('ok','warn');
+    pill.classList.add(cctvState.failCount >= 2 ? 'danger' : 'warn');
+    txt.textContent = cctvState.failCount >= 2 ? 'CCTV 오프라인' : 'CCTV 재연결중';
+  }
+}
+
+async function loadCctvChannels(){
+  const body = document.getElementById('dtCctvBody');
+  const meta = document.getElementById('dtCctvMeta');
+  if(!body) return;
+  try{
+    const r = await fetch(`${CCTV_BASE}/api/channels?_t=${Date.now()}`, { cache: 'no-store' });
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    cctvState.channels = (j.channels || []);
+    // NVR 선택 옵션 갱신
+    const sel = document.getElementById('dtCctvNvr');
+    if(sel){
+      const nvrs = [...new Map(cctvState.channels.map(c => [c.nvr, c.nvrName || ('NVR '+(c.nvr+1))])).entries()];
+      sel.innerHTML = `<option value="all">전체 NVR (${cctvState.channels.length}채널)</option>` +
+        nvrs.map(([id, name]) => `<option value="${id}">${name}</option>`).join('');
+    }
+    if(meta) meta.textContent = `${CCTV_BASE.replace(/^https?:\/\//,'')} · ${cctvState.channels.length}채널 연결`;
+    renderCctvGrid();
+    startCctvAutoRefresh();
+  }catch(e){
+    if(meta) meta.textContent = '연결 실패';
+    body.innerHTML = `<div class="dt-cctv-empty" style="color:var(--warn)">
+      CCTV 서버에 연결할 수 없습니다 (${CCTV_BASE})<br>
+      <small style="color:var(--text-mute)">박물관 PC에서 cctv.py + cloudflared 가 실행 중이어야 합니다</small>
+    </div>`;
+    stopCctvAutoRefresh();
+  }
+}
+
+function setCctvGridSize(n){
+  cctvState.gridSize = n;
+  document.querySelectorAll('#dtCctvWrap .dt-cctv-tools button[data-g]')
+    .forEach(b => b.classList.toggle('active', Number(b.dataset.g) === n));
+  renderCctvGrid();
+}
+
+function renderCctvGrid(){
+  const body = document.getElementById('dtCctvBody');
+  if(!body) return;
+  const sel = document.getElementById('dtCctvNvr');
+  const nvrFilter = sel ? sel.value : 'all';
+  let chs = cctvState.channels;
+  if(nvrFilter !== 'all') chs = chs.filter(c => String(c.nvr) === String(nvrFilter));
+  if(chs.length === 0){
+    body.innerHTML = `<div class="dt-cctv-empty">표시할 채널이 없습니다</div>`;
+    return;
+  }
+  const g = cctvState.gridSize;
+  const ts = Date.now();
+  body.innerHTML = `<div class="dt-cctv-grid g${g}">` + chs.map(c => `
+    <div class="dt-cctv-cell" data-nvr="${c.nvr}" data-ch="${c.ch}">
+      <img src="${CCTV_BASE}/api/snap/${c.ch}?nvr=${c.nvr}&_t=${ts}"
+           alt="${c.name||('CH'+c.ch)}"
+           onerror="this.style.display='none';this.nextElementSibling.style.display='grid'">
+      <div class="cell-off" style="display:none">신호 없음</div>
+      <div class="cell-label">${c.name || ('CH ' + c.ch)}</div>
+      <div class="cell-live">LIVE</div>
+    </div>`).join('') + `</div>`;
+}
+
+function refreshCctvSnaps(){
+  const ts = Date.now();
+  document.querySelectorAll('#dtCctvBody .dt-cctv-cell').forEach(cell => {
+    const nvr = cell.dataset.nvr, ch = cell.dataset.ch;
+    const img = cell.querySelector('img');
+    const off = cell.querySelector('.cell-off');
+    if(img){
+      img.style.display = '';
+      if(off) off.style.display = 'none';
+      img.src = `${CCTV_BASE}/api/snap/${ch}?nvr=${nvr}&_t=${ts}`;
+    }
+  });
+}
+
+function startCctvAutoRefresh(){
+  stopCctvAutoRefresh();
+  cctvSnapTimer = setInterval(() => {
+    // 모달이 열려있을 때만 갱신
+    if(document.getElementById('detail').classList.contains('show')){
+      refreshCctvSnaps();
+    }
+  }, 5000);
+}
+function stopCctvAutoRefresh(){
+  if(cctvSnapTimer){ clearInterval(cctvSnapTimer); cctvSnapTimer = null; }
+}
+
+// 모달 닫을 때 스냅 타이머 정지
+const _origCloseDetail = closeDetail;
+closeDetail = function(){
+  stopCctvAutoRefresh();
+  _origCloseDetail();
+};
+
+// 헤더 헬스체크 시작 (10초 주기)
+probeCctvHealth();
+cctvHealthTimer = setInterval(probeCctvHealth, 10000);
 </script>
 </body>
 </html>

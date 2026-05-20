@@ -3,6 +3,7 @@
 //  메인 홈 대시보드에 임베드되는 컴포넌트
 // ════════════════════════════════════════════════════════════
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import { StaffDetailModal } from "./staff-detail.jsx";
 
 const DEPT_CCTV_MAP_KEY = "jamsa_dept_cctv_map";   // { [dept_id]: channelNum }
 const COLLAPSED_KEY     = "jamsa_attendance_panel_collapsed";
@@ -23,14 +24,45 @@ const sinceMinutes = (iso) => {
   return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
 };
 
-// CCTV URL 생성 (jamsa_cctv_guard_url 우선)
+// CCTV URL 생성 (jamsa_cctv_guard_url → LAN/터널 자동 선택)
+const DEFAULT_CCTV_BASE = (() => {
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      const h = window.location.hostname;
+      if (h === "localhost" || h === "127.0.0.1" ||
+          h.startsWith("192.168.") || h.startsWith("10.") ||
+          /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(h)) {
+        return "http://localhost:5556";
+      }
+    }
+  } catch (e) {}
+  return "https://cctv.thejamsa.com";
+})();
+
+function isValidCctvBase(s) {
+  if (!s) return false;
+  // Vercel 자체 도메인이 저장되어 있으면 404로 가므로 무효 처리
+  if (/jamsa-panel\.vercel\.app/i.test(s)) return false;
+  // 명백히 잘못된 경로 (404 페이지 등) 차단
+  if (/\/(404|not[-_]?found)/i.test(s)) return false;
+  return /^https?:\/\//i.test(s) || /^\/\//.test(s) || s.startsWith("localhost") || s.startsWith("/");
+}
+
 function getCctvUrl(channel) {
   try {
-    const base = (localStorage.getItem("jamsa_cctv_guard_url") || "").replace(/\/+$/, "");
-    if (!base) return null;
+    let base = (localStorage.getItem("jamsa_cctv_guard_url") || "").replace(/\/+$/, "");
+    if (!isValidCctvBase(base)) {
+      // 잘못된 값은 정리하고 기본값으로
+      if (base) {
+        try { localStorage.removeItem("jamsa_cctv_guard_url"); } catch (e) {}
+      }
+      base = DEFAULT_CCTV_BASE;
+    }
     if (channel == null) return base;
     return `${base}/?channel=${channel}`;
-  } catch (e) { return null; }
+  } catch (e) {
+    return DEFAULT_CCTV_BASE;
+  }
 }
 
 // 부서 → CCTV 채널 매핑
@@ -364,17 +396,29 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
                         {ch != null && <> · CCTV ch{ch}</>}
                       </div>
                     </div>
-                    {cctvUrl ? (
-                      <a href={cctvUrl} target="_blank" rel="noopener" title={`CCTV 보기 (ch${ch})`}
-                        style={{ padding: "3px 8px", borderRadius: 4, background: "linear-gradient(135deg,#0891b2,#059669)", color: "#fff", fontSize: 10, fontWeight: 700, textDecoration: "none" }}>
-                        📹
-                      </a>
-                    ) : (
-                      <button onClick={() => setEditCctvDept(d.id)} title="CCTV 채널 매핑"
-                        style={{ padding: "3px 8px", borderRadius: 4, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "#94a3b8", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
-                        ＋매핑
-                      </button>
-                    )}
+                    <button type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (e.shiftKey || e.altKey) { setEditCctvDept(d.id); return; }
+                        const url = cctvUrl || getCctvUrl(null);
+                        if (url) {
+                          const w = window.open(url, "_blank", "noopener");
+                          if (!w) { try { location.href = url; } catch (err) {} }
+                        } else {
+                          setEditCctvDept(d.id);
+                        }
+                      }}
+                      onContextMenu={(e) => { e.preventDefault(); setEditCctvDept(d.id); }}
+                      title={ch != null ? `CCTV ch${ch} 보기 (Shift+클릭: 채널 매핑)` : "CCTV 열기 (Shift+클릭: 매핑)"}
+                      style={{
+                        padding: "3px 8px", borderRadius: 4,
+                        background: ch != null ? "linear-gradient(135deg,#0891b2,#059669)" : "rgba(8,145,178,0.18)",
+                        border: ch != null ? "none" : "1px solid rgba(8,145,178,0.35)",
+                        color: ch != null ? "#fff" : "#67e8f9",
+                        fontSize: 10, fontWeight: 700, cursor: "pointer",
+                      }}>
+                      📹
+                    </button>
                   </div>
                 );
               })}
@@ -383,9 +427,9 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
         </div>
       )}
 
-      {/* 행동 로그 모달 */}
+      {/* 직원 세부 모달 (식별자 + 타임라인 + 평가 + 스케줄 + 주간) */}
       {logModalStaff && (
-        <StaffLogModal
+        <StaffDetailModal
           staff={logModalStaff}
           dept={depts.find(d => d.id === logModalStaff.dept_id)}
           sb={supabaseRef.current}
@@ -446,140 +490,101 @@ function StaffMiniCard({ staff, last, working, dept, cctvCh, onCheckIn, onCheckO
   const bg = working ? "linear-gradient(135deg, rgba(16,185,129,0.18), rgba(15,23,42,0.5))"
            : "rgba(30,41,59,0.6)";
   const border = working ? "1px solid rgba(52,211,153,0.4)" : "1px solid rgba(255,255,255,0.08)";
+
+  // 식별자 연결 상태 (5종)
+  const idCount = [staff.unique_uid, staff.beacon_id, staff.gps_device_id, staff.wifi_mac, staff.card_uid]
+    .filter(Boolean).length;
+
   return (
-    <div style={{ background: bg, border, borderRadius: 8, padding: 10, position: "relative", overflow: "hidden" }}>
+    <div onClick={onShowLog}
+      style={{ background: bg, border, borderRadius: 8, padding: 10, position: "relative", overflow: "hidden",
+        cursor: "pointer", transition: "transform 0.1s, box-shadow 0.1s" }}
+      onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-1px)"; e.currentTarget.style.boxShadow = "0 4px 12px rgba(16,185,129,0.15)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "none"; }}
+      title="클릭하면 세부 정보 + 식별자 + 평가"
+    >
       {working && <div style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: 3, background: "#34d399" }} />}
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 3 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9", letterSpacing: "-0.01em" }}>{staff.name}</div>
         <span style={{ fontSize: 9, fontWeight: 700, color: working ? "#6ee7b7" : last ? "#94a3b8" : "#fbbf24" }}>{status}</span>
       </div>
-      <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 6 }}>
-        📍 {dept?.name || "미지정"} · {staff.beacon_id || "비콘 미배정"}
+      <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 4 }}>
+        📍 {dept?.name || "미지정"}
+        {staff.position && <span style={{ color: "#64748b" }}> · {staff.position}</span>}
       </div>
+
+      {/* 식별자 점 표시 */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
+        <IdDot active={!!staff.unique_uid}    label="UID" />
+        <IdDot active={!!staff.beacon_id}     label="📡" />
+        <IdDot active={!!staff.gps_device_id} label="📱" />
+        <IdDot active={!!staff.wifi_mac}      label="📶" />
+        <IdDot active={!!staff.card_uid}      label="💳" />
+        <span style={{ marginLeft: "auto", fontSize: 9, color: "#64748b" }}>{idCount}/5</span>
+      </div>
+
       <div style={{ fontSize: 10, color: working ? "#34d399" : "#64748b", fontFamily: "ui-monospace,monospace", marginBottom: 8, minHeight: 14 }}>
         {working   ? `● 출근 ${fmtTime(last?.checked_in_at)}`
          : last    ? `퇴근 ${fmtTime(last?.checked_out_at)}`
          :           "—"}
       </div>
-      <div style={{ display: "flex", gap: 4 }}>
+      <div style={{ display: "flex", gap: 4 }} onClick={(e) => e.stopPropagation()}>
         {working ? (
-          <button onClick={onCheckOut}
+          <button type="button" onClick={(e) => { e.stopPropagation(); onCheckOut && onCheckOut(); }}
             style={{ flex: 1, padding: "5px", borderRadius: 4, background: "transparent", border: "1px solid #34d399", color: "#34d399", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>퇴근</button>
         ) : last ? (
-          <button disabled
+          <button type="button" disabled
             style={{ flex: 1, padding: "5px", borderRadius: 4, background: "rgba(15,23,42,0.4)", border: "1px solid rgba(255,255,255,0.08)", color: "#64748b", fontSize: 11, fontWeight: 700, cursor: "not-allowed" }}>완료</button>
         ) : (
-          <button onClick={onCheckIn}
+          <button type="button" onClick={(e) => { e.stopPropagation(); onCheckIn && onCheckIn(); }}
             style={{ flex: 1, padding: "5px", borderRadius: 4, background: "#10b981", color: "#0f172a", border: "none", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>출근</button>
         )}
-        {cctvUrl ? (
-          <a href={cctvUrl} target="_blank" rel="noopener" title={`CCTV ch${cctvCh}`}
-            style={{ padding: "5px 7px", borderRadius: 4, background: "linear-gradient(135deg,#0891b2,#059669)", color: "#fff", fontSize: 11, fontWeight: 700, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>📹</a>
-        ) : (
-          <button onClick={onSetCctv} title="CCTV 채널 매핑"
-            style={{ padding: "5px 7px", borderRadius: 4, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#94a3b8", fontSize: 11, cursor: "pointer" }}>📹</button>
-        )}
-        <button onClick={onShowLog} title="개인 행동 로그"
-          style={{ padding: "5px 7px", borderRadius: 4, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#94a3b8", fontSize: 11, cursor: "pointer" }}>📋</button>
+        <button type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            // 채널 매핑이 없어도 기본 CCTV 화면이 열리도록 — 매핑 모달은 우클릭/Shift+클릭
+            if (e.shiftKey || e.altKey) { onSetCctv && onSetCctv(); return; }
+            const url = cctvUrl || getCctvUrl(null);
+            if (url) {
+              const w = window.open(url, "_blank", "noopener");
+              if (!w) { try { location.href = url; } catch (err) {} }
+            } else {
+              onSetCctv && onSetCctv();
+            }
+          }}
+          onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onSetCctv && onSetCctv(); }}
+          title={cctvCh != null ? `CCTV ch${cctvCh} 보기 (Shift+클릭: 채널 매핑)` : "CCTV 열기 (Shift+클릭: 채널 매핑)"}
+          style={{
+            padding: "5px 7px", borderRadius: 4,
+            background: cctvCh != null ? "linear-gradient(135deg,#0891b2,#059669)" : "rgba(8,145,178,0.18)",
+            border: cctvCh != null ? "none" : "1px solid rgba(8,145,178,0.35)",
+            color: cctvCh != null ? "#fff" : "#67e8f9",
+            fontSize: 11, fontWeight: 700, cursor: "pointer",
+            display: "inline-flex", alignItems: "center",
+          }}>📹</button>
+        <button type="button"
+          onClick={(e) => { e.stopPropagation(); onShowLog && onShowLog(); }}
+          title="개인 상세 (식별자/타임라인/평가)"
+          style={{ padding: "5px 7px", borderRadius: 4, background: "rgba(167,139,250,0.15)", border: "1px solid rgba(167,139,250,0.3)", color: "#ddd6fe", fontSize: 11, cursor: "pointer" }}>📋</button>
       </div>
     </div>
   );
 }
 
-function StaffLogModal({ staff, dept, sb, onClose, onAddFacAction }) {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState(null);
-
-  useEffect(() => {
-    if (!sb) return;
-    (async () => {
-      try {
-        const { data, error } = await sb.from("attendance").select("*")
-          .eq("staff_id", staff.id)
-          .order("checked_in_at", { ascending: false })
-          .limit(50);
-        if (error) throw error;
-        setRows(data || []);
-      } catch (e) {
-        setErr(e?.message || String(e));
-      } finally { setLoading(false); }
-    })();
-  }, [sb, staff.id]);
-
+function IdDot({ active, label }) {
   return (
-    <div onClick={onClose}
-      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div onClick={(e) => e.stopPropagation()}
-        style={{ width: "100%", maxWidth: 560, maxHeight: "80vh", background: "#0f172a", color: "#f1f5f9", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-        <div style={{ padding: "14px 18px", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 800 }}>📋 {staff.name} 행동 로그</div>
-            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
-              {dept?.name || "-"} · {staff.beacon_id || "비콘 미배정"} · {staff.phone || "연락처 없음"}
-            </div>
-          </div>
-          <button onClick={onClose} style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.15)", color: "#94a3b8", borderRadius: 4, padding: "4px 10px", cursor: "pointer", fontSize: 12 }}>✕</button>
-        </div>
-        <div style={{ flex: 1, overflowY: "auto", padding: "10px 18px" }}>
-          {loading ? <div style={{ padding: 30, textAlign: "center", color: "#64748b", fontSize: 12 }}>⏳ 로딩...</div>
-           : err ? <div style={{ padding: 12, color: "#fca5a5", fontSize: 12 }}>⚠ {err}</div>
-           : rows.length === 0 ? <div style={{ padding: 30, textAlign: "center", color: "#64748b", fontSize: 12 }}>출퇴근 기록 없음</div>
-           : (
-            <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ color: "#94a3b8", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
-                  <th style={{ textAlign: "left", padding: "6px 4px", fontWeight: 600 }}>날짜</th>
-                  <th style={{ textAlign: "left", padding: "6px 4px", fontWeight: 600 }}>출근</th>
-                  <th style={{ textAlign: "left", padding: "6px 4px", fontWeight: 600 }}>퇴근</th>
-                  <th style={{ textAlign: "right", padding: "6px 4px", fontWeight: 600 }}>근무</th>
-                  <th style={{ textAlign: "center", padding: "6px 4px", fontWeight: 600 }}>출처</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map(r => {
-                  const ci = new Date(r.checked_in_at);
-                  const co = r.checked_out_at ? new Date(r.checked_out_at) : null;
-                  const hrs = co ? ((co - ci) / 3600000).toFixed(1) : "—";
-                  const d = `${ci.getFullYear()}.${pad(ci.getMonth()+1)}.${pad(ci.getDate())}`;
-                  return (
-                    <tr key={r.id} style={{ borderBottom: "1px dotted rgba(255,255,255,0.05)" }}>
-                      <td style={{ padding: "6px 4px", fontFamily: "ui-monospace,monospace", color: "#cbd5e1" }}>{d}</td>
-                      <td style={{ padding: "6px 4px", fontFamily: "ui-monospace,monospace", color: "#34d399" }}>{fmtTimeFull(r.checked_in_at)}</td>
-                      <td style={{ padding: "6px 4px", fontFamily: "ui-monospace,monospace", color: co ? "#94a3b8" : "#fbbf24" }}>{co ? fmtTimeFull(r.checked_out_at) : "근무중"}</td>
-                      <td style={{ padding: "6px 4px", fontFamily: "ui-monospace,monospace", textAlign: "right", color: "#cbd5e1" }}>{hrs}h</td>
-                      <td style={{ padding: "6px 4px", textAlign: "center", color: "#64748b", fontSize: 10 }}>{r.source || "manual"}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
-        <div style={{ padding: "10px 18px", borderTop: "1px solid rgba(255,255,255,0.08)", display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          {onAddFacAction && (
-            <button onClick={() => {
-              onAddFacAction({
-                title: `${staff.name} 행동 점검 요청`,
-                category: "HR",
-                priority: "MEDIUM",
-                memo: `직원 ${staff.name}(${dept?.name||"-"}) 의 출퇴근 패턴 점검 요청`,
-              });
-              alert("✓ 보완과제로 등록됨 — 시설점검 모듈에서 확인");
-            }}
-              style={{ padding: "6px 12px", borderRadius: 4, background: "rgba(251,191,36,0.15)", border: "1px solid rgba(251,191,36,0.3)", color: "#fde68a", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
-              + 보완과제 등록
-            </button>
-          )}
-          <button onClick={onClose}
-            style={{ padding: "6px 14px", borderRadius: 4, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "#cbd5e1", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
-            닫기
-          </button>
-        </div>
-      </div>
-    </div>
+    <span style={{
+      display: "inline-flex", alignItems: "center", justifyContent: "center",
+      width: 16, height: 14, borderRadius: 3, fontSize: 8, fontWeight: 700,
+      background: active ? "rgba(52,211,153,0.18)" : "rgba(255,255,255,0.04)",
+      color: active ? "#34d399" : "#475569",
+      border: active ? "1px solid rgba(52,211,153,0.3)" : "1px solid rgba(255,255,255,0.05)"
+    }}>{label}</span>
   );
 }
+
+// (구 StaffLogModal 제거됨 — staff-detail.jsx 의 StaffDetailModal 로 교체)
 
 function DeptCctvEditModal({ dept, currentCh, onSave, onCancel }) {
   const [val, setVal] = useState(currentCh ?? "");
