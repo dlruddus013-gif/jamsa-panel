@@ -22042,6 +22042,7 @@ function StatCard({ label, value, unit = "", trend = "", color = "#0f172a" }) {
 function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], auditLog = [], onNavigate, onAddFacAction }) {
   const [selectedZone, setSelectedZone] = useState(null);
   const [warehouseModelZone, setWarehouseModelZone] = useState(null);
+  const [spotAiModalOpen, setSpotAiModalOpen] = useState(false);
   const [filterMode, setFilterMode] = useState("all"); // all | urgent | stock | facility
   const [viewMode, setViewMode] = useState(() => {
     // 사용자 마지막 뷰 모드 기억 (단, 'map'이 아닌 값이면 일단 map으로 시작)
@@ -23532,6 +23533,13 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
             }} title="창고 실제 이미지 기반 재고 배치와 3D 모델링"
               style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: "linear-gradient(135deg,#0f766e,#2563eb)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 800 }}>
               창고 3D
+            </button>
+            <button onClick={() => setSpotAiModalOpen(true)}
+              title="위성지도 스크린샷을 AI Vision으로 분석해서 spot 위치 자동 조정"
+              style={{ padding: "6px 12px", borderRadius: 6, border: "none",
+                background: "linear-gradient(135deg,#a855f7,#ec4899)", color: "#fff", cursor: "pointer",
+                fontSize: 11, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 4 }}>
+              🤖 AI 자동 정렬
             </button>
           </>
         )}
@@ -25908,6 +25916,15 @@ window.onload = () => {
           onClose={() => setShowApiKeyModal(false)} />
       )}
 
+      {/* ─── AI Vision 자동 정렬 모달 ─── */}
+      {spotAiModalOpen && (
+        <SpotLayoutAiModal
+          zones={allZones.filter(z => !zoneCustomizations[z.id]?._deleted)}
+          mapRef={naverMapRef}
+          onApply={(zoneId, patch) => updateZoneField(zoneId, patch)}
+          onClose={() => setSpotAiModalOpen(false)} />
+      )}
+
       {/* ─── CCTV 서버 상태 배지 (우하단) ─── */}
       <div onClick={() => setCctvGuideOpen(true)}
         title="클릭하면 자세한 가이드"
@@ -27373,6 +27390,243 @@ function ZoneEditPanel({ zone, allCameras, onUpdate, onDelete, onClose }) {
         {/* Help */}
         <div style={{ marginTop: 12, padding: 8, background: "#f8fafc", borderRadius: 6, fontSize: 10, color: "#64748b", lineHeight: 1.5 }}>
           💡 변경사항은 자동 저장됩니다. 위치는 지도에서 핀을 드래그하여 변경하세요.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────────
+//  🤖 AI Vision 자동 정렬 모달
+//   - 사용자가 위성지도 스크린샷을 업로드 → Claude Vision 분석 → spot 위치 자동 추정 → 적용
+// ─────────────────────────────────────────────────────────────────
+function SpotLayoutAiModal({ zones, mapRef, onApply, onClose }) {
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [result, setResult] = useState(null); // { matches, uncertain, notes }
+  const [error, setError] = useState("");
+  const [hint, setHint] = useState("");
+
+  // 현재 지도의 영역(bbox) 자동 추출
+  const bounds = useMemo(() => {
+    try {
+      const m = mapRef?.current;
+      if (m && m.getBounds) {
+        const b = m.getBounds();
+        // Naver Maps: getMin / getMax
+        const sw = b.getSW ? b.getSW() : (b._min || null);
+        const ne = b.getNE ? b.getNE() : (b._max || null);
+        if (sw && ne) {
+          return {
+            south: typeof sw.lat === "function" ? sw.lat() : sw.lat,
+            west:  typeof sw.lng === "function" ? sw.lng() : sw.lng,
+            north: typeof ne.lat === "function" ? ne.lat() : ne.lat,
+            east:  typeof ne.lng === "function" ? ne.lng() : ne.lng,
+          };
+        }
+      }
+    } catch (e) {}
+    // fallback: JAMSA_CENTER 기준 ±150m
+    return {
+      south: (JAMSA_CENTER.lat || 36.6383) - 0.0013,
+      north: (JAMSA_CENTER.lat || 36.6383) + 0.0013,
+      west:  (JAMSA_CENTER.lng || 127.3828) - 0.0017,
+      east:  (JAMSA_CENTER.lng || 127.3828) + 0.0017,
+    };
+  }, [mapRef?.current]);
+
+  const onFileChange = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    if (!f.type.startsWith("image/")) { setError("이미지 파일만 업로드 가능합니다."); return; }
+    setError("");
+    setResult(null);
+    try {
+      const dataUrl = await facCompressPhoto(f, 1600);
+      setImageFile(dataUrl);
+      setImagePreview(dataUrl);
+    } catch (err) {
+      setError("이미지 처리 실패: " + err.message);
+    }
+  };
+
+  const analyze = async () => {
+    if (!imageFile) { setError("위성지도 스크린샷을 먼저 업로드하세요."); return; }
+    setAnalyzing(true);
+    setError("");
+    setResult(null);
+    try {
+      const spotPayload = zones.map(z => ({ id: z.id, name: z.name, icon: z.icon, desc: z.desc }));
+      const r = await fetch("/api/spot-layout-vision", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(window.__authToken ? { "Authorization": "Bearer " + window.__authToken } : {}),
+        },
+        body: JSON.stringify({ image: imageFile, spots: spotPayload, bounds, hint }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        throw new Error(data.message || data.error || `HTTP ${r.status}`);
+      }
+      setResult(data);
+    } catch (e) {
+      setError("AI 분석 실패: " + e.message);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const applyAll = (minConfidence = 0) => {
+    if (!result?.matches) return;
+    const applied = result.matches.filter(m => (m.confidence ?? 0) >= minConfidence && m.lat && m.lng);
+    if (applied.length === 0) { alert("적용할 매칭이 없습니다."); return; }
+    if (!confirm(`${applied.length}개 spot 위치를 AI 추정값으로 업데이트할까요?\n\n신뢰도가 낮은 spot은 수동 확인을 권장합니다.`)) return;
+    applied.forEach(m => onApply(m.id, { lat: m.lat, lng: m.lng }));
+    alert(`✅ ${applied.length}개 spot 위치 업데이트 완료\n\n원하지 않는 위치는 스팟 편집 → 핀 드래그/클릭으로 다시 조정하세요.`);
+    onClose();
+  };
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
+      zIndex: 10300, display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        width: "100%", maxWidth: 720, maxHeight: "92vh", overflowY: "auto",
+        background: "#fff", borderRadius: 12, boxShadow: "0 20px 60px rgba(0,0,0,0.4)",
+      }}>
+        {/* 헤더 */}
+        <div style={{ padding: "14px 20px", background: "linear-gradient(135deg,#a855f7,#ec4899)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", borderRadius: "12px 12px 0 0" }}>
+          <div>
+            <div style={{ fontSize: 11, opacity: 0.9 }}>실험적 기능 · Claude Vision</div>
+            <div style={{ fontSize: 17, fontWeight: 900 }}>🤖 AI 자동 위치 정렬</div>
+          </div>
+          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", fontSize: 22, cursor: "pointer", width: 30, height: 30, borderRadius: "50%" }}>×</button>
+        </div>
+
+        {/* 본문 */}
+        <div style={{ padding: 18 }}>
+          {/* 1단계: 안내 */}
+          <div style={{ padding: 12, background: "#faf5ff", border: "1px solid #e9d5ff", borderRadius: 8, marginBottom: 14, fontSize: 11, lineHeight: 1.6, color: "#581c87" }}>
+            <strong>사용 방법:</strong>
+            <ol style={{ margin: "6px 0 0 18px", padding: 0 }}>
+              <li>이 모달을 띄운 채로 <strong>지도 영역을 잘 보이게 조정</strong>하세요 (현재 지도 영역의 bbox를 자동 사용)</li>
+              <li>운영체제 스크린샷(Win+Shift+S 또는 ⌘+Shift+4)으로 <strong>위성지도 영역만 잘라서 캡처</strong></li>
+              <li>아래에 업로드 → 🚀 AI 분석 실행</li>
+              <li>제안된 위치 확인 후 ✅ 적용 (낮은 신뢰도는 수동 확인)</li>
+            </ol>
+            <div style={{ marginTop: 6, fontSize: 10, color: "#7c3aed" }}>
+              💡 비용 약 $0.02 · 정확도 ±5~10m · 한계: AI가 일부 시설을 오인할 수 있음
+            </div>
+          </div>
+
+          {/* 2단계: 이미지 업로드 */}
+          <label style={{ fontSize: 11, fontWeight: 800, color: "#475569", marginBottom: 6, display: "block" }}>
+            📷 위성지도 스크린샷 업로드
+          </label>
+          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+            <label style={{
+              flex: 1, padding: "10px 14px", background: imagePreview ? "#dcfce7" : "#f3f4f6",
+              border: `2px dashed ${imagePreview ? "#16a34a" : "#cbd5e1"}`, borderRadius: 8,
+              textAlign: "center", cursor: "pointer", fontSize: 12, fontWeight: 700,
+              color: imagePreview ? "#15803d" : "#475569",
+            }}>
+              {imagePreview ? "✓ 이미지 선택됨 — 다시 선택하려면 클릭" : "+ 클릭하여 이미지 선택"}
+              <input type="file" accept="image/*" onChange={onFileChange}
+                style={{ display: "none" }} />
+            </label>
+          </div>
+
+          {imagePreview && (
+            <div style={{ marginBottom: 10, border: "1px solid #e5e7eb", borderRadius: 8, overflow: "hidden", background: "#000" }}>
+              <img src={imagePreview} alt="위성지도 미리보기" style={{ width: "100%", maxHeight: 300, objectFit: "contain", display: "block" }} />
+            </div>
+          )}
+
+          {/* 3단계: 컨텍스트 힌트 (옵션) */}
+          <label style={{ fontSize: 11, fontWeight: 800, color: "#475569", marginBottom: 4, display: "block" }}>
+            💡 추가 힌트 (선택) — AI에게 알려줄 정보
+          </label>
+          <input value={hint} onChange={e => setHint(e.target.value)}
+            placeholder="예: 좌측 회색 건물이 본관, 우상단 흰 천막이 매점, 입구는 남쪽"
+            style={{ width: "100%", padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 11, marginBottom: 10 }} />
+
+          {/* 현재 bbox 표시 */}
+          <div style={{ padding: "6px 10px", background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 6, fontSize: 10, color: "#64748b", marginBottom: 12, fontFamily: "ui-monospace,monospace" }}>
+            📐 현재 지도 영역: ({bounds.south.toFixed(5)}, {bounds.west.toFixed(5)}) → ({bounds.north.toFixed(5)}, {bounds.east.toFixed(5)})
+          </div>
+
+          {/* 실행 버튼 */}
+          <button onClick={analyze} disabled={!imageFile || analyzing}
+            style={{
+              width: "100%", padding: 12, borderRadius: 8, border: "none", cursor: (!imageFile || analyzing) ? "not-allowed" : "pointer",
+              background: analyzing ? "#94a3b8" : "linear-gradient(135deg,#a855f7,#ec4899)", color: "#fff", fontSize: 13, fontWeight: 800,
+              opacity: (!imageFile || analyzing) ? 0.6 : 1,
+            }}>
+            {analyzing ? "🔍 AI 분석 중... (약 5~15초)" : "🚀 AI 분석 실행"}
+          </button>
+
+          {error && (
+            <div style={{ marginTop: 10, padding: 10, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, color: "#991b1b", fontSize: 11 }}>
+              ⚠ {error}
+            </div>
+          )}
+
+          {/* 4단계: 결과 */}
+          {result && (
+            <div style={{ marginTop: 16, padding: 12, background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 8 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "#0f172a", marginBottom: 8 }}>
+                📋 AI 분석 결과 ({result.matches?.length || 0}건)
+              </div>
+              {result.notes && (
+                <div style={{ fontSize: 11, color: "#475569", marginBottom: 10, padding: 8, background: "#fff", borderRadius: 6, border: "1px solid #e5e7eb" }}>
+                  💬 {result.notes}
+                </div>
+              )}
+              <div style={{ maxHeight: 280, overflowY: "auto", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 6 }}>
+                {(result.matches || []).map(m => {
+                  const conf = parseFloat(m.confidence) || 0;
+                  const confColor = conf >= 0.7 ? "#16a34a" : conf >= 0.4 ? "#ea580c" : "#dc2626";
+                  return (
+                    <div key={m.id} style={{ padding: "8px 12px", borderBottom: "1px solid #f1f5f9", display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>{m.name || m.id}</div>
+                        <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>{m.reason || "—"}</div>
+                        {m.lat && m.lng && (
+                          <div style={{ fontSize: 9, color: "#94a3b8", fontFamily: "ui-monospace,monospace", marginTop: 2 }}>
+                            {m.lat.toFixed(6)}, {m.lng.toFixed(6)} (x: {(m.xPct * 100).toFixed(0)}% y: {(m.yPct * 100).toFixed(0)}%)
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ textAlign: "right", flexShrink: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 900, color: confColor, fontFamily: "ui-monospace,monospace" }}>
+                          {(conf * 100).toFixed(0)}%
+                        </div>
+                        <div style={{ fontSize: 9, color: "#94a3b8" }}>신뢰도</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+                <button onClick={() => applyAll(0.7)}
+                  style={{ flex: 1, padding: "8px 12px", borderRadius: 6, background: "#16a34a", color: "#fff", border: "none", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>
+                  ✓ 신뢰도 70%+ 만 적용
+                </button>
+                <button onClick={() => applyAll(0)}
+                  style={{ flex: 1, padding: "8px 12px", borderRadius: 6, background: "linear-gradient(135deg,#a855f7,#ec4899)", color: "#fff", border: "none", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>
+                  ✓ 전체 적용
+                </button>
+              </div>
+              <div style={{ marginTop: 6, fontSize: 9, color: "#64748b", textAlign: "center" }}>
+                적용 후에도 스팟 편집 → 핀 드래그/클릭으로 언제든 수정 가능합니다
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
