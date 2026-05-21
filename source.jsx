@@ -23408,6 +23408,8 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
     });
 
     // ✨ 초기 1회: 모든 스팟이 한 화면에 보이도록 자동 줌/팬 (사용자 조작 보존)
+    //    + 스팟이 좁은 영역(60~70m)에 몰려있어서 fit-bounds만으로는 핀이 겹침
+    //    → 최소 줌 20을 강제해서 핀 + CCTV 미니창이 안 겹치게 함
     if (!naverInitialFitRef.current && naverMapRef.current && naverMarkersRef.current.length > 0) {
       try {
         const _LB = naver?.maps?.LatLngBounds;
@@ -23416,13 +23418,19 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           naverMarkersRef.current.forEach(m => {
             try { bounds.extend(m.getPosition()); } catch (e) {}
           });
-          // 핀 + CCTV 미니창 + 라벨이 들어갈 충분한 여백
           if (typeof naverMapRef.current.fitBounds === "function") {
-            naverMapRef.current.fitBounds(bounds, { top: 90, right: 180, bottom: 90, left: 60 });
-            // fitBounds가 너무 확대되면 클램프 (좁은 영역에서 z=22 등 과한 줌 방지)
+            naverMapRef.current.fitBounds(bounds, { top: 80, right: 100, bottom: 80, left: 80 });
+            // 좁은 영역이면 fitBounds 결과가 z=17~18 정도라 핀이 겹침 → 최소 20 강제
+            // 최대는 21(네이버 SDK 상한)로 클램프
             try {
+              const _center = (typeof bounds.getCenter === "function") ? bounds.getCenter() : null;
               const _z = naverMapRef.current.getZoom();
-              if (_z > 19) naverMapRef.current.setZoom(19);
+              if (_z < 20) {
+                if (_center) naverMapRef.current.setCenter(_center);
+                naverMapRef.current.setZoom(20);
+              } else if (_z > 21) {
+                naverMapRef.current.setZoom(21);
+              }
             } catch (e) {}
           }
           naverInitialFitRef.current = true;
@@ -26533,24 +26541,27 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
     });
 
     // 위성 타일 (ESRI World Imagery - 무료, 인증 불필요)
+    // maxNativeZoom=19로 z>19일 때도 19 타일을 업스케일 표시 → 핀 겹침 방지를 위해 z=20 사용 가능
     const satelliteLayer = L.tileLayer(
       "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
       {
         attribution: "Tiles © Esri",
-        maxZoom: 19,
+        maxZoom: 21,
+        maxNativeZoom: 19,
       }
     );
 
     // 일반 타일 (OSM)
     const planLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: "© OpenStreetMap",
-      maxZoom: 19,
+      maxZoom: 21,
+      maxNativeZoom: 19,
     });
 
     // 라벨 오버레이 (위성에 도로/지명 표시)
     const labelsLayer = L.tileLayer(
       "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
-      { attribution: "Tiles © Esri", maxZoom: 19 }
+      { attribution: "Tiles © Esri", maxZoom: 21, maxNativeZoom: 19 }
     );
 
     tileLayersRef.current = { satelliteLayer, planLayer, labelsLayer };
@@ -26707,11 +26718,16 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
     });
 
     // ✨ 초기 1회: 모든 스팟이 한 화면에 보이도록 자동 줌/팬 (사용자 조작 보존)
+    //    + 스팟이 좁은 영역에 몰려있어서 fit-bounds만으론 핀이 겹침 → 최소 줌 20 강제
     if (!initialFitRef.current && markersRef.current.length > 0) {
       try {
         const group = L.featureGroup(markersRef.current);
-        // 핀 + CCTV 미니창 + 라벨이 들어갈 충분한 여백
-        map.fitBounds(group.getBounds(), { padding: [90, 120], maxZoom: 19 });
+        const groupBounds = group.getBounds();
+        map.fitBounds(groupBounds, { padding: [60, 60], maxZoom: 21 });
+        // 좁은 영역이면 fitBounds 결과 줌이 17~18이라 핀이 겹침 → 최소 20 강제
+        if (map.getZoom() < 20) {
+          map.setView(groupBounds.getCenter(), 20);
+        }
         initialFitRef.current = true;
       } catch (e) { console.warn("[OsmFallbackMap] fitBounds 실패:", e?.message); }
     }
