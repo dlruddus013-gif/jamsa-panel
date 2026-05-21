@@ -15,6 +15,7 @@ import {
   dedupeTodayAttendance,
   loadAttendanceAlertConfig,
 } from "./attendance-alert-rules.jsx";
+import { StaffManageModal } from "./staff-manage-modal.jsx";
 
 const DEPT_CCTV_MAP_KEY = "jamsa_dept_cctv_map";   // { [dept_id]: channelNum }
 const COLLAPSED_KEY     = "jamsa_attendance_panel_collapsed";
@@ -97,6 +98,7 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
   const [depts, setDepts]           = useState([]);
   const [staffList, setStaffList]   = useState([]);
   const [alertConfigOpen, setAlertConfigOpen] = useState(false);
+  const [staffManageOpen, setStaffManageOpen] = useState(false);
   const [today, setToday]           = useState([]);   // 오늘 attendance
   const [recent, setRecent]         = useState([]);   // 최근 행동 로그 (출근/퇴근 이벤트)
   const [deptCctv, setDeptCctv]     = useState(loadDeptCctvMap);
@@ -315,6 +317,11 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button onClick={() => setStaffManageOpen(true)}
+            title="직원/알바 추가·수정·비활성 (인력 관리)"
+            style={{ padding: "6px 12px", background: "rgba(15,23,42,0.35)", border: "1px solid rgba(255,255,255,0.25)", borderRadius: 6, fontSize: 11, fontWeight: 800, color: "#fff", cursor: "pointer", whiteSpace: "nowrap" }}>
+            👥 인력 관리
+          </button>
           <button onClick={() => setAlertConfigOpen(true)}
             title="출퇴근 자동 SMS 알림 설정 — 출근/퇴근/지각/결근 이벤트별 발송 규칙 + 수신자 phone"
             style={{ padding: "6px 12px", background: "rgba(15,23,42,0.35)", border: "1px solid rgba(255,255,255,0.25)", borderRadius: 6, fontSize: 11, fontWeight: 800, color: "#fff", cursor: "pointer", whiteSpace: "nowrap" }}>
@@ -351,6 +358,14 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
           depts={depts}
           staffList={staffList}
           onClose={() => setAlertConfigOpen(false)}
+        />
+      )}
+      {/* 직원/알바 관리 모달 */}
+      {staffManageOpen && (
+        <StaffManageModal
+          depts={depts}
+          onChanged={() => { const sb = supabaseRef.current; if (sb) loadAll(sb); }}
+          onClose={() => setStaffManageOpen(false)}
         />
       )}
 

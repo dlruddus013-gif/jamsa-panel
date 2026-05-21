@@ -5,6 +5,7 @@ import beaconWebhook from '../api_handlers/beacon-webhook.js';
 import cctvAiAnalyze from '../api_handlers/cctv-ai-analyze.js';
 import spotLayoutVision from '../api_handlers/spot-layout-vision.js';
 import aiStatus from '../api_handlers/ai-status.js';
+import staffManage from '../api_handlers/staff-manage.js';
 import chatbot from '../api_handlers/chatbot.js';
 import config from '../api_handlers/config.js';
 import dataBulk from '../api_handlers/data-bulk.js';
@@ -39,6 +40,7 @@ const routes = {
   'cctv-ai-analyze': cctvAiAnalyze,
   'spot-layout-vision': spotLayoutVision,
   'ai-status': aiStatus,
+  'staff-manage': staffManage,
   'chatbot': chatbot,
   'config': config,
   'data-bulk': dataBulk,
