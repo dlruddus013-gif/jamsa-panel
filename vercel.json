@@ -98,6 +98,8 @@
     { "source": "/t", "destination": "/ticket-test.html" },
     { "source": "/staff-checkin-v2", "destination": "/staff-checkin-v2.html" },
     { "source": "/m2", "destination": "/staff-checkin-v2.html" },
+    { "source": "/roles", "destination": "/multirole-demo.html" },
+    { "source": "/multirole", "destination": "/multirole-demo.html" },
     { "source": "/", "destination": "/index.html" }
   ]
 }

@@ -1,0 +1,832 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<title>다중 이해관계자 인터페이스 데모 — 한국잠사박물관</title>
+<style>
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Apple SD Gothic Neo','Noto Sans KR',sans-serif; background:#f1f5f9; color:#0f172a; min-height:100vh; -webkit-font-smoothing:antialiased; }
+  button { font-family:inherit; cursor:pointer; }
+  .topbar { background:linear-gradient(135deg,#0f172a,#1e293b); color:#fff; padding:12px 20px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; position:sticky; top:0; z-index:50; box-shadow:0 2px 8px rgba(0,0,0,0.15); }
+  .topbar .title { font-size:14px; font-weight:800; display:flex; align-items:center; gap:8px; }
+  .topbar .badge { font-size:9px; padding:2px 6px; background:rgba(255,255,255,0.15); border-radius:4px; font-weight:700; letter-spacing:0.5px; }
+  .topbar .who { margin-left:auto; font-size:11px; color:rgba(255,255,255,0.75); display:flex; align-items:center; gap:8px; }
+  .topbar .who strong { color:#fff; font-weight:700; }
+  .roletabs { background:#fff; border-bottom:1px solid #e2e8f0; padding:6px 12px; display:flex; gap:4px; overflow-x:auto; position:sticky; top:46px; z-index:40; scrollbar-width:thin; }
+  .roletab { padding:8px 14px; border-radius:8px; border:1px solid transparent; background:transparent; color:#64748b; font-size:12px; font-weight:700; white-space:nowrap; display:flex; align-items:center; gap:6px; }
+  .roletab:hover { background:#f8fafc; }
+  .roletab.active { background:linear-gradient(135deg,#0f172a,#334155); color:#fff; border-color:#0f172a; box-shadow:0 2px 6px rgba(15,23,42,0.2); }
+  .roletab .emoji { font-size:14px; }
+  main { padding:18px 20px 60px; max-width:1280px; margin:0 auto; }
+  .role-banner { background:#fff; border-radius:12px; padding:14px 16px; margin-bottom:16px; display:flex; gap:12px; align-items:flex-start; box-shadow:0 1px 3px rgba(0,0,0,0.06); border-left:4px solid var(--accent,#0f172a); }
+  .role-banner .icon { font-size:28px; }
+  .role-banner h2 { font-size:15px; font-weight:800; margin-bottom:3px; }
+  .role-banner p { font-size:11.5px; color:#64748b; line-height:1.55; }
+  .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); }
+  .grid.thirds { grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }
+  .card { background:#fff; border-radius:10px; padding:14px; box-shadow:0 1px 3px rgba(0,0,0,0.06); }
+  .card h3 { font-size:12px; font-weight:800; color:#0f172a; margin-bottom:10px; display:flex; align-items:center; gap:6px; }
+  .card h3 .pill { font-size:9px; padding:2px 6px; background:#f1f5f9; color:#475569; border-radius:4px; font-weight:700; margin-left:auto; }
+  .stat { font-size:28px; font-weight:900; color:#0f172a; line-height:1.1; }
+  .stat .unit { font-size:13px; color:#94a3b8; font-weight:700; margin-left:4px; }
+  .stat-sub { font-size:10.5px; color:#64748b; margin-top:4px; }
+  .stat.good { color:#16a34a; }
+  .stat.warn { color:#ea580c; }
+  .stat.bad { color:#dc2626; }
+  .row { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid #f1f5f9; }
+  .row:last-child { border-bottom:0; }
+  .row .avatar { width:30px; height:30px; border-radius:50%; background:linear-gradient(135deg,#3b82f6,#8b5cf6); color:#fff; font-size:11px; font-weight:800; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .row .who { flex:1; min-width:0; }
+  .row .who .name { font-size:12px; font-weight:700; color:#0f172a; }
+  .row .who .meta { font-size:10px; color:#64748b; margin-top:1px; }
+  .row .status { font-size:10px; padding:2px 7px; border-radius:10px; font-weight:700; white-space:nowrap; }
+  .status.ok { background:#dcfce7; color:#166534; }
+  .status.pending { background:#fef3c7; color:#92400e; }
+  .status.late { background:#fee2e2; color:#991b1b; }
+  .status.absent { background:#fecaca; color:#7f1d1d; }
+  .status.info { background:#dbeafe; color:#1e40af; }
+  .status.muted { background:#f1f5f9; color:#475569; }
+  .row .btn { font-size:10px; padding:4px 8px; border-radius:5px; border:1px solid #cbd5e1; background:#fff; color:#0f172a; font-weight:700; }
+  .row .btn.primary { background:#0f172a; color:#fff; border-color:#0f172a; }
+  .row .btn.warn { background:#ea580c; color:#fff; border-color:#ea580c; }
+  .anonchip { font-size:10px; padding:2px 6px; background:#f1f5f9; color:#475569; border-radius:4px; font-weight:700; font-family:monospace; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid #f1f5f9; }
+  th { background:#f8fafc; color:#475569; font-weight:700; font-size:10px; text-transform:uppercase; letter-spacing:0.4px; }
+  td .mini { font-size:9px; color:#94a3b8; }
+  .empty { padding:24px 12px; text-align:center; color:#94a3b8; font-size:11px; }
+  .privacy-note { margin-top:8px; padding:8px 10px; background:#f0f9ff; border-left:3px solid #0284c7; border-radius:4px; font-size:10.5px; color:#075985; line-height:1.5; }
+  .danger-note { margin-top:8px; padding:8px 10px; background:#fef2f2; border-left:3px solid #dc2626; border-radius:4px; font-size:10.5px; color:#991b1b; line-height:1.5; }
+  .ok-note { margin-top:8px; padding:8px 10px; background:#f0fdf4; border-left:3px solid #16a34a; border-radius:4px; font-size:10.5px; color:#166534; line-height:1.5; }
+  .toolbar { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+  .toolbar .btn { font-size:11px; padding:6px 12px; border-radius:6px; border:1px solid #cbd5e1; background:#fff; color:#0f172a; font-weight:700; }
+  .toolbar .btn.primary { background:linear-gradient(135deg,#0f172a,#334155); color:#fff; border-color:#0f172a; }
+  .toolbar .btn.warn { background:#ea580c; color:#fff; border-color:#ea580c; }
+  .toolbar .btn.good { background:#16a34a; color:#fff; border-color:#16a34a; }
+  /* Permission matrix */
+  .matrix { background:#fff; border-radius:10px; padding:12px; box-shadow:0 1px 3px rgba(0,0,0,0.06); overflow-x:auto; }
+  .matrix table { min-width:760px; }
+  .matrix th, .matrix td { font-size:10.5px; padding:8px 10px; text-align:center; }
+  .matrix th:first-child, .matrix td:first-child { text-align:left; font-weight:700; }
+  .pm-yes { color:#16a34a; font-weight:900; font-size:13px; }
+  .pm-no { color:#cbd5e1; font-weight:700; }
+  .pm-req { color:#ea580c; font-weight:900; font-size:11px; }
+  /* Modal */
+  .modal-bg { position:fixed; inset:0; background:rgba(15,23,42,0.6); z-index:100; display:none; align-items:center; justify-content:center; padding:16px; }
+  .modal-bg.open { display:flex; }
+  .modal { background:#fff; border-radius:12px; padding:22px; max-width:480px; width:100%; max-height:90vh; overflow:auto; box-shadow:0 24px 48px rgba(0,0,0,0.3); }
+  .modal h3 { font-size:15px; font-weight:800; margin-bottom:6px; display:flex; align-items:center; gap:6px; }
+  .modal p.sub { font-size:11.5px; color:#64748b; line-height:1.55; margin-bottom:14px; }
+  .modal label { font-size:11px; font-weight:700; color:#475569; display:block; margin:10px 0 4px; }
+  .modal input, .modal select, .modal textarea { width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:6px; font-size:12px; font-family:inherit; }
+  .modal textarea { resize:vertical; min-height:80px; }
+  .modal .actions { display:flex; gap:8px; margin-top:16px; justify-content:flex-end; }
+  .modal .actions .btn { font-size:12px; padding:8px 14px; border-radius:6px; border:1px solid #cbd5e1; background:#fff; color:#0f172a; font-weight:700; }
+  .modal .actions .btn.primary { background:linear-gradient(135deg,#0f172a,#334155); color:#fff; border-color:#0f172a; }
+  .modal .actions .btn.warn { background:#ea580c; color:#fff; border-color:#ea580c; }
+  .modal .actions .btn.danger { background:#dc2626; color:#fff; border-color:#dc2626; }
+  /* Toast */
+  .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%) translateY(60px); background:#0f172a; color:#fff; padding:10px 16px; border-radius:8px; font-size:12px; font-weight:700; box-shadow:0 8px 24px rgba(0,0,0,0.2); z-index:200; opacity:0; transition:all 0.25s; max-width:90vw; }
+  .toast.show { transform:translateX(-50%) translateY(0); opacity:1; }
+  .toast.warn { background:#ea580c; }
+  .toast.good { background:#16a34a; }
+  /* Customer-only fancy card */
+  .customer-status { background:linear-gradient(135deg,#0f766e,#0891b2); color:#fff; border-radius:14px; padding:22px; box-shadow:0 4px 14px rgba(8,145,178,0.25); }
+  .customer-status .label { font-size:11px; opacity:0.85; font-weight:700; letter-spacing:0.4px; text-transform:uppercase; }
+  .customer-status .val { font-size:22px; font-weight:900; margin-top:4px; }
+  .customer-status .sub { font-size:12px; opacity:0.85; margin-top:3px; }
+  .timeline { margin-top:10px; }
+  .timeline .ev { display:flex; gap:10px; padding:10px 0; border-bottom:1px solid #f1f5f9; align-items:flex-start; }
+  .timeline .ev:last-child { border-bottom:0; }
+  .timeline .dot { width:10px; height:10px; border-radius:50%; background:#16a34a; margin-top:4px; flex-shrink:0; box-shadow:0 0 0 3px rgba(22,163,74,0.18); }
+  .timeline .dot.pending { background:#cbd5e1; box-shadow:0 0 0 3px rgba(203,213,225,0.4); }
+  .timeline .dot.scheduled { background:#3b82f6; box-shadow:0 0 0 3px rgba(59,130,246,0.18); }
+  .timeline .ev .body { flex:1; min-width:0; }
+  .timeline .ev .body .label { font-size:11.5px; font-weight:700; color:#0f172a; }
+  .timeline .ev .body .meta { font-size:10px; color:#64748b; margin-top:1px; }
+  @media (max-width:640px) {
+    main { padding:14px 12px 60px; }
+    .topbar { padding:10px 12px; }
+    .roletabs { padding:6px 8px; top:44px; }
+    .roletab { padding:7px 10px; font-size:11px; }
+    .role-banner { padding:12px; }
+    .role-banner h2 { font-size:14px; }
+    .role-banner p { font-size:11px; }
+    .stat { font-size:24px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="title">
+    <span style="font-size:18px">🛡️</span>
+    다중 이해관계자 인터페이스 데모
+    <span class="badge">PROTOTYPE</span>
+  </div>
+  <div class="who">
+    역할 시뮬레이션 · <strong id="whoLabel">직원 김효진</strong>
+  </div>
+</div>
+
+<div class="roletabs" id="roletabs"></div>
+
+<main id="main"></main>
+
+<!-- 모달들 -->
+<div class="modal-bg" id="modal-bg">
+  <div class="modal" id="modal-inner"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// =================================================================
+// 모의 데이터
+// =================================================================
+const STAFF = [
+  { id:"s1", name:"김효진",  team:"전시팀", anon:"E-1A2B", role:"직원", phone:"010-****-1234", contractStart:"2023-03-15" },
+  { id:"s2", name:"윤승수",  team:"시설팀", anon:"E-3C4D", role:"직원", phone:"010-****-5678", contractStart:"2024-01-10" },
+  { id:"s3", name:"윤찬미",  team:"전시팀", anon:"E-5E6F", role:"직원", phone:"010-****-9012", contractStart:"2024-06-01" },
+  { id:"s4", name:"박지훈",  team:"보안팀", anon:"E-7G8H", role:"직원", phone:"010-****-3456", contractStart:"2022-11-22" },
+  { id:"s5", name:"최서연",  team:"안내팀", anon:"E-9I0J", role:"알바", phone:"010-****-7890", contractStart:"2025-02-01" },
+];
+const TEAMS = ["전시팀","시설팀","보안팀","안내팀"];
+const TODAY_ATTENDANCE = [
+  { staffId:"s1", state:"근무중", checkIn:"08:55", method:"GPS", accuracy:"high", deviceMatch:true, lateMin:0 },
+  { staffId:"s2", state:"자동출근 대기", checkIn:null, method:"BLE", accuracy:"low", deviceMatch:true, lateMin:0, queueReason:"BLE 신호 약함" },
+  { staffId:"s3", state:"근무중", checkIn:"09:02", method:"GPS", accuracy:"high", deviceMatch:true, lateMin:2 },
+  { staffId:"s4", state:"수동출근 요청", checkIn:null, method:null, accuracy:null, deviceMatch:false, lateMin:0, manualReason:"디바이스 변경, 새 폰 인증 대기" },
+  { staffId:"s5", state:"미출근", checkIn:null, method:null, accuracy:null, deviceMatch:null, lateMin:18 },
+];
+const CORRECTIONS = [
+  { id:"c1", staffId:"s1", date:"2026-05-19", field:"퇴근시각", from:"17:55", to:"18:30", reason:"고객 응대로 지연 출구 시점 30분 차이", status:"대기" },
+  { id:"c2", staffId:"s3", date:"2026-05-18", field:"출근시각", from:"09:15", to:"08:55", reason:"BLE 인식 지연으로 늦은 기록", status:"승인" },
+];
+const ACCESS_LOG = [
+  { ts:"2026-05-21 10:42", actor:"관리자 이미경",  target:"E-3C4D", action:"정밀 위치 열람",      reason:"BLE 미수신 원인 확인", legalBasis:"근로기준법 제43조 임금대장" },
+  { ts:"2026-05-21 09:14", actor:"관리자 이미경",  target:"E-1A2B", action:"근태기록 정정 승인", reason:"본인 요청 검증 — 출입게이트 로그 확인", legalBasis:"근로자명부 정정의무" },
+  { ts:"2026-05-20 16:08", actor:"팀장 박정환",    target:"E-5E6F", action:"출근 큐 검토",        reason:"자동출근 대기 해소", legalBasis:"팀 운영 권한" },
+];
+const CONSENT_RECORDS = [
+  { staffId:"s1", version:"v3.2",   agreedAt:"2024-12-30", scope:["근무지 GPS","BLE","근무중 한정"], withdrawAt:null },
+  { staffId:"s2", version:"v3.2",   agreedAt:"2024-12-30", scope:["근무지 GPS","BLE","근무중 한정"], withdrawAt:null },
+  { staffId:"s3", version:"v3.2",   agreedAt:"2024-12-30", scope:["근무지 GPS","BLE","근무중 한정"], withdrawAt:null },
+  { staffId:"s4", version:"v3.2",   agreedAt:"2024-12-30", scope:["근무지 GPS","BLE","근무중 한정"], withdrawAt:null },
+  { staffId:"s5", version:"v3.2",   agreedAt:"2025-02-01", scope:["근무지 GPS"],                       withdrawAt:null },
+];
+const CUSTOMER_TASKS = [
+  { id:"t1", customer:"청주시 시설관리공단", site:"한국잠사박물관", time:"14:00", state:"인력 도착 완료", delay:0, issues:0 },
+  { id:"t2", customer:"청주시 시설관리공단", site:"누에과학관 정기점검", time:"15:30", state:"예정", delay:0, issues:0 },
+];
+
+// =================================================================
+// 역할 정의
+// =================================================================
+const ROLES = [
+  { key:"staff",    emoji:"👤", name:"직원",   color:"#3b82f6", desc:"내 출퇴근·정정·동의 관리" },
+  { key:"lead",     emoji:"📋", name:"팀장",   color:"#0891b2", desc:"팀 운영 보드 · 예외 처리 · 근무표" },
+  { key:"admin",    emoji:"🛠️", name:"관리자", color:"#0f172a", desc:"운영 예외 처리 · 권한 관리 · 사유 기반 정밀 위치 열람" },
+  { key:"ceo",      emoji:"🏛️", name:"대표",   color:"#7c3aed", desc:"집계 KPI · 리스크 · 컴플라이언스 (개인 위치 미노출)" },
+  { key:"lawyer",   emoji:"⚖️", name:"노무사", color:"#0e7490", desc:"동의·접근 로그·보존·감사 증빙" },
+  { key:"customer", emoji:"🤝", name:"고객",   color:"#16a34a", desc:"서비스 진행 상태만 (직원 개인정보 미노출)" },
+];
+
+// =================================================================
+// 헬퍼
+// =================================================================
+const $ = (s,r=document)=>r.querySelector(s);
+const $$ = (s,r=document)=>Array.from(r.querySelectorAll(s));
+function staffById(id) { return STAFF.find(s=>s.id===id); }
+function toast(msg, kind="") {
+  const t = $("#toast"); t.textContent = msg; t.className = "toast show " + kind;
+  setTimeout(()=>t.classList.remove("show"), 2400);
+}
+function openModal(html) {
+  $("#modal-inner").innerHTML = html;
+  $("#modal-bg").classList.add("open");
+}
+function closeModal() { $("#modal-bg").classList.remove("open"); }
+$("#modal-bg").addEventListener("click", e=>{ if (e.target.id==="modal-bg") closeModal(); });
+
+let currentRole = "staff";
+function setRole(key) {
+  currentRole = key;
+  const r = ROLES.find(x=>x.key===key);
+  $("#whoLabel").textContent = r.name + " 시뮬레이션";
+  renderTabs();
+  render();
+}
+
+function renderTabs() {
+  $("#roletabs").innerHTML = ROLES.map(r => `
+    <button class="roletab ${currentRole===r.key?'active':''}" onclick="setRole('${r.key}')">
+      <span class="emoji">${r.emoji}</span> ${r.name}
+    </button>
+  `).join("");
+}
+
+// =================================================================
+// 1. 직원 화면
+// =================================================================
+function renderStaff() {
+  const me = STAFF[0]; // 김효진 시뮬레이션
+  const att = TODAY_ATTENDANCE.find(a=>a.staffId===me.id);
+  const myConsent = CONSENT_RECORDS.find(c=>c.staffId===me.id);
+  const myCorrections = CORRECTIONS.filter(c=>c.staffId===me.id);
+
+  return `
+    <div class="role-banner" style="--accent:#3b82f6">
+      <div class="icon">👤</div>
+      <div>
+        <h2>${me.name} (${me.team}) — 내 화면</h2>
+        <p>내 출퇴근 상태, 정정 요청, 위치정보 동의 관리. 다른 동료의 위치는 보이지 않습니다.</p>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h3>📍 오늘 내 출퇴근 <span class="pill">${att.state}</span></h3>
+        <div class="stat good">${att.checkIn || '대기'}<span class="unit">출근</span></div>
+        <div class="stat-sub">방식: ${att.method || '-'} · 정확도: ${att.accuracy || '-'} · 디바이스 일치: ${att.deviceMatch ? '✓' : '✗'}</div>
+        <div class="toolbar" style="margin-top:12px">
+          <button class="btn primary" onclick="openManualCheckin()">수동 출근 요청</button>
+          <button class="btn" onclick="openCorrection()">기록 정정 요청</button>
+        </div>
+        <div class="privacy-note">⚠️ 내 GPS 좌표는 근무 시간(시작 1시간 전 ~ 종료 30분 후)에만 수집되며, 동의 철회 시 즉시 중단됩니다.</div>
+      </div>
+
+      <div class="card">
+        <h3>📝 내 정정 요청 <span class="pill">${myCorrections.length}건</span></h3>
+        ${myCorrections.length === 0 ? '<div class="empty">정정 요청 없음</div>' :
+          myCorrections.map(c=>`
+            <div class="row">
+              <div class="who">
+                <div class="name">${c.date} · ${c.field}</div>
+                <div class="meta">${c.from} → ${c.to} · "${c.reason}"</div>
+              </div>
+              <div class="status ${c.status==='승인'?'ok':'pending'}">${c.status}</div>
+            </div>
+          `).join("")
+        }
+      </div>
+
+      <div class="card">
+        <h3>🔐 내 위치정보 동의 <span class="pill">${myConsent.version}</span></h3>
+        <div class="stat good" style="font-size:18px">동의 유효</div>
+        <div class="stat-sub">동의 일시: ${myConsent.agreedAt}</div>
+        <div class="stat-sub">수집 범위: ${myConsent.scope.join(' · ')}</div>
+        <div class="toolbar" style="margin-top:12px">
+          <button class="btn" onclick="openConsentDetail()">동의 내역 자세히</button>
+          <button class="btn warn" onclick="openWithdrawConsent()">동의 철회</button>
+        </div>
+        <div class="privacy-note">위치정보법 제18조에 따라, 언제든지 동의를 철회할 수 있고 즉시 수집이 중단됩니다.</div>
+      </div>
+
+      <div class="card">
+        <h3>📅 내 근무 정보</h3>
+        <div class="row">
+          <div class="who"><div class="name">이번 주 근무시간</div><div class="meta">월~수: 24h · 목금: 예정 16h</div></div>
+          <div class="status info">40h / 52h</div>
+        </div>
+        <div class="row">
+          <div class="who"><div class="name">이번 달 지각</div><div class="meta">1회 (5/19, 2분)</div></div>
+          <div class="status muted">1</div>
+        </div>
+        <div class="row">
+          <div class="who"><div class="name">결근</div><div class="meta">0회</div></div>
+          <div class="status ok">0</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// =================================================================
+// 2. 팀장 화면
+// =================================================================
+function renderLead() {
+  const myTeam = "전시팀";
+  const teamMembers = STAFF.filter(s=>s.team===myTeam);
+  const teamAtt = teamMembers.map(s=>({...s, att:TODAY_ATTENDANCE.find(a=>a.staffId===s.id)}));
+  const queue = TODAY_ATTENDANCE.filter(a => a.state==="자동출근 대기" || a.state==="수동출근 요청");
+  const pendingCorr = CORRECTIONS.filter(c=>c.status==="대기");
+
+  return `
+    <div class="role-banner" style="--accent:#0891b2">
+      <div class="icon">📋</div>
+      <div>
+        <h2>${myTeam} 팀장 — 팀 운영 보드</h2>
+        <p>실시간 지도가 아닌 팀원 상태 · 예외 처리 큐 · 근무표 조정 중심. 팀원 정밀 좌표는 기본 미노출.</p>
+      </div>
+    </div>
+
+    <div class="grid thirds">
+      <div class="card">
+        <h3>오늘 출근 현황</h3>
+        <div class="stat good">${teamAtt.filter(t=>t.att?.state==='근무중').length}<span class="unit">/ ${teamAtt.length}명</span></div>
+        <div class="stat-sub">정상 출근 · 지각 ${teamAtt.filter(t=>t.att?.lateMin>0).length}명</div>
+      </div>
+      <div class="card">
+        <h3>예외 처리 대기</h3>
+        <div class="stat warn">${queue.length}<span class="unit">건</span></div>
+        <div class="stat-sub">자동출근 대기 + 수동출근 요청</div>
+      </div>
+      <div class="card">
+        <h3>정정 요청 (팀)</h3>
+        <div class="stat ${pendingCorr.length>0?'warn':'good'}">${pendingCorr.length}<span class="unit">대기</span></div>
+        <div class="stat-sub">팀장 승인 후 관리자 최종 확인</div>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:14px">
+      <div class="card">
+        <h3>👥 팀원 상태</h3>
+        ${teamAtt.map(t=>`
+          <div class="row">
+            <div class="avatar">${t.name[0]}</div>
+            <div class="who">
+              <div class="name">${t.name}</div>
+              <div class="meta">${t.att?.checkIn ? '출근 '+t.att.checkIn : '미출근'}${t.att?.lateMin>0?` · 지각 ${t.att.lateMin}분`:''}</div>
+            </div>
+            <div class="status ${t.att?.state==='근무중'?'ok':t.att?.state==='미출근'?'absent':'pending'}">${t.att?.state || '미출근'}</div>
+          </div>
+        `).join("")}
+        <div class="privacy-note">⚠️ 팀장 화면에서는 정밀 좌표 대신 출퇴근 상태만 표시. 정밀 위치가 필요하면 관리자에게 사유와 함께 요청해주세요.</div>
+      </div>
+
+      <div class="card">
+        <h3>⚡ 예외 처리 큐</h3>
+        ${queue.length === 0 ? '<div class="empty">처리 대기 없음</div>' :
+          queue.map(q=>{
+            const s = staffById(q.staffId);
+            return `
+              <div class="row">
+                <div class="avatar" style="background:linear-gradient(135deg,#ea580c,#dc2626)">${s.name[0]}</div>
+                <div class="who">
+                  <div class="name">${s.name} · ${q.state}</div>
+                  <div class="meta">${q.queueReason || q.manualReason || ''}</div>
+                </div>
+                <button class="btn primary" onclick="toast('승인 처리 (시뮬레이션)','good')">검토</button>
+              </div>
+            `;
+          }).join("")
+        }
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:14px">
+      <div class="card">
+        <h3>📢 팀 공지</h3>
+        <div class="toolbar"><button class="btn primary" onclick="toast('팀 공지 작성 (시뮬레이션)')">새 공지</button></div>
+        <div class="row"><div class="who"><div class="name">금주 시설점검 일정 변경</div><div class="meta">5/22 14:00 → 16:00</div></div><div class="status info">발송 완료</div></div>
+        <div class="row"><div class="who"><div class="name">관람객 단체 예약 안내</div><div class="meta">5/24 토 · 80명</div></div><div class="status info">발송 완료</div></div>
+      </div>
+      <div class="card">
+        <h3>🗓️ 근무표 조정</h3>
+        <div class="row"><div class="who"><div class="name">5/24 토</div><div class="meta">전시팀 필요 인원 3명</div></div><div class="status pending">2명 배정</div></div>
+        <div class="row"><div class="who"><div class="name">5/25 일</div><div class="meta">전시팀 필요 인원 2명</div></div><div class="status ok">2명 배정</div></div>
+        <div class="toolbar"><button class="btn" onclick="toast('근무표 편집 화면 열기 (시뮬레이션)')">편집</button></div>
+      </div>
+    </div>
+  `;
+}
+
+// =================================================================
+// 3. 관리자 화면
+// =================================================================
+function renderAdmin() {
+  const queue = TODAY_ATTENDANCE.filter(a => a.state==="자동출근 대기" || a.state==="수동출근 요청");
+  const lowAcc = TODAY_ATTENDANCE.filter(a => a.accuracy === "low");
+  const recentAccess = ACCESS_LOG.slice(0,3);
+
+  return `
+    <div class="role-banner" style="--accent:#0f172a">
+      <div class="icon">🛠️</div>
+      <div>
+        <h2>관리자 — 운영 예외 처리</h2>
+        <p>"직원 감시"가 아닌 운영 예외 처리 중심. 정밀 위치는 사유 입력 + 접근 로그 후에만 열람 가능.</p>
+      </div>
+    </div>
+
+    <div class="grid thirds">
+      <div class="card"><h3>전체 출근율</h3><div class="stat good">${Math.round(TODAY_ATTENDANCE.filter(a=>a.state==='근무중').length/STAFF.length*100)}<span class="unit">%</span></div><div class="stat-sub">${TODAY_ATTENDANCE.filter(a=>a.state==='근무중').length}/${STAFF.length}명 근무중</div></div>
+      <div class="card"><h3>자동출근 대기</h3><div class="stat warn">${queue.length}<span class="unit">건</span></div><div class="stat-sub">BLE/GPS 정확도 미달 포함</div></div>
+      <div class="card"><h3>GPS 정확도 낮음</h3><div class="stat warn">${lowAcc.length}<span class="unit">명</span></div><div class="stat-sub">정밀도 50m 초과</div></div>
+    </div>
+
+    <div class="grid" style="margin-top:14px">
+      <div class="card">
+        <h3>📋 전체 출근 현황 <span class="pill">익명 ID 기본 표시</span></h3>
+        ${TODAY_ATTENDANCE.map(a=>{
+          const s = staffById(a.staffId);
+          return `
+            <div class="row">
+              <div class="avatar">${s.name[0]}</div>
+              <div class="who">
+                <div class="name">${s.name} <span class="anonchip">${s.anon}</span></div>
+                <div class="meta">${s.team} · ${a.checkIn ? '출근 '+a.checkIn : '미출근'} · ${a.method || '-'}</div>
+              </div>
+              <div class="status ${a.state==='근무중'?'ok':a.state==='미출근'?'absent':'pending'}">${a.state}</div>
+              <button class="btn" onclick="requestPreciseLocation('${s.id}','${s.anon}')">정밀 위치 열람</button>
+            </div>
+          `;
+        }).join("")}
+        <div class="privacy-note">⚠️ 정밀 위치 열람은 사유 입력이 필수이며, 모든 접근은 영구 로그에 기록됩니다. (위치정보법 제16조)</div>
+      </div>
+
+      <div class="card">
+        <h3>📝 정정 요청 처리함 <span class="pill">${CORRECTIONS.filter(c=>c.status==='대기').length}건 대기</span></h3>
+        ${CORRECTIONS.map(c=>{
+          const s = staffById(c.staffId);
+          return `
+            <div class="row">
+              <div class="who">
+                <div class="name">${s.name} · ${c.date} · ${c.field}</div>
+                <div class="meta">${c.from} → ${c.to} · "${c.reason}"</div>
+              </div>
+              ${c.status==='대기' ? `
+                <button class="btn primary" onclick="toast('승인됨 (감사로그 기록)','good')">승인</button>
+                <button class="btn" onclick="toast('반려됨','warn')">반려</button>
+              ` : `<div class="status ok">${c.status}</div>`}
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:14px">
+      <div class="card">
+        <h3>📜 정밀 위치 접근 로그 (최근)</h3>
+        <table>
+          <thead><tr><th>일시</th><th>접근자</th><th>대상</th><th>사유</th></tr></thead>
+          <tbody>
+            ${recentAccess.map(l=>`<tr><td>${l.ts}</td><td>${l.actor}</td><td><span class="anonchip">${l.target}</span></td><td>${l.reason}</td></tr>`).join("")}
+          </tbody>
+        </table>
+        <div class="ok-note">✓ 모든 접근은 노무사 화면에서도 동일하게 조회 가능하며, 5년 보존됩니다.</div>
+      </div>
+      <div class="card">
+        <h3>🔑 권한 관리</h3>
+        <div class="row"><div class="who"><div class="name">이미경 (관리자)</div><div class="meta">정밀 위치 열람 가능 · 정정 승인 가능</div></div><div class="status info">관리자</div></div>
+        <div class="row"><div class="who"><div class="name">박정환 (팀장)</div><div class="meta">팀 단위 출근 상태 조회 · 정밀 좌표 미노출</div></div><div class="status muted">팀장</div></div>
+        <div class="row"><div class="who"><div class="name">손지영 (대표)</div><div class="meta">집계 KPI만 · 개인 위치/이름 미노출</div></div><div class="status muted">대표</div></div>
+        <div class="toolbar"><button class="btn" onclick="openPermissionMatrix()">권한 매트릭스 자세히</button></div>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:14px">
+      <div class="card">
+        <h3>📤 고객 리포트 발송 상태</h3>
+        <div class="row"><div class="who"><div class="name">청주시 시설관리공단</div><div class="meta">5/21 일일 리포트 (익명화)</div></div><div class="status ok">발송 완료 09:30</div></div>
+        <div class="row"><div class="who"><div class="name">청주시 시설관리공단</div><div class="meta">5/20 일일 리포트 (익명화)</div></div><div class="status ok">발송 완료</div></div>
+      </div>
+    </div>
+  `;
+}
+
+// =================================================================
+// 4. 대표 화면
+// =================================================================
+function renderCEO() {
+  return `
+    <div class="role-banner" style="--accent:#7c3aed">
+      <div class="icon">🏛️</div>
+      <div>
+        <h2>대표 — 집계 KPI · 리스크</h2>
+        <p>개인 위치/이름 미노출. 사업장 단위 KPI, 컴플라이언스 알림, 인력 배치 개선 인사이트.</p>
+      </div>
+    </div>
+
+    <div class="grid thirds">
+      <div class="card"><h3>출근 정확도 (월)</h3><div class="stat good">96.4<span class="unit">%</span></div><div class="stat-sub">자동출근 성공률 · 전월 대비 +2.1%</div></div>
+      <div class="card"><h3>정정 요청률</h3><div class="stat good">1.8<span class="unit">%</span></div><div class="stat-sub">기준치 5% 이하 정상</div></div>
+      <div class="card"><h3>사업장 지연 위험</h3><div class="stat warn">중<span class="unit"></span></div><div class="stat-sub">5/24 토 단체 예약 대응</div></div>
+      <div class="card"><h3>고객 서비스 영향</h3><div class="stat good">0<span class="unit">건</span></div><div class="stat-sub">이번 주 고객 이슈</div></div>
+      <div class="card"><h3>권한 과다 리스크</h3><div class="stat good">낮음</div><div class="stat-sub">관리자 계정 2개 · 권한 분리 OK</div></div>
+      <div class="card"><h3>컴플라이언스 알림</h3><div class="stat warn">2<span class="unit">건</span></div><div class="stat-sub">동의서 갱신 예정 · 보존기간 점검</div></div>
+    </div>
+
+    <div class="grid" style="margin-top:14px">
+      <div class="card">
+        <h3>🏢 사업장별 KPI</h3>
+        <table>
+          <thead><tr><th>사업장</th><th>출근율</th><th>정정률</th><th>고객 만족</th><th>리스크</th></tr></thead>
+          <tbody>
+            <tr><td>한국잠사박물관</td><td>96.4%</td><td>1.8%</td><td>4.8/5.0</td><td><span class="status ok">정상</span></td></tr>
+            <tr><td>누에과학관 (위탁)</td><td>92.1%</td><td>3.2%</td><td>4.5/5.0</td><td><span class="status pending">주의</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3>📊 인력 배치 개선 포인트</h3>
+        <div class="row"><div class="who"><div class="name">시설팀 BLE 인식률 낮음</div><div class="meta">BLE 비콘 추가 설치 검토 권고</div></div><div class="status pending">권고</div></div>
+        <div class="row"><div class="who"><div class="name">주말 안내팀 인력 부족</div><div class="meta">5/24 토 단체 예약 시 1명 추가 필요</div></div><div class="status pending">권고</div></div>
+        <div class="row"><div class="who"><div class="name">정정 요청 사유 통계</div><div class="meta">"BLE 인식 지연" 68% — 인프라 개선 필요</div></div><div class="status info">인사이트</div></div>
+      </div>
+    </div>
+
+    <div class="privacy-note" style="max-width:none">⚠️ 대표 화면에는 개인 실시간 위치, 직원 실명, 정밀 좌표가 의도적으로 표시되지 않습니다. 운영상 개인 단위 확인이 필요하면 관리자에게 사유와 함께 요청하세요.</div>
+  `;
+}
+
+// =================================================================
+// 5. 노무사 화면
+// =================================================================
+function renderLawyer() {
+  return `
+    <div class="role-banner" style="--accent:#0e7490">
+      <div class="icon">⚖️</div>
+      <div>
+        <h2>노무사 — 동의 · 접근 로그 · 보존 · 감사</h2>
+        <p>위치정보법 · 근로기준법 점검 대비. 동의 이력, 정정 이력, 관리자 접근 로그, 보존·파기 상태, 감사 증빙.</p>
+      </div>
+    </div>
+
+    <div class="grid thirds">
+      <div class="card"><h3>동의 유효 직원</h3><div class="stat good">${CONSENT_RECORDS.filter(c=>!c.withdrawAt).length}<span class="unit">/ ${STAFF.length}</span></div><div class="stat-sub">동의 문구 v3.2 (2024-12 갱신)</div></div>
+      <div class="card"><h3>동의 철회 (누적)</h3><div class="stat good">0<span class="unit">건</span></div><div class="stat-sub">철회 즉시 GPS 중단 자동화 OK</div></div>
+      <div class="card"><h3>관리자 정밀 위치 열람 (월)</h3><div class="stat">${ACCESS_LOG.filter(l=>l.action==='정밀 위치 열람').length}<span class="unit">건</span></div><div class="stat-sub">전 건 사유 첨부 · 로그 영구 보존</div></div>
+    </div>
+
+    <div class="grid" style="margin-top:14px">
+      <div class="card">
+        <h3>📜 위치정보 수집·이용 동의 이력</h3>
+        <table>
+          <thead><tr><th>직원</th><th>동의 일시</th><th>버전</th><th>수집 범위</th><th>철회</th></tr></thead>
+          <tbody>
+            ${CONSENT_RECORDS.map(c=>{
+              const s = staffById(c.staffId);
+              return `<tr><td>${s.name} <span class="mini">${s.anon}</span></td><td>${c.agreedAt}</td><td>${c.version}</td><td>${c.scope.join(', ')}</td><td>${c.withdrawAt || '<span class="status ok">유효</span>'}</td></tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+        <div class="ok-note">✓ 위치정보법 제18조: 이용약관 주요 사항 명시·동의 획득 · 권리 행사 절차 반영 완료.</div>
+      </div>
+
+      <div class="card">
+        <h3>🔍 정밀 위치 접근 로그 <span class="pill">전체</span></h3>
+        <table>
+          <thead><tr><th>일시</th><th>접근자</th><th>대상</th><th>사유 / 법적 근거</th></tr></thead>
+          <tbody>
+            ${ACCESS_LOG.map(l=>`<tr><td>${l.ts}</td><td>${l.actor}</td><td><span class="anonchip">${l.target}</span></td><td>${l.reason}<br><span class="mini">${l.legalBasis}</span></td></tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:14px">
+      <div class="card">
+        <h3>📝 출퇴근 정정 요청 이력 (감사)</h3>
+        <table>
+          <thead><tr><th>일자</th><th>직원</th><th>항목</th><th>변경 내역</th><th>사유</th><th>상태</th></tr></thead>
+          <tbody>
+            ${CORRECTIONS.map(c=>{
+              const s = staffById(c.staffId);
+              return `<tr><td>${c.date}</td><td>${s.name}</td><td>${c.field}</td><td>${c.from} → ${c.to}</td><td>${c.reason}</td><td><span class="status ${c.status==='승인'?'ok':'pending'}">${c.status}</span></td></tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+        <div class="ok-note">✓ 근로기준법 제42조: 근로자 명부·중요 서류 3년 보존. 정정 이력 보존 자동화 적용.</div>
+      </div>
+
+      <div class="card">
+        <h3>💾 보존·파기 상태</h3>
+        <div class="row"><div class="who"><div class="name">근로자 명부</div><div class="meta">3년 보존 · 자동 백업</div></div><div class="status ok">정상</div></div>
+        <div class="row"><div class="who"><div class="name">임금대장</div><div class="meta">3년 보존 · 별도 저장소</div></div><div class="status ok">정상</div></div>
+        <div class="row"><div class="who"><div class="name">위치정보 원본</div><div class="meta">근무종료 90일 후 자동 파기</div></div><div class="status ok">정상</div></div>
+        <div class="row"><div class="who"><div class="name">접근 로그</div><div class="meta">5년 보존 (사후 점검 대응)</div></div><div class="status ok">정상</div></div>
+        <div class="row"><div class="who"><div class="name">동의 철회 기록</div><div class="meta">영구 보존</div></div><div class="status ok">정상</div></div>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:14px">
+      <div class="card">
+        <h3>📦 감사용 증빙 패키지</h3>
+        <p style="font-size:11.5px;color:#64748b;line-height:1.55;margin-bottom:10px">사후 점검·분쟁 대비. 동의 이력, 접근 로그, 정정 이력, 보존 증명, 위치 원본 해시값을 PDF + JSON으로 일괄 생성.</p>
+        <div class="toolbar">
+          <button class="btn primary" onclick="generateAuditPackage()">감사 패키지 생성 (zip)</button>
+          <button class="btn" onclick="toast('전월(4월) 패키지 다운로드')">전월 패키지</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// =================================================================
+// 6. 고객 화면
+// =================================================================
+function renderCustomer() {
+  const t = CUSTOMER_TASKS[0];
+  return `
+    <div class="role-banner" style="--accent:#16a34a">
+      <div class="icon">🤝</div>
+      <div>
+        <h2>${t.customer} — 서비스 진행 상태</h2>
+        <p>직원 실명·좌표·이동 경로 미노출. 서비스 도착·시작·지연·이슈 신고·일일 리포트만 제공.</p>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="customer-status">
+        <div class="label">현재 상태</div>
+        <div class="val">담당 인력 현장 도착 완료</div>
+        <div class="sub">${t.site} · 서비스 시작 예정 ${t.time} · 지연 없음</div>
+      </div>
+
+      <div class="card">
+        <h3>📍 진행 타임라인 <span class="pill">${t.site}</span></h3>
+        <div class="timeline">
+          <div class="ev"><div class="dot"></div><div class="body"><div class="label">담당 인력 현장 도착</div><div class="meta">${t.time.replace(':','')==('1400')?'13:52':'완료'} · 정시 도착</div></div></div>
+          <div class="ev"><div class="dot scheduled"></div><div class="body"><div class="label">서비스 시작 예정</div><div class="meta">${t.time} · 5분 전 알림 발송 예정</div></div></div>
+          <div class="ev"><div class="dot pending"></div><div class="body"><div class="label">서비스 종료 예정</div><div class="meta">17:00</div></div></div>
+          <div class="ev"><div class="dot pending"></div><div class="body"><div class="label">일일 리포트 발송</div><div class="meta">18:00 (익명 통계)</div></div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>📋 일일 리포트 (개인정보 보호형)</h3>
+        <div class="row"><div class="who"><div class="name">담당 인력</div><div class="meta">소속: 한국잠사박물관 운영팀</div></div><div class="status ok">배정 완료</div></div>
+        <div class="row"><div class="who"><div class="name">정시 도착</div><div class="meta">예정 ${t.time} → 실제 13:52</div></div><div class="status ok">정상</div></div>
+        <div class="row"><div class="who"><div class="name">지연</div><div class="meta">없음</div></div><div class="status ok">0건</div></div>
+        <div class="row"><div class="who"><div class="name">고객 이슈</div><div class="meta">접수된 이슈 없음</div></div><div class="status ok">0건</div></div>
+        <div class="privacy-note">⚠️ 직원의 실명, 정확한 GPS 좌표, 이동 경로는 고객님께 제공되지 않습니다. 서비스 진행 상태만 공유됩니다.</div>
+      </div>
+
+      <div class="card">
+        <h3>🚨 이슈 신고</h3>
+        <p style="font-size:11.5px;color:#64748b;line-height:1.55;margin-bottom:10px">서비스 중 문제가 있으면 알려주세요. 직접 직원에게 연락하지 않으셔도 됩니다.</p>
+        <div class="toolbar">
+          <button class="btn primary" onclick="openCustomerIssue()">이슈 신고</button>
+          <button class="btn" onclick="toast('과거 리포트 보기 (시뮬레이션)')">과거 리포트</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// =================================================================
+// 액션 핸들러 (모달들)
+// =================================================================
+function requestPreciseLocation(staffId, anon) {
+  const s = staffById(staffId);
+  openModal(`
+    <h3>🔍 정밀 위치 열람 요청</h3>
+    <p class="sub">대상: <strong>${s.name}</strong> <span class="anonchip">${anon}</span><br>
+       이 작업은 위치정보법 제16조에 따라 사유 입력이 필수이며, 모든 접근은 영구 로그에 기록됩니다.</p>
+    <label>열람 사유 (필수)</label>
+    <select id="reasonCat"><option>BLE 미수신 원인 확인</option><option>긴급 안전 사고 대응</option><option>출퇴근 기록 정정 검증</option><option>고객 응대 필요</option><option>기타</option></select>
+    <label>상세 설명 (50자 이상)</label>
+    <textarea id="reasonDetail" placeholder="예: 14:32 BLE 게이트웨이 신호가 끊긴 시점부터 현장 위치 확인 필요. 고객 응대 중 사고 대응 가능성."></textarea>
+    <label>법적 근거</label>
+    <select id="legalBasis"><option>근로기준법 제43조 (임금대장)</option><option>위치정보법 제16조</option><option>고용계약상 안전관리 의무</option><option>고객 서비스 이행</option></select>
+    <div class="actions">
+      <button class="btn" onclick="closeModal()">취소</button>
+      <button class="btn primary" onclick="confirmPreciseLocation('${staffId}')">사유 기록 + 열람</button>
+    </div>
+  `);
+}
+function confirmPreciseLocation(staffId) {
+  const det = $("#reasonDetail").value.trim();
+  if (det.length < 50) { toast("상세 설명 50자 이상 입력해주세요", "warn"); return; }
+  closeModal();
+  toast("✓ 사유 기록됨 · 정밀 위치 표시 (감사 로그 보존)", "good");
+}
+
+function openManualCheckin() {
+  openModal(`
+    <h3>📍 수동 출근 요청</h3>
+    <p class="sub">GPS/BLE 자동 인식이 안 되는 경우, 사유와 함께 출근을 직접 요청할 수 있습니다. 팀장 → 관리자 검토 후 승인됩니다.</p>
+    <label>사유</label>
+    <select><option>새 디바이스로 변경</option><option>BLE 비콘 점검 중</option><option>GPS 신호 불량 (실내)</option><option>기타</option></select>
+    <label>현재 위치 (대략)</label>
+    <input value="박물관 본관 1층 안내데스크"/>
+    <label>상세 설명</label>
+    <textarea placeholder="현장 사진을 첨부하면 빠르게 승인됩니다."></textarea>
+    <div class="actions">
+      <button class="btn" onclick="closeModal()">취소</button>
+      <button class="btn primary" onclick="closeModal();toast('요청 전송됨 · 팀장 검토 대기','good')">제출</button>
+    </div>
+  `);
+}
+
+function openCorrection() {
+  openModal(`
+    <h3>📝 출퇴근 기록 정정 요청</h3>
+    <p class="sub">기록된 출퇴근 시각이 실제와 다를 때 정정을 요청할 수 있습니다. 모든 정정 이력은 노무사 화면에서도 확인됩니다.</p>
+    <label>대상 일자</label><input type="date" value="2026-05-21"/>
+    <label>항목</label><select><option>출근시각</option><option>퇴근시각</option><option>휴게시간</option></select>
+    <label>실제 시각</label><input type="time" value="17:55"/>
+    <label>사유</label><textarea placeholder="예: 고객 응대로 퇴근 시점이 지연됨. 안내데스크 동료 증인."></textarea>
+    <div class="actions">
+      <button class="btn" onclick="closeModal()">취소</button>
+      <button class="btn primary" onclick="closeModal();toast('요청 전송됨 · 팀장 → 관리자 순으로 검토','good')">제출</button>
+    </div>
+  `);
+}
+
+function openConsentDetail() {
+  openModal(`
+    <h3>🔐 위치정보 수집·이용 동의 안내</h3>
+    <p class="sub">위치정보법 제18조에 따라 다음 사항을 명시하고 동의를 받습니다.</p>
+    <div style="font-size:11.5px;line-height:1.7;color:#475569">
+      <strong>1. 수집 항목</strong><br>· GPS 좌표 (위도/경도) · BLE 신호 · 디바이스 ID<br><br>
+      <strong>2. 수집 목적</strong><br>· 출퇴근 자동 인식 · 근무지 이탈 방지 · 비상 시 안전 확인<br><br>
+      <strong>3. 수집 시간 범위</strong><br>· 근무 시작 1시간 전 ~ 근무 종료 30분 후만 수집<br>· 그 외 시간은 자동 비활성화<br><br>
+      <strong>4. 보유·이용 기간</strong><br>· 원본 좌표: 90일 후 자동 파기<br>· 집계 (출근 여부): 3년 보존 (근로기준법)<br><br>
+      <strong>5. 제3자 제공</strong><br>· 없음 (고객사에는 익명화 상태로만 제공)<br><br>
+      <strong>6. 동의 거부 시</strong><br>· 자동 출퇴근 미적용 (수동 출근 요청으로 대체 가능)<br>· 인사·평가상 불이익 없음
+    </div>
+    <div class="actions">
+      <button class="btn primary" onclick="closeModal()">확인</button>
+    </div>
+  `);
+}
+
+function openWithdrawConsent() {
+  openModal(`
+    <h3>⚠️ 위치정보 동의 철회</h3>
+    <p class="sub">철회 즉시 GPS·BLE 수집이 중단됩니다. 자동 출퇴근이 비활성화되며, 수동 출근 요청만 가능합니다.<br>인사·평가상 불이익은 없습니다.</p>
+    <label>철회 사유 (선택)</label>
+    <textarea placeholder="입력 안 해도 됩니다. 서비스 개선 참고용."></textarea>
+    <div class="actions">
+      <button class="btn" onclick="closeModal()">취소</button>
+      <button class="btn danger" onclick="closeModal();toast('동의 철회 처리됨 · GPS·BLE 수집 즉시 중단','warn')">철회 확정</button>
+    </div>
+  `);
+}
+
+function openCustomerIssue() {
+  openModal(`
+    <h3>🚨 이슈 신고</h3>
+    <p class="sub">서비스 진행 중 문제가 있으면 알려주세요. 담당자에게 직접 전달됩니다.</p>
+    <label>이슈 유형</label>
+    <select><option>약속 시간보다 지연</option><option>서비스 품질 문제</option><option>시설/장비 문제</option><option>기타</option></select>
+    <label>상세 내용</label>
+    <textarea placeholder="가능한 자세히 작성해주세요."></textarea>
+    <label>회신 받을 연락처 (선택)</label>
+    <input placeholder="010-0000-0000"/>
+    <div class="actions">
+      <button class="btn" onclick="closeModal()">취소</button>
+      <button class="btn primary" onclick="closeModal();toast('이슈 접수 완료 · 30분 내 회신','good')">신고</button>
+    </div>
+  `);
+}
+
+function openPermissionMatrix() {
+  openModal(`
+    <h3>🔑 권한 매트릭스</h3>
+    <p class="sub">각 역할별로 볼 수 있는 정보 범위. ✓=항상, ⚠️=사유+로그 필요, –=불가</p>
+    <div class="matrix" style="margin-top:8px">
+      <table>
+        <thead><tr><th>정보 항목</th>${ROLES.map(r=>`<th>${r.emoji}<br>${r.name}</th>`).join("")}</tr></thead>
+        <tbody>
+          <tr><td>본인 출퇴근 상태</td><td class="pm-yes">✓</td><td class="pm-yes">✓</td><td class="pm-yes">✓</td><td class="pm-no">–</td><td class="pm-yes">✓</td><td class="pm-no">–</td></tr>
+          <tr><td>팀원 출퇴근 상태</td><td class="pm-no">–</td><td class="pm-yes">✓</td><td class="pm-yes">✓</td><td class="pm-no">–</td><td class="pm-yes">✓</td><td class="pm-no">–</td></tr>
+          <tr><td>직원 실명</td><td class="pm-no">본인만</td><td class="pm-yes">팀원만</td><td class="pm-yes">✓</td><td class="pm-no">–</td><td class="pm-yes">✓</td><td class="pm-no">–</td></tr>
+          <tr><td>익명 ID (E-XXXX)</td><td class="pm-yes">✓</td><td class="pm-yes">✓</td><td class="pm-yes">✓</td><td class="pm-yes">✓</td><td class="pm-yes">✓</td><td class="pm-no">–</td></tr>
+          <tr><td>정밀 GPS 좌표</td><td class="pm-yes">본인만</td><td class="pm-no">–</td><td class="pm-req">⚠️ 사유</td><td class="pm-no">–</td><td class="pm-no">–</td><td class="pm-no">–</td></tr>
+          <tr><td>이동 경로</td><td class="pm-no">–</td><td class="pm-no">–</td><td class="pm-req">⚠️ 사유</td><td class="pm-no">–</td><td class="pm-no">–</td><td class="pm-no">–</td></tr>
+          <tr><td>집계 KPI</td><td class="pm-no">–</td><td class="pm-yes">팀 단위</td><td class="pm-yes">✓</td><td class="pm-yes">✓</td><td class="pm-yes">✓</td><td class="pm-no">–</td></tr>
+          <tr><td>접근 로그</td><td class="pm-no">–</td><td class="pm-no">–</td><td class="pm-yes">✓</td><td class="pm-no">–</td><td class="pm-yes">✓</td><td class="pm-no">–</td></tr>
+          <tr><td>동의 이력 (직원)</td><td class="pm-yes">본인만</td><td class="pm-no">–</td><td class="pm-yes">요약만</td><td class="pm-no">–</td><td class="pm-yes">✓</td><td class="pm-no">–</td></tr>
+          <tr><td>서비스 진행 상태 (익명)</td><td class="pm-no">–</td><td class="pm-yes">✓</td><td class="pm-yes">✓</td><td class="pm-yes">✓</td><td class="pm-yes">✓</td><td class="pm-yes">✓</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="actions"><button class="btn primary" onclick="closeModal()">확인</button></div>
+  `);
+}
+
+function generateAuditPackage() {
+  toast("📦 감사 패키지 생성 중... (시뮬레이션)");
+  setTimeout(()=>toast("✓ jamsa_audit_2026-05.zip · 동의이력·접근로그·정정이력·해시증명 포함","good"), 1200);
+}
+
+// =================================================================
+// 렌더
+// =================================================================
+function render() {
+  let html = "";
+  switch (currentRole) {
+    case "staff":    html = renderStaff();    break;
+    case "lead":     html = renderLead();     break;
+    case "admin":    html = renderAdmin();    break;
+    case "ceo":      html = renderCEO();      break;
+    case "lawyer":   html = renderLawyer();   break;
+    case "customer": html = renderCustomer(); break;
+  }
+  $("#main").innerHTML = html;
+  window.scrollTo({top:0,behavior:"smooth"});
+}
+
+// 초기화
+renderTabs();
+render();
+
+// 첫 방문 안내 토스트
+setTimeout(()=>toast("상단 탭에서 역할을 바꿔보세요 · 각 역할별 권한 범위가 다릅니다"), 600);
+</script>
+</body>
+</html>
