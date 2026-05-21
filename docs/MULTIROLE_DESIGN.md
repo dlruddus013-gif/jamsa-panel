@@ -1,0 +1,496 @@
+# 다중 이해관계자 인터페이스 — 설계 문서
+
+> 버전: v1 (draft)
+> 작성일: 2026-05-21
+> 범위: 직원·팀장·관리자·대표·노무사·고객 6역할의 권한 분리 시스템
+
+---
+
+## 0. 설계 원칙
+
+> **"볼 수 있는 사람"과 "봐야 하는 정보"를 분리한다.**
+
+| 원칙 | 의미 |
+|---|---|
+| Privacy by default | 정밀 위치는 기본 미노출. 사유 입력 + 접근 로그 필수 |
+| Need-to-know | 각 역할이 *직무 수행에 필요한* 데이터만 본다 |
+| Auditable | 모든 민감 데이터 접근은 영구 로그로 추적 가능 |
+| Defense in depth | 화면 분리 + API 권한 + DB(RLS) 3중 방어 |
+| Consent-driven | 직원 동의 없으면 GPS·BLE 수집 즉시 중단 |
+| Legal compliance | 위치정보법, 근로기준법, 개인정보보호법 명시 반영 |
+
+---
+
+## 1. 역할 정의
+
+| 역할 키 | 역할명 | 직무 핵심 | 정밀 위치 |
+|---|---|---|---|
+| `staff`    | 직원   | 본인 출퇴근·정정·동의 관리 | 본인만 |
+| `lead`     | 팀장   | 팀 운영 보드·예외 처리·근무표 | 미노출 (필요 시 관리자에게 요청) |
+| `admin`    | 관리자 | 운영 예외 처리·권한 관리 | **사유 + 로그 후 열람** |
+| `ceo`      | 대표   | 집계 KPI·리스크·컴플라이언스 | 미노출 (개인 단위 절대 금지) |
+| `lawyer`   | 노무사 | 동의 이력·접근 로그·보존·감사 | 미노출 (로그만 조회) |
+| `customer` | 고객   | 서비스 진행 상태 | 절대 미노출 |
+
+### 1.1 권한 매트릭스
+
+| 정보 항목 | 직원 | 팀장 | 관리자 | 대표 | 노무사 | 고객 |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| 본인 출퇴근 상태 | ✓ | ✓ | ✓ | – | ✓ | – |
+| 팀원 출퇴근 상태 | – | ✓ | ✓ | – | ✓ | – |
+| 직원 실명 | 본인 | 팀원 | ✓ | – | ✓ | – |
+| 익명 ID (`E-XXXX`) | ✓ | ✓ | ✓ | ✓ | ✓ | – |
+| 정밀 GPS 좌표 | 본인 | – | ⚠️ 사유 | – | – | – |
+| 이동 경로 | – | – | ⚠️ 사유 | – | – | – |
+| 집계 KPI | – | 팀 단위 | ✓ | ✓ | ✓ | – |
+| 접근 로그 | – | – | ✓ | – | ✓ | – |
+| 동의 이력 (직원) | 본인 | – | 요약 | – | ✓ | – |
+| 서비스 진행 상태 (익명) | – | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+범례: ✓=항상, ⚠️=사유 입력 + 로그 필수, –=불가
+
+---
+
+## 2. 파일·디렉토리 구조 권장안
+
+### 2.1 현 상태
+- `source.jsx` (1.7MB) — 모든 React 컴포넌트 한 파일에 혼재
+- `staff-checkin.html` / `staff-checkin-v2.html` — 직원용 모바일 페이지 (정적 HTML)
+- `lib/auth.js` — `memberships.role` 검증 (admin|manager|inspector|viewer)
+
+### 2.2 목표 구조
+
+```
+src/
+  roles/
+    staff/          # 직원 화면 (모바일 PWA 포함)
+    lead/           # 팀장 화면 (예외 처리 큐)
+    admin/          # 관리자 화면 (현 통합 대시보드 분리)
+    ceo/            # 대표 화면 (KPI/리스크 전용)
+    lawyer/         # 노무사 화면 (감사용)
+    customer/       # 고객 포털 (서비스 상태만)
+  shared/
+    components/     # 권한 매트릭스, 사유 입력 모달, 동의 모달 등
+    permissions/    # 권한 체크 헬퍼 (canViewPreciseLocation 등)
+    anon/           # 익명 ID 발급·해제
+  guards/
+    RoleGate.jsx    # 역할별 라우트 보호
+public/
+  staff/            # 직원 PWA (현 staff-checkin.html 이전)
+  customer/         # 고객 포털 (직원 자산과 완전 분리)
+```
+
+### 2.3 단기(Phase 1) 절충안 — source.jsx 분할 없이 진행
+파일 분할은 큰 작업이라, **단기에는 source.jsx 내부에 새 컴포넌트만 추가**하고 `currentRole` 분기로 표시. 데모(`multirole-demo.html`)에서 검증된 UI를 그대로 옮김.
+
+```
+source.jsx 끝부분에 추가:
+  function StaffOwnView({ userCtx })   { ... }   // 직원
+  function TeamLeadView({ userCtx })    { ... }   // 팀장
+  function CeoDashboard({ userCtx })    { ... }   // 대표
+  function LawyerAuditView({ userCtx }) { ... }   // 노무사
+  function CustomerPortal({ token })    { ... }   // 고객 (별도 라우트)
+
+  // 현 IntegratedHomeDashboard = '관리자' 화면으로 분류
+```
+
+---
+
+## 3. 데이터베이스 스키마 추가
+
+기존 `memberships.role`은 `admin|manager|inspector|viewer` 4종. 6역할 대응 위해 확장.
+
+### 3.1 `memberships.role` 확장
+
+```sql
+-- 기존 CHECK 제약 교체
+alter table public.memberships drop constraint if exists memberships_role_check;
+alter table public.memberships add constraint memberships_role_check
+  check (role in ('staff','lead','admin','ceo','lawyer','customer'));
+
+-- 기존 데이터 마이그레이션 (1회만)
+update public.memberships set role = 'admin'   where role = 'admin';
+update public.memberships set role = 'lead'    where role = 'manager';
+update public.memberships set role = 'staff'   where role in ('inspector','viewer');
+```
+
+### 3.2 동의 기록 (`consent_records`)
+
+```sql
+create table if not exists public.consent_records (
+  id uuid primary key default gen_random_uuid(),
+  org_id text not null references public.organizations(id),
+  staff_id uuid not null references auth.users(id) on delete cascade,
+  consent_version text not null,           -- 'v3.2' 등
+  consent_text_hash text not null,         -- 동의 문구 SHA-256 (변조 방지)
+  scope jsonb not null,                    -- ['gps','ble','work_hours_only']
+  agreed_at timestamptz not null default now(),
+  agreed_ip inet,
+  agreed_user_agent text,
+  withdrawn_at timestamptz,                -- 철회 시 채워짐
+  withdraw_reason text,
+  created_at timestamptz default now()
+);
+
+create index consent_records_staff_idx on public.consent_records (staff_id, agreed_at desc);
+```
+
+### 3.3 정밀 위치 접근 로그 (`location_access_log`)
+
+```sql
+create table if not exists public.location_access_log (
+  id uuid primary key default gen_random_uuid(),
+  org_id text not null references public.organizations(id),
+  accessed_at timestamptz not null default now(),
+  actor_user_id uuid not null references auth.users(id),
+  actor_role text not null,
+  target_staff_id uuid not null references auth.users(id),
+  reason_category text not null,           -- 'BLE_DEBUG','EMERGENCY','PAYROLL_VERIFY','CUSTOMER_ISSUE'
+  reason_detail text not null check (char_length(reason_detail) >= 50),
+  legal_basis text not null,
+  data_returned jsonb,                     -- 무슨 데이터를 보여줬는지
+  ip inet,
+  user_agent text
+);
+
+create index lal_target_idx on public.location_access_log (target_staff_id, accessed_at desc);
+create index lal_actor_idx  on public.location_access_log (actor_user_id, accessed_at desc);
+
+-- 영구 보존 (RLS로 update/delete 차단)
+```
+
+### 3.4 정정 요청 (`attendance_corrections`)
+
+```sql
+create table if not exists public.attendance_corrections (
+  id uuid primary key default gen_random_uuid(),
+  org_id text not null references public.organizations(id),
+  staff_id uuid not null references auth.users(id),
+  date date not null,
+  field text not null check (field in ('check_in','check_out','break_time')),
+  value_before time,
+  value_after time not null,
+  reason text not null,
+  status text not null default 'pending' check (status in ('pending','approved','rejected')),
+  reviewed_by uuid references auth.users(id),
+  reviewed_at timestamptz,
+  reviewed_note text,
+  created_at timestamptz default now()
+);
+```
+
+### 3.5 고객 서비스 세션 (`service_sessions`)
+
+```sql
+-- 고객용 익명 토큰. 직원 ID 대신 이걸로만 조회 가능
+create table if not exists public.service_sessions (
+  id uuid primary key default gen_random_uuid(),
+  org_id text not null references public.organizations(id),
+  customer_org text not null,              -- '청주시 시설관리공단'
+  site_name text not null,                 -- '한국잠사박물관'
+  scheduled_at timestamptz not null,
+  scheduled_duration_min int not null,
+  assigned_staff_count int default 0,      -- 인원 수만, 누구인지는 미공개
+  status text not null default 'scheduled' -- scheduled/arrived/started/completed/delayed
+    check (status in ('scheduled','arrived','started','completed','delayed','cancelled')),
+  delay_min int default 0,
+  issue_count int default 0,
+  customer_view_token text unique not null  -- 고객이 이 토큰으로만 조회
+);
+```
+
+---
+
+## 4. Row Level Security (RLS) 정책
+
+DB 레벨에서 권한 강제. 화면에서 빼먹어도 DB가 막아야 함.
+
+### 4.1 staff_locations (정밀 위치) — 가장 민감
+
+```sql
+alter table public.staff_locations enable row level security;
+
+-- 본인은 본인 위치 조회 가능
+create policy "staff_own_location" on public.staff_locations
+  for select using (auth.uid() = staff_id);
+
+-- 관리자는 location_access_log에 사유 기록 후에만 (앱 코드에서 강제)
+-- DB 레벨로는 admin 역할이면 SELECT 가능, 단 트리거로 access_log 자동 기록
+create policy "admin_with_log" on public.staff_locations
+  for select using (
+    exists (
+      select 1 from public.memberships m
+      where m.user_id = auth.uid()
+        and m.org_id = staff_locations.org_id
+        and m.role in ('admin','lawyer')
+    )
+  );
+
+-- INSERT/UPDATE/DELETE: 본인 또는 서버 service-role만
+create policy "staff_own_insert" on public.staff_locations
+  for insert with check (auth.uid() = staff_id);
+```
+
+### 4.2 location_access_log — 영구 보존
+
+```sql
+alter table public.location_access_log enable row level security;
+
+-- 관리자·노무사는 조회 가능
+create policy "audit_read" on public.location_access_log
+  for select using (
+    exists (select 1 from public.memberships m
+            where m.user_id = auth.uid() and m.role in ('admin','lawyer'))
+  );
+
+-- INSERT는 service-role만 (앱 서버에서 직접 기록)
+-- UPDATE/DELETE는 누구도 못함 (영구 보존)
+revoke update, delete on public.location_access_log from public, authenticated;
+```
+
+### 4.3 consent_records
+
+```sql
+alter table public.consent_records enable row level security;
+
+-- 본인은 본인 동의 이력 조회
+create policy "consent_own" on public.consent_records
+  for select using (auth.uid() = staff_id);
+
+-- 관리자·노무사는 전체 조회
+create policy "consent_audit" on public.consent_records
+  for select using (
+    exists (select 1 from public.memberships m
+            where m.user_id = auth.uid() and m.role in ('admin','lawyer'))
+  );
+
+-- 철회는 본인만
+create policy "consent_withdraw" on public.consent_records
+  for update using (auth.uid() = staff_id)
+  with check (auth.uid() = staff_id and withdrawn_at is not null);
+```
+
+### 4.4 attendance_corrections
+
+```sql
+alter table public.attendance_corrections enable row level security;
+
+-- 본인 요청 조회 + 작성
+create policy "corr_own" on public.attendance_corrections
+  for all using (auth.uid() = staff_id)
+  with check (auth.uid() = staff_id);
+
+-- 팀장은 팀원 요청 조회
+create policy "corr_lead" on public.attendance_corrections
+  for select using (
+    exists (select 1 from public.memberships m1
+            join public.memberships m2 on m1.org_id = m2.org_id and m1.dept = m2.dept
+            where m1.user_id = auth.uid() and m1.role = 'lead'
+              and m2.user_id = attendance_corrections.staff_id)
+  );
+
+-- 관리자는 전체 + 승인
+create policy "corr_admin" on public.attendance_corrections
+  for all using (
+    exists (select 1 from public.memberships m
+            where m.user_id = auth.uid() and m.role = 'admin')
+  );
+```
+
+### 4.5 service_sessions (고객용)
+
+```sql
+-- 고객은 customer_view_token으로만 익명 조회
+-- → 별도 PostgREST 함수 또는 API endpoint로 처리, RLS는 staff용
+```
+
+---
+
+## 5. 라우팅·인증 가드
+
+### 5.1 역할별 진입점
+
+| URL | 대상 역할 | 비고 |
+|---|---|---|
+| `/` (`index.html` → React) | admin, lead | 기본 대시보드 + 역할별 분기 |
+| `/m`, `/staff-checkin` | staff | 모바일 PWA |
+| `/ceo` | ceo | KPI 전용 |
+| `/lawyer` | lawyer | 감사 전용 |
+| `/customer/:token` | customer | 토큰 기반 익명 |
+| `/roles` (현 데모) | 모두 | 시연용 |
+
+### 5.2 권한 가드 헬퍼 (`shared/permissions/`)
+
+```js
+// shared/permissions/canDo.js
+export const PERMISSIONS = {
+  view_own_location:          ['staff','admin','lawyer'],
+  view_team_attendance:       ['lead','admin','lawyer'],
+  view_precise_location:      ['admin'],        // ⚠️ 사유 + 로그 필수
+  approve_correction:         ['admin'],
+  view_aggregate_kpi:         ['lead','admin','ceo','lawyer'],
+  view_access_log:            ['admin','lawyer'],
+  view_consent_records:       ['admin','lawyer'],
+  view_anonymous_progress:    ['lead','admin','ceo','lawyer','customer'],
+  generate_audit_package:     ['lawyer'],
+};
+
+export function canDo(role, action) {
+  return (PERMISSIONS[action] || []).includes(role);
+}
+```
+
+### 5.3 정밀 위치 열람 — 서버 미들웨어
+
+```js
+// api_handlers/precise-location.js
+export async function handlePreciseLocationView(req, res) {
+  const ctx = await requireAuth(req, res);
+  if (!ctx) return; // requireAuth가 401 응답함
+
+  // 역할 체크
+  if (!canDo(ctx.role, 'view_precise_location')) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+
+  const { targetStaffId, reasonCategory, reasonDetail, legalBasis } = req.body;
+  if (!reasonDetail || reasonDetail.length < 50) {
+    return res.status(400).json({ error: 'reason_too_short' });
+  }
+
+  // 1) 접근 로그 INSERT (먼저!)
+  await supabaseSvc.from('location_access_log').insert({
+    actor_user_id: ctx.user.id,
+    actor_role: ctx.role,
+    target_staff_id: targetStaffId,
+    reason_category: reasonCategory,
+    reason_detail: reasonDetail,
+    legal_basis: legalBasis,
+    ip: req.headers['x-forwarded-for'],
+    user_agent: req.headers['user-agent'],
+  });
+
+  // 2) 위치 조회
+  const { data } = await supabaseSvc.from('staff_locations')
+    .select('*').eq('staff_id', targetStaffId)
+    .order('captured_at', { ascending: false }).limit(1);
+
+  res.json({ location: data });
+}
+```
+
+---
+
+## 6. 법적 컴플라이언스 매핑
+
+| 법령·조항 | 시스템 적용 위치 |
+|---|---|
+| **위치정보법 제18조** (개인위치정보 수집·이용·제공 동의) | `consent_records` 테이블 + 동의 모달에 6개 필수 항목 명시 |
+| **위치정보법 제16조** (관리적 보호조치 — 취급자 지정·접근 통제·로그) | `location_access_log` 5년 보존 + RLS로 UPDATE/DELETE 차단 |
+| **위치정보법 제24조** (사후 정보 제공·열람·정정 요구권) | 직원 화면에서 본인 동의 이력·위치 이력 조회 가능 |
+| **근로기준법 제42조** (근로자 명부·계약 서류 3년 보존) | `memberships` + `attendance_corrections` 백업 정책 |
+| **근로기준법 제48조** (임금대장 작성·보존) | 별도 임금대장 모듈 (현 범위 외) |
+| **개인정보보호법 제29조** (안전조치 의무) | RLS + service-role 키 서버 전용 + 정밀 좌표 90일 후 파기 |
+
+### 6.1 동의 문구 필수 항목 (v3.2)
+
+1. 수집 항목: GPS 좌표, BLE 신호, 디바이스 ID
+2. 수집 목적: 출퇴근 자동 인식, 근무지 이탈 방지, 비상 안전
+3. 수집 시간: 근무 시작 1시간 전 ~ 종료 30분 후
+4. 보유 기간: 원본 90일 / 집계 3년
+5. 제3자 제공: 없음 (고객사에는 익명화 후)
+6. 동의 거부 시 불이익: 없음 (수동 출근 대체)
+
+---
+
+## 7. 구현 단계 (Phasing)
+
+8개 우선순위를 4 phase로 묶음.
+
+### Phase 1 — 권한 분리 골격 (1주)
+**목표: 데모를 실제 코드에 통합. 권한 가드 동작.**
+- ① `memberships.role` 6역할로 마이그레이션
+- ② `lib/auth.js`에 `canDo()` 헬퍼 추가
+- ③ `source.jsx`에 역할 분기 추가 — admin/lead 진입 시 다른 화면
+- ④ 현 통합 대시보드 = admin 전용으로 재분류
+- ⑤ ceo·lawyer 화면을 source.jsx에 신규 추가 (데모 코드 이식)
+- ⑥ customer 포털은 별도 정적 페이지 `public/customer-portal.html`
+
+### Phase 2 — 정밀 위치 접근 통제 (1주)
+**목표: 우선순위 3·4 (사유 입력 + 로그)**
+- ① `location_access_log` 테이블 + RLS
+- ② `/api/precise-location` API 엔드포인트 (사유 검증 + 로그 기록)
+- ③ admin 화면 "정밀 위치 열람" 버튼 → 모달 → API 호출
+- ④ staff_locations RLS 정책 적용
+
+### Phase 3 — 동의·정정·고객 (2주)
+**목표: 우선순위 5·6**
+- ① `consent_records` 테이블 + 동의 모달 (v3.2 문구)
+- ② 직원 화면 — 동의 철회 / 정정 요청 UI
+- ③ `attendance_corrections` + 팀장→관리자 검토 흐름
+- ④ `service_sessions` + customer-portal.html (토큰 기반)
+- ⑤ 일일 익명화 리포트 자동 발송 (스케줄러)
+
+### Phase 4 — 감사·노무사 (1주)
+**목표: 우선순위 7·8**
+- ① 노무사 화면 — 접근 로그·동의 이력·정정 이력 조회
+- ② 감사 패키지 생성 함수 — JSON + PDF + 해시 증명을 zip으로
+- ③ 보존 기간 정책 cron — 90일 후 원본 좌표 파기, 5년 후 로그 아카이브
+- ④ 권한 매트릭스 도큐먼트 자동 생성 (관리자 화면)
+
+---
+
+## 8. 마이그레이션 전략
+
+### 8.1 기존 사용자 영향 최소화
+- 1단계: `memberships.role` 마이그레이션 SQL 실행 (영향 없음, role 매핑)
+- 2단계: 신규 컬럼/테이블 추가 (DDL only, 데이터 영향 없음)
+- 3단계: 화면 분기 추가 (기존 admin은 그대로 보임)
+- 4단계: RLS 정책은 staging에서 충분히 검증 후 적용 (RLS 잘못 걸면 전체 다운)
+
+### 8.2 롤백 플랜
+- 각 phase commit을 revert 가능한 단위로
+- RLS 정책은 `drop policy` 로 즉시 제거 가능
+- `memberships.role` 마이그레이션은 백업 후 진행
+
+### 8.3 테스트 시나리오
+- 각 역할로 로그인 → 화면 정상 표시 확인
+- staff 역할로 admin URL 접근 → 403
+- admin이 사유 없이 정밀 위치 API 호출 → 400
+- 사유 50자 미만 → 400
+- 정상 사유 → 200 + `location_access_log` row 생성 확인
+- lawyer가 로그 조회 → 모든 row 보임
+- staff 본인이 본인 로그 조회 → 본인 관련만 보임
+
+---
+
+## 9. 미해결 의사결정 사항
+
+데모 페이지 만들면서 정해야 할 것들:
+
+| # | 항목 | 옵션 |
+|---|---|---|
+| 1 | **고객 포털 인증** | (a) 토큰 URL만, (b) 토큰 + 이메일 OTP, (c) 별도 고객 계정 |
+| 2 | **익명 ID (`E-XXXX`) 생성 규칙** | (a) staff_id 해시 4자리, (b) DB 시퀀스, (c) hashids 라이브러리 |
+| 3 | **정밀 위치 캐시 TTL** | (a) 매번 DB 조회, (b) 5분 캐시 (성능 ↑ 추적성 ↓) |
+| 4 | **노무사 계정 발급** | (a) 외부 노무법인 계정 직접 추가, (b) 시한부 토큰 발급 |
+| 5 | **CEO 화면 접근 시간 제한** | 업무시간 외 접근 차단? 알림? |
+| 6 | **감사 패키지 암호화** | zip 패스워드? 노무사 공개키 암호화? |
+
+---
+
+## 10. 참고
+
+### 10.1 관련 파일
+- 데모: `public/multirole-demo.html` (`/roles`)
+- 기존 인증: `lib/auth.js`
+- 기존 스키마: `schema.sql`, `supabase/staff_*.sql`
+- 기존 대시보드: `source.jsx` (`IntegratedHomeDashboard`)
+
+### 10.2 외부 자료 (검증 필요)
+- 위치정보법 시행령 동의 양식
+- 한국인터넷진흥원(KISA) 개인위치정보 처리 가이드라인
+- 노무사 협회 표준 근태 시스템 점검 체크리스트
+
+### 10.3 다음 액션
+설계 문서 검토 후 합의되면 **Phase 1** 부터 실제 코드 작업 시작.
