@@ -11,6 +11,7 @@ import {
   evaluateAbsent,
   evaluateLongIdle,
   evaluateBeaconAutoAttendance,
+  evaluateGpsAutoAttendance,
   dedupeTodayAttendance,
   loadAttendanceAlertConfig,
 } from "./attendance-alert-rules.jsx";
@@ -188,22 +189,32 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
     return () => clearInterval(t);
   }, [staffList, today, depts]);
 
-  // ── 🆕 비콘 자동 출퇴근 (30초마다) ──
+  // ── 🆕 자동 출퇴근 (비콘 + GPS, 30초마다) ──
   useEffect(() => {
     if (!staffList.length) return;
     const sb = supabaseRef.current;
     if (!sb) return;
     const run = async () => {
       const cfg = loadAttendanceAlertConfig();
-      if (!cfg.autoBeacon?.enabled) return;
-      try {
-        const res = await evaluateBeaconAutoAttendance({ sb, staffList, todayAttendance: today, depts });
-        if (res.autoIn > 0 || res.autoOut > 0) {
-          console.log(`[자동 출퇴근] 출근 ${res.autoIn}건 / 퇴근 ${res.autoOut}건`);
-          // realtime 구독이 자동 갱신하지만 즉시 반영을 위해 한 번 더
-          loadAll(sb);
-        }
-      } catch (e) { console.warn("[자동 출퇴근] 실패:", e); }
+      let totalIn = 0, totalOut = 0;
+      // 비콘 자동 출퇴근
+      if (cfg.autoBeacon?.enabled) {
+        try {
+          const r = await evaluateBeaconAutoAttendance({ sb, staffList, todayAttendance: today, depts });
+          totalIn += r.autoIn || 0; totalOut += r.autoOut || 0;
+        } catch (e) { console.warn("[자동 출퇴근/비콘] 실패:", e); }
+      }
+      // GPS 자동 출퇴근
+      if (cfg.autoGps?.enabled) {
+        try {
+          const r = await evaluateGpsAutoAttendance({ sb, staffList, todayAttendance: today, depts });
+          totalIn += r.autoIn || 0; totalOut += r.autoOut || 0;
+        } catch (e) { console.warn("[자동 출퇴근/GPS] 실패:", e); }
+      }
+      if (totalIn > 0 || totalOut > 0) {
+        console.log(`[자동 출퇴근] 출근 ${totalIn}건 / 퇴근 ${totalOut}건`);
+        loadAll(sb);
+      }
     };
     run();
     const t = setInterval(run, 30 * 1000);

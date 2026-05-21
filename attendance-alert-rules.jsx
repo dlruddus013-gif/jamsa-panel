@@ -39,6 +39,17 @@ const DEFAULT_CONFIG = {
     inMin: 5,         // 최근 N분 안에 비콘 감지되면 자동 출근
     outMin: 30,       // N분 이상 비콘 미감지면 자동 퇴근
   },
+  // 🆕 GPS/권역 자동 출퇴근
+  autoGps: {
+    enabled: false,
+    centerLat: 36.6383333,    // 박물관 중심
+    centerLng: 127.3827778,
+    radiusM: 200,             // 원형 권역 반경
+    polygon: null,            // [{lat,lng}, ...] 다각형 권역 (있으면 우선)
+    inMin: 3,                 // 권역 안에서 N분 머무르면 자동 출근
+    outMin: 30,               // 권역 밖에서 N분 머무르면 자동 퇴근
+    maxAccuracyM: 100,        // GPS 정확도 N미터 이상이면 평가 skip
+  },
   messages: {
     checkIn:  "[잠사] {name}({dept}) 출근 — {time}",
     checkOut: "[잠사] {name}({dept}) 퇴근 — {time} · 근무 {hours}시간",
@@ -334,6 +345,138 @@ export async function evaluateBeaconAutoAttendance({ sb, staffList, todayAttenda
   return { autoIn, autoOut };
 }
 
+// ─── 거리/포함 판정 헬퍼 ───────────────────────────────────────
+function _haversineM(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const toRad = (d) => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat/2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng/2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+// ray-casting 다각형 포함 판정
+function _pointInPolygon(lat, lng, polygon) {
+  if (!Array.isArray(polygon) || polygon.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].lng, yi = polygon[i].lat;
+    const xj = polygon[j].lng, yj = polygon[j].lat;
+    const intersect = ((yi > lat) !== (yj > lat))
+      && (lng < (xj - xi) * (lat - yi) / (yj - yi + 1e-12) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+export function isInsideGeofence(lat, lng, autoGps) {
+  if (!autoGps) return false;
+  if (Array.isArray(autoGps.polygon) && autoGps.polygon.length >= 3) {
+    return _pointInPolygon(lat, lng, autoGps.polygon);
+  }
+  if (typeof autoGps.centerLat === "number" && typeof autoGps.centerLng === "number") {
+    const d = _haversineM(lat, lng, autoGps.centerLat, autoGps.centerLng);
+    return d <= (autoGps.radiusM || 200);
+  }
+  return false;
+}
+
+// 권역 상태 추적용 별도 키 (직원별 진입/이탈 시각)
+const GPS_STATE_KEY = "jamsa_attendance_gps_state"; // { [staffId]: {inside, since, lastEvalAt} }
+function _loadGpsState() { try { return JSON.parse(localStorage.getItem(GPS_STATE_KEY) || "{}"); } catch (e) { return {}; } }
+function _saveGpsState(o) { try { localStorage.setItem(GPS_STATE_KEY, JSON.stringify(o)); } catch (e) {} }
+
+// ─── GPS/권역 자동 출퇴근 평가 ─────────────────────────────────
+//   - staff_locations 테이블에서 최근 위치 조회 (mobile_gps source)
+//   - 권역 안 inMin 분 머무름 + 미출근 → 자동 출근
+//   - 권역 밖 outMin 분 머무름 + 근무중 (출근 1h+ 경과) → 자동 퇴근
+export async function evaluateGpsAutoAttendance({ sb, staffList, todayAttendance, depts }) {
+  const cfg = loadAttendanceAlertConfig();
+  if (!cfg.autoGps?.enabled || !sb) return { autoIn: 0, autoOut: 0 };
+
+  // 최근 5분 안에 갱신된 staff_locations 조회
+  const sinceIso = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  let locs = [];
+  try {
+    const { data, error } = await sb.from("staff_locations")
+      .select("id,lat,lng,accuracy,source,last_seen,updated_at")
+      .gte("updated_at", sinceIso);
+    if (error) throw error;
+    locs = data || [];
+  } catch (e) {
+    return { autoIn: 0, autoOut: 0, error: e.message };
+  }
+
+  const now = Date.now();
+  const inMs  = (cfg.autoGps.inMin  || 3)  * 60 * 1000;
+  const outMs = (cfg.autoGps.outMin || 30) * 60 * 1000;
+  const maxAcc = cfg.autoGps.maxAccuracyM || 100;
+  const state = _loadGpsState();
+  let autoIn = 0, autoOut = 0;
+
+  for (const staff of staffList) {
+    const loc = locs.find(l => String(l.id) === String(staff.id));
+    if (!loc || typeof loc.lat !== "number" || typeof loc.lng !== "number") continue;
+    if (loc.accuracy && loc.accuracy > maxAcc) continue; // 부정확한 위치는 skip
+
+    const inside = isInsideGeofence(loc.lat, loc.lng, cfg.autoGps);
+    const s = state[staff.id] || { inside: null, since: now };
+    if (inside !== s.inside) {
+      // 상태 변경 — 진입/이탈 시각 갱신
+      s.inside = inside;
+      s.since = now;
+    }
+    s.lastEvalAt = now;
+    state[staff.id] = s;
+
+    const duration = now - s.since;
+    const myAtt = todayAttendance.filter(a => a.staff_id === staff.id);
+    const working = myAtt.find(a => !a.checked_out_at);
+
+    // CASE 1: 권역 안에서 inMs 이상 머무름 + 미출근 → 자동 출근
+    if (inside && duration >= inMs && !working) {
+      const recentDupe = myAtt.find(a => now - new Date(a.checked_in_at).getTime() < 60_000);
+      if (recentDupe) continue;
+      try {
+        const { data, error } = await sb.from("attendance")
+          .insert({ staff_id: staff.id, source: "gps_auto" })
+          .select().single();
+        if (!error && data) {
+          autoIn++;
+          const dept = depts.find(d => d.id === staff.dept_id);
+          triggerCheckInAlert({ staff, dept, attendanceRecord: data }).catch(() => {});
+          appendLog({
+            kind: "autoGpsIn", staffId: staff.id, staffName: staff.name,
+            message: `🟢 GPS 자동 출근 — ${staff.name} (${dept?.name||""}) · 권역 내 ${Math.round(duration/60000)}분 체류`,
+            ok: true, severity: "INFO",
+          });
+        }
+      } catch (e) {}
+    }
+
+    // CASE 2: 권역 밖 outMs 이상 + 근무중 (출근 1h+) → 자동 퇴근
+    if (!inside && duration >= outMs && working) {
+      const inT = new Date(working.checked_in_at).getTime();
+      if (now - inT < 60 * 60 * 1000) continue;
+      try {
+        const checkoutTime = new Date().toISOString();
+        const { error } = await sb.from("attendance")
+          .update({ checked_out_at: checkoutTime })
+          .eq("id", working.id);
+        if (!error) {
+          autoOut++;
+          const dept = depts.find(d => d.id === staff.dept_id);
+          triggerCheckOutAlert({ staff, dept, attendanceRecord: { ...working, checked_out_at: checkoutTime } }).catch(() => {});
+          appendLog({
+            kind: "autoGpsOut", staffId: staff.id, staffName: staff.name,
+            message: `🔻 GPS 자동 퇴근 — ${staff.name} (${dept?.name||""}) · 권역 밖 ${Math.round(duration/60000)}분 체류`,
+            ok: true, severity: "INFO",
+          });
+        }
+      } catch (e) {}
+    }
+  }
+  _saveGpsState(state);
+  return { autoIn, autoOut };
+}
+
 // ─── 누적 중복 정리 도구 (1분 이내 같은 직원 중복 attendance 삭제) ─
 // supabase client + today attendance array를 받아 중복 행 삭제, 삭제 결과 반환
 export async function dedupeTodayAttendance(sb, today) {
@@ -439,6 +582,92 @@ export function AttendanceAlertConfigModal({ depts = [], staffList = [], onClose
               <Toggle label="지각 알림"    on={cfg.events.late}     onClick={() => toggleEvent("late")}     />
               <Toggle label="결근 알림"    on={cfg.events.absent}   onClick={() => toggleEvent("absent")}   />
               <Toggle label="장기 부재"    on={cfg.events.longIdle} onClick={() => toggleEvent("longIdle")} />
+            </Section>
+
+            {/* 🆕 GPS/권역 자동 출퇴근 (직원 모바일) */}
+            <Section title="📍 모바일 GPS · 권역 자동 출퇴근">
+              <label style={{ display: "flex", alignItems: "center", gap: 8, padding: 8, background: cfg.autoGps?.enabled ? "rgba(34,197,94,0.15)" : "rgba(255,255,255,0.03)", border: `1px solid ${cfg.autoGps?.enabled ? "rgba(34,197,94,0.4)" : "rgba(255,255,255,0.08)"}`, borderRadius: 5, cursor: "pointer", marginBottom: 6 }}>
+                <input type="checkbox" checked={!!cfg.autoGps?.enabled}
+                  onChange={(e) => setCfg(c => ({ ...c, autoGps: { ...(c.autoGps||{}), enabled: e.target.checked } }))}
+                  style={{ accentColor: "#22c55e", width: 16, height: 16 }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: cfg.autoGps?.enabled ? "#86efac" : "#94a3b8" }}>
+                    {cfg.autoGps?.enabled ? "● GPS 자동 출퇴근 활성화" : "○ GPS 자동 출퇴근 비활성화"}
+                  </div>
+                  <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>
+                    직원이 모바일 페이지에 접속해서 위치를 공유 → 권역 진입 시 자동 출근, 이탈 N분 후 자동 퇴근
+                  </div>
+                </div>
+              </label>
+
+              <div style={{ padding: 8, background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.15)", borderRadius: 4, fontSize: 10, color: "#cbd5e1", marginBottom: 8 }}>
+                <strong>📲 직원 모바일 페이지:</strong>{" "}
+                <a href="/staff-checkin" target="_blank" rel="noopener" style={{ color: "#6ee7b7", fontFamily: "ui-monospace,monospace" }}>
+                  {typeof window !== "undefined" ? window.location.origin : ""}/staff-checkin
+                </a>
+                <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 4 }}>
+                  ✓ 위 URL을 직원에게 카카오톡/문자로 전송 → 본인 선택 → 위치 권한 허용 → 끝
+                </div>
+              </div>
+
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", marginBottom: 4 }}>🎯 권역 중심 좌표 (원형)</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px", gap: 6 }}>
+                  <Field label="위도">
+                    <input type="number" step="0.000001" value={cfg.autoGps?.centerLat ?? ""}
+                      onChange={e => setCfg(c => ({ ...c, autoGps: { ...(c.autoGps||{}), centerLat: parseFloat(e.target.value)||0 } }))}
+                      style={{ ...input, fontFamily: "ui-monospace,monospace" }} />
+                  </Field>
+                  <Field label="경도">
+                    <input type="number" step="0.000001" value={cfg.autoGps?.centerLng ?? ""}
+                      onChange={e => setCfg(c => ({ ...c, autoGps: { ...(c.autoGps||{}), centerLng: parseFloat(e.target.value)||0 } }))}
+                      style={{ ...input, fontFamily: "ui-monospace,monospace" }} />
+                  </Field>
+                  <Field label="반경 (m)">
+                    <input type="number" min="20" max="5000" value={cfg.autoGps?.radiusM ?? 200}
+                      onChange={e => setCfg(c => ({ ...c, autoGps: { ...(c.autoGps||{}), radiusM: parseInt(e.target.value)||200 } }))}
+                      style={input} />
+                  </Field>
+                </div>
+                <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+                  <button onClick={() => {
+                    if (typeof navigator === "undefined" || !navigator.geolocation) { alert("위치 기능 미지원"); return; }
+                    navigator.geolocation.getCurrentPosition(
+                      (p) => {
+                        setCfg(c => ({ ...c, autoGps: { ...(c.autoGps||{}), centerLat: p.coords.latitude, centerLng: p.coords.longitude } }));
+                        alert(`✅ 현재 위치로 권역 중심 설정\n${p.coords.latitude.toFixed(6)}, ${p.coords.longitude.toFixed(6)}`);
+                      },
+                      (e) => alert("위치 가져오기 실패: " + e.message),
+                      { enableHighAccuracy: true, timeout: 10000 }
+                    );
+                  }} style={{ ...btnDashed, flex: 1, fontSize: 9 }}>📍 현재 위치로 설정</button>
+                  <button onClick={() => setCfg(c => ({ ...c, autoGps: { ...(c.autoGps||{}), centerLat: 36.6383333, centerLng: 127.3827778, radiusM: 200 } }))}
+                    style={{ ...btnDashed, flex: 1, fontSize: 9 }}>↺ 박물관 기본값</button>
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+                <Field label="자동 출근 (분)">
+                  <input type="number" min="1" max="60" value={cfg.autoGps?.inMin ?? 3}
+                    onChange={e => setCfg(c => ({ ...c, autoGps: { ...(c.autoGps||{}), inMin: parseInt(e.target.value)||3 } }))}
+                    style={input} />
+                </Field>
+                <Field label="자동 퇴근 (분)">
+                  <input type="number" min="5" max="240" value={cfg.autoGps?.outMin ?? 30}
+                    onChange={e => setCfg(c => ({ ...c, autoGps: { ...(c.autoGps||{}), outMin: parseInt(e.target.value)||30 } }))}
+                    style={input} />
+                </Field>
+                <Field label="GPS 정확도 최대 (m)">
+                  <input type="number" min="20" max="500" value={cfg.autoGps?.maxAccuracyM ?? 100}
+                    onChange={e => setCfg(c => ({ ...c, autoGps: { ...(c.autoGps||{}), maxAccuracyM: parseInt(e.target.value)||100 } }))}
+                    style={input} />
+                </Field>
+              </div>
+              <div style={{ marginTop: 6, padding: 6, background: "rgba(255,255,255,0.03)", borderRadius: 4, fontSize: 9, color: "#94a3b8", lineHeight: 1.5 }}>
+                • 권역 안 {cfg.autoGps?.inMin||3}분 머무름 → 자동 출근<br/>
+                • 권역 밖 {cfg.autoGps?.outMin||30}분 머무름 (출근 1h+ 경과) → 자동 퇴근<br/>
+                • GPS 정확도 ±{cfg.autoGps?.maxAccuracyM||100}m 초과 시 평가 skip (실내/지하 등 부정확 위치 보호)
+              </div>
             </Section>
 
             {/* 🆕 비콘 자동 출퇴근 */}
