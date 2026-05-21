@@ -314,7 +314,74 @@ localStorage.removeItem = function(key) {
 // ════════════════════════════════════════════════
 //  로그인 화면 (Supabase 미인증 시)
 // ════════════════════════════════════════════════
+// ─── 자동 로그인 헬퍼 ─────────────────────────────────────
+const LS_LAST_EMAIL    = "jamsa_last_login_email";
+const LS_REMEMBER_PW   = "jamsa_remember_pw_v1";    // 암호화된 비번
+const LS_REMEMBER_TIME = "jamsa_remember_until";    // expiry timestamp
+
+// 간단한 XOR + base64 (안전한 비번 저장은 아니지만 평문보다 나음)
+// 보안 경고: 같은 디바이스에서만 의미 있음. 멀티유저 PC에서는 사용 자제.
+function _devKey() {
+  // 디바이스 고유 키 (브라우저 첫 사용 시 생성, localStorage 영구)
+  let k = localStorage.getItem("jamsa_dev_key");
+  if (!k) {
+    const buf = new Uint8Array(32);
+    crypto.getRandomValues(buf);
+    k = Array.from(buf).map(b => b.toString(16).padStart(2,"0")).join("");
+    localStorage.setItem("jamsa_dev_key", k);
+  }
+  return k;
+}
+function _xorEncrypt(text, key) {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    out += String.fromCharCode(text.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+  }
+  return btoa(unescape(encodeURIComponent(out)));
+}
+function _xorDecrypt(b64, key) {
+  try {
+    const s = decodeURIComponent(escape(atob(b64)));
+    let out = "";
+    for (let i = 0; i < s.length; i++) {
+      out += String.fromCharCode(s.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+    }
+    return out;
+  } catch (e) { return null; }
+}
+function saveRememberCreds(email, password, days = 30) {
+  try {
+    localStorage.setItem(LS_LAST_EMAIL, email);
+    const enc = _xorEncrypt(password, _devKey());
+    localStorage.setItem(LS_REMEMBER_PW, enc);
+    localStorage.setItem(LS_REMEMBER_TIME, String(Date.now() + days * 86400_000));
+  } catch (e) {}
+}
+function loadRememberCreds() {
+  try {
+    const email = localStorage.getItem(LS_LAST_EMAIL);
+    const enc = localStorage.getItem(LS_REMEMBER_PW);
+    const until = parseInt(localStorage.getItem(LS_REMEMBER_TIME) || "0", 10);
+    if (!email) return null;
+    if (!enc || !until || Date.now() > until) {
+      // 비번 만료 — 이메일만 반환
+      return { email, password: null, expired: !!enc };
+    }
+    const pw = _xorDecrypt(enc, _devKey());
+    return { email, password: pw, expired: false };
+  } catch (e) { return null; }
+}
+function clearRememberCreds() {
+  try {
+    localStorage.removeItem(LS_REMEMBER_PW);
+    localStorage.removeItem(LS_REMEMBER_TIME);
+    // 이메일은 유지 (다음 로그인 편의)
+  } catch (e) {}
+}
+
 function showAuthScreen() {
+  const remembered = loadRememberCreds();
+  const lastEmail = remembered?.email || "";
   const overlay = document.createElement('div');
   overlay.id = 'authOverlay';
   overlay.innerHTML = `
@@ -327,22 +394,38 @@ function showAuthScreen() {
           <div style="font-size:18px;font-weight:700;color:#0f172a;">한국잠사박물관</div>
           <div style="font-size:12px;color:#64748b;margin-top:4px;">통합관리 시스템</div>
         </div>
+        ${remembered?.email && remembered?.password ? `
+          <div id="autoLoginBanner" style="background:linear-gradient(135deg,#dcfce7,#bbf7d0);border:1px solid #86efac;color:#14532d;padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px;">
+            <div style="font-weight:700;margin-bottom:3px;">⚡ 자동 로그인 시도 중</div>
+            <div style="font-size:11px;color:#15803d">${remembered.email} · 잠시만 기다려주세요...</div>
+          </div>
+        ` : ''}
         <div id="authError" style="display:none;background:#fee2e2;color:#991b1b;
                                     padding:8px 12px;border-radius:6px;font-size:12px;margin-bottom:12px;"></div>
-        <input id="authEmail" type="email" placeholder="이메일" autocomplete="email"
+        <input id="authEmail" type="email" placeholder="이메일" autocomplete="email" value="${lastEmail.replace(/"/g, '&quot;')}"
                style="width:100%;padding:11px 14px;border:1px solid #e2e8f0;border-radius:8px;
                       font-size:14px;margin-bottom:10px;outline:none;" />
         <input id="authPw" type="password" placeholder="비밀번호" autocomplete="current-password"
                style="width:100%;padding:11px 14px;border:1px solid #e2e8f0;border-radius:8px;
-                      font-size:14px;margin-bottom:14px;outline:none;" />
+                      font-size:14px;margin-bottom:10px;outline:none;" />
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#475569;margin-bottom:14px;cursor:pointer;user-select:none;">
+          <input id="authRemember" type="checkbox" checked style="width:16px;height:16px;cursor:pointer;accent-color:#3b5bdb;" />
+          <span>이 기기에서 30일 자동 로그인 (같은 PC만)</span>
+        </label>
         <button id="authBtnLogin" style="width:100%;padding:11px;background:#3b5bdb;color:white;
                                           border:none;border-radius:8px;font-size:14px;font-weight:600;
                                           cursor:pointer;margin-bottom:8px;">로그인</button>
         <button id="authBtnSignup" style="width:100%;padding:11px;background:transparent;color:#3b5bdb;
                                            border:1px solid #3b5bdb;border-radius:8px;font-size:13px;
                                            font-weight:500;cursor:pointer;">계정 만들기</button>
+        ${remembered?.email ? `
+          <button id="authBtnForget" style="width:100%;padding:8px;background:transparent;color:#dc2626;
+                                            border:none;font-size:11px;cursor:pointer;margin-top:6px;">
+            🗑 이 기기 저장된 정보 삭제
+          </button>
+        ` : ''}
         <div style="text-align:center;margin-top:14px;font-size:11px;color:#94a3b8;">
-          🔒 Supabase Auth + RLS · HTTPS
+          🔒 Supabase Auth + RLS · HTTPS · XOR 암호화
         </div>
       </div>
     </div>
@@ -353,27 +436,34 @@ function showAuthScreen() {
     const e = document.getElementById('authError');
     e.textContent = msg;
     e.style.display = 'block';
+    const banner = document.getElementById('autoLoginBanner');
+    if (banner) banner.style.display = 'none';
   };
 
-  document.getElementById('authBtnLogin').onclick = async () => {
-    const email = document.getElementById('authEmail').value.trim();
-    const pw = document.getElementById('authPw').value;
-    if (!email || !pw) return showError('이메일/비밀번호 입력');
+  // 로그인 처리 공통 함수
+  async function doLogin(email, pw, isAuto = false) {
     const btn = document.getElementById('authBtnLogin');
-    btn.textContent = '로그인 중...';
-    btn.disabled = true;
+    if (btn) { btn.textContent = isAuto ? '자동 로그인 중...' : '로그인 중...'; btn.disabled = true; }
     const { data, error } = await supabase.auth.signInWithPassword({ email, password: pw });
     if (error) {
-      btn.textContent = '로그인';
-      btn.disabled = false;
-      return showError(error.message);
+      if (btn) { btn.textContent = '로그인'; btn.disabled = false; }
+      // 자동 로그인 실패 시 저장된 비번 삭제 (만료/변경 등)
+      if (isAuto) { clearRememberCreds(); }
+      return showError(error.message + (isAuto ? ' (저장된 정보 삭제됨 - 비번 다시 입력)' : ''));
     }
     // 세션 즉시 반영
     session = data.session;
     window.__authToken = session?.access_token || null;
     window.__supabaseUserEmail = session?.user?.email || email;
+    // 자동 로그인 체크되어 있으면 비번 저장
+    const remember = document.getElementById('authRemember')?.checked;
+    if (remember) {
+      saveRememberCreds(email, pw, 30);
+    } else {
+      // 이메일만 저장 (편의)
+      try { localStorage.setItem(LS_LAST_EMAIL, email); } catch (e) {}
+    }
     overlay.remove();
-    // 로딩 화면 메시지만 짧게 표시 (이미 init 시 폴링이 자동으로 hide함)
     const msgEl = document.getElementById('loadingMsg');
     if (msgEl) msgEl.textContent = '화면 준비 중...';
     document.body.classList.add('loading');
@@ -382,12 +472,17 @@ function showAuthScreen() {
       loadingEl.classList.remove('hidden');
       loadingEl.style.opacity = '1';
     }
-    // React 마운트
     await mountReactApp();
-    // React 마운트 후 즉시 로딩 숨기기 (폴링 대신 직접)
     setTimeout(() => {
       if (typeof window.__hideLoading === 'function') window.__hideLoading();
     }, 50);
+  }
+
+  document.getElementById('authBtnLogin').onclick = async () => {
+    const email = document.getElementById('authEmail').value.trim();
+    const pw = document.getElementById('authPw').value;
+    if (!email || !pw) return showError('이메일/비밀번호 입력');
+    await doLogin(email, pw, false);
   };
 
   document.getElementById('authBtnSignup').onclick = async () => {
@@ -400,10 +495,33 @@ function showAuthScreen() {
     showError('✅ 가입 완료. 이메일 확인 후 로그인하세요.');
   };
 
-  // 엔터로 로그인
+  const forgetBtn = document.getElementById('authBtnForget');
+  if (forgetBtn) forgetBtn.onclick = () => {
+    if (!confirm('이 기기에 저장된 로그인 정보를 모두 삭제할까요?')) return;
+    try {
+      localStorage.removeItem(LS_LAST_EMAIL);
+      localStorage.removeItem(LS_REMEMBER_PW);
+      localStorage.removeItem(LS_REMEMBER_TIME);
+    } catch (e) {}
+    location.reload();
+  };
+
   document.getElementById('authPw').addEventListener('keydown', e => {
     if (e.key === 'Enter') document.getElementById('authBtnLogin').click();
   });
+  // 자동 포커스
+  setTimeout(() => {
+    const focus = (remembered?.email && !remembered?.password)
+      ? document.getElementById('authPw')
+      : document.getElementById('authEmail');
+    focus?.focus();
+  }, 100);
+
+  // 🆕 자동 로그인 즉시 시도
+  if (remembered?.email && remembered?.password) {
+    document.getElementById('authPw').value = remembered.password;
+    setTimeout(() => doLogin(remembered.email, remembered.password, true), 200);
+  }
 }
 
 // ════════════════════════════════════════════════
