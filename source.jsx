@@ -22137,6 +22137,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   const naverMapRef = useRef(null);
   const naverMapContainerRef = useRef(null);
   const naverMarkersRef = useRef([]);
+  const naverInitialFitRef = useRef(false);
 
   // 자동 복구 0: 첫 로딩 시 viewMode 강제 정리 (한 번만)
   useEffect(() => {
@@ -23405,6 +23406,29 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         console.warn("Naver marker creation failed for zone", z.id, e.message);
       }
     });
+
+    // ✨ 초기 1회: 모든 스팟이 한 화면에 보이도록 자동 줌/팬 (사용자 조작 보존)
+    if (!naverInitialFitRef.current && naverMapRef.current && naverMarkersRef.current.length > 0) {
+      try {
+        const _LB = naver?.maps?.LatLngBounds;
+        if (_LB) {
+          const bounds = new _LB();
+          naverMarkersRef.current.forEach(m => {
+            try { bounds.extend(m.getPosition()); } catch (e) {}
+          });
+          // 핀 + CCTV 미니창 + 라벨이 들어갈 충분한 여백
+          if (typeof naverMapRef.current.fitBounds === "function") {
+            naverMapRef.current.fitBounds(bounds, { top: 90, right: 180, bottom: 90, left: 60 });
+            // fitBounds가 너무 확대되면 클램프 (좁은 영역에서 z=22 등 과한 줌 방지)
+            try {
+              const _z = naverMapRef.current.getZoom();
+              if (_z > 19) naverMapRef.current.setZoom(19);
+            } catch (e) {}
+          }
+          naverInitialFitRef.current = true;
+        }
+      } catch (e) { console.warn("[NaverMap] fitBounds 실패:", e?.message); }
+    }
 
     // In edit mode, allow click on empty map area to add new zone
     if (editMode && naverMapRef.current && naver.maps.Event) {
@@ -26576,6 +26600,7 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
 
   // 마커 동기화
   const markersRef = React.useRef([]);
+  const initialFitRef = React.useRef(false);
   React.useEffect(() => {
     if (!leafletMapRef.current || !window.L) return;
     const L = window.L;
@@ -26680,6 +26705,16 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
         .on("click", () => onSelectZone(s));
       markersRef.current.push(marker);
     });
+
+    // ✨ 초기 1회: 모든 스팟이 한 화면에 보이도록 자동 줌/팬 (사용자 조작 보존)
+    if (!initialFitRef.current && markersRef.current.length > 0) {
+      try {
+        const group = L.featureGroup(markersRef.current);
+        // 핀 + CCTV 미니창 + 라벨이 들어갈 충분한 여백
+        map.fitBounds(group.getBounds(), { padding: [90, 120], maxZoom: 19 });
+        initialFitRef.current = true;
+      } catch (e) { console.warn("[OsmFallbackMap] fitBounds 실패:", e?.message); }
+    }
   }, [zoneStatus, leafletLoaded, cctvSnapshotData, cctvEditMode, cctvMap]);
 
   // CCTV 편집 모드 - 드래그앤드롭 핸들러
