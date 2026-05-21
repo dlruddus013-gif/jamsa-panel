@@ -428,20 +428,29 @@ export async function handlePreciseLocationView(req, res) {
 - ⏳ 사용자 작업: Supabase에서 `multirole_phase2.sql` 실행
 - ⏳ 클라이언트의 직접 좌표 표시(L25987) 마스킹 — Phase 5
 
-### Phase 3 — 동의·정정·고객 (2주)
+### Phase 3 — 동의·정정·고객 (2주) ✅ 코드 작성 완료
 **목표: 우선순위 5·6**
-- ① `consent_records` 테이블 + 동의 모달 (v3.2 문구)
-- ② 직원 화면 — 동의 철회 / 정정 요청 UI
-- ③ `attendance_corrections` + 팀장→관리자 검토 흐름
-- ④ `service_sessions` + customer-portal.html (토큰 기반)
-- ⑤ 일일 익명화 리포트 자동 발송 (스케줄러)
+- ✅ `consent_records` 테이블 + RLS (본인/admin/lawyer)
+- ✅ `consent_text_hash` SHA-256 — 동의 문구 변조 방지
+- ✅ ConsentModal v3.2 (6항목 + scope 선택)
+- ✅ `attendance_corrections` + RLS (본인/lead 팀/admin 전체)
+- ✅ CorrectionRequestModal + admin 승인 API
+- ✅ `service_sessions` + `customer_otp_log` + `customer_org_members` (Tier 1·2·3)
+- ✅ `get_session_by_token(text)` RPC (security definer, 90일 만료)
+- ✅ customer-portal.html 실 API 연동 + 이슈 신고 POST
+- ⏳ 일일 익명화 리포트 자동 발송 — Phase 4·5 인프라
+- ⏳ 사용자 작업: Supabase에서 multirole_phase3.sql 실행
 
-### Phase 4 — 감사·노무사 (1주)
+### Phase 4 — 감사·노무사 (1주) ✅ 코드 작성 완료
 **목표: 우선순위 7·8**
-- ① 노무사 화면 — 접근 로그·동의 이력·정정 이력 조회
-- ② 감사 패키지 생성 함수 — JSON + PDF + 해시 증명을 zip으로
-- ③ 보존 기간 정책 cron — 90일 후 원본 좌표 파기, 5년 후 로그 아카이브
-- ④ 권한 매트릭스 도큐먼트 자동 생성 (관리자 화면)
+- ✅ 노무사 화면 — `/api/audit-data` 실 DB fetch (consent/access/correction/retention/stats)
+- ✅ `/api/audit-package` — JSON 페이로드 + SHA-256 해시 + audit_package_log INSERT
+- ✅ `lawyer_recipients` + `audit_package_log` 테이블 + RLS
+- ✅ dryRun 미리보기 / 실제 생성 분리
+- ✅ `purge_expired_locations()` PostgreSQL 함수 — 90일 후 좌표 파기
+- ✅ `scripts/retention_cron.mjs` — 외부 스케줄러용 cron 스크립트
+- ⏳ 메일 발송 워커 (delivery_status=pending 픽업) — 별도 인프라
+- ⏳ 사용자 작업: Supabase에서 multirole_phase4.sql 실행
 
 ---
 

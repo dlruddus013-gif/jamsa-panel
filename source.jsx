@@ -28363,30 +28363,76 @@ function CeoDashboard({ userCtx }) {
 }
 
 function LawyerAuditView({ userCtx }) {
-  // Phase 3에서 실제 consent_records, location_access_log, attendance_corrections로 교체
-  const consent = [
-    { name: "김효진", anon: "E-1A2B", agreedAt: "2024-12-30", version: "v3.2", scope: "GPS·BLE·근무중", status: "유효" },
-    { name: "윤승수", anon: "E-3C4D", agreedAt: "2024-12-30", version: "v3.2", scope: "GPS·BLE·근무중", status: "유효" },
-    { name: "윤찬미", anon: "E-5E6F", agreedAt: "2024-12-30", version: "v3.2", scope: "GPS·BLE·근무중", status: "유효" },
-    { name: "박지훈", anon: "E-7G8H", agreedAt: "2024-12-30", version: "v3.2", scope: "GPS·BLE·근무중", status: "유효" },
-    { name: "최서연", anon: "E-9I0J", agreedAt: "2025-02-01", version: "v3.2", scope: "GPS",            status: "유효" },
-  ];
-  const accessLog = [
-    { ts: "2026-05-21 10:42", actor: "관리자 이미경", target: "E-3C4D", action: "정밀 위치 열람",     reason: "BLE 미수신 원인 확인",                legal: "근로기준법 제43조 임금대장" },
-    { ts: "2026-05-21 09:14", actor: "관리자 이미경", target: "E-1A2B", action: "근태기록 정정 승인", reason: "본인 요청 검증 — 출입게이트 로그 확인", legal: "근로자명부 정정의무" },
-    { ts: "2026-05-20 16:08", actor: "팀장 박정환",   target: "E-5E6F", action: "출근 큐 검토",       reason: "자동출근 대기 해소",                  legal: "팀 운영 권한" },
-  ];
-  const corrections = [
-    { date: "2026-05-19", name: "김효진", field: "퇴근시각", change: "17:55 → 18:30", reason: "고객 응대로 지연 출구 시점 30분 차이", status: "대기" },
-    { date: "2026-05-18", name: "윤찬미", field: "출근시각", change: "09:15 → 08:55", reason: "BLE 인식 지연으로 늦은 기록",          status: "승인" },
-  ];
-  const retention = [
-    { name: "근로자 명부",    meta: "3년 보존 · 자동 백업" },
-    { name: "임금대장",       meta: "3년 보존 · 별도 저장소" },
-    { name: "위치정보 원본",  meta: "근무종료 90일 후 자동 파기" },
-    { name: "접근 로그",      meta: "5년 보존 (사후 점검 대응)" },
-    { name: "동의 철회 기록", meta: "영구 보존" },
-  ];
+  // Phase 4: 실제 DB fetch. 인증 실패 시 mock fallback (시연용).
+  const [consent, setConsent] = useState([]);
+  const [accessLog, setAccessLog] = useState([]);
+  const [corrections, setCorrections] = useState([]);
+  const [retention, setRetention] = useState([
+    { name: "근로자 명부", meta: "3년 보존 · 자동 백업", status: "정상" },
+    { name: "임금대장", meta: "3년 보존 · 별도 저장소", status: "정상" },
+    { name: "위치정보 원본", meta: "근무종료 90일 후 자동 파기", status: "정상" },
+    { name: "접근 로그", meta: "5년 보존 (사후 점검 대응)", status: "정상" },
+    { name: "동의 철회 기록", meta: "영구 보존", status: "정상" },
+  ]);
+  const [stats, setStats] = useState({ consentActive: 0, consentWithdrawn: 0, monthlyAccess: 0, totalStaff: 0 });
+  const [pkgLoading, setPkgLoading] = useState(false);
+  const [pkgResult, setPkgResult] = useState(null);
+  const [usingMock, setUsingMock] = useState(false);
+
+  useEffect(() => {
+    const token = getAuthToken();
+    if (!token) { applyMock(); return; }
+    const headers = { Authorization: `Bearer ${token}` };
+    Promise.all([
+      fetch("/api/audit-data?type=consent", { headers }).then(r => r.json()).catch(() => null),
+      fetch("/api/audit-data?type=access", { headers }).then(r => r.json()).catch(() => null),
+      fetch("/api/audit-data?type=correction", { headers }).then(r => r.json()).catch(() => null),
+      fetch("/api/audit-data?type=retention", { headers }).then(r => r.json()).catch(() => null),
+      fetch("/api/audit-data?type=stats", { headers }).then(r => r.json()).catch(() => null),
+    ]).then(([c, a, co, re, st]) => {
+      if (c?.ok && a?.ok && co?.ok && re?.ok && st?.ok) {
+        setConsent(c.data); setAccessLog(a.data); setCorrections(co.data);
+        setRetention(re.data); setStats(st.data);
+      } else {
+        applyMock();
+      }
+    });
+  }, []);
+
+  function applyMock() {
+    setUsingMock(true);
+    setConsent([
+      { name: "김효진", anon: "E-1A2B", agreedAt: "2024-12-30", version: "v3.2", scope: "gps, ble, work_hours_only", status: "유효" },
+      { name: "윤승수", anon: "E-3C4D", agreedAt: "2024-12-30", version: "v3.2", scope: "gps, ble, work_hours_only", status: "유효" },
+      { name: "윤찬미", anon: "E-5E6F", agreedAt: "2024-12-30", version: "v3.2", scope: "gps, ble, work_hours_only", status: "유효" },
+      { name: "박지훈", anon: "E-7G8H", agreedAt: "2024-12-30", version: "v3.2", scope: "gps, ble, work_hours_only", status: "유효" },
+      { name: "최서연", anon: "E-9I0J", agreedAt: "2025-02-01", version: "v3.2", scope: "gps", status: "유효" },
+    ]);
+    setAccessLog([
+      { ts: "2026-05-21T10:42:00Z", actor: "admin 관리자",  target: "E-3C4D", action: "정밀 위치 열람",     reason: "BLE 미수신 원인 확인",                legal: "근로기준법 제43조 임금대장" },
+      { ts: "2026-05-21T09:14:00Z", actor: "admin 관리자",  target: "E-1A2B", action: "근태기록 정정 승인", reason: "본인 요청 검증 — 출입게이트 로그 확인", legal: "근로자명부 정정의무" },
+      { ts: "2026-05-20T16:08:00Z", actor: "lead 박정환",   target: "E-5E6F", action: "출근 큐 검토",       reason: "자동출근 대기 해소",                  legal: "팀 운영 권한" },
+    ]);
+    setCorrections([
+      { date: "2026-05-19", name: "김효진", field: "퇴근시각", change: "17:55 → 18:30", reason: "고객 응대로 지연 출구 시점 30분 차이", status: "대기" },
+      { date: "2026-05-18", name: "윤찬미", field: "출근시각", change: "09:15 → 08:55", reason: "BLE 인식 지연으로 늦은 기록", status: "승인" },
+    ]);
+    setStats({ consentActive: 5, consentWithdrawn: 0, monthlyAccess: 1, totalStaff: 5 });
+  }
+
+  async function generatePackage(dryRun) {
+    setPkgLoading(true); setPkgResult(null);
+    try {
+      const r = await fetch("/api/audit-package", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getAuthToken()}` },
+        body: JSON.stringify({ dryRun: !!dryRun }),
+      });
+      const j = await r.json();
+      setPkgResult(j);
+    } catch (e) { setPkgResult({ ok: false, error: e.message }); }
+    finally { setPkgLoading(false); }
+  }
 
   const card = { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, marginBottom: 14 };
   const okNote = { background: "#ecfdf5", border: "1px solid #a7f3d0", color: "#047857", padding: "8px 12px", borderRadius: 6, fontSize: 11.5, marginTop: 10 };
@@ -28396,10 +28442,16 @@ function LawyerAuditView({ userCtx }) {
       <RoleBanner roleKey="lawyer" title="노무사 — 동의·접근 로그·보존·감사"
         sub="위치정보법 · 근로기준법 점검 대비. 동의 이력, 정정 이력, 관리자 접근 로그, 보존·파기 상태, 감사 증빙." />
 
+      {usingMock && (
+        <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "8px 12px", marginBottom: 14, fontSize: 11.5, color: "#92400e" }}>
+          ⚠️ 시연 모드 (mock 데이터). 실제 DB 연동 시 Supabase 인증 토큰이 필요합니다.
+        </div>
+      )}
+
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 18 }}>
-        <CeoStat label="동의 유효 직원" value={consent.filter(c => c.status === "유효").length} unit={`/ ${consent.length}`} tone="good" note="동의 문구 v3.2 (2024-12 갱신)" />
-        <CeoStat label="동의 철회 (누적)" value="0" unit="건" tone="good" note="철회 즉시 GPS 중단 자동화 OK" />
-        <CeoStat label="관리자 정밀 위치 열람 (월)" value={accessLog.filter(l => l.action === "정밀 위치 열람").length} unit="건" tone="neutral" note="전 건 사유 첨부 · 영구 보존" />
+        <CeoStat label="동의 유효 직원" value={stats.consentActive} unit={`/ ${stats.totalStaff || consent.length}`} tone="good" note="동의 문구 v3.2 (2024-12 갱신)" />
+        <CeoStat label="동의 철회 (누적)" value={stats.consentWithdrawn} unit="건" tone={stats.consentWithdrawn === 0 ? "good" : "warn"} note="철회 즉시 GPS 중단 자동화" />
+        <CeoStat label="관리자 정밀 위치 열람 (월)" value={stats.monthlyAccess} unit="건" tone="neutral" note="전 건 사유 첨부 · 영구 보존" />
       </div>
 
       <div style={card}>
@@ -28415,14 +28467,19 @@ function LawyerAuditView({ userCtx }) {
             </tr>
           </thead>
           <tbody>
+            {consent.length === 0 && (
+              <tr><td colSpan={5} style={{ padding: 12, textAlign: "center", color: "#94a3b8", fontSize: 11.5 }}>동의 이력 없음</td></tr>
+            )}
             {consent.map((c, i) => (
               <tr key={i} style={{ borderTop: "1px solid #e2e8f0" }}>
                 <td style={{ padding: 8 }}>{c.name} <span style={{ fontSize: 10, color: "#64748b", marginLeft: 4 }}>{c.anon}</span></td>
-                <td style={{ padding: 8, textAlign: "center" }}>{c.agreedAt}</td>
+                <td style={{ padding: 8, textAlign: "center" }}>{c.agreedAt ? String(c.agreedAt).slice(0, 10) : "-"}</td>
                 <td style={{ padding: 8, textAlign: "center" }}>{c.version}</td>
                 <td style={{ padding: 8 }}>{c.scope}</td>
                 <td style={{ padding: 8, textAlign: "center" }}>
-                  <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: "#dcfce7", color: "#166534" }}>{c.status}</span>
+                  <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 700,
+                    background: c.status === "유효" ? "#dcfce7" : "#fee2e2",
+                    color: c.status === "유효" ? "#166534" : "#991b1b" }}>{c.status}</span>
                 </td>
               </tr>
             ))}
@@ -28443,9 +28500,12 @@ function LawyerAuditView({ userCtx }) {
             </tr>
           </thead>
           <tbody>
+            {accessLog.length === 0 && (
+              <tr><td colSpan={4} style={{ padding: 12, textAlign: "center", color: "#94a3b8", fontSize: 11.5 }}>접근 로그 없음</td></tr>
+            )}
             {accessLog.map((l, i) => (
               <tr key={i} style={{ borderTop: "1px solid #e2e8f0" }}>
-                <td style={{ padding: 8 }}>{l.ts}</td>
+                <td style={{ padding: 8 }}>{l.ts ? new Date(l.ts).toLocaleString("ko-KR") : "-"}</td>
                 <td style={{ padding: 8 }}>{l.actor}</td>
                 <td style={{ padding: 8, textAlign: "center" }}>
                   <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, background: "#f1f5f9", fontWeight: 700 }}>{l.target}</span>
@@ -28497,7 +28557,7 @@ function LawyerAuditView({ userCtx }) {
                 <div style={{ fontSize: 12.5, fontWeight: 700 }}>{r.name}</div>
                 <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{r.meta}</div>
               </div>
-              <span style={{ padding: "3px 9px", borderRadius: 10, fontSize: 10.5, fontWeight: 700, background: "#dcfce7", color: "#166534" }}>정상</span>
+              <span style={{ padding: "3px 9px", borderRadius: 10, fontSize: 10.5, fontWeight: 700, background: "#dcfce7", color: "#166534" }}>{r.status || "정상"}</span>
             </div>
           ))}
         </div>
@@ -28506,19 +28566,40 @@ function LawyerAuditView({ userCtx }) {
       <div style={card}>
         <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 8 }}>📦 감사용 증빙 패키지</div>
         <p style={{ fontSize: 11.5, color: "#64748b", lineHeight: 1.55, marginBottom: 10 }}>
-          사후 점검·분쟁 대비. 동의 이력, 접근 로그, 정정 이력, 보존 증명, 위치 원본 해시값을 PDF + JSON으로 일괄 생성.
-          상세 구현은 Phase 4 (설계 §11.2 경로 B — 월간 자동 발송 포함).
+          사후 점검·분쟁 대비. 동의 이력 · 접근 로그 · 정정 이력 · audit_logs를 JSON으로 일괄 수집 + SHA-256 해시 기록.
+          <code style={{ fontSize: 10.5, padding: "1px 5px", background: "#f1f5f9", borderRadius: 3, marginLeft: 4 }}>lawyer_recipients</code> active 수신자에게 발송 큐 등록 (설계 §11.2 경로 B).
         </p>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={() => alert("Phase 4에서 구현 — 감사 패키지 생성 (zip + PGP 옵션)")}
-            style={{ padding: "8px 14px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #0e7490, #0891b2)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-            감사 패키지 생성 (zip)
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={() => generatePackage(true)} disabled={pkgLoading}
+            style={{ padding: "8px 14px", borderRadius: 6, border: "1px solid #e2e8f0", background: "#fff", fontSize: 12, fontWeight: 700, cursor: pkgLoading ? "not-allowed" : "pointer" }}>
+            {pkgLoading ? "처리 중..." : "🔍 미리보기 (dryRun)"}
           </button>
-          <button onClick={() => alert("전월(4월) 패키지 다운로드 — Phase 4")}
-            style={{ padding: "8px 14px", borderRadius: 6, border: "1px solid #e2e8f0", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-            전월 패키지
+          <button onClick={() => generatePackage(false)} disabled={pkgLoading}
+            style={{ padding: "8px 14px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #0e7490, #0891b2)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: pkgLoading ? "not-allowed" : "pointer" }}>
+            {pkgLoading ? "생성 중..." : "📦 감사 패키지 생성 + 발송 큐 등록"}
           </button>
         </div>
+        {pkgResult && (
+          <div style={{
+            marginTop: 12, padding: 12, borderRadius: 6, fontSize: 11.5,
+            background: pkgResult.ok ? "#ecfdf5" : "#fef2f2",
+            border: `1px solid ${pkgResult.ok ? "#a7f3d0" : "#fecaca"}`,
+            color: pkgResult.ok ? "#065f46" : "#b91c1c",
+            lineHeight: 1.65,
+          }}>
+            {pkgResult.ok ? (
+              <>
+                ✓ {pkgResult.dryRun ? "미리보기" : "생성 완료"} · 기간 {pkgResult.period?.start} ~ {pkgResult.period?.end}<br />
+                SHA-256: <code style={{ fontSize: 10.5 }}>{pkgResult.sha256?.slice(0, 16)}…</code> · {(pkgResult.sizeBytes / 1024).toFixed(1)} KB<br />
+                요약: 동의 {pkgResult.summary?.consent_count} · 접근 {pkgResult.summary?.access_count} · 정정 {pkgResult.summary?.correction_count} · audit {pkgResult.summary?.audit_log_count}건
+                {pkgResult.queuedRecipients && <><br />발송 큐 등록: {pkgResult.queuedRecipients.length}명</>}
+                {pkgResult.note && <><br /><span style={{ fontSize: 10.5, color: "#64748b" }}>{pkgResult.note}</span></>}
+              </>
+            ) : (
+              <>❌ 실패: {pkgResult.error} {pkgResult.hint && `— ${pkgResult.hint}`}</>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

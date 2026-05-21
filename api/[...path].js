@@ -28,6 +28,8 @@ import preciseLocation from '../api_handlers/precise-location.js';
 import consent from '../api_handlers/consent.js';
 import correction from '../api_handlers/correction.js';
 import customerSession from '../api_handlers/customer-session.js';
+import auditData from '../api_handlers/audit-data.js';
+import auditPackage from '../api_handlers/audit-package.js';
 import stats from '../api_handlers/stats.js';
 import tapoAutomations from '../api_handlers/tapo-automations.js';
 import tapoCamera from '../api_handlers/tapo-camera.js';
@@ -66,6 +68,8 @@ const routes = {
   'consent': consent,
   'correction': correction,
   'customer-session': customerSession,
+  'audit-data': auditData,
+  'audit-package': auditPackage,
   'stats': stats,
   'tapo-automations': tapoAutomations,
   'tapo-camera': tapoCamera,
