@@ -33,6 +33,12 @@ const DEFAULT_CONFIG = {
   cooldownMin: 5,
   deptFilter: "all",
   staffFilter: "all",
+  // 🆕 비콘 자동 출퇴근
+  autoBeacon: {
+    enabled: false,
+    inMin: 5,         // 최근 N분 안에 비콘 감지되면 자동 출근
+    outMin: 30,       // N분 이상 비콘 미감지면 자동 퇴근
+  },
   messages: {
     checkIn:  "[잠사] {name}({dept}) 출근 — {time}",
     checkOut: "[잠사] {name}({dept}) 퇴근 — {time} · 근무 {hours}시간",
@@ -245,6 +251,89 @@ export async function evaluateLongIdle({ staffList, todayAttendance, depts }) {
   saveCooldown(cooldown);
 }
 
+// ─── 비콘 자동 출퇴근 평가 ──────────────────────────────────────
+//   - 매핑된 beacon_id가 inMin 분 안에 감지 + 직원이 미출근 → 자동 attendance insert
+//   - 매핑된 beacon_id가 outMin 분 이상 미감지 + 직원이 근무중 → 자동 checkout
+//   - 자동 처리된 출퇴근에도 동일하게 SMS 알림 발송
+export async function evaluateBeaconAutoAttendance({ sb, staffList, todayAttendance, depts }) {
+  const cfg = loadAttendanceAlertConfig();
+  if (!cfg.autoBeacon?.enabled || !sb) return { autoIn: 0, autoOut: 0 };
+
+  // 비콘 감지 이력 — beacon-gateway가 localStorage에 누적
+  let beaconHistory = [];
+  try { beaconHistory = JSON.parse(localStorage.getItem("jamsa_beacon_history") || "[]"); } catch (e) {}
+
+  // 각 beacon_id의 가장 최근 감지 시각 추출
+  const lastSeen = new Map();
+  beaconHistory.forEach(b => {
+    const id = (b.beaconId || b.id || b.mac || b.uuid || "").toUpperCase();
+    if (!id) return;
+    const t = new Date(b.at || b.timestamp || Date.now()).getTime();
+    const prev = lastSeen.get(id) || 0;
+    if (t > prev) lastSeen.set(id, t);
+  });
+
+  const now = Date.now();
+  const inThreshold  = (cfg.autoBeacon.inMin  || 5)  * 60 * 1000;
+  const outThreshold = (cfg.autoBeacon.outMin || 30) * 60 * 1000;
+  let autoIn = 0, autoOut = 0;
+
+  for (const staff of staffList) {
+    const beaconId = (staff.beacon_id || staff.unique_uid || "").toUpperCase();
+    if (!beaconId) continue;
+    const seen = lastSeen.get(beaconId);
+    const myAtt = todayAttendance.filter(a => a.staff_id === staff.id);
+    const working = myAtt.find(a => !a.checked_out_at);
+
+    // CASE 1: 최근 감지 + 출근 안 됨 → 자동 출근
+    if (seen && (now - seen) < inThreshold && !working) {
+      // 60초 이내 중복 방지
+      const recentDupe = myAtt.find(a => Date.now() - new Date(a.checked_in_at).getTime() < 60_000);
+      if (recentDupe) continue;
+      try {
+        const { data, error } = await sb.from("attendance")
+          .insert({ staff_id: staff.id, source: "beacon_auto" })
+          .select().single();
+        if (!error && data) {
+          autoIn++;
+          const dept = depts.find(d => d.id === staff.dept_id);
+          triggerCheckInAlert({ staff, dept, attendanceRecord: data }).catch(() => {});
+          // 자동 처리 별도 로그
+          appendLog({
+            kind: "autoBeaconIn", staffId: staff.id, staffName: staff.name,
+            beaconId, message: `🔵 자동 출근 — ${staff.name} (${dept?.name||""}) · 비콘 ${beaconId} 감지`,
+            ok: true, severity: "INFO",
+          });
+        }
+      } catch (e) {}
+    }
+
+    // CASE 2: 미감지 또는 장시간 미감지 + 근무중 → 자동 퇴근
+    if (working && (!seen || (now - seen) > outThreshold)) {
+      // 자동 퇴근은 출근 후 최소 1시간 지난 경우만 (잠시 자리 비움 등 무시)
+      const inT = new Date(working.checked_in_at).getTime();
+      if (now - inT < 60 * 60 * 1000) continue;
+      try {
+        const checkoutTime = new Date().toISOString();
+        const { error } = await sb.from("attendance")
+          .update({ checked_out_at: checkoutTime })
+          .eq("id", working.id);
+        if (!error) {
+          autoOut++;
+          const dept = depts.find(d => d.id === staff.dept_id);
+          triggerCheckOutAlert({ staff, dept, attendanceRecord: { ...working, checked_out_at: checkoutTime } }).catch(() => {});
+          appendLog({
+            kind: "autoBeaconOut", staffId: staff.id, staffName: staff.name,
+            beaconId, message: `🔴 자동 퇴근 — ${staff.name} (${dept?.name||""}) · 비콘 ${cfg.autoBeacon.outMin}분 미감지`,
+            ok: true, severity: "INFO",
+          });
+        }
+      } catch (e) {}
+    }
+  }
+  return { autoIn, autoOut };
+}
+
 // ─── 누적 중복 정리 도구 (1분 이내 같은 직원 중복 attendance 삭제) ─
 // supabase client + today attendance array를 받아 중복 행 삭제, 삭제 결과 반환
 export async function dedupeTodayAttendance(sb, today) {
@@ -350,6 +439,41 @@ export function AttendanceAlertConfigModal({ depts = [], staffList = [], onClose
               <Toggle label="지각 알림"    on={cfg.events.late}     onClick={() => toggleEvent("late")}     />
               <Toggle label="결근 알림"    on={cfg.events.absent}   onClick={() => toggleEvent("absent")}   />
               <Toggle label="장기 부재"    on={cfg.events.longIdle} onClick={() => toggleEvent("longIdle")} />
+            </Section>
+
+            {/* 🆕 비콘 자동 출퇴근 */}
+            <Section title="📡 비콘 자동 출퇴근">
+              <label style={{ display: "flex", alignItems: "center", gap: 8, padding: 8, background: cfg.autoBeacon?.enabled ? "rgba(167,139,250,0.15)" : "rgba(255,255,255,0.03)", border: `1px solid ${cfg.autoBeacon?.enabled ? "rgba(167,139,250,0.4)" : "rgba(255,255,255,0.08)"}`, borderRadius: 5, cursor: "pointer", marginBottom: 6 }}>
+                <input type="checkbox" checked={!!cfg.autoBeacon?.enabled}
+                  onChange={(e) => setCfg(c => ({ ...c, autoBeacon: { ...(c.autoBeacon||{}), enabled: e.target.checked } }))}
+                  style={{ accentColor: "#a855f7", width: 16, height: 16 }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: cfg.autoBeacon?.enabled ? "#ddd6fe" : "#94a3b8" }}>
+                    {cfg.autoBeacon?.enabled ? "● 자동 출퇴근 활성화" : "○ 자동 출퇴근 비활성화"}
+                  </div>
+                  <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>
+                    매핑된 비콘이 감지되면 출근, 일정 시간 미감지 시 퇴근 자동 처리 (수동 클릭 불필요)
+                  </div>
+                </div>
+              </label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                <Field label="자동 출근 (분 이내 감지)">
+                  <input type="number" min="1" max="60" value={cfg.autoBeacon?.inMin ?? 5}
+                    onChange={e => setCfg(c => ({ ...c, autoBeacon: { ...(c.autoBeacon||{}), inMin: parseInt(e.target.value)||5 } }))}
+                    style={input} />
+                </Field>
+                <Field label="자동 퇴근 (분 이상 미감지)">
+                  <input type="number" min="5" max="240" value={cfg.autoBeacon?.outMin ?? 30}
+                    onChange={e => setCfg(c => ({ ...c, autoBeacon: { ...(c.autoBeacon||{}), outMin: parseInt(e.target.value)||30 } }))}
+                    style={input} />
+                </Field>
+              </div>
+              <div style={{ marginTop: 6, padding: 8, background: "rgba(167,139,250,0.06)", border: "1px solid rgba(167,139,250,0.15)", borderRadius: 4, fontSize: 9, color: "#cbd5e1", lineHeight: 1.5 }}>
+                ⚠ 사전 조건:<br/>
+                • <strong>각 직원에게 beacon_id 또는 unique_uid 매핑</strong> 필요 (직원 상세 → 식별자 등록 탭)<br/>
+                • <strong>BLE 게이트웨이 또는 비콘 스캐너 가동</strong> — 감지 데이터가 localStorage에 누적되어야 함<br/>
+                • 30초마다 자동 평가 · 자동 퇴근은 출근 후 최소 1시간 경과 시에만 발생 (잠시 자리 비움 무시)
+              </div>
             </Section>
 
             {/* 정시 기준 */}
