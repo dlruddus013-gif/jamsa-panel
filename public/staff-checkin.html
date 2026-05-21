@@ -7,10 +7,12 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<meta name="build" content="v2-2026-05-21">
+<meta name="build" content="v3-2026-05-21-map">
 <title>잠사플레이팜 · 출퇴근 체크인</title>
 <link rel="manifest" href="/manifest.json">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <style>
   :root {
     --bg:#0f172a; --bg2:#0b1220; --surface:#1e293b; --line:#334155;
@@ -83,6 +85,50 @@
   .state-on{background:rgba(52,211,153,0.2);color:var(--accent);border:1px solid rgba(52,211,153,0.4)}
   .state-off{background:rgba(148,163,184,0.15);color:var(--text-soft);border:1px solid rgba(148,163,184,0.3)}
   .state-done{background:rgba(99,102,241,0.18);color:#a5b4fc;border:1px solid rgba(99,102,241,0.35)}
+
+  /* 지도 토글 버튼 */
+  .map-toggle{
+    padding:3px 8px;border-radius:4px;
+    background:rgba(255,255,255,0.06);border:1px solid var(--line);
+    color:var(--text-soft);font-size:10px;font-weight:700;cursor:pointer;
+  }
+  .map-toggle:active{background:rgba(255,255,255,0.12)}
+  .map-toggle.active{background:var(--accent-bg);color:var(--accent);border-color:var(--accent-deep)}
+
+  /* 레전드 점 */
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;vertical-align:middle;margin-right:3px;border:1.5px solid #0f172a}
+  .dot-me{background:#3b82f6;box-shadow:0 0 0 2px rgba(59,130,246,0.35)}
+  .dot-staff{background:#10b981}
+  .dot-visitor{background:#a855f7}
+  .dot-beacon{background:#f59e0b}
+  .dot-fence{background:none;border:2px dashed #34d399;width:10px;height:10px}
+
+  /* 사람 리스트 row */
+  .person-row{
+    display:flex;align-items:center;gap:8px;padding:6px 8px;
+    background:rgba(255,255,255,0.03);border:1px solid var(--line);
+    border-radius:6px;font-size:11px;
+  }
+  .person-row.me{background:rgba(59,130,246,0.12);border-color:rgba(59,130,246,0.35)}
+  .person-row .pdot{flex-shrink:0;width:8px;height:8px;border-radius:50%}
+  .person-row .pinfo{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .person-row .pmeta{color:var(--text-mute);font-size:9px;font-family:ui-monospace,monospace}
+
+  /* Leaflet 다크 보정 */
+  .leaflet-container{background:#0b1220 !important}
+  .leaflet-control-attribution{background:rgba(0,0,0,0.6) !important;color:var(--text-mute) !important;font-size:9px !important}
+  .leaflet-control-attribution a{color:var(--text-soft) !important}
+  .leaflet-control-zoom a{background:rgba(15,23,42,0.9) !important;color:var(--text) !important;border-color:var(--line) !important}
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip{
+    background:var(--surface) !important;color:var(--text) !important;
+    border:1px solid var(--line);box-shadow:0 4px 12px rgba(0,0,0,0.5);
+  }
+  .leaflet-popup-content{margin:8px 12px !important;font-size:12px !important}
+  .me-marker{background:#3b82f6;border:3px solid #fff;border-radius:50%;width:18px !important;height:18px !important;box-shadow:0 0 0 4px rgba(59,130,246,0.35),0 2px 6px rgba(0,0,0,0.5);animation:pulse 1.5s infinite}
+  .other-marker{background:#10b981;border:2.5px solid #fff;border-radius:50%;width:14px !important;height:14px !important;box-shadow:0 2px 6px rgba(0,0,0,0.6)}
+  .other-marker.visitor{background:#a855f7}
+  .other-marker.beacon{background:#f59e0b}
+  .other-marker.stale{opacity:0.5}
 
   #setup-card{display:flex;flex-direction:column;gap:12px}
   #setup-card .field{display:flex;flex-direction:column;gap:6px}
@@ -211,6 +257,34 @@
       </div>
     </div>
 
+    <!-- 🆕 지도 (내 위치 + 권역 + 동료 위치) -->
+    <div class="card" style="padding:0;overflow:hidden">
+      <div style="padding:12px 14px 8px;display:flex;justify-content:space-between;align-items:center">
+        <div class="lbl">🗺️ 실시간 지도</div>
+        <div style="display:flex;gap:4px">
+          <button class="map-toggle" id="mapTypeBtn" onclick="toggleMapType()" title="지도/위성 전환">위성</button>
+          <button class="map-toggle" onclick="centerOnMe()" title="내 위치로">📍</button>
+        </div>
+      </div>
+      <div id="mapBox" style="height:280px;background:#0b1220;position:relative"></div>
+      <div id="mapLegend" style="padding:6px 12px;background:rgba(0,0,0,0.3);font-size:9px;color:var(--text-mute);display:flex;gap:10px;flex-wrap:wrap">
+        <span><span class="dot dot-me"></span> 내 위치</span>
+        <span><span class="dot dot-staff"></span> 직원</span>
+        <span><span class="dot dot-visitor"></span> 관람객/알바</span>
+        <span><span class="dot dot-beacon"></span> 비콘 감지</span>
+        <span><span class="dot dot-fence"></span> 권역</span>
+      </div>
+    </div>
+
+    <!-- 🆕 함께 근무 중 -->
+    <div class="card">
+      <div class="lbl" style="display:flex;justify-content:space-between;align-items:center">
+        <span>👥 현재 위치 공유 중인 사람</span>
+        <span id="peopleCount" class="mono" style="font-size:11px;color:var(--text-soft)">0명</span>
+      </div>
+      <div id="peopleList" style="margin-top:8px;display:flex;flex-direction:column;gap:4px"></div>
+    </div>
+
     <div class="status-grid">
       <div class="status-tile">
         <div class="lbl">📡 위치</div>
@@ -256,11 +330,20 @@ let watchId = null;
 let lastPos = null;
 let sendTimer = null;
 let evalTimer = null;
+let peopleTimer = null;
 let geofence = null; // {centerLat, centerLng, radiusM, inMin, outMin}
 let geofenceState = "unknown"; // "inside" | "outside" | "unknown"
 let geofenceEnterAt = 0;
 let geofenceExitAt = 0;
 let attendanceState = { working: false, lastAttendance: null }; // 현재 출근 상태
+
+// 지도 관련
+let map = null;
+let mapTileSat = null, mapTileStreet = null, mapTileLabels = null;
+let mapTypeSatellite = false;
+let myMarker = null;
+let fenceCircle = null;
+let othersMarkers = new Map(); // id → marker
 
 const LS_URL  = "jamsa_sb_url";
 const LS_KEY  = "jamsa_sb_key";
@@ -387,6 +470,9 @@ async function startCheckin() {
   // 현재 출근 상태 로드
   await refreshAttendanceState();
 
+  // 지도 초기화 (Leaflet)
+  setTimeout(initMap, 300);
+
   // GPS watch 시작
   watchId = navigator.geolocation.watchPosition(onPosition, onPosError, {
     enableHighAccuracy: true,
@@ -398,8 +484,172 @@ async function startCheckin() {
   sendTimer = setInterval(sendLocation, 30000);
   evalTimer = setInterval(runAutoEvaluation, 30000);
 
+  // 15초마다 다른 직원 위치 폴링
+  peopleTimer = setInterval(fetchPeople, 15000);
+  fetchPeople();
+
   // 출근 상태 5분마다 새로고침
   setInterval(refreshAttendanceState, 5 * 60 * 1000);
+}
+
+// ─── 지도 초기화 ───────────────────────────────────────────────
+function initMap() {
+  if (map || typeof L === "undefined") return;
+  const center = [geofence.centerLat, geofence.centerLng];
+  map = L.map("mapBox", {
+    zoomControl: true,
+    attributionControl: true,
+    tap: true,
+  }).setView(center, 17);
+
+  // 일반 (OSM)
+  mapTileStreet = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "© OpenStreetMap",
+    maxZoom: 19,
+  });
+  // 위성 (ESRI World Imagery)
+  mapTileSat = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+    attribution: "Esri",
+    maxZoom: 19,
+  });
+  mapTileLabels = L.tileLayer("https://stamen-tiles.a.ssl.fastly.net/toner-labels/{z}/{x}/{y}.png", {
+    attribution: "Stamen",
+    maxZoom: 19, opacity: 0.7,
+  });
+
+  mapTileStreet.addTo(map);
+
+  // 권역 원
+  fenceCircle = L.circle(center, {
+    radius: geofence.radiusM,
+    color: "#34d399",
+    weight: 2,
+    fillColor: "#34d399",
+    fillOpacity: 0.1,
+    dashArray: "5,5",
+  }).addTo(map);
+  fenceCircle.bindPopup(`<b>박물관 권역</b><br>반경 ${geofence.radiusM}m`);
+}
+
+function toggleMapType() {
+  if (!map) return;
+  const btn = document.getElementById("mapTypeBtn");
+  mapTypeSatellite = !mapTypeSatellite;
+  if (mapTypeSatellite) {
+    map.removeLayer(mapTileStreet);
+    mapTileSat.addTo(map);
+    mapTileLabels.addTo(map);
+    btn.textContent = "일반";
+    btn.classList.add("active");
+  } else {
+    map.removeLayer(mapTileSat);
+    if (map.hasLayer(mapTileLabels)) map.removeLayer(mapTileLabels);
+    mapTileStreet.addTo(map);
+    btn.textContent = "위성";
+    btn.classList.remove("active");
+  }
+}
+
+function centerOnMe() {
+  if (!map || !lastPos) return;
+  map.setView([lastPos.lat, lastPos.lng], 18, { animate: true });
+}
+
+// 내 마커 갱신
+function updateMyMarker() {
+  if (!map || !lastPos) return;
+  const ll = [lastPos.lat, lastPos.lng];
+  if (!myMarker) {
+    myMarker = L.marker(ll, {
+      icon: L.divIcon({ className: "me-marker", iconSize: [18, 18] }),
+      zIndexOffset: 1000,
+    }).addTo(map);
+    myMarker.bindPopup(`<b>${currentStaff.name}</b> (나)<br>±${Math.round(lastPos.accuracy)}m`);
+    // 첫 fix에 지도를 본인 위치로 이동
+    map.setView(ll, 17);
+  } else {
+    myMarker.setLatLng(ll);
+    myMarker.setPopupContent(`<b>${currentStaff.name}</b> (나)<br>±${Math.round(lastPos.accuracy)}m`);
+  }
+}
+
+// ─── 다른 직원/관람객 위치 가져오기 ─────────────────────────────
+async function fetchPeople() {
+  try {
+    const r = await fetch("/api/staff-locations", { cache: "no-store" });
+    if (!r.ok) return;
+    const j = await r.json();
+    const users = (j.users || []).filter(u => String(u.id) !== String(currentStaff?.id));
+    renderPeople(users);
+    updateOthersOnMap(users);
+  } catch (e) { /* silent */ }
+}
+
+function renderPeople(users) {
+  const list = document.getElementById("peopleList");
+  const count = document.getElementById("peopleCount");
+  if (!list || !count) return;
+
+  // 본인 포함 카운트
+  const total = users.length + (lastPos ? 1 : 0);
+  count.textContent = `${total}명 (나 포함)`;
+
+  let html = "";
+  // 나
+  if (currentStaff && lastPos) {
+    html += `<div class="person-row me">
+      <div class="pdot" style="background:#3b82f6"></div>
+      <div class="pinfo"><b>${currentStaff.name}</b> (나) · ${currentStaff.dept || "—"}</div>
+      <div class="pmeta">±${Math.round(lastPos.accuracy)}m</div>
+    </div>`;
+  }
+  // 다른 사람들 (오래된 순서대로 정렬)
+  users.sort((a, b) => (a.ageSec || 0) - (b.ageSec || 0));
+  users.forEach(u => {
+    const isVisitor = u.role === "visitor";
+    const color = isVisitor ? "#a855f7" : (u.source === "beacon" ? "#f59e0b" : "#10b981");
+    const ageMin = Math.floor((u.ageSec || 0) / 60);
+    const ageLabel = ageMin === 0 ? `${u.ageSec||0}초전` : `${ageMin}분전`;
+    html += `<div class="person-row">
+      <div class="pdot" style="background:${color}"></div>
+      <div class="pinfo"><b>${u.name||"익명"}</b> ${u.dept ? `· ${u.dept}` : ""} ${isVisitor ? "· 관람객" : ""}</div>
+      <div class="pmeta">${ageLabel}</div>
+    </div>`;
+  });
+  if (users.length === 0 && !currentStaff) {
+    html = `<div style="padding:14px;text-align:center;color:var(--text-mute);font-size:11px">위치 공유 중인 사람 없음</div>`;
+  }
+  list.innerHTML = html;
+}
+
+function updateOthersOnMap(users) {
+  if (!map) return;
+  const keepIds = new Set();
+  users.forEach(u => {
+    if (!u.lat || !u.lng) return;
+    keepIds.add(String(u.id));
+    const isVisitor = u.role === "visitor";
+    const isBeacon = u.source === "beacon";
+    const className = "other-marker" + (isVisitor ? " visitor" : "") + (isBeacon ? " beacon" : "") + (u.ageSec > 180 ? " stale" : "");
+    const existing = othersMarkers.get(String(u.id));
+    if (existing) {
+      existing.setLatLng([u.lat, u.lng]);
+    } else {
+      const m = L.marker([u.lat, u.lng], {
+        icon: L.divIcon({ className, iconSize: [14, 14] }),
+      }).addTo(map);
+      const ageMin = Math.floor((u.ageSec || 0) / 60);
+      m.bindPopup(`<b>${u.name||"익명"}</b><br>${u.dept || ""} ${isVisitor ? "· 관람객" : ""}<br><small>${ageMin === 0 ? (u.ageSec||0)+"초전" : ageMin+"분전"}</small>`);
+      othersMarkers.set(String(u.id), m);
+    }
+  });
+  // 사라진 사용자 마커 제거
+  for (const [id, marker] of othersMarkers.entries()) {
+    if (!keepIds.has(id)) {
+      map.removeLayer(marker);
+      othersMarkers.delete(id);
+    }
+  }
 }
 
 // ─── 현재 출근 상태 조회 ───────────────────────────────────────
@@ -636,6 +886,9 @@ function onPosition(pos) {
     }
   }
 
+  // 지도 마커 갱신
+  updateMyMarker();
+
   // 첫 fix 즉시 전송
   if (!window._firstSent) {
     window._firstSent = true;
@@ -673,6 +926,7 @@ function stop() {
   if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
   if (sendTimer) { clearInterval(sendTimer); sendTimer = null; }
   if (evalTimer) { clearInterval(evalTimer); evalTimer = null; }
+  if (peopleTimer) { clearInterval(peopleTimer); peopleTimer = null; }
   setStatus("warn", "일시 중지됨");
   logRow("일시 중지 — 수동 출퇴근 버튼은 계속 사용 가능", "evt");
 }
