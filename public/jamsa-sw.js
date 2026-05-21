@@ -1,10 +1,46 @@
 // jamsa-sw.js — Service Worker
 // 캐시 정책: 정적 자원만 캐시, API/동적 자원은 무조건 네트워크
+// 🆕 백그라운드 위치 추적: periodicsync + sync 이벤트 (체크인 상태일 때)
 
-const CACHE_NAME = 'jamsa-v5-2026-05-21-no-html-cache';  // bump again to force re-activate
+const CACHE_NAME = 'jamsa-v6-2026-05-21-bg-track';
 const STATIC_ASSETS = [
   '/manifest.json',
 ];  // index.html은 절대 캐시 안 함 (항상 최신)
+
+// IndexedDB 헬퍼 — 메인 페이지가 저장한 마지막 위치/세션을 SW가 읽기
+const DB_NAME = 'jamsa_bg_track';
+const DB_VER = 1;
+const STORE = 'session';
+
+function openDb(){
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VER);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function idbGet(key){
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const r = tx.objectStore(STORE).get(key);
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+}
+async function idbSet(key, val){
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).put(val, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -16,15 +52,11 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then(names => {
-      // 모든 이전 캐시 삭제 (jamsa-* 전부)
       return Promise.all(names.filter(n => n !== CACHE_NAME).map(n => caches.delete(n)));
     }).then(() => self.clients.claim()).then(() => {
-      // 모든 클라이언트에게 강제 새로고침 (메시지 + navigate 둘 다)
       return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
         clients.forEach(client => {
-          // 옛 클라이언트가 메시지 리스너 없을 수 있으므로 navigate도 시도
           try { client.postMessage({ type: 'SW_UPDATED', version: CACHE_NAME }); } catch (e) {}
-          try { client.navigate(client.url); } catch (e) {}
         });
       });
     })
@@ -33,27 +65,22 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-
-  // API 호출은 캐시 안 함 (실시간 데이터)
   if (url.pathname.startsWith('/api/')) {
-    return; // 기본 fetch 동작
+    return;
   }
-
-  // 🆕 모든 HTML 페이지 + JS 번들은 항상 네트워크 우선 (캐시 폴백)
-  //    .html 파일들이 SW에 의해 stale 캐시되는 문제 방지
   if (url.pathname === '/'
       || url.pathname.endsWith('.html')
       || url.pathname.endsWith('.js')
       || url.pathname === '/staff-checkin'
+      || url.pathname === '/staff-checkin-v2'
       || url.pathname === '/attendance'
-      || url.pathname === '/m') {
+      || url.pathname === '/m'
+      || url.pathname === '/m2') {
     event.respondWith(
       fetch(event.request, { cache: 'no-store' }).catch(() => caches.match(event.request))
     );
     return;
   }
-
-  // 기타 정적 자원(이미지/CSS/폰트 등)은 cache-first
   event.respondWith(
     caches.match(event.request).then(cached => {
       return cached || fetch(event.request).then(res => {
@@ -67,7 +94,73 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-// 푸시 알림 (Ppurio 대신 FCM 쓸 때)
+// ─── 🆕 백그라운드 위치 전송 (메인 페이지가 putState로 저장한 정보 사용) ───
+async function sendBackgroundLocation(reason){
+  try {
+    const session = await idbGet('session');
+    if (!session || !session.staffId || !session.lastPos) return false;
+
+    // 체크인 상태가 아니면 전송 안 함 (퇴근 후 전송 방지)
+    if (session.working === false) return false;
+
+    // 마지막 위치가 너무 오래된 경우 (15분 이상) — 신선도 표시
+    const ageMs = Date.now() - (session.lastPos.t || 0);
+    const stale = ageMs > 15 * 60 * 1000;
+
+    const body = {
+      staffId: session.staffId,
+      staffName: session.staffName || '익명',
+      dept: session.dept || null,
+      lat: session.lastPos.lat,
+      lng: session.lastPos.lng,
+      accuracy: session.lastPos.accuracy,
+      source: 'mobile_bg_' + (reason || 'sync'),
+      role: 'staff',
+      timestamp: new Date().toISOString(),
+      stale,
+      ageMs,
+    };
+    const res = await fetch('/api/staff-location-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      keepalive: true,
+    });
+    await idbSet('last_bg_send', { at: Date.now(), reason, ok: res.ok, stale });
+    return res.ok;
+  } catch (e) {
+    try { await idbSet('last_bg_send', { at: Date.now(), reason, error: e.message }); } catch(_) {}
+    return false;
+  }
+}
+
+// Periodic Background Sync (Chrome 80+, PWA 설치 시 ~15분 간격)
+self.addEventListener('periodicsync', (event) => {
+  if (event.tag === 'staff-location-sync') {
+    event.waitUntil(sendBackgroundLocation('periodic'));
+  }
+});
+
+// One-shot Background Sync (네트워크 복귀/명시적 트리거)
+self.addEventListener('sync', (event) => {
+  if (event.tag === 'staff-location-sync' || event.tag === 'staff-location-flush') {
+    event.waitUntil(sendBackgroundLocation('sync'));
+  }
+});
+
+// 메인 페이지 ↔ SW 메시지: 세션/위치 갱신
+self.addEventListener('message', (event) => {
+  const msg = event.data || {};
+  if (msg.type === 'PUT_SESSION') {
+    event.waitUntil(idbSet('session', msg.session));
+  } else if (msg.type === 'CLEAR_SESSION') {
+    event.waitUntil(idbSet('session', { working: false }));
+  } else if (msg.type === 'FLUSH_NOW') {
+    event.waitUntil(sendBackgroundLocation('flush_now'));
+  }
+});
+
+// 푸시 알림
 self.addEventListener('push', (event) => {
   if (!event.data) return;
   let data = {};
@@ -86,4 +179,3 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   event.waitUntil(clients.openWindow(event.notification.data || '/'));
 });
-

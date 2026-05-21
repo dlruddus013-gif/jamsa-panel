@@ -7,7 +7,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<meta name="build" content="v7-2026-05-21-label-marker">
+<meta name="build" content="v8-2026-05-21-bg-track">
 <title>잠사플레이팜 · 출퇴근 체크인</title>
 <link rel="manifest" href="/manifest.json">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -1268,26 +1268,312 @@ function logout() {
   document.getElementById("login").style.display = "block";
 }
 
-// ⚠ Service Worker는 staff-checkin 페이지에서 비활성화 (캐시 문제 방지)
-// 기존에 등록된 SW가 있으면 unregister + 캐시 모두 삭제
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.getRegistrations().then(regs => {
-    regs.forEach(r => r.unregister().catch(() => {}));
-  }).catch(() => {});
-  if (typeof caches !== "undefined") {
-    caches.keys().then(keys => keys.forEach(k => caches.delete(k))).catch(() => {});
+// ════════════════════════════════════════════════════════════════
+// 🆕 백그라운드 위치 추적: 페이지 닫혀도 퇴근 전까지 위치 전송
+// ════════════════════════════════════════════════════════════════
+// 1) Wake Lock — 화면 잠금 방지 (페이지 visible 동안)
+// 2) Service Worker + Periodic Background Sync — 페이지 닫혀도 SW가 ~15분마다 깨어나 위치 ping
+// 3) Page Visibility / pagehide — 백그라운드 진입 시 sendBeacon으로 즉시 flush
+// 4) IndexedDB — 메인 페이지가 저장한 세션/위치를 SW가 읽음
+
+const BG = {
+  swReg: null,
+  wakeLock: null,
+  bannerEl: null,
+  periodicSyncSupported: false,
+  installPromptEvent: null,
+  pushSessionTimer: null,
+};
+
+// IndexedDB 헬퍼 — SW와 공유하는 store
+function bgOpenDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('jamsa_bg_track', 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('session')) db.createObjectStore('session');
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function bgPutSession(session) {
+  try {
+    const db = await bgOpenDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('session', 'readwrite');
+      tx.objectStore('session').put(session, 'session');
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) {}
+  // SW에게도 메시지 전송 (즉시 갱신)
+  try {
+    if (BG.swReg && BG.swReg.active) {
+      BG.swReg.active.postMessage({ type: 'PUT_SESSION', session });
+    }
+  } catch (e) {}
+}
+async function bgClearSession() {
+  try {
+    if (BG.swReg && BG.swReg.active) {
+      BG.swReg.active.postMessage({ type: 'CLEAR_SESSION' });
+    }
+  } catch (e) {}
+  try {
+    const db = await bgOpenDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('session', 'readwrite');
+      tx.objectStore('session').put({ working: false }, 'session');
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) {}
+}
+
+// 현재 상태를 IDB에 push (SW가 백그라운드에서 사용)
+function pushBgSession() {
+  if (!currentStaff) return;
+  const session = {
+    staffId: String(currentStaff.id),
+    staffName: currentStaff.name,
+    dept: currentStaff.dept || null,
+    working: !!attendanceState.working,
+    lastPos: lastPos ? { lat: lastPos.lat, lng: lastPos.lng, accuracy: lastPos.accuracy, t: lastPos.t } : null,
+    updatedAt: Date.now(),
+  };
+  bgPutSession(session);
+}
+
+// Wake Lock 요청/해제
+async function bgRequestWakeLock() {
+  if (!('wakeLock' in navigator)) return false;
+  try {
+    if (BG.wakeLock && !BG.wakeLock.released) return true;
+    BG.wakeLock = await navigator.wakeLock.request('screen');
+    BG.wakeLock.addEventListener('release', () => {
+      // 화면 잠금 방지 해제 — 페이지가 다시 visible될 때 자동 재요청
+    });
+    return true;
+  } catch (e) { return false; }
+}
+async function bgReleaseWakeLock() {
+  try {
+    if (BG.wakeLock && !BG.wakeLock.released) await BG.wakeLock.release();
+  } catch (e) {}
+  BG.wakeLock = null;
+}
+
+// Periodic Background Sync 등록 (Chrome PWA만)
+async function bgRegisterPeriodicSync() {
+  if (!BG.swReg) return false;
+  if (!('periodicSync' in BG.swReg)) return false;
+  try {
+    const status = await navigator.permissions.query({ name: 'periodic-background-sync' });
+    if (status.state !== 'granted') {
+      BG.periodicSyncSupported = false;
+      return false;
+    }
+    await BG.swReg.periodicSync.register('staff-location-sync', {
+      minInterval: 15 * 60 * 1000, // 15분 (브라우저가 최종 결정)
+    });
+    BG.periodicSyncSupported = true;
+    return true;
+  } catch (e) {
+    BG.periodicSyncSupported = false;
+    return false;
+  }
+}
+async function bgUnregisterPeriodicSync() {
+  if (!BG.swReg || !('periodicSync' in BG.swReg)) return;
+  try { await BG.swReg.periodicSync.unregister('staff-location-sync'); } catch (e) {}
+}
+
+// One-shot Background Sync (네트워크 끊김에서 복귀 시 자동 재시도)
+async function bgRegisterOneShotSync() {
+  if (!BG.swReg || !('sync' in BG.swReg)) return false;
+  try { await BG.swReg.sync.register('staff-location-sync'); return true; } catch (e) { return false; }
+}
+
+// 페이지 숨김/종료 시 마지막 위치 즉시 flush (sendBeacon — keepalive 보장)
+function bgFlushBeacon(reason) {
+  if (!currentStaff || !lastPos || !attendanceState.working) return;
+  const payload = JSON.stringify({
+    staffId: String(currentStaff.id),
+    staffName: currentStaff.name,
+    dept: currentStaff.dept || null,
+    lat: lastPos.lat, lng: lastPos.lng, accuracy: lastPos.accuracy,
+    source: 'mobile_' + (reason || 'pagehide'),
+    role: 'staff',
+    timestamp: new Date().toISOString(),
+  });
+  try {
+    if (navigator.sendBeacon) {
+      const blob = new Blob([payload], { type: 'application/json' });
+      navigator.sendBeacon('/api/staff-location-update', blob);
+    } else {
+      fetch('/api/staff-location-update', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: payload, keepalive: true,
+      }).catch(()=>{});
+    }
+  } catch (e) {}
+  // SW에게도 즉시 flush 요청
+  try {
+    if (BG.swReg && BG.swReg.active) BG.swReg.active.postMessage({ type: 'FLUSH_NOW' });
+  } catch (e) {}
+}
+
+// 상단 상태 배너 갱신
+function bgUpdateBanner() {
+  let el = document.getElementById('bgTrackBanner');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'bgTrackBanner';
+    el.style.cssText = 'position:sticky;top:0;z-index:30;padding:8px 12px;font-size:11px;font-weight:700;text-align:center;border-bottom:1px solid var(--line);background:#0b1220;color:var(--text-soft)';
+    const main = document.querySelector('main');
+    if (main) main.insertBefore(el, main.firstChild);
+    else document.body.insertBefore(el, document.body.firstChild);
+    BG.bannerEl = el;
+  }
+  if (!currentStaff || !attendanceState.working) {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'block';
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const wakeOk = !!BG.wakeLock && !BG.wakeLock.released;
+  const periodicOk = BG.periodicSyncSupported;
+  const parts = [];
+  parts.push(`🛰 백그라운드 추적: ${attendanceState.working ? '활성' : '대기'}`);
+  parts.push(wakeOk ? '🔆 화면켜짐' : '🌙');
+  if (periodicOk) parts.push('⏰ 자동 SW 동기화');
+  else if (!isStandalone) parts.push(`📲 홈 화면에 추가하면 더 안정`);
+  el.textContent = parts.join(' · ');
+  if (!isStandalone && BG.installPromptEvent && !el.dataset.btnAdded) {
+    el.dataset.btnAdded = '1';
+    const btn = document.createElement('button');
+    btn.textContent = '앱 설치';
+    btn.style.cssText = 'margin-left:8px;padding:3px 8px;border-radius:6px;background:var(--accent-deep);color:#fff;border:0;font-weight:700;font-size:11px;cursor:pointer';
+    btn.onclick = async () => {
+      try {
+        BG.installPromptEvent.prompt();
+        const { outcome } = await BG.installPromptEvent.userChoice;
+        if (outcome === 'accepted') {
+          BG.installPromptEvent = null;
+          btn.remove();
+          await bgRegisterPeriodicSync();
+          bgUpdateBanner();
+        }
+      } catch (e) {}
+    };
+    el.appendChild(btn);
   }
 }
 
-// 화면이 꺼져도 위치 추적 유지를 위해 Wake Lock (지원되는 브라우저만)
-let wakeLock = null;
+// ─── 메인 페이지 ↔ SW 연동 시작 ───
+async function bgBoot() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    BG.swReg = await navigator.serviceWorker.register('/jamsa-sw.js', { scope: '/' });
+    // 활성화 대기
+    if (!BG.swReg.active) {
+      await new Promise((resolve) => {
+        const onState = () => {
+          if (BG.swReg.active) { resolve(); return; }
+          if (BG.swReg.installing) {
+            BG.swReg.installing.addEventListener('statechange', onState);
+          }
+        };
+        onState();
+        setTimeout(resolve, 3000);
+      });
+    }
+  } catch (e) {
+    console.warn('[bg] SW 등록 실패:', e);
+  }
+}
+
+// PWA install prompt 캡처
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  BG.installPromptEvent = e;
+  bgUpdateBanner();
+});
+
+// 페이지 visibility / pagehide 핸들러
 document.addEventListener('visibilitychange', async () => {
-  if (document.visibilityState === 'visible' && currentStaff && 'wakeLock' in navigator) {
-    try {
-      wakeLock = await navigator.wakeLock.request('screen');
-    } catch (e) {}
+  if (document.visibilityState === 'visible') {
+    if (currentStaff && attendanceState.working) {
+      await bgRequestWakeLock();
+      // 백그라운드에 다녀온 동안 위치가 흘렀을 수 있어 즉시 fresh fix 요청
+      if (lastPos == null || (Date.now() - (lastPos.t || 0) > 60000)) {
+        if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(onPosition, onPosError, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
+        }
+      }
+    }
+    pushBgSession();
+    bgUpdateBanner();
+  } else {
+    // 백그라운드 진입: 마지막 위치를 sendBeacon으로 보장 + SW에게 sync 요청
+    bgFlushBeacon('pagehide');
+    bgRegisterOneShotSync();
   }
 });
+window.addEventListener('pagehide', () => { bgFlushBeacon('pagehide'); });
+window.addEventListener('beforeunload', () => { bgFlushBeacon('beforeunload'); });
+
+// 세션이 시작/종료되었을 때 호출되는 attachpoint — 기존 코드에서 startCheckin/manualCheckIn/manualCheckOut을 hook
+const _origStartCheckin = startCheckin;
+startCheckin = async function() {
+  await _origStartCheckin.apply(this, arguments);
+  await bgBoot();
+  await bgRequestWakeLock();
+  await bgRegisterPeriodicSync();
+  pushBgSession();
+  bgUpdateBanner();
+  // 10초마다 IDB 세션 갱신 (위치가 흐를 때만 SW가 신선한 값 사용)
+  if (BG.pushSessionTimer) clearInterval(BG.pushSessionTimer);
+  BG.pushSessionTimer = setInterval(pushBgSession, 10000);
+};
+
+const _origManualCheckIn = manualCheckIn;
+manualCheckIn = async function() {
+  await _origManualCheckIn.apply(this, arguments);
+  await bgRequestWakeLock();
+  await bgRegisterPeriodicSync();
+  pushBgSession();
+  bgUpdateBanner();
+};
+
+const _origManualCheckOut = manualCheckOut;
+manualCheckOut = async function() {
+  await _origManualCheckOut.apply(this, arguments);
+  await bgReleaseWakeLock();
+  await bgUnregisterPeriodicSync();
+  await bgClearSession();
+  if (BG.pushSessionTimer) { clearInterval(BG.pushSessionTimer); BG.pushSessionTimer = null; }
+  bgUpdateBanner();
+};
+
+// onPosition을 wrap해서 매 fix마다 IDB 갱신
+const _origOnPosition = onPosition;
+onPosition = function(pos) {
+  _origOnPosition.apply(this, arguments);
+  pushBgSession();
+};
+
+// 자동 평가 후에도 attendance 상태가 바뀔 수 있어 IDB 갱신
+const _origRunAutoEvaluation = runAutoEvaluation;
+runAutoEvaluation = async function() {
+  await _origRunAutoEvaluation.apply(this, arguments);
+  pushBgSession();
+  bgUpdateBanner();
+};
+
+// 페이지 로드 직후 SW 등록만 미리 시도 (체크인 전에도 SW가 준비되도록)
+bgBoot().then(()=>{ bgUpdateBanner(); });
 
 init();
 </script>

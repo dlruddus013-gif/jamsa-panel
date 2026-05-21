@@ -6,7 +6,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <meta name="build" content="v2-live-2026-05-21">
+  <meta name="build" content="v2-bg-track-2026-05-21">
   <title>잠사 출퇴근 체크인 · 직원용</title>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
@@ -527,6 +527,12 @@
       APP.stateRefreshTimer = setInterval(()=>{ refreshAttendanceState(); }, 60000);
       // 카운트다운 1초마다
       setInterval(updateCountdown, 1000);
+      // 🆕 백그라운드 추적 활성화
+      await bgBootV2();
+      await bgRequestWakeLockV2();
+      await bgRegisterPeriodicSyncV2();
+      pushBgSessionV2();
+      APP.bgPushTimer = setInterval(pushBgSessionV2, 10000);
       logDev(`체크인 세션 시작 — ${APP.currentStaff.name}`);
     }
 
@@ -535,8 +541,11 @@
         navigator.geolocation.clearWatch(APP.watchId);
       }
       APP.watchId = null;
-      [APP.sendTimer, APP.evalTimer, APP.stateRefreshTimer].forEach(t=>{ if(t) clearInterval(t); });
-      APP.sendTimer = APP.evalTimer = APP.stateRefreshTimer = null;
+      [APP.sendTimer, APP.evalTimer, APP.stateRefreshTimer, APP.bgPushTimer].forEach(t=>{ if(t) clearInterval(t); });
+      APP.sendTimer = APP.evalTimer = APP.stateRefreshTimer = APP.bgPushTimer = null;
+      bgReleaseWakeLockV2();
+      bgUnregisterPeriodicSyncV2();
+      bgClearSessionV2();
     }
 
     // ─── 위치 콜백 ───
@@ -1039,8 +1048,124 @@
       $('#toggleLog').textContent = hidden ? '상세 로그 보기' : '상세 로그 숨기기';
     });
 
+    // ─── 🆕 백그라운드 위치 추적 ───
+    const BGV2 = { swReg:null, wakeLock:null, installEvent:null, periodicOk:false };
+    function bgOpenDbV2(){
+      return new Promise((resolve,reject)=>{
+        const req = indexedDB.open('jamsa_bg_track',1);
+        req.onupgradeneeded = ()=>{ const db=req.result; if(!db.objectStoreNames.contains('session')) db.createObjectStore('session'); };
+        req.onsuccess = ()=>resolve(req.result);
+        req.onerror = ()=>reject(req.error);
+      });
+    }
+    async function bgPutSessionV2(session){
+      try{
+        const db = await bgOpenDbV2();
+        await new Promise((resolve,reject)=>{
+          const tx = db.transaction('session','readwrite');
+          tx.objectStore('session').put(session,'session');
+          tx.oncomplete=()=>resolve(); tx.onerror=()=>reject(tx.error);
+        });
+      }catch(e){}
+      try{ if(BGV2.swReg && BGV2.swReg.active) BGV2.swReg.active.postMessage({type:'PUT_SESSION', session}); }catch(e){}
+    }
+    async function bgClearSessionV2(){
+      try{ if(BGV2.swReg && BGV2.swReg.active) BGV2.swReg.active.postMessage({type:'CLEAR_SESSION'}); }catch(e){}
+      try{
+        const db = await bgOpenDbV2();
+        await new Promise((resolve)=>{ const tx=db.transaction('session','readwrite'); tx.objectStore('session').put({working:false},'session'); tx.oncomplete=()=>resolve(); });
+      }catch(e){}
+    }
+    function pushBgSessionV2(){
+      if(!APP.currentStaff) return;
+      bgPutSessionV2({
+        staffId: String(APP.currentStaff.id),
+        staffName: APP.currentStaff.name,
+        dept: APP.currentStaff.dept || null,
+        working: !!APP.attendance.working,
+        lastPos: APP.lastPos ? { lat:APP.lastPos.lat, lng:APP.lastPos.lng, accuracy:APP.lastPos.accuracy, t:APP.lastPos.t } : null,
+        updatedAt: Date.now(),
+      });
+    }
+    async function bgBootV2(){
+      if(!('serviceWorker' in navigator)) return;
+      try{
+        BGV2.swReg = await navigator.serviceWorker.register('/jamsa-sw.js',{scope:'/'});
+        if(!BGV2.swReg.active){
+          await new Promise((resolve)=>{
+            const tick=()=>{ if(BGV2.swReg.active){resolve();return;} setTimeout(tick,300); };
+            tick(); setTimeout(resolve,3000);
+          });
+        }
+      }catch(e){ console.warn('[bgV2] SW reg fail', e); }
+    }
+    async function bgRequestWakeLockV2(){
+      if(!('wakeLock' in navigator)) return false;
+      try{
+        if(BGV2.wakeLock && !BGV2.wakeLock.released) return true;
+        BGV2.wakeLock = await navigator.wakeLock.request('screen');
+        return true;
+      }catch(e){ return false; }
+    }
+    async function bgReleaseWakeLockV2(){
+      try{ if(BGV2.wakeLock && !BGV2.wakeLock.released) await BGV2.wakeLock.release(); }catch(e){}
+      BGV2.wakeLock = null;
+    }
+    async function bgRegisterPeriodicSyncV2(){
+      if(!BGV2.swReg || !('periodicSync' in BGV2.swReg)) return false;
+      try{
+        const status = await navigator.permissions.query({name:'periodic-background-sync'});
+        if(status.state !== 'granted'){ BGV2.periodicOk=false; return false; }
+        await BGV2.swReg.periodicSync.register('staff-location-sync',{minInterval:15*60*1000});
+        BGV2.periodicOk = true; return true;
+      }catch(e){ BGV2.periodicOk=false; return false; }
+    }
+    async function bgUnregisterPeriodicSyncV2(){
+      if(!BGV2.swReg || !('periodicSync' in BGV2.swReg)) return;
+      try{ await BGV2.swReg.periodicSync.unregister('staff-location-sync'); }catch(e){}
+    }
+    function bgFlushBeaconV2(reason){
+      if(!APP.currentStaff || !APP.lastPos || !APP.attendance.working) return;
+      const payload = JSON.stringify({
+        staffId: String(APP.currentStaff.id),
+        staffName: APP.currentStaff.name,
+        dept: APP.currentStaff.dept || null,
+        lat: APP.lastPos.lat, lng: APP.lastPos.lng, accuracy: APP.lastPos.accuracy,
+        source: 'mobile_'+(reason||'pagehide'),
+        role: 'staff', timestamp: new Date().toISOString(),
+      });
+      try{
+        if(navigator.sendBeacon){
+          const blob = new Blob([payload],{type:'application/json'});
+          navigator.sendBeacon('/api/staff-location-update', blob);
+        } else {
+          fetch('/api/staff-location-update',{method:'POST',headers:{'Content-Type':'application/json'},body:payload,keepalive:true}).catch(()=>{});
+        }
+      }catch(e){}
+      try{ if(BGV2.swReg && BGV2.swReg.active) BGV2.swReg.active.postMessage({type:'FLUSH_NOW'}); }catch(e){}
+    }
+
+    window.addEventListener('beforeinstallprompt',(e)=>{ e.preventDefault(); BGV2.installEvent=e; });
+    document.addEventListener('visibilitychange', async ()=>{
+      if(document.visibilityState === 'visible'){
+        if(APP.currentStaff && APP.attendance.working){
+          await bgRequestWakeLockV2();
+          if(!APP.lastPos || (Date.now() - (APP.lastPos?.t||0) > 60000)){
+            if(navigator.geolocation) navigator.geolocation.getCurrentPosition(onPosition, onPosError, {enableHighAccuracy:true, maximumAge:0, timeout:15000});
+          }
+        }
+        pushBgSessionV2();
+      } else {
+        bgFlushBeaconV2('pagehide');
+        try{ if(BGV2.swReg && 'sync' in BGV2.swReg) await BGV2.swReg.sync.register('staff-location-sync'); }catch(e){}
+      }
+    });
+    window.addEventListener('pagehide', ()=> bgFlushBeaconV2('pagehide'));
+    window.addEventListener('beforeunload', ()=> bgFlushBeaconV2('beforeunload'));
+
     // ─── 시작 ───
     renderState('loading');
+    bgBootV2();
     bootstrap();
   </script>
 </body>
