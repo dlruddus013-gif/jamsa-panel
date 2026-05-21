@@ -335,10 +335,19 @@ export default async function handler(req, res) {
     if (!isShortQuery) mode = 'consensus';
   }
 
+  // mode 정규화: 요청한 모드에 필요한 키가 없으면 가능한 단일 모델로 자동 downgrade
+  let modeRequested = mode;
+  if (mode === 'consensus' && !(ANTHROPIC_API_KEY && OPENAI_API_KEY)) {
+    // consensus 요청했는데 키 한쪽만 있음 → 가능한 단일 모델로
+    mode = ANTHROPIC_API_KEY ? 'claude' : OPENAI_API_KEY ? 'openai' : 'auto';
+  }
+  if (mode === 'claude' && !ANTHROPIC_API_KEY && OPENAI_API_KEY) mode = 'openai';
+  if (mode === 'openai' && !OPENAI_API_KEY && ANTHROPIC_API_KEY) mode = 'claude';
+
   const userMessage = buildUserMessage({ question, context, userRole, currentPage });
   const wantConsensus = mode === 'consensus' && ANTHROPIC_API_KEY && OPENAI_API_KEY;
   const wantClaude    = (mode === 'claude' || mode === 'auto') && ANTHROPIC_API_KEY;
-  const wantOpenAI    = (mode === 'openai') && OPENAI_API_KEY;
+  const wantOpenAI    = (mode === 'openai' || mode === 'auto') && OPENAI_API_KEY && !wantClaude;
 
   // 종합 의견 (consensus): 둘 다 병렬 호출 후 머지
   if (wantConsensus) {
