@@ -27917,13 +27917,25 @@ function AppInner() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", fontFamily: "'Pretendard','Noto Sans KR',-apple-system,sans-serif", background: "#f5f5f5", overflow: "hidden" }}>
-      <style>{`@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');*{box-sizing:border-box;margin:0;padding:0}`}</style>
+      <style>{`@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');*{box-sizing:border-box;margin:0;padding:0}
+        /* 모바일 상단 메뉴 가로 스크롤바 숨김 */
+        .jamsa-modnav::-webkit-scrollbar, .jamsa-topbar-left::-webkit-scrollbar { height: 0; display: none; }
+        /* 📱 모바일에서 모듈 nav를 가로 스크롤로 */
+        @media (max-width: 768px) {
+          .jamsa-topbar { padding: 6px 10px !important; gap: 6px !important; }
+          .jamsa-topbar-title { font-size: 12px !important; }
+          .jamsa-modnav { padding: 2px !important; gap: 1px !important; }
+          .jamsa-modnav button { padding: 8px 10px !important; font-size: 12px !important; min-height: 38px !important; flex-shrink: 0 !important; }
+          .jamsa-topbar-right { gap: 4px !important; flex-wrap: wrap; }
+          .jamsa-topbar-right button { padding: 5px 8px !important; font-size: 10px !important; }
+        }
+      `}</style>
 
       {/* ─── Module switcher bar ─── */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#0f172a", color: "#fff", padding: "8px 16px", flexShrink: 0, boxShadow: "0 2px 6px rgba(0,0,0,0.15)", zIndex: 100 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: 0.2 }}>🏛️ 통합관리 시스템</div>
-          <div style={{ display: "flex", gap: 2, background: "rgba(255,255,255,0.08)", padding: 3, borderRadius: 8 }}>
+      <div className="jamsa-topbar" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#0f172a", color: "#fff", padding: "8px 16px", flexShrink: 0, boxShadow: "0 2px 6px rgba(0,0,0,0.15)", zIndex: 100, flexWrap: "wrap", gap: 8 }}>
+        <div className="jamsa-topbar-left" style={{ display: "flex", alignItems: "center", gap: 14, flex: "1 1 auto", minWidth: 0, overflowX: "auto" }}>
+          <div className="jamsa-topbar-title" style={{ fontSize: 14, fontWeight: 800, letterSpacing: 0.2, flexShrink: 0 }}>🏛️ 통합관리 시스템</div>
+          <div className="jamsa-modnav" style={{ display: "flex", gap: 2, background: "rgba(255,255,255,0.08)", padding: 3, borderRadius: 8, overflowX: "auto", scrollbarWidth: "none" }}>
             <button data-jamsa-module="home" onClick={() => setModule("home")}
               style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
                 background: module === "home" ? "linear-gradient(135deg,#059669,#0891b2)" : "transparent",
