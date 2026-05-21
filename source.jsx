@@ -21835,7 +21835,35 @@ const MERGED_USERS = [
   { id: "u3", name: "전원기", email: "ins1@jamsafarm.kr",  login: "ins1",    pw: "ins1234",    role: "INSPECTOR", invRole: "staff",  dept: "시설운영팀",    active: true },
   { id: "u4", name: "고가은", email: "ins2@jamsafarm.kr",  login: "ins2",    pw: "ins1234",    role: "INSPECTOR", invRole: "staff",  dept: "체험프로그램팀", active: true },
   { id: "u5", name: "박반장", email: "viewer@jamsafarm.kr",login: "viewer",  pw: "viewer1234", role: "VIEWER",    invRole: "viewer", dept: "경영지원팀",    active: true },
+  // Phase 1 — 6역할 분리 시연용 (ceo, lawyer). 실제 운영 계정은 Supabase memberships에서 관리.
+  { id: "u6", name: "대표",   email: "ceo@jamsafarm.kr",   login: "ceo",     pw: "ceo1234",    role: "CEO",       invRole: "viewer", dept: "경영진",       active: true },
+  { id: "u7", name: "노무사", email: "lawyer@jamsafarm.kr",login: "lawyer",  pw: "lawyer1234", role: "LAWYER",    invRole: "viewer", dept: "외부 노무법인", active: true },
 ];
+
+// ── 6역할 정규화 (lib/auth.js와 동기화 — 클라이언트 사본) ──
+// 기존 대문자 role(ADMIN/MANAGER/VISITOR/CEO/LAWYER)을 설계 문서의 6역할로 매핑.
+const ROLE6_MAP = {
+  ADMIN: "admin", admin: "admin",
+  MANAGER: "lead", manager: "lead", lead: "lead",
+  STAFF: "staff", staff: "staff",
+  INSPECTOR: "staff", inspector: "staff",
+  VIEWER: "staff",   viewer: "staff",
+  VISITOR: "customer", visitor: "customer", customer: "customer",
+  CEO: "ceo", ceo: "ceo",
+  LAWYER: "lawyer", lawyer: "lawyer",
+};
+function normalizeRole6(raw) {
+  if (!raw) return "staff";
+  return ROLE6_MAP[raw] || ROLE6_MAP[String(raw).toLowerCase()] || "staff";
+}
+const ROLE6_META = {
+  staff:    { emoji: "👤", name: "직원",   color: "#3b82f6" },
+  lead:     { emoji: "📋", name: "팀장",   color: "#0891b2" },
+  admin:    { emoji: "🛠️", name: "관리자", color: "#0f172a" },
+  ceo:      { emoji: "🏛️", name: "대표",   color: "#7c3aed" },
+  lawyer:   { emoji: "⚖️", name: "노무사", color: "#0e7490" },
+  customer: { emoji: "🤝", name: "고객",   color: "#16a34a" },
+};
 
 // Shape adapter: the facility module reads user.role as {id,name,email,role,dept}.
 // The inventory module reads user.{id,name,login,pw,role:<inventory-role>,active}.
@@ -27890,6 +27918,287 @@ function HomeNaverApiKeyModal({ currentKey, onSave, onClose }) {
   );
 }
 
+/* ==================== Phase 1 — 역할별 전용 화면 ====================
+   설계 문서 §11 참고. 데이터는 시연용 mock — Phase 3에서 Supabase
+   consent_records / location_access_log / service_sessions로 교체.
+*/
+
+function RoleBanner({ roleKey, title, sub }) {
+  const meta = ROLE6_META[roleKey] || ROLE6_META.staff;
+  return (
+    <div style={{ display: "flex", gap: 14, alignItems: "center", padding: "18px 22px",
+      background: `linear-gradient(135deg, ${meta.color}, ${meta.color}cc)`,
+      color: "#fff", borderRadius: 12, marginBottom: 16, boxShadow: "0 4px 14px rgba(0,0,0,0.08)" }}>
+      <div style={{ fontSize: 34 }}>{meta.emoji}</div>
+      <div>
+        <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 4 }}>{title}</div>
+        <div style={{ fontSize: 12.5, opacity: 0.92, lineHeight: 1.5 }}>{sub}</div>
+      </div>
+    </div>
+  );
+}
+
+function CeoStat({ label, value, unit, tone = "neutral", note }) {
+  const colors = {
+    good:    { bg: "#ecfdf5", border: "#a7f3d0", text: "#047857" },
+    warn:    { bg: "#fef3c7", border: "#fcd34d", text: "#92400e" },
+    neutral: { bg: "#f8fafc", border: "#e2e8f0", text: "#0f172a" },
+  };
+  const c = colors[tone];
+  return (
+    <div style={{ background: c.bg, border: `1px solid ${c.border}`, borderRadius: 10, padding: "14px 16px" }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: 26, fontWeight: 900, color: c.text, lineHeight: 1 }}>
+        {value}{unit && <span style={{ fontSize: 13, fontWeight: 700, marginLeft: 3 }}>{unit}</span>}
+      </div>
+      {note && <div style={{ fontSize: 11, color: "#64748b", marginTop: 6 }}>{note}</div>}
+    </div>
+  );
+}
+
+function CeoDashboard({ userCtx }) {
+  // Phase 3에서 실제 Supabase 데이터로 교체
+  const kpi = [
+    { label: "출근 정확도 (월)",    value: "96.4", unit: "%",   tone: "good", note: "자동출근 성공률 · 전월 +2.1%" },
+    { label: "정정 요청률",         value: "1.8",  unit: "%",   tone: "good", note: "기준치 5% 이하 정상" },
+    { label: "사업장 지연 위험",    value: "중",                tone: "warn", note: "5/24 토 단체 예약 대응" },
+    { label: "고객 서비스 영향",    value: "0",    unit: "건",  tone: "good", note: "이번 주 고객 이슈" },
+    { label: "권한 과다 리스크",    value: "낮음",              tone: "good", note: "관리자 2명 · 권한 분리 OK" },
+    { label: "컴플라이언스 알림",   value: "2",    unit: "건",  tone: "warn", note: "동의서 갱신 예정" },
+  ];
+  const sites = [
+    { name: "한국잠사박물관",     attend: "96.4%", correct: "1.8%", csat: "4.8/5.0", risk: "정상" },
+    { name: "누에과학관 (위탁)",  attend: "92.1%", correct: "3.2%", csat: "4.5/5.0", risk: "주의" },
+  ];
+  const insights = [
+    { name: "시설팀 BLE 인식률 낮음",   meta: "BLE 비콘 추가 설치 검토 권고",      tag: "권고" },
+    { name: "주말 안내팀 인력 부족",    meta: "5/24 토 단체 예약 시 1명 추가 필요", tag: "권고" },
+    { name: "정정 요청 사유 통계",      meta: "'BLE 인식 지연' 68% — 인프라 개선",  tag: "인사이트" },
+  ];
+
+  return (
+    <div style={{ padding: 20, overflow: "auto", height: "100%", background: "#f8fafc" }}>
+      <RoleBanner roleKey="ceo" title="대표 — 집계 KPI · 리스크"
+        sub="개인 위치·이름 미노출. 사업장 단위 KPI, 컴플라이언스 알림, 인력 배치 개선 인사이트." />
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 18 }}>
+        {kpi.map((k, i) => <CeoStat key={i} {...k} />)}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+        <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, padding: 16 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 12 }}>🏢 사업장별 KPI</div>
+          <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "#f1f5f9" }}>
+                <th style={{ padding: 8, textAlign: "left" }}>사업장</th>
+                <th style={{ padding: 8 }}>출근율</th>
+                <th style={{ padding: 8 }}>정정률</th>
+                <th style={{ padding: 8 }}>고객 만족</th>
+                <th style={{ padding: 8 }}>리스크</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sites.map((s, i) => (
+                <tr key={i} style={{ borderTop: "1px solid #e2e8f0" }}>
+                  <td style={{ padding: 8 }}>{s.name}</td>
+                  <td style={{ padding: 8, textAlign: "center" }}>{s.attend}</td>
+                  <td style={{ padding: 8, textAlign: "center" }}>{s.correct}</td>
+                  <td style={{ padding: 8, textAlign: "center" }}>{s.csat}</td>
+                  <td style={{ padding: 8, textAlign: "center" }}>
+                    <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 700,
+                      background: s.risk === "정상" ? "#dcfce7" : "#fef3c7",
+                      color: s.risk === "정상" ? "#166534" : "#92400e" }}>{s.risk}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, padding: 16 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 12 }}>📊 인력 배치 개선 포인트</div>
+          {insights.map((it, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderTop: i > 0 ? "1px solid #f1f5f9" : "none" }}>
+              <div>
+                <div style={{ fontSize: 12.5, fontWeight: 700 }}>{it.name}</div>
+                <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{it.meta}</div>
+              </div>
+              <span style={{ padding: "3px 9px", borderRadius: 10, fontSize: 10.5, fontWeight: 700, background: "#e0e7ff", color: "#3730a3" }}>{it.tag}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ background: "#fefce8", border: "1px solid #fde047", borderRadius: 8, padding: "10px 14px", fontSize: 11.5, color: "#854d0e", lineHeight: 1.55 }}>
+        ⚠️ 대표 화면에는 개인 실시간 위치, 직원 실명, 정밀 좌표가 의도적으로 표시되지 않습니다. 운영상 개인 단위 확인이 필요하면 관리자에게 사유와 함께 요청하세요.
+      </div>
+    </div>
+  );
+}
+
+function LawyerAuditView({ userCtx }) {
+  // Phase 3에서 실제 consent_records, location_access_log, attendance_corrections로 교체
+  const consent = [
+    { name: "김효진", anon: "E-1A2B", agreedAt: "2024-12-30", version: "v3.2", scope: "GPS·BLE·근무중", status: "유효" },
+    { name: "윤승수", anon: "E-3C4D", agreedAt: "2024-12-30", version: "v3.2", scope: "GPS·BLE·근무중", status: "유효" },
+    { name: "윤찬미", anon: "E-5E6F", agreedAt: "2024-12-30", version: "v3.2", scope: "GPS·BLE·근무중", status: "유효" },
+    { name: "박지훈", anon: "E-7G8H", agreedAt: "2024-12-30", version: "v3.2", scope: "GPS·BLE·근무중", status: "유효" },
+    { name: "최서연", anon: "E-9I0J", agreedAt: "2025-02-01", version: "v3.2", scope: "GPS",            status: "유효" },
+  ];
+  const accessLog = [
+    { ts: "2026-05-21 10:42", actor: "관리자 이미경", target: "E-3C4D", action: "정밀 위치 열람",     reason: "BLE 미수신 원인 확인",                legal: "근로기준법 제43조 임금대장" },
+    { ts: "2026-05-21 09:14", actor: "관리자 이미경", target: "E-1A2B", action: "근태기록 정정 승인", reason: "본인 요청 검증 — 출입게이트 로그 확인", legal: "근로자명부 정정의무" },
+    { ts: "2026-05-20 16:08", actor: "팀장 박정환",   target: "E-5E6F", action: "출근 큐 검토",       reason: "자동출근 대기 해소",                  legal: "팀 운영 권한" },
+  ];
+  const corrections = [
+    { date: "2026-05-19", name: "김효진", field: "퇴근시각", change: "17:55 → 18:30", reason: "고객 응대로 지연 출구 시점 30분 차이", status: "대기" },
+    { date: "2026-05-18", name: "윤찬미", field: "출근시각", change: "09:15 → 08:55", reason: "BLE 인식 지연으로 늦은 기록",          status: "승인" },
+  ];
+  const retention = [
+    { name: "근로자 명부",    meta: "3년 보존 · 자동 백업" },
+    { name: "임금대장",       meta: "3년 보존 · 별도 저장소" },
+    { name: "위치정보 원본",  meta: "근무종료 90일 후 자동 파기" },
+    { name: "접근 로그",      meta: "5년 보존 (사후 점검 대응)" },
+    { name: "동의 철회 기록", meta: "영구 보존" },
+  ];
+
+  const card = { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, padding: 16, marginBottom: 14 };
+  const okNote = { background: "#ecfdf5", border: "1px solid #a7f3d0", color: "#047857", padding: "8px 12px", borderRadius: 6, fontSize: 11.5, marginTop: 10 };
+
+  return (
+    <div style={{ padding: 20, overflow: "auto", height: "100%", background: "#f8fafc" }}>
+      <RoleBanner roleKey="lawyer" title="노무사 — 동의·접근 로그·보존·감사"
+        sub="위치정보법 · 근로기준법 점검 대비. 동의 이력, 정정 이력, 관리자 접근 로그, 보존·파기 상태, 감사 증빙." />
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 18 }}>
+        <CeoStat label="동의 유효 직원" value={consent.filter(c => c.status === "유효").length} unit={`/ ${consent.length}`} tone="good" note="동의 문구 v3.2 (2024-12 갱신)" />
+        <CeoStat label="동의 철회 (누적)" value="0" unit="건" tone="good" note="철회 즉시 GPS 중단 자동화 OK" />
+        <CeoStat label="관리자 정밀 위치 열람 (월)" value={accessLog.filter(l => l.action === "정밀 위치 열람").length} unit="건" tone="neutral" note="전 건 사유 첨부 · 영구 보존" />
+      </div>
+
+      <div style={card}>
+        <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 12 }}>📜 위치정보 수집·이용 동의 이력</div>
+        <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ background: "#f1f5f9" }}>
+              <th style={{ padding: 8, textAlign: "left" }}>직원</th>
+              <th style={{ padding: 8 }}>동의 일시</th>
+              <th style={{ padding: 8 }}>버전</th>
+              <th style={{ padding: 8 }}>수집 범위</th>
+              <th style={{ padding: 8 }}>상태</th>
+            </tr>
+          </thead>
+          <tbody>
+            {consent.map((c, i) => (
+              <tr key={i} style={{ borderTop: "1px solid #e2e8f0" }}>
+                <td style={{ padding: 8 }}>{c.name} <span style={{ fontSize: 10, color: "#64748b", marginLeft: 4 }}>{c.anon}</span></td>
+                <td style={{ padding: 8, textAlign: "center" }}>{c.agreedAt}</td>
+                <td style={{ padding: 8, textAlign: "center" }}>{c.version}</td>
+                <td style={{ padding: 8 }}>{c.scope}</td>
+                <td style={{ padding: 8, textAlign: "center" }}>
+                  <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: "#dcfce7", color: "#166534" }}>{c.status}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={okNote}>✓ 위치정보법 제18조: 이용약관 주요 사항 명시·동의 획득 · 권리 행사 절차 반영 완료.</div>
+      </div>
+
+      <div style={card}>
+        <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 12 }}>🔍 정밀 위치 접근 로그 (전체)</div>
+        <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ background: "#f1f5f9" }}>
+              <th style={{ padding: 8, textAlign: "left" }}>일시</th>
+              <th style={{ padding: 8 }}>접근자</th>
+              <th style={{ padding: 8 }}>대상</th>
+              <th style={{ padding: 8, textAlign: "left" }}>사유 / 법적 근거</th>
+            </tr>
+          </thead>
+          <tbody>
+            {accessLog.map((l, i) => (
+              <tr key={i} style={{ borderTop: "1px solid #e2e8f0" }}>
+                <td style={{ padding: 8 }}>{l.ts}</td>
+                <td style={{ padding: 8 }}>{l.actor}</td>
+                <td style={{ padding: 8, textAlign: "center" }}>
+                  <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, background: "#f1f5f9", fontWeight: 700 }}>{l.target}</span>
+                </td>
+                <td style={{ padding: 8 }}>{l.reason}<br /><span style={{ fontSize: 10.5, color: "#64748b" }}>{l.legal}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+        <div style={card}>
+          <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 12 }}>📝 출퇴근 정정 이력 (감사)</div>
+          <table style={{ width: "100%", fontSize: 11.5, borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "#f1f5f9" }}>
+                <th style={{ padding: 6, textAlign: "left" }}>일자</th>
+                <th style={{ padding: 6 }}>직원</th>
+                <th style={{ padding: 6 }}>항목</th>
+                <th style={{ padding: 6 }}>변경</th>
+                <th style={{ padding: 6 }}>상태</th>
+              </tr>
+            </thead>
+            <tbody>
+              {corrections.map((c, i) => (
+                <tr key={i} style={{ borderTop: "1px solid #e2e8f0" }}>
+                  <td style={{ padding: 6 }}>{c.date}</td>
+                  <td style={{ padding: 6 }}>{c.name}</td>
+                  <td style={{ padding: 6 }}>{c.field}</td>
+                  <td style={{ padding: 6 }}>{c.change}</td>
+                  <td style={{ padding: 6, textAlign: "center" }}>
+                    <span style={{ padding: "2px 7px", borderRadius: 10, fontSize: 10.5, fontWeight: 700,
+                      background: c.status === "승인" ? "#dcfce7" : "#fef3c7",
+                      color: c.status === "승인" ? "#166534" : "#92400e" }}>{c.status}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={okNote}>✓ 근로기준법 제42조: 근로자 명부·중요 서류 3년 보존. 정정 이력 자동 보존.</div>
+        </div>
+
+        <div style={card}>
+          <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 12 }}>💾 보존·파기 상태</div>
+          {retention.map((r, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderTop: i > 0 ? "1px solid #f1f5f9" : "none" }}>
+              <div>
+                <div style={{ fontSize: 12.5, fontWeight: 700 }}>{r.name}</div>
+                <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{r.meta}</div>
+              </div>
+              <span style={{ padding: "3px 9px", borderRadius: 10, fontSize: 10.5, fontWeight: 700, background: "#dcfce7", color: "#166534" }}>정상</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={card}>
+        <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 8 }}>📦 감사용 증빙 패키지</div>
+        <p style={{ fontSize: 11.5, color: "#64748b", lineHeight: 1.55, marginBottom: 10 }}>
+          사후 점검·분쟁 대비. 동의 이력, 접근 로그, 정정 이력, 보존 증명, 위치 원본 해시값을 PDF + JSON으로 일괄 생성.
+          상세 구현은 Phase 4 (설계 §11.2 경로 B — 월간 자동 발송 포함).
+        </p>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => alert("Phase 4에서 구현 — 감사 패키지 생성 (zip + PGP 옵션)")}
+            style={{ padding: "8px 14px", borderRadius: 6, border: "none", background: "linear-gradient(135deg, #0e7490, #0891b2)", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+            감사 패키지 생성 (zip)
+          </button>
+          <button onClick={() => alert("전월(4월) 패키지 다운로드 — Phase 4")}
+            style={{ padding: "8px 14px", borderRadius: 6, border: "1px solid #e2e8f0", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+            전월 패키지
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AppInner() {
   const [currentUser, setCurrentUser] = useState(() => {
     // localStorage에 저장된 사용자가 있으면 즉시 복원
@@ -28021,6 +28330,8 @@ function AppInner() {
   const facUser = toFacUser(currentUser);
   const invUser = toInvUser(currentUser);
   const logout = () => setCurrentUser(null);
+  const role6 = normalizeRole6(currentUser.role);
+  const roleMeta = ROLE6_META[role6] || ROLE6_META.staff;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", fontFamily: "'Pretendard','Noto Sans KR',-apple-system,sans-serif", background: "#f5f5f5", overflow: "hidden" }}>
@@ -28149,7 +28460,10 @@ function AppInner() {
           </a>
           <span style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}>{currentUser.dept}</span>
           <span style={{ fontSize: 12, fontWeight: 700 }}>{currentUser.name}</span>
-          <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 4, background: "rgba(59,91,219,0.2)", color: "#93c5fd", fontWeight: 700 }}>{currentUser.role}</span>
+          <span title={`6역할: ${role6}`}
+            style={{ fontSize: 10, padding: "2px 8px", borderRadius: 10, background: roleMeta.color, color: "#fff", fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 3 }}>
+            {roleMeta.emoji} {roleMeta.name}
+          </span>
           <button onClick={logout}
             style={{ padding: "5px 12px", borderRadius: 6, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>
             로그아웃
@@ -28159,7 +28473,10 @@ function AppInner() {
 
       {/* ─── Active module ─── */}
       <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-        {module === "home"      && <IntegratedHomeDashboard userCtx={facUser} facActions={facActions} worklogs={worklogs} auditLog={auditLog} onNavigate={(m)=>setModule(m)} onAddFacAction={addFacAction} />}
+        {/* Phase 1: ceo/lawyer 역할은 전용 화면. 다른 모듈 진입 시도해도 권한 분리 유지. */}
+        {role6 === "ceo"    && <CeoDashboard userCtx={facUser} />}
+        {role6 === "lawyer" && <LawyerAuditView userCtx={facUser} />}
+        {role6 !== "ceo" && role6 !== "lawyer" && module === "home"      && <IntegratedHomeDashboard userCtx={facUser} facActions={facActions} worklogs={worklogs} auditLog={auditLog} onNavigate={(m)=>setModule(m)} onAddFacAction={addFacAction} />}
         {module === "facility"  && <FacilityModule  userCtx={facUser} onLogout={logout} inspections={facInspections} setInspections={setFacInspections} actions={facActions} setActions={setFacActions} addAudit={addAudit} updateFacAction={updateFacAction} />}
         {module === "inventory" && <InventoryModule userCtx={invUser} onLogout={logout} onAddFacAction={addFacAction} switchToFacility={() => setModule("facility")} facActions={facActions} addAudit={addAudit} />}
         {module === "safety"    && <SafetyModule userCtx={facUser} onLogout={logout} facilities={FAC_FACILITIES} onAddFacAction={addFacAction} addAudit={addAudit} worklogs={worklogs} facActions={facActions} auditLog={auditLog} />}

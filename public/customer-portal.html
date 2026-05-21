@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>서비스 진행 상태 · 한국잠사플레이팜</title>
+<link rel="manifest" href="/manifest.json" />
+<style>
+  @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Pretendard','Noto Sans KR',-apple-system,sans-serif;background:#f8fafc;color:#0f172a;line-height:1.5;padding:0}
+  .wrap{max-width:680px;margin:0 auto;padding:20px 16px 60px}
+  .topbar{display:flex;align-items:center;gap:10px;padding:14px 18px;background:#fff;border-bottom:1px solid #e2e8f0;font-weight:800}
+  .topbar .badge{font-size:10px;padding:2px 8px;border-radius:10px;background:#dcfce7;color:#166534;font-weight:700}
+  .banner{display:flex;align-items:center;gap:14px;padding:18px 20px;border-radius:12px;color:#fff;margin-bottom:16px;background:linear-gradient(135deg,#16a34a,#15803d);box-shadow:0 4px 14px rgba(22,163,74,0.18)}
+  .banner .icon{font-size:34px}
+  .banner h1{font-size:18px;font-weight:800;margin-bottom:4px}
+  .banner p{font-size:12px;opacity:.92}
+  .card{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin-bottom:14px}
+  .card h3{font-size:14px;font-weight:800;margin-bottom:10px;display:flex;align-items:center;gap:6px}
+  .pill{font-size:10px;padding:2px 7px;border-radius:10px;background:#f1f5f9;color:#475569;font-weight:700}
+  .status-big{padding:16px;border-radius:10px;background:linear-gradient(135deg,#ecfdf5,#d1fae5);border:1px solid #a7f3d0;margin-bottom:14px}
+  .status-big .lbl{font-size:11px;font-weight:700;color:#047857;margin-bottom:4px}
+  .status-big .val{font-size:20px;font-weight:900;color:#064e3b;margin-bottom:4px}
+  .status-big .sub{font-size:12px;color:#047857}
+  .timeline{position:relative;padding-left:22px}
+  .timeline::before{content:'';position:absolute;left:6px;top:8px;bottom:8px;width:2px;background:#e2e8f0}
+  .ev{position:relative;padding:6px 0 14px;font-size:12.5px}
+  .ev .dot{position:absolute;left:-22px;top:8px;width:14px;height:14px;border-radius:50%;background:#16a34a;border:2px solid #fff;box-shadow:0 0 0 1px #16a34a}
+  .ev .dot.scheduled{background:#fbbf24;box-shadow:0 0 0 1px #fbbf24}
+  .ev .dot.pending{background:#cbd5e1;box-shadow:0 0 0 1px #cbd5e1}
+  .ev .lbl{font-weight:700}
+  .ev .meta{font-size:11.5px;color:#64748b;margin-top:2px}
+  .row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-top:1px solid #f1f5f9}
+  .row:first-child{border-top:none}
+  .row .name{font-size:12.5px;font-weight:700}
+  .row .meta{font-size:11px;color:#64748b;margin-top:2px}
+  .ok-pill{padding:3px 9px;border-radius:10px;font-size:10.5px;font-weight:700;background:#dcfce7;color:#166534}
+  .privacy{background:#fefce8;border:1px solid #fde047;color:#854d0e;padding:10px 12px;border-radius:8px;font-size:11.5px;margin-top:10px;line-height:1.55}
+  .btn{padding:9px 16px;border-radius:7px;border:1px solid #e2e8f0;background:#fff;font-size:12px;font-weight:700;cursor:pointer}
+  .btn.primary{border:none;background:linear-gradient(135deg,#16a34a,#15803d);color:#fff}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap}
+  .modal-bg{position:fixed;inset:0;background:rgba(15,23,42,0.6);display:none;align-items:center;justify-content:center;padding:16px;z-index:100}
+  .modal-bg.open{display:flex}
+  .modal{background:#fff;border-radius:12px;padding:22px;width:100%;max-width:440px;max-height:90vh;overflow:auto}
+  .modal h3{font-size:15px;font-weight:800;margin-bottom:6px}
+  .modal .sub{font-size:11.5px;color:#64748b;margin-bottom:14px;line-height:1.55}
+  .modal label{display:block;font-size:11px;font-weight:700;margin:10px 0 4px;color:#475569}
+  .modal select,.modal input,.modal textarea{width:100%;padding:8px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:12.5px;font-family:inherit}
+  .modal textarea{resize:vertical;min-height:70px}
+  .modal .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#0f172a;color:#fff;padding:11px 18px;border-radius:8px;font-size:12.5px;font-weight:700;opacity:0;transition:opacity .2s;pointer-events:none;z-index:200}
+  .toast.show{opacity:1}
+  .toast.good{background:#15803d}
+  .empty{padding:40px 20px;text-align:center;color:#64748b}
+  .empty h2{font-size:16px;color:#0f172a;margin-bottom:8px}
+  .empty p{font-size:12.5px}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span style="font-size:18px">🤝</span>
+  <span>서비스 진행 상태</span>
+  <span class="badge">한국잠사플레이팜</span>
+</div>
+
+<div class="wrap" id="root"></div>
+
+<div class="modal-bg" id="modal-bg"><div class="modal" id="modal-inner"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+// 설계 §11.1 Tier 1 — 토큰 URL 기반 익명 조회. Tier 2(OTP)·Tier 3(계정)는 Phase 3.
+// 토큰은 ?token=XXXX 쿼리 또는 #token=XXXX 해시로 받음.
+
+const $ = (s, r=document) => r.querySelector(s);
+function getToken() {
+  const url = new URL(location.href);
+  return url.searchParams.get("token") || (location.hash.match(/token=([^&]+)/) || [])[1] || "";
+}
+function toast(msg, kind="") {
+  const t = $("#toast"); t.textContent = msg; t.className = "toast show " + kind;
+  setTimeout(() => t.classList.remove("show"), 2400);
+}
+function openModal(html) { $("#modal-inner").innerHTML = html; $("#modal-bg").classList.add("open"); }
+function closeModal() { $("#modal-bg").classList.remove("open"); }
+$("#modal-bg").addEventListener("click", e => { if (e.target.id === "modal-bg") closeModal(); });
+
+// Phase 1: mock 데이터 (실제는 Phase 3에서 /api/customer/session?token= 호출로 교체)
+const MOCK_SESSIONS = {
+  "DEMO-1234": {
+    customer_org: "청주시 시설관리공단",
+    site: "한국잠사박물관",
+    scheduled_time: "14:00",
+    status: "arrived",
+    delay_min: 0,
+    issues: 0,
+    actual_arrival: "13:52",
+    scheduled_end: "17:00",
+    report_at: "18:00",
+    staff_team: "한국잠사박물관 운영팀",
+    staff_count: 2,
+  },
+};
+
+async function fetchSession(token) {
+  // Phase 3: fetch(`/api/customer/session?token=${token}`).then(r=>r.json())
+  // Phase 1: mock
+  return MOCK_SESSIONS[token] || null;
+}
+
+function renderEmpty(reason) {
+  $("#root").innerHTML = `
+    <div class="card empty">
+      <h2>⛔ 조회 불가</h2>
+      <p>${reason}</p>
+      <p style="margin-top:16px;font-size:11.5px;color:#94a3b8">문의: 한국잠사플레이팜 운영팀<br/>본 페이지는 발급된 링크로만 접근 가능합니다.</p>
+    </div>`;
+}
+
+function statusKor(s, delay) {
+  const map = {
+    scheduled: "예정", arrived: "담당 인력 현장 도착 완료",
+    started: "서비스 진행 중", completed: "서비스 완료",
+    delayed: `지연 (${delay}분)`, cancelled: "취소됨",
+  };
+  return map[s] || s;
+}
+
+async function main() {
+  const token = getToken();
+  if (!token) {
+    renderEmpty("토큰이 없습니다. 발급받은 링크로 접속해주세요.");
+    return;
+  }
+  const s = await fetchSession(token);
+  if (!s) {
+    renderEmpty("유효하지 않거나 만료된 토큰입니다. 새 링크를 요청해주세요.");
+    return;
+  }
+  $("#root").innerHTML = `
+    <div class="banner">
+      <div class="icon">🤝</div>
+      <div>
+        <h1>${escape_(s.customer_org)} — 서비스 진행 상태</h1>
+        <p>직원 실명·좌표·이동 경로 미노출. 도착·시작·지연·이슈 신고·일일 리포트만 제공.</p>
+      </div>
+    </div>
+
+    <div class="status-big">
+      <div class="lbl">현재 상태</div>
+      <div class="val">${escape_(statusKor(s.status, s.delay_min))}</div>
+      <div class="sub">${escape_(s.site)} · 서비스 시작 예정 ${escape_(s.scheduled_time)} · ${s.delay_min ? `지연 ${s.delay_min}분` : "지연 없음"}</div>
+    </div>
+
+    <div class="card">
+      <h3>📍 진행 타임라인 <span class="pill">${escape_(s.site)}</span></h3>
+      <div class="timeline">
+        <div class="ev"><div class="dot"></div><div class="lbl">담당 인력 현장 도착</div><div class="meta">${escape_(s.actual_arrival)} · 정시 도착</div></div>
+        <div class="ev"><div class="dot scheduled"></div><div class="lbl">서비스 시작 예정</div><div class="meta">${escape_(s.scheduled_time)} · 5분 전 알림 발송 예정</div></div>
+        <div class="ev"><div class="dot pending"></div><div class="lbl">서비스 종료 예정</div><div class="meta">${escape_(s.scheduled_end)}</div></div>
+        <div class="ev"><div class="dot pending"></div><div class="lbl">일일 리포트 발송</div><div class="meta">${escape_(s.report_at)} (익명 통계)</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>📋 일일 리포트 (개인정보 보호형)</h3>
+      <div class="row"><div><div class="name">담당 인력</div><div class="meta">소속: ${escape_(s.staff_team)} · ${s.staff_count}명 배정</div></div><span class="ok-pill">배정 완료</span></div>
+      <div class="row"><div><div class="name">정시 도착</div><div class="meta">예정 ${escape_(s.scheduled_time)} → 실제 ${escape_(s.actual_arrival)}</div></div><span class="ok-pill">정상</span></div>
+      <div class="row"><div><div class="name">지연</div><div class="meta">${s.delay_min ? s.delay_min + "분" : "없음"}</div></div><span class="ok-pill">${s.delay_min ? "주의" : "0건"}</span></div>
+      <div class="row"><div><div class="name">고객 이슈</div><div class="meta">${s.issues ? s.issues + "건 접수됨" : "접수된 이슈 없음"}</div></div><span class="ok-pill">${s.issues}건</span></div>
+      <div class="privacy">⚠️ 직원의 실명, 정확한 GPS 좌표, 이동 경로는 고객님께 제공되지 않습니다. 서비스 진행 상태만 공유됩니다.</div>
+    </div>
+
+    <div class="card">
+      <h3>🚨 이슈 신고</h3>
+      <p style="font-size:11.5px;color:#64748b;line-height:1.55;margin-bottom:10px">서비스 중 문제가 있으면 알려주세요. 직접 직원에게 연락하지 않으셔도 됩니다.</p>
+      <div class="toolbar">
+        <button class="btn primary" onclick="openIssue()">이슈 신고</button>
+        <button class="btn" onclick="openOtpRequest()">상세 리포트 요청 (OTP)</button>
+      </div>
+      <p style="font-size:10.5px;color:#94a3b8;margin-top:10px">상세 리포트·현장 사진·이슈 상세 등 민감 정보는 Tier 2 OTP 인증 후 제공됩니다 (Phase 3).</p>
+    </div>
+  `;
+}
+
+function escape_(s) {
+  return String(s == null ? "" : s).replace(/[<>&"']/g, c => ({ "<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;","'":"&#39;" }[c]));
+}
+
+window.openIssue = function() {
+  openModal(`
+    <h3>🚨 이슈 신고</h3>
+    <p class="sub">서비스 진행 중 문제가 있으면 알려주세요. 담당자에게 직접 전달됩니다.</p>
+    <label>이슈 유형</label>
+    <select id="issueType"><option>약속 시간보다 지연</option><option>서비스 품질 문제</option><option>시설/장비 문제</option><option>기타</option></select>
+    <label>상세 내용</label>
+    <textarea id="issueDetail" placeholder="가능한 자세히 작성해주세요."></textarea>
+    <label>회신 받을 연락처 (선택)</label>
+    <input id="issueContact" placeholder="010-0000-0000"/>
+    <div class="actions">
+      <button class="btn" onclick="closeModal()">취소</button>
+      <button class="btn primary" onclick="submitIssue()">신고</button>
+    </div>
+  `);
+};
+window.submitIssue = function() {
+  // Phase 3: POST /api/customer/issue { token, type, detail, contact }
+  closeModal();
+  toast("이슈 접수 완료 · 30분 내 회신", "good");
+};
+window.openOtpRequest = function() {
+  openModal(`
+    <h3>🔐 OTP 인증 (Tier 2)</h3>
+    <p class="sub">상세 리포트·현장 사진 등 민감 정보 열람은 OTP 인증이 필요합니다.<br/>등록된 고객 이메일로 6자리 인증코드를 발송합니다. (Phase 3에서 활성화)</p>
+    <label>이메일</label>
+    <input id="otpEmail" type="email" placeholder="등록된 담당자 이메일" />
+    <div class="actions">
+      <button class="btn" onclick="closeModal()">취소</button>
+      <button class="btn primary" onclick="closeModal();toast('Phase 3에서 OTP 발송 활성화됩니다')">인증코드 발송</button>
+    </div>
+  `);
+};
+
+main();
+</script>
+</body>
+</html>
