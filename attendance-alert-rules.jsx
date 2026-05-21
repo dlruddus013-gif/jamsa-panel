@@ -39,16 +39,16 @@ const DEFAULT_CONFIG = {
     inMin: 5,         // 최근 N분 안에 비콘 감지되면 자동 출근
     outMin: 30,       // N분 이상 비콘 미감지면 자동 퇴근
   },
-  // 🆕 GPS/권역 자동 출퇴근
+  // 🆕 GPS/권역 자동 출퇴근 — 빠른 반응 기본값 (사용자 피드백 반영)
   autoGps: {
     enabled: false,
     centerLat: 36.6383333,    // 박물관 중심
     centerLng: 127.3827778,
-    radiusM: 200,             // 원형 권역 반경
+    radiusM: 300,             // 원형 권역 반경 — GPS 오차 감안 300m
     polygon: null,            // [{lat,lng}, ...] 다각형 권역 (있으면 우선)
-    inMin: 3,                 // 권역 안에서 N분 머무르면 자동 출근
-    outMin: 30,               // 권역 밖에서 N분 머무르면 자동 퇴근
-    maxAccuracyM: 100,        // GPS 정확도 N미터 이상이면 평가 skip
+    inMin: 1,                 // 권역 안에서 1분 머무르면 자동 출근 (이전 3분)
+    outMin: 10,               // 권역 밖에서 10분 머무르면 자동 퇴근 (이전 30분)
+    maxAccuracyM: 500,        // GPS 정확도 500m까지 허용 (PC/실내 대응, 이전 100m)
   },
   messages: {
     checkIn:  "[잠사] {name}({dept}) 출근 — {time}",

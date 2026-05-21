@@ -351,8 +351,9 @@ const LS_URL  = "jamsa_sb_url";
 const LS_KEY  = "jamsa_sb_key";
 const LS_STAFF= "jamsa_checkin_staff_id";
 
-// 잠사박물관 기본 중심 + 200m 반경 (관리자가 설정 변경 가능)
-const DEFAULT_GEOFENCE = { centerLat: 36.6383333, centerLng: 127.3827778, radiusM: 200, inMin: 3, outMin: 30 };
+// 잠사박물관 기본 중심 + 300m 반경 (관리자가 설정 변경 가능)
+// 빠른 반응을 위해 inMin 1분, outMin 10분으로 단축
+const DEFAULT_GEOFENCE = { centerLat: 36.6383333, centerLng: 127.3827778, radiusM: 300, inMin: 1, outMin: 10 };
 const LS_GEOFENCE = "jamsa_geofence";
 
 async function loadGeofence() {
@@ -948,12 +949,16 @@ function onPosition(pos) {
 
 async function sendLocation() {
   if (!lastPos || !currentStaff) return;
+  const sentAt = new Date().toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
+  let okA = false, okB = false, errMsgs = [];
+
+  // (A) 서버 API 호출 (service-role로 upsert) — 1차
   try {
     const res = await fetch("/api/staff-location-update", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        staffId: currentStaff.id,
+        staffId: String(currentStaff.id),
         staffName: currentStaff.name,
         lat: lastPos.lat, lng: lastPos.lng, accuracy: lastPos.accuracy,
         source: "mobile_gps",
@@ -962,13 +967,36 @@ async function sendLocation() {
         timestamp: new Date(lastPos.t).toISOString(),
       }),
     });
-    const ok = res.ok;
-    const sentAt = new Date().toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
-    document.getElementById("sentText").textContent = sentAt;
-    if (ok) logRow(`위치 전송 (${lastPos.accuracy ? "±" + Math.round(lastPos.accuracy)+"m" : ""})`, "ok");
-    else logRow("위치 전송 실패", "err");
-  } catch (e) {
-    logRow("전송 오류: " + e.message, "err");
+    okA = res.ok;
+    if (!res.ok) errMsgs.push("API " + res.status);
+  } catch (e) { errMsgs.push("API:" + e.message); }
+
+  // (B) Supabase 직접 upsert (anon 키, RLS 정책 허용 필요) — 2차 안전장치
+  if (sb && currentStaff) {
+    try {
+      const { error } = await sb.from("staff_locations").upsert({
+        id: String(currentStaff.id),
+        name: currentStaff.name,
+        lat: lastPos.lat,
+        lng: lastPos.lng,
+        accuracy: lastPos.accuracy,
+        source: "mobile_gps",
+        role: "staff",
+        dept: currentStaff.dept || null,
+        last_seen: new Date(lastPos.t).toISOString(),
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "id" });
+      if (!error) okB = true;
+      else errMsgs.push("SB:" + error.message.slice(0, 50));
+    } catch (e) { errMsgs.push("SB:" + e.message); }
+  }
+
+  document.getElementById("sentText").textContent = sentAt;
+  if (okA || okB) {
+    const path = [okA && "API", okB && "DB"].filter(Boolean).join("+");
+    logRow(`위치 전송 ${path} (${lastPos.accuracy ? "±" + Math.round(lastPos.accuracy)+"m" : ""})`, "ok");
+  } else {
+    logRow(`전송 실패: ${errMsgs.join(", ")}`, "err");
   }
 }
 
