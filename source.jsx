@@ -22073,6 +22073,9 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   const [filterMode, setFilterMode] = useState("all"); // all | urgent | stock | facility
   // 🗺️ 지도 크게 보기 모드 — 상단 패널/헤더를 숨기고 지도가 화면 전체를 차지
   const [mapFullscreen, setMapFullscreen] = useState(false);
+  // 🌐 지도 펼치기 모드 — 좁은 영역(60~70m)에 몰린 스팟을 시각적으로 펼쳐서 표시
+  //    실제 좌표는 그대로, 화면 표시용 위치만 centroid에서 방사형으로 확대
+  const [spreadMode, setSpreadMode] = useState(false);
   const [viewMode, setViewMode] = useState(() => {
     // 사용자 마지막 뷰 모드 기억 (단, 'map'이 아닌 값이면 일단 map으로 시작)
     try {
@@ -23275,10 +23278,26 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
       });
     }
 
+    // 🌐 지도 펼치기: 좁은 영역에 몰린 스팟의 화면 표시 좌표를 centroid에서 방사형으로 확대
+    //    실제 좌표(z.lat/z.lng)는 보존, _displayLatLng()만 변환
+    const _validZones = zoneStatus.filter(s => s.zone?.lat && s.zone?.lng);
+    let _cLat = 0, _cLng = 0;
+    if (_validZones.length > 0) {
+      _validZones.forEach(s => { _cLat += s.zone.lat; _cLng += s.zone.lng; });
+      _cLat /= _validZones.length;
+      _cLng /= _validZones.length;
+    }
+    const _spreadFactor = spreadMode ? 4 : 1;
+    const _displayLatLng = (z) => ({
+      lat: _cLat + (z.lat - _cLat) * _spreadFactor,
+      lng: _cLng + (z.lng - _cLng) * _spreadFactor,
+    });
+
     // 각 스팟마다 마커 생성 (상태별 색상 뱃지)
     zoneStatus.forEach(s => {
       const z = s.zone;
       if (!z.lat || !z.lng) return;
+      const _disp = _displayLatLng(z);
       try {
         const pulseAnim = s.status === "urgent" ? "animation:homePinPulse 1.5s infinite;" : "";
         const badgeNum = s.openActions.length + (s.lowStock > 0 ? s.lowStock : 0);
@@ -23375,9 +23394,9 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         // 🆕 구역 이름 라벨
         const _nameLabel = `<div style="position:absolute;left:23px;top:50px;transform:translateX(-50%);background:rgba(255,255,255,0.96);color:#0f172a;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:800;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.3);border:1px solid ${z.color};z-index:4;pointer-events:none;">${z.icon} ${z.name}</div>`;
         const marker = new naver.maps.Marker({
-          position: new naver.maps.LatLng(z.lat, z.lng),
+          position: new naver.maps.LatLng(_disp.lat, _disp.lng),
           map: naverMapRef.current,
-          draggable: editMode,
+          draggable: editMode && !spreadMode, // 펼치기 모드에선 드래그 비활성 (좌표 왜곡 방지)
           icon: {
             content: `<div style="position:relative;width:${_markerWidth}px;height:82px;${pulseAnim}cursor:${editMode ? "move" : "pointer"};${editMode ? "outline:3px dashed #2563eb;outline-offset:2px;border-radius:8px;" : ""}"><div style="position:absolute;left:0;top:0;width:46px;height:46px;"><div style="background:${z.color};border:3px solid #fff;border-radius:50% 50% 50% 0;width:38px;height:38px;transform:rotate(-45deg);box-shadow:0 4px 12px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;margin:4px;"><div style="transform:rotate(45deg);font-size:18px;">${z.icon}</div></div>${badgeHtml}${statusLabelHtml}${crowdBadgeHtml}${_photoThumb}${_nameLabel}</div>${_cctvHtml}</div>`,
             anchor: new naver.maps.Point(23, 46),
@@ -23410,8 +23429,8 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
     });
 
     // ✨ 초기 1회: 모든 스팟이 한 화면에 보이도록 자동 줌/팬 (사용자 조작 보존)
-    //    + 스팟이 좁은 영역(60~70m)에 몰려있어서 fit-bounds만으로는 핀이 겹침
-    //    → 최소 줌 20을 강제해서 핀 + CCTV 미니창이 안 겹치게 함
+    //    펼치기 OFF: 좁은 영역(60~70m)이라 최소 줌 20 강제
+    //    펼치기 ON:  4배 펼쳐서 fit-bounds 자연값(z=17~18)으로 충분
     if (!naverInitialFitRef.current && naverMapRef.current && naverMarkersRef.current.length > 0) {
       try {
         const _LB = naver?.maps?.LatLngBounds;
@@ -23422,14 +23441,13 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           });
           if (typeof naverMapRef.current.fitBounds === "function") {
             naverMapRef.current.fitBounds(bounds, { top: 80, right: 100, bottom: 80, left: 80 });
-            // 좁은 영역이면 fitBounds 결과가 z=17~18 정도라 핀이 겹침 → 최소 20 강제
-            // 최대는 21(네이버 SDK 상한)로 클램프
             try {
               const _center = (typeof bounds.getCenter === "function") ? bounds.getCenter() : null;
               const _z = naverMapRef.current.getZoom();
-              if (_z < 20) {
+              const _minZ = spreadMode ? 17 : 20;
+              if (_z < _minZ) {
                 if (_center) naverMapRef.current.setCenter(_center);
-                naverMapRef.current.setZoom(20);
+                naverMapRef.current.setZoom(_minZ);
               } else if (_z > 21) {
                 naverMapRef.current.setZoom(21);
               }
@@ -23460,7 +23478,10 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         }
       });
     }
-  }, [zoneStatus, naverLoaded, mapProvider, bgMode, viewMode, editMode, cctvSnapshotData, zoneCrowdStats, cctvMap, cctvEditMode]);
+  }, [zoneStatus, naverLoaded, mapProvider, bgMode, viewMode, editMode, cctvSnapshotData, zoneCrowdStats, cctvMap, cctvEditMode, spreadMode]);
+
+  // 🌐 펼치기 모드 토글 시 fit-bounds 재실행을 위해 플래그 리셋
+  useEffect(() => { naverInitialFitRef.current = false; }, [spreadMode]);
 
 
   const createQuickAction = (zone, template) => {
@@ -23610,6 +23631,14 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                 boxShadow: mapFullscreen ? "0 0 0 3px rgba(220,38,38,0.25)" : "none" }}>
               {mapFullscreen ? "✕ 크게보기 종료" : "⛶ 지도 크게보기"}
             </button>
+            <button onClick={() => setSpreadMode(v => !v)}
+              title={spreadMode ? "스팟을 실제 좌표로 되돌리기" : "겹쳐 보이는 스팟을 화면상에서 4배 펼쳐서 보기 (실제 좌표는 보존)"}
+              style={{ padding: "6px 12px", borderRadius: 6, border: "none",
+                background: spreadMode ? "linear-gradient(135deg,#16a34a,#0891b2)" : "linear-gradient(135deg,#475569,#1e293b)",
+                color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 800,
+                boxShadow: spreadMode ? "0 0 0 3px rgba(22,163,74,0.25)" : "none" }}>
+              {spreadMode ? "✓ 펼치기 ON" : "🌐 지도 펼치기"}
+            </button>
           </>
         )}
 
@@ -23652,6 +23681,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
               cctvSnapshotData={cctvSnapshotData}
               cctvEditMode={cctvEditMode}
               cctvMap={cctvMap}
+              spreadMode={spreadMode}
               onMoveCctv={moveChannelToZone} />
           )}
 
@@ -26491,7 +26521,7 @@ window.onload = () => {
 }
 
 /* ─── OSM FALLBACK MAP (네이버 API 키 없거나 오류 시) ─── */
-function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, errorMsg, bgMode = "satellite", onChangeBgMode, cctvSnapshotData = null, cctvEditMode = false, onMoveCctv = null, cctvMap = {} }) {
+function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, errorMsg, bgMode = "satellite", onChangeBgMode, cctvSnapshotData = null, cctvEditMode = false, onMoveCctv = null, cctvMap = {}, spreadMode = false }) {
   // 박물관 영역 경계 (한국잠사박물관 청주 - 정확한 좌표)
   const LAT_MIN = 36.6378, LAT_MAX = 36.6395, LNG_MIN = 127.4880, LNG_MAX = 127.4905;
   const LAT_CENTER = (LAT_MIN + LAT_MAX) / 2;
@@ -26652,10 +26682,22 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
       });
     }
 
+    // 🌐 지도 펼치기: centroid에서 방사형으로 화면 표시 좌표 확대 (실제 좌표는 보존)
+    const _validZ = zoneStatus.filter(s => s.zone?.lat && s.zone?.lng);
+    let _cLat = 0, _cLng = 0;
+    if (_validZ.length > 0) {
+      _validZ.forEach(s => { _cLat += s.zone.lat; _cLng += s.zone.lng; });
+      _cLat /= _validZ.length;
+      _cLng /= _validZ.length;
+    }
+    const _factor = spreadMode ? 4 : 1;
+
     // 새 마커 추가
     zoneStatus.forEach(s => {
       const z = s.zone;
       if (!z.lat || !z.lng) return;
+      const _dispLat = _cLat + (z.lat - _cLat) * _factor;
+      const _dispLng = _cLng + (z.lng - _cLng) * _factor;
       const badgeNum = s.openActions.length + (s.lowStock > 0 ? s.lowStock : 0);
       const isPulse = s.status === "urgent";
 
@@ -26721,7 +26763,7 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
         iconAnchor: [22, 36],
       });
 
-      const marker = L.marker([z.lat, z.lng], { icon })
+      const marker = L.marker([_dispLat, _dispLng], { icon })
         .addTo(map)
         .on("click", () => onSelectZone(s));
       markersRef.current.push(marker);
@@ -26741,7 +26783,10 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
         initialFitRef.current = true;
       } catch (e) { console.warn("[OsmFallbackMap] fitBounds 실패:", e?.message); }
     }
-  }, [zoneStatus, leafletLoaded, cctvSnapshotData, cctvEditMode, cctvMap]);
+  }, [zoneStatus, leafletLoaded, cctvSnapshotData, cctvEditMode, cctvMap, spreadMode]);
+
+  // 🌐 펼치기 모드 토글 시 fit-bounds 재실행을 위해 플래그 리셋
+  React.useEffect(() => { initialFitRef.current = false; }, [spreadMode]);
 
   // CCTV 편집 모드 - 드래그앤드롭 핸들러
   React.useEffect(() => {
