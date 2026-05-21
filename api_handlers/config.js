@@ -16,6 +16,7 @@ export default function handler(req, res) {
     supabase_anon_key: process.env.SUPABASE_ANON_KEY || '',
     org_id: process.env.ORG_ID || 'jamsa',
     backend_cctv_url: process.env.BACKEND_CCTV_URL || '',
+    naver_client_id: process.env.NAVER_CLIENT_ID || process.env.NAVER_MAP_CLIENT_ID || '',
     version: 'v12.9-vercel',
   });
 }
