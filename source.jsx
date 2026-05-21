@@ -26000,6 +26000,13 @@ window.onload = () => {
                       </button>
                     </div>
                   )}
+                  {/* Phase 2: admin 만 정밀 위치 사유 기반 열람 */}
+                  {u.role === "staff" && normalizeRole6(userCtx?.role) === "admin" && (
+                    <button onClick={() => { setSelectedUserId(null); window.dispatchEvent(new CustomEvent("jamsa-precise-location-open", { detail: { id: u.id, name: u.name, anon: u.anon } })); }}
+                      style={{ width: "100%", marginTop: 6, padding: 8, background: "linear-gradient(135deg,#dc2626,#b91c1c)", color: "#fff", border: "none", borderRadius: 6, fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>
+                      🔍 정밀 위치 열람 (사유 + 로그)
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -27918,6 +27925,143 @@ function HomeNaverApiKeyModal({ currentKey, onSave, onClose }) {
   );
 }
 
+/* ==================== Phase 2 — 정밀 위치 사유 입력 모달 ====================
+   설계 §5.3, §11.1. admin만 사용 가능, lawyer는 사후 로그 조회만.
+   서버에 reason_detail 50자 이상 + legal_basis 전송, 로그 INSERT 후 좌표 반환.
+*/
+const PRECISE_REASON_CATEGORIES = [
+  { key: "BLE_DEBUG",      label: "BLE 미수신 원인 확인" },
+  { key: "EMERGENCY",      label: "긴급 안전 사고 대응" },
+  { key: "PAYROLL_VERIFY", label: "출퇴근 기록 정정 검증" },
+  { key: "CUSTOMER_ISSUE", label: "고객 응대 필요" },
+  { key: "OTHER",          label: "기타" },
+];
+const LEGAL_BASIS_OPTIONS = [
+  "위치정보법 제16조 (관리적 보호조치)",
+  "근로기준법 제43조 (임금대장)",
+  "고용계약상 안전관리 의무",
+  "고객 서비스 이행",
+];
+
+function PreciseLocationModal({ targetUser, onClose, onSuccess, currentUser }) {
+  const [reasonCat, setReasonCat] = useState(PRECISE_REASON_CATEGORIES[0].key);
+  const [reasonDetail, setReasonDetail] = useState("");
+  const [legalBasis, setLegalBasis] = useState(LEGAL_BASIS_OPTIONS[0]);
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+  const detailLen = reasonDetail.trim().length;
+  const detailOk = detailLen >= 50;
+  const role6 = normalizeRole6(currentUser?.role);
+  const canSubmit = role6 === "admin" && detailOk && !submitting;
+
+  async function submit() {
+    setSubmitting(true); setError("");
+    try {
+      const token = window.__authToken || window.localStorage?.getItem("__supabase_token") || "";
+      const r = await fetch("/api/precise-location", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          targetStaffId: targetUser?.id,
+          targetAnon: targetUser?.anon || null,
+          reasonCategory: reasonCat,
+          reasonDetail: reasonDetail.trim(),
+          legalBasis,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) {
+        setError(j.error === "reason_too_short" ? "사유 50자 이상 필요"
+          : j.error === "forbidden" ? "권한 없음 (admin 필요)"
+          : j.error === "missing_token" || j.error === "invalid_token" ? "로그인 필요 — 세션 만료됨"
+          : j.error || "요청 실패");
+        return;
+      }
+      setResult(j);
+      onSuccess?.(j);
+    } catch (e) {
+      setError("네트워크 오류: " + e.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div onClick={onClose}
+      style={{ position: "fixed", inset: 0, zIndex: 10090, background: "rgba(15,23,42,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ background: "#fff", borderRadius: 12, width: 500, maxWidth: "95vw", maxHeight: "90vh", overflow: "auto", padding: 22, boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+        <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 6 }}>🔍 정밀 위치 열람 요청</div>
+        <div style={{ fontSize: 12, color: "#64748b", marginBottom: 14, lineHeight: 1.6 }}>
+          대상: <strong>{targetUser?.name || targetUser?.id}</strong>
+          {targetUser?.anon && <span style={{ marginLeft: 4, padding: "1px 6px", borderRadius: 4, background: "#f1f5f9", fontWeight: 700 }}>{targetUser.anon}</span>}
+          <br />이 작업은 <strong>위치정보법 제16조</strong>에 따라 사유 입력이 필수이며, 모든 접근은 영구 로그에 기록됩니다.
+        </div>
+
+        {result ? (
+          <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 8, padding: 14 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#065f46", marginBottom: 8 }}>✓ 사유 기록됨 · 좌표 반환</div>
+            <div style={{ fontSize: 12, color: "#047857", lineHeight: 1.7 }}>
+              📍 <strong>{result.location?.lat?.toFixed(6)}, {result.location?.lng?.toFixed(6)}</strong><br />
+              정확도 ±{Math.round(result.location?.accuracy || 0)}m · {result.location?.source || "?"}<br />
+              마지막 업데이트: {result.location?.updatedAt ? new Date(result.location.updatedAt).toLocaleString("ko-KR") : "-"}<br />
+              <span style={{ fontSize: 11, color: "#64748b", marginTop: 6, display: "block" }}>접근 로그 ID: {result.accessLogId}</span>
+            </div>
+            <button onClick={onClose}
+              style={{ marginTop: 12, padding: "8px 14px", borderRadius: 6, border: "none", background: "#0f172a", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              닫기
+            </button>
+          </div>
+        ) : (
+          <>
+            {role6 !== "admin" && (
+              <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "8px 12px", marginBottom: 12, fontSize: 11.5, color: "#92400e" }}>
+                ⚠️ 정밀 위치 열람은 관리자(admin)만 가능합니다. 현재 역할: <strong>{role6}</strong>
+              </div>
+            )}
+            <label style={{ display: "block", fontSize: 11, fontWeight: 700, marginBottom: 4, color: "#475569" }}>열람 사유 (필수)</label>
+            <select value={reasonCat} onChange={e => setReasonCat(e.target.value)}
+              style={{ width: "100%", padding: "8px 10px", border: "1px solid #e2e8f0", borderRadius: 6, fontSize: 12.5, marginBottom: 10 }}>
+              {PRECISE_REASON_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+
+            <label style={{ display: "block", fontSize: 11, fontWeight: 700, marginBottom: 4, color: "#475569" }}>
+              상세 설명 (50자 이상) <span style={{ float: "right", color: detailOk ? "#16a34a" : "#dc2626", fontWeight: 700 }}>{detailLen} / 50</span>
+            </label>
+            <textarea value={reasonDetail} onChange={e => setReasonDetail(e.target.value)}
+              placeholder="예: 14:32 BLE 게이트웨이 신호가 끊긴 시점부터 현장 위치 확인 필요. 고객 응대 중 사고 대응 가능성."
+              style={{ width: "100%", padding: "8px 10px", border: `1px solid ${detailOk ? "#a7f3d0" : "#e2e8f0"}`, borderRadius: 6, fontSize: 12.5, minHeight: 80, resize: "vertical", marginBottom: 10, fontFamily: "inherit" }} />
+
+            <label style={{ display: "block", fontSize: 11, fontWeight: 700, marginBottom: 4, color: "#475569" }}>법적 근거</label>
+            <select value={legalBasis} onChange={e => setLegalBasis(e.target.value)}
+              style={{ width: "100%", padding: "8px 10px", border: "1px solid #e2e8f0", borderRadius: 6, fontSize: 12.5, marginBottom: 12 }}>
+              {LEGAL_BASIS_OPTIONS.map(o => <option key={o}>{o}</option>)}
+            </select>
+
+            {error && (
+              <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, padding: "8px 12px", marginBottom: 12, fontSize: 11.5, color: "#b91c1c" }}>
+                ❌ {error}
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={onClose}
+                style={{ padding: "9px 16px", borderRadius: 6, border: "1px solid #e2e8f0", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                취소
+              </button>
+              <button onClick={submit} disabled={!canSubmit}
+                style={{ padding: "9px 16px", borderRadius: 6, border: "none", background: canSubmit ? "linear-gradient(135deg,#dc2626,#b91c1c)" : "#cbd5e1", color: "#fff", fontSize: 12, fontWeight: 700, cursor: canSubmit ? "pointer" : "not-allowed" }}>
+                {submitting ? "기록 중..." : "사유 기록 + 열람"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ==================== Phase 1 — 역할별 전용 화면 ====================
    설계 문서 §11 참고. 데이터는 시연용 mock — Phase 3에서 Supabase
    consent_records / location_access_log / service_sessions로 교체.
@@ -28307,6 +28451,14 @@ function AppInner() {
   const addFacAction = (a) => setFacActions(prev => [{ id: a.id || ("a" + Date.now()), status: "TODO", memo: null, ...a }, ...prev]);
   const updateFacAction = (id, patch) => setFacActions(prev => prev.map(a => a.id === id ? { ...a, ...patch } : a));
 
+  // Phase 2: 정밀 위치 열람 모달 (admin만 트리거 가능, 서버에서 한번 더 검증)
+  const [preciseTarget, setPreciseTarget] = useState(null);
+  useEffect(() => {
+    const h = (e) => setPreciseTarget(e.detail || null);
+    window.addEventListener("jamsa-precise-location-open", h);
+    return () => window.removeEventListener("jamsa-precise-location-open", h);
+  }, []);
+
   // Shared audit log - every AI analysis, action creation, and completion is logged
   const [auditLog, setAuditLog] = useLocalStorage("jamsa_audit_log", []);
   const [showAuditLog, setShowAuditLog] = useState(false);
@@ -28497,6 +28649,7 @@ function AppInner() {
           snapshotData={{ facActions, worklogs, auditLog }}
         />}
       </div>
+      {preciseTarget && <PreciseLocationModal targetUser={preciseTarget} currentUser={currentUser} onClose={() => setPreciseTarget(null)} onSuccess={() => {}} />}
       {showAuditLog && <AuditLogModal log={auditLog} onClose={() => setShowAuditLog(false)} />}
       {showWorklog && <WorklogPage onClose={() => setShowWorklog(false)} addAudit={addAudit} facActions={facActions} worklogs={worklogs} setWorklogs={setWorklogs} currentUser={currentUser} />}
       {showBackup && <BackupRestoreModal onClose={() => setShowBackup(false)} />}

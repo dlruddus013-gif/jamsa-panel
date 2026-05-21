@@ -407,21 +407,26 @@ export async function handlePreciseLocationView(req, res) {
 
 8개 우선순위를 4 phase로 묶음.
 
-### Phase 1 — 권한 분리 골격 (1주)
+### Phase 1 — 권한 분리 골격 (1주) ✅ 완료
 **목표: 데모를 실제 코드에 통합. 권한 가드 동작.**
-- ① `memberships.role` 6역할로 마이그레이션
-- ② `lib/auth.js`에 `canDo()` 헬퍼 추가
-- ③ `source.jsx`에 역할 분기 추가 — admin/lead 진입 시 다른 화면
-- ④ 현 통합 대시보드 = admin 전용으로 재분류
-- ⑤ ceo·lawyer 화면을 source.jsx에 신규 추가 (데모 코드 이식)
-- ⑥ customer 포털은 별도 정적 페이지 `public/customer-portal.html`
+- ✅ `memberships.role` 6역할 마이그레이션 — `supabase/multirole_phase1.sql`
+- ✅ `lib/auth.js`에 `normalizeRole()` + `canDo()` + `PERMISSIONS` 매트릭스
+- ✅ `source.jsx`에 `normalizeRole6()` + 6색 역할 배지
+- ✅ 현 통합 대시보드 = staff/lead/admin 진입점 (ceo/lawyer는 우회)
+- ✅ `CeoDashboard` + `LawyerAuditView` 컴포넌트 신규
+- ✅ 고객 포털 정적 페이지 `public/customer-portal.html` (Tier 1 + Tier 2 골격)
+- ⏳ 사용자 작업: Supabase에서 `multirole_phase1.sql` 실행
 
-### Phase 2 — 정밀 위치 접근 통제 (1주)
+### Phase 2 — 정밀 위치 접근 통제 (1주) ✅ 코드 작성 완료
 **목표: 우선순위 3·4 (사유 입력 + 로그)**
-- ① `location_access_log` 테이블 + RLS
-- ② `/api/precise-location` API 엔드포인트 (사유 검증 + 로그 기록)
-- ③ admin 화면 "정밀 위치 열람" 버튼 → 모달 → API 호출
-- ④ staff_locations RLS 정책 적용
+- ✅ `location_access_log` 테이블 + RLS — `supabase/multirole_phase2.sql`
+- ✅ `/api/precise-location` 엔드포인트 — `api_handlers/precise-location.js`
+  · 사유 50자 검증 / category 5종 enum / 법적 근거 필수 / 로그 INSERT 먼저
+- ✅ admin 사용자 클릭 팝업에 "정밀 위치 열람" 버튼 — `source.jsx`
+- ✅ `PreciseLocationModal` 컴포넌트 (글자수 카운터 + 권한 가드)
+- ✅ staff_locations RLS 보강 (본인 + admin/lawyer)
+- ⏳ 사용자 작업: Supabase에서 `multirole_phase2.sql` 실행
+- ⏳ 클라이언트의 직접 좌표 표시(L25987) 마스킹 — Phase 5
 
 ### Phase 3 — 동의·정정·고객 (2주)
 **목표: 우선순위 5·6**
