@@ -2,34 +2,22 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <meta name="build" content="v2-demo-2026-05-21">
-  <title>잠사 출퇴근 체크인 · 직원용 인터페이스 데모</title>
+  <meta name="build" content="v2-live-2026-05-21">
+  <title>잠사 출퇴근 체크인 · 직원용</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     :root{
-      --bg:#07111f;
-      --surface:#111d2e;
-      --surface-2:#17263a;
-      --surface-3:#20314b;
-      --line:#2a4364;
-      --line-soft:rgba(148,163,184,.18);
-      --text:#f8fafc;
-      --muted:#98a6ba;
-      --muted-2:#c6d1df;
-      --green:#20d79b;
-      --green-2:#0faf78;
-      --blue:#4b8cff;
-      --yellow:#ffd166;
-      --orange:#fb923c;
-      --red:#ef4444;
-      --gray:#64748b;
+      --bg:#07111f; --surface:#111d2e; --surface-2:#17263a; --surface-3:#20314b;
+      --line:#2a4364; --line-soft:rgba(148,163,184,.18);
+      --text:#f8fafc; --muted:#98a6ba; --muted-2:#c6d1df;
+      --green:#20d79b; --green-2:#0faf78; --blue:#4b8cff;
+      --yellow:#ffd166; --orange:#fb923c; --red:#ef4444; --gray:#64748b;
       --shadow:0 18px 60px rgba(0,0,0,.35);
-      --radius:22px;
-      --radius-sm:14px;
-      --bottom-bar-height:86px;
+      --radius:22px; --radius-sm:14px;
       color-scheme:dark;
       font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Pretendard","Noto Sans KR",Segoe UI,sans-serif;
     }
@@ -48,20 +36,120 @@
     .header h1{font-size:22px;line-height:1.15;margin:0 0 6px;font-weight:900;letter-spacing:-.04em}
     .header p{margin:0;color:rgba(255,255,255,.78);font-size:13px;font-weight:600}
     .privacy-chip{position:absolute;right:14px;top:14px;padding:7px 10px;border-radius:999px;background:rgba(5,11,20,.28);color:#eafff6;border:1px solid rgba(255,255,255,.18);font-size:11px;font-weight:800}
+    .who-bar{margin:10px 0 0;display:flex;align-items:center;gap:8px;padding:9px 12px;border:1px solid var(--line-soft);border-radius:14px;background:rgba(17,29,46,.86);color:#cbd5e1;font-size:12px;font-weight:700}
+    .who-bar b{color:#fff}
+    .who-bar .right{margin-left:auto;display:flex;gap:6px}
+    .who-bar button{background:#0d1828;color:#cbd5e1;border:1px solid var(--line);padding:6px 9px;border-radius:10px;font-size:11px;font-weight:800}
     .demo-switch{margin:12px 0 0;padding:12px;border:1px solid var(--line-soft);background:rgba(17,29,46,.88);border-radius:18px;box-shadow:var(--shadow)}
     .demo-switch-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;color:#cbd5e1;font-size:12px;font-weight:800;letter-spacing:-.02em}
     .chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}.chips::-webkit-scrollbar{display:none}
     .chip{white-space:nowrap;padding:9px 12px;border-radius:999px;background:#0c1728;color:#aebcd0;border:1px solid var(--line);font-weight:800;font-size:12px}
     .chip.active{background:rgba(32,215,155,.16);color:#dffdf3;border-color:rgba(32,215,155,.65)}
-    .grid{display:grid;gap:12px}.card{background:linear-gradient(180deg,rgba(23,38,58,.96),rgba(17,29,46,.96));border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}.card-pad{padding:18px}.section-title{display:flex;align-items:center;gap:8px;margin:0 0 12px;color:#cbd5e1;font-size:13px;font-weight:900;letter-spacing:-.03em}.section-title .right{margin-left:auto;font-size:12px;color:#94a3b8;font-weight:800}.status-card{position:relative;background:linear-gradient(145deg,rgba(15,118,110,.24),rgba(17,29,46,.98) 58%);border-color:rgba(32,215,155,.42)}.status-top{display:flex;align-items:flex-start;gap:12px}.status-dot{width:16px;height:16px;border-radius:50%;margin-top:5px;background:var(--green);box-shadow:0 0 0 7px rgba(32,215,155,.12)}.status-dot.blue{background:var(--blue);box-shadow:0 0 0 7px rgba(75,140,255,.12)}.status-dot.yellow{background:var(--yellow);box-shadow:0 0 0 7px rgba(255,209,102,.13)}.status-dot.red{background:var(--red);box-shadow:0 0 0 7px rgba(239,68,68,.13)}.status-dot.gray{background:var(--gray);box-shadow:0 0 0 7px rgba(100,116,139,.13)}.status-content{min-width:0;flex:1}.eyebrow{font-size:12px;font-weight:900;color:#98f4d7;margin-bottom:5px}.status-card h2{margin:0;font-size:25px;letter-spacing:-.05em}.status-card p{margin:9px 0 0;color:#d7e2ef;line-height:1.55;font-size:14px}.countdown{display:inline-flex;align-items:center;gap:6px;margin-top:12px;padding:9px 12px;background:rgba(255,209,102,.13);border:1px solid rgba(255,209,102,.45);color:#ffe7a0;border-radius:12px;font-size:13px;font-weight:900}.actions{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:16px}.actions.three{grid-template-columns:1fr 1fr 1fr}.btn{min-height:46px;padding:0 14px;border-radius:15px;font-weight:900;letter-spacing:-.03em;display:inline-flex;align-items:center;justify-content:center;gap:7px;transition:transform .12s ease,filter .12s ease,background .12s ease}.btn:active{transform:translateY(1px) scale(.99)}.btn.primary{background:linear-gradient(135deg,var(--green-2),var(--green));color:#062317;box-shadow:0 10px 24px rgba(32,215,155,.25)}.btn.blue{background:linear-gradient(135deg,#2563eb,#60a5fa);color:white}.btn.warning{background:linear-gradient(135deg,#f59e0b,#ffd166);color:#422006}.btn.danger{background:linear-gradient(135deg,#dc2626,#fb7185);color:white}.btn.secondary{background:#0d1828;color:#d9e5f4;border:1px solid var(--line)}.btn.ghost{background:transparent;color:#b7c5d8;border:1px solid var(--line-soft)}.info-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.info{padding:14px;border:1px solid var(--line-soft);border-radius:16px;background:rgba(7,17,31,.52)}.info strong{display:block;color:#fff;font-size:17px;margin-top:6px;letter-spacing:-.03em}.info span{color:#9fb0c5;font-size:12px;font-weight:800}.health{display:flex;align-items:center;gap:10px;padding:13px;border-radius:16px;background:rgba(32,215,155,.1);border:1px solid rgba(32,215,155,.28);margin-top:12px}.health .mini-dot{width:10px;height:10px;border-radius:50%;background:var(--green)}.health.error{background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.3)}.health.error .mini-dot{background:var(--red)}.health.paused{background:rgba(100,116,139,.12);border-color:rgba(100,116,139,.32)}.health.paused .mini-dot{background:var(--gray)}.health b{font-size:13px}.health small{display:block;color:#a8b5c7;font-size:11px;margin-top:2px}.timeline{padding:7px 0 0;margin:0;list-style:none}.timeline li{display:grid;grid-template-columns:22px 1fr;gap:9px;padding:10px 0;border-top:1px dashed rgba(148,163,184,.18);color:#dbe6f2;font-size:13px}.timeline li:first-child{border-top:0}.timeline .mark{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;background:rgba(32,215,155,.12);color:var(--green);font-size:12px;font-weight:900}.timeline small{display:block;color:#8ea1b7;margin-top:3px}.accordion-head{width:100%;display:flex;align-items:center;justify-content:space-between;background:transparent;color:#fff;padding:0;font-weight:900}.accordion-head span{color:#94a3b8;font-size:12px}.map-wrap{margin-top:14px;border:1px solid var(--line-soft);border-radius:18px;overflow:hidden;background:#0a1422}.mock-map{height:250px;position:relative;background:linear-gradient(30deg,rgba(32,215,155,.08),transparent 25%),repeating-linear-gradient(35deg,rgba(148,163,184,.08) 0 1px,transparent 1px 36px),repeating-linear-gradient(125deg,rgba(148,163,184,.07) 0 1px,transparent 1px 43px),linear-gradient(135deg,#102235,#213f35 45%,#17283f);isolation:isolate}.mock-map:before{content:"";position:absolute;inset:44px 54px;border:2px dashed rgba(32,215,155,.75);border-radius:50%;background:rgba(32,215,155,.12);box-shadow:0 0 0 1px rgba(255,255,255,.06) inset}.road{position:absolute;height:16px;background:rgba(226,232,240,.26);border-radius:999px;transform:rotate(-28deg);box-shadow:0 0 0 2px rgba(15,23,42,.2)}.road.r1{width:270px;left:-34px;top:70px}.road.r2{width:290px;right:-55px;bottom:55px;transform:rotate(28deg)}.road.r3{width:210px;left:105px;bottom:114px;transform:rotate(8deg)}.worksite{position:absolute;left:calc(50% - 22px);top:calc(50% - 22px);width:44px;height:44px;border-radius:14px;background:rgba(255,255,255,.12);border:2px solid rgba(255,255,255,.58);display:grid;place-items:center;font-size:21px;box-shadow:0 12px 28px rgba(0,0,0,.26)}.me{position:absolute;left:50%;top:53%;transform:translate(-50%,-50%);display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:999px;background:#1d4ed8;color:#fff;border:3px solid rgba(147,197,253,.8);box-shadow:0 12px 30px rgba(29,78,216,.38);font-size:12px;font-weight:900}.me:before{content:"";width:10px;height:10px;border-radius:50%;background:#bfdbfe}.map-caption{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 13px;color:#9fb0c5;font-size:12px;background:rgba(8,15,26,.88)}.map-caption b{color:#dbeafe}.privacy{background:linear-gradient(145deg,rgba(59,130,246,.12),rgba(17,29,46,.96));}.privacy-list{display:grid;gap:10px;margin:0;padding:0;list-style:none}.privacy-list li{display:grid;grid-template-columns:26px 1fr;gap:8px;align-items:start;color:#cbd5e1;font-size:13px;line-height:1.45}.privacy-list b{color:#fff}.help{display:grid;gap:10px}.help-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px;border-radius:16px;background:rgba(7,17,31,.46);border:1px solid var(--line-soft)}.help-row div{min-width:0}.help-row b{display:block;font-size:14px}.help-row small{display:block;color:#94a3b8;margin-top:4px;line-height:1.4}.tiny-btn{white-space:nowrap;padding:10px 12px;border-radius:13px;background:#0d1828;color:#d9e5f4;border:1px solid var(--line);font-size:12px;font-weight:900}.bottom-bar{position:fixed;left:0;right:0;bottom:0;z-index:50;padding:10px 14px 14px;background:linear-gradient(180deg,transparent,rgba(3,7,18,.94) 25%,rgba(3,7,18,.98));backdrop-filter:blur(16px)}.bottom-inner{width:min(100%,460px);margin:0 auto;display:grid;grid-template-columns:1.35fr .85fr;gap:9px;padding:9px;border:1px solid rgba(148,163,184,.22);border-radius:20px;background:rgba(15,23,42,.86);box-shadow:0 -18px 50px rgba(0,0,0,.28)}.toast{position:fixed;left:50%;bottom:100px;z-index:100;transform:translateX(-50%) translateY(16px);opacity:0;pointer-events:none;width:min(calc(100% - 28px),420px);padding:13px 14px;border-radius:16px;background:rgba(15,23,42,.96);border:1px solid rgba(32,215,155,.35);box-shadow:0 18px 44px rgba(0,0,0,.42);color:#e6f9f1;font-size:13px;font-weight:800;transition:.2s ease}.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}dialog{width:min(calc(100% - 28px),430px);border:1px solid var(--line);border-radius:24px;background:linear-gradient(180deg,#17263a,#0e1828);color:var(--text);box-shadow:0 28px 80px rgba(0,0,0,.6);padding:0}dialog::backdrop{background:rgba(0,0,0,.62);backdrop-filter:blur(4px)}.modal-head{display:flex;align-items:center;justify-content:space-between;padding:18px 18px 0}.modal-head h3{margin:0;font-size:19px;letter-spacing:-.04em}.modal-body{padding:14px 18px 18px}.close{width:34px;height:34px;border-radius:50%;background:#0d1828;color:#cbd5e1;border:1px solid var(--line);font-weight:900}.field{margin-top:13px}.field label{display:block;color:#cbd5e1;font-size:12px;font-weight:900;margin:0 0 7px}.field input,.field textarea,.field select{width:100%;background:#08111f;border:1px solid var(--line);border-radius:14px;color:#fff;padding:12px 13px;outline:0}.field textarea{min-height:96px;resize:vertical}.modal-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:16px}.hidden{display:none!important}.muted{color:#94a3b8}.kbd{display:inline-block;padding:2px 6px;border-radius:7px;background:rgba(148,163,184,.14);border:1px solid rgba(148,163,184,.2);font-size:11px;color:#cbd5e1}.footer-note{text-align:center;color:#718096;font-size:11px;padding:12px 0 0}.sr-only{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-    @media (max-width:380px){body{padding-left:10px;padding-right:10px}.top{margin-left:-10px;margin-right:-10px;padding-left:10px;padding-right:10px}.header-inner{padding:21px 16px}.header h1{font-size:20px}.privacy-chip{display:none}.status-card h2{font-size:23px}.actions,.actions.three,.info-grid{grid-template-columns:1fr}.bottom-inner{grid-template-columns:1fr}.bottom-bar{padding-left:10px;padding-right:10px}.mock-map{height:220px}}
-    @media (min-width:860px){body{padding-top:28px}.app{width:min(100%,920px)}.desktop{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}.wide{grid-column:1/-1}.header{border-radius:24px}.top{position:static;margin:0 0 14px;padding:0;background:transparent;backdrop-filter:none}.bottom-bar{display:none}.mock-map{height:310px}}
+    .grid{display:grid;gap:12px}
+    .card{background:linear-gradient(180deg,rgba(23,38,58,.96),rgba(17,29,46,.96));border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}.card-pad{padding:18px}
+    .section-title{display:flex;align-items:center;gap:8px;margin:0 0 12px;color:#cbd5e1;font-size:13px;font-weight:900;letter-spacing:-.03em}.section-title .right{margin-left:auto;font-size:12px;color:#94a3b8;font-weight:800}
+    .status-card{position:relative;background:linear-gradient(145deg,rgba(15,118,110,.24),rgba(17,29,46,.98) 58%);border-color:rgba(32,215,155,.42)}
+    .status-top{display:flex;align-items:flex-start;gap:12px}
+    .status-dot{width:16px;height:16px;border-radius:50%;margin-top:5px;background:var(--green);box-shadow:0 0 0 7px rgba(32,215,155,.12)}
+    .status-dot.blue{background:var(--blue);box-shadow:0 0 0 7px rgba(75,140,255,.12)}
+    .status-dot.yellow{background:var(--yellow);box-shadow:0 0 0 7px rgba(255,209,102,.13)}
+    .status-dot.red{background:var(--red);box-shadow:0 0 0 7px rgba(239,68,68,.13)}
+    .status-dot.gray{background:var(--gray);box-shadow:0 0 0 7px rgba(100,116,139,.13)}
+    .status-content{min-width:0;flex:1}
+    .eyebrow{font-size:12px;font-weight:900;color:#98f4d7;margin-bottom:5px}
+    .status-card h2{margin:0;font-size:25px;letter-spacing:-.05em}
+    .status-card p{margin:9px 0 0;color:#d7e2ef;line-height:1.55;font-size:14px}
+    .countdown{display:inline-flex;align-items:center;gap:6px;margin-top:12px;padding:9px 12px;background:rgba(255,209,102,.13);border:1px solid rgba(255,209,102,.45);color:#ffe7a0;border-radius:12px;font-size:13px;font-weight:900}
+    .actions{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:16px}
+    .actions.three{grid-template-columns:1fr 1fr 1fr}
+    .btn{min-height:46px;padding:0 14px;border-radius:15px;font-weight:900;letter-spacing:-.03em;display:inline-flex;align-items:center;justify-content:center;gap:7px;transition:transform .12s ease,filter .12s ease,background .12s ease}
+    .btn:active{transform:translateY(1px) scale(.99)}
+    .btn[disabled]{opacity:.55;pointer-events:none}
+    .btn.primary{background:linear-gradient(135deg,var(--green-2),var(--green));color:#062317;box-shadow:0 10px 24px rgba(32,215,155,.25)}
+    .btn.blue{background:linear-gradient(135deg,#2563eb,#60a5fa);color:white}
+    .btn.warning{background:linear-gradient(135deg,#f59e0b,#ffd166);color:#422006}
+    .btn.danger{background:linear-gradient(135deg,#dc2626,#fb7185);color:white}
+    .btn.secondary{background:#0d1828;color:#d9e5f4;border:1px solid var(--line)}
+    .btn.ghost{background:transparent;color:#b7c5d8;border:1px solid var(--line-soft)}
+    .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .info{padding:14px;border:1px solid var(--line-soft);border-radius:16px;background:rgba(7,17,31,.52)}
+    .info strong{display:block;color:#fff;font-size:17px;margin-top:6px;letter-spacing:-.03em}
+    .info span{color:#9fb0c5;font-size:12px;font-weight:800}
+    .health{display:flex;align-items:center;gap:10px;padding:13px;border-radius:16px;background:rgba(32,215,155,.1);border:1px solid rgba(32,215,155,.28);margin-top:12px}
+    .health .mini-dot{width:10px;height:10px;border-radius:50%;background:var(--green)}
+    .health.error{background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.3)}.health.error .mini-dot{background:var(--red)}
+    .health.paused{background:rgba(100,116,139,.12);border-color:rgba(100,116,139,.32)}.health.paused .mini-dot{background:var(--gray)}
+    .health b{font-size:13px}.health small{display:block;color:#a8b5c7;font-size:11px;margin-top:2px}
+    .timeline{padding:7px 0 0;margin:0;list-style:none}
+    .timeline li{display:grid;grid-template-columns:22px 1fr;gap:9px;padding:10px 0;border-top:1px dashed rgba(148,163,184,.18);color:#dbe6f2;font-size:13px}
+    .timeline li:first-child{border-top:0}
+    .timeline .mark{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;background:rgba(32,215,155,.12);color:var(--green);font-size:12px;font-weight:900}
+    .timeline small{display:block;color:#8ea1b7;margin-top:3px}
+    .accordion-head{width:100%;display:flex;align-items:center;justify-content:space-between;background:transparent;color:#fff;padding:0;font-weight:900}
+    .accordion-head span{color:#94a3b8;font-size:12px}
+    .map-wrap{margin-top:14px;border:1px solid var(--line-soft);border-radius:18px;overflow:hidden;background:#0a1422}
+    .real-map{height:280px;width:100%;background:#0a1422}
+    .map-caption{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 13px;color:#9fb0c5;font-size:12px;background:rgba(8,15,26,.88)}.map-caption b{color:#dbeafe}
+    .privacy{background:linear-gradient(145deg,rgba(59,130,246,.12),rgba(17,29,46,.96));}
+    .privacy-list{display:grid;gap:10px;margin:0;padding:0;list-style:none}
+    .privacy-list li{display:grid;grid-template-columns:26px 1fr;gap:8px;align-items:start;color:#cbd5e1;font-size:13px;line-height:1.45}
+    .privacy-list b{color:#fff}
+    .help{display:grid;gap:10px}
+    .help-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px;border-radius:16px;background:rgba(7,17,31,.46);border:1px solid var(--line-soft)}
+    .help-row div{min-width:0}.help-row b{display:block;font-size:14px}.help-row small{display:block;color:#94a3b8;margin-top:4px;line-height:1.4}
+    .tiny-btn{white-space:nowrap;padding:10px 12px;border-radius:13px;background:#0d1828;color:#d9e5f4;border:1px solid var(--line);font-size:12px;font-weight:900}
+    .bottom-bar{position:fixed;left:0;right:0;bottom:0;z-index:50;padding:10px 14px 14px;background:linear-gradient(180deg,transparent,rgba(3,7,18,.94) 25%,rgba(3,7,18,.98));backdrop-filter:blur(16px)}
+    .bottom-inner{width:min(100%,460px);margin:0 auto;display:grid;grid-template-columns:1.35fr .85fr;gap:9px;padding:9px;border:1px solid rgba(148,163,184,.22);border-radius:20px;background:rgba(15,23,42,.86);box-shadow:0 -18px 50px rgba(0,0,0,.28)}
+    .toast{position:fixed;left:50%;bottom:100px;z-index:100;transform:translateX(-50%) translateY(16px);opacity:0;pointer-events:none;width:min(calc(100% - 28px),420px);padding:13px 14px;border-radius:16px;background:rgba(15,23,42,.96);border:1px solid rgba(32,215,155,.35);box-shadow:0 18px 44px rgba(0,0,0,.42);color:#e6f9f1;font-size:13px;font-weight:800;transition:.2s ease}
+    .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+    dialog{width:min(calc(100% - 28px),430px);border:1px solid var(--line);border-radius:24px;background:linear-gradient(180deg,#17263a,#0e1828);color:var(--text);box-shadow:0 28px 80px rgba(0,0,0,.6);padding:0}
+    dialog::backdrop{background:rgba(0,0,0,.62);backdrop-filter:blur(4px)}
+    .modal-head{display:flex;align-items:center;justify-content:space-between;padding:18px 18px 0}
+    .modal-head h3{margin:0;font-size:19px;letter-spacing:-.04em}
+    .modal-body{padding:14px 18px 18px}
+    .close{width:34px;height:34px;border-radius:50%;background:#0d1828;color:#cbd5e1;border:1px solid var(--line);font-weight:900}
+    .field{margin-top:13px}
+    .field label{display:block;color:#cbd5e1;font-size:12px;font-weight:900;margin:0 0 7px}
+    .field input,.field textarea,.field select{width:100%;background:#08111f;border:1px solid var(--line);border-radius:14px;color:#fff;padding:12px 13px;outline:0}
+    .field textarea{min-height:96px;resize:vertical}
+    .modal-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:16px}
+    .hidden{display:none!important}
+    .muted{color:#94a3b8}
+    .footer-note{text-align:center;color:#718096;font-size:11px;padding:12px 0 0}
+    .footer-note a{color:#60a5fa;text-decoration:none}
+    @media (max-width:380px){
+      body{padding-left:10px;padding-right:10px}
+      .top{margin-left:-10px;margin-right:-10px;padding-left:10px;padding-right:10px}
+      .header-inner{padding:21px 16px}.header h1{font-size:20px}
+      .privacy-chip{display:none}.status-card h2{font-size:23px}
+      .actions,.actions.three,.info-grid{grid-template-columns:1fr}
+      .bottom-inner{grid-template-columns:1fr}.bottom-bar{padding-left:10px;padding-right:10px}
+      .real-map{height:230px}
+    }
+    @media (min-width:860px){
+      body{padding-top:28px}.app{width:min(100%,920px)}
+      .desktop{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+      .wide{grid-column:1/-1}.header{border-radius:24px}
+      .top{position:static;margin:0 0 14px;padding:0;background:transparent;backdrop-filter:none}
+      .bottom-bar{display:none}.real-map{height:340px}
+    }
     @media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
+
+    /* Leaflet dark adjustments */
+    .leaflet-container{background:#0b1220 !important}
+    .leaflet-control-attribution{background:rgba(0,0,0,0.6) !important;color:#94a3b8 !important;font-size:9px !important}
+    .leaflet-control-attribution a{color:#cbd5e1 !important}
+    .leaflet-control-zoom a{background:rgba(15,23,42,0.9) !important;color:#f1f5f9 !important;border-color:#334155 !important}
+    .me-marker{background:#3b82f6;border:3px solid #fff;border-radius:50%;width:18px !important;height:18px !important;box-shadow:0 0 0 4px rgba(59,130,246,0.35),0 2px 6px rgba(0,0,0,0.5)}
   </style>
+  <link id="leafletCss" rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
 </head>
 <body>
-  <main class="app" aria-label="잠사 출퇴근 직원용 인터페이스 데모">
-    <div class="browser-note"><span>🧪</span><span><strong>직원용 데모 v2</strong> · 지도는 내 위치만 표시하고, 동료 실명/좌표는 숨긴 버전입니다.</span></div>
+  <main class="app" aria-label="잠사 출퇴근 직원용 인터페이스">
+    <div class="browser-note">
+      <span>🛰</span>
+      <span><strong>직원용 v2</strong> · 본인 위치만 표시하고, 동료 좌표는 숨깁니다.</span>
+    </div>
 
     <div class="top">
       <header class="header">
@@ -74,8 +162,16 @@
           <div class="privacy-chip">직원용 · 최소 표시</div>
         </div>
       </header>
-      <section class="demo-switch" aria-label="데모 상태 전환">
-        <div class="demo-switch-title"><span>화면 상태 미리보기</span><span class="kbd">Demo</span></div>
+      <div class="who-bar" id="whoBar">
+        <span>👤</span>
+        <b id="whoName">로그인 중...</b>
+        <span class="muted" id="whoDept"></span>
+        <span class="right">
+          <button id="switchUser">전환</button>
+        </span>
+      </div>
+      <section class="demo-switch hidden" id="demoSwitch" aria-label="데모 상태 전환">
+        <div class="demo-switch-title"><span>화면 상태 미리보기 (DEMO)</span><span>실제 출퇴근에 영향 없음</span></div>
         <div class="chips" role="tablist">
           <button class="chip active" data-state="auto" role="tab">자동 출근 대기</button>
           <button class="chip" data-state="waiting" role="tab">출근 전</button>
@@ -88,30 +184,30 @@
 
     <div class="desktop">
       <section class="card card-pad status-card" id="stateCard">
-        <div class="section-title">✅ 오늘 근무 상태 <span class="right" id="stateBadge">자동 처리 예정</span></div>
+        <div class="section-title">✅ 오늘 근무 상태 <span class="right" id="stateBadge">로딩…</span></div>
         <div class="status-top">
-          <div class="status-dot yellow" id="stateDot" aria-hidden="true"></div>
+          <div class="status-dot gray" id="stateDot" aria-hidden="true"></div>
           <div class="status-content">
-            <div class="eyebrow" id="stateEyebrow">근무지 권역 안에 있습니다</div>
-            <h2 id="stateTitle">자동 출근 대기</h2>
-            <p id="stateText">잠사 근무지 권역 안에서 위치가 안정적으로 확인되고 있습니다. 잠시 후 자동으로 출근 처리됩니다.</p>
-            <div class="countdown" id="countdownBox">⏱ <span id="countdown">38</span>초 뒤 자동 출근</div>
+            <div class="eyebrow" id="stateEyebrow">상태 확인 중</div>
+            <h2 id="stateTitle">잠시만 기다려 주세요</h2>
+            <p id="stateText">서버에서 본인 출퇴근 상태와 위치 권한을 확인하고 있습니다.</p>
+            <div class="countdown hidden" id="countdownBox">⏱ <span id="countdownText">— 초 뒤 자동 처리</span></div>
             <div class="actions" id="stateActions"></div>
           </div>
         </div>
       </section>
 
       <section class="card card-pad" id="locationCard">
-        <div class="section-title">🛰 위치 인식 상태 <span class="right" id="locationRight">마지막 확인 오후 01:32</span></div>
+        <div class="section-title">🛰 위치 인식 상태 <span class="right" id="locationRight">위치 권한 요청 중</span></div>
         <div class="info-grid">
-          <div class="info"><span>근무지까지</span><strong id="distanceValue">22m</strong></div>
-          <div class="info"><span>GPS 정확도</span><strong id="accuracyValue">좋음 · ±7m</strong></div>
-          <div class="info"><span>권역 상태</span><strong id="zoneValue">안에 있음</strong></div>
-          <div class="info"><span>공유 상태</span><strong id="shareValue">관리자 확인 중</strong></div>
+          <div class="info"><span>근무지까지</span><strong id="distanceValue">—</strong></div>
+          <div class="info"><span>GPS 정확도</span><strong id="accuracyValue">—</strong></div>
+          <div class="info"><span>권역 상태</span><strong id="zoneValue">확인 중</strong></div>
+          <div class="info"><span>공유 상태</span><strong id="shareValue">대기 중</strong></div>
         </div>
         <div class="health" id="healthBox">
           <div class="mini-dot"></div>
-          <div><b id="healthTitle">정상적으로 위치가 확인되고 있습니다</b><small id="healthText">좌표는 기본적으로 숨기고, 출퇴근 확인에 필요한 상태만 표시합니다.</small></div>
+          <div><b id="healthTitle">위치 권한을 허용해 주세요</b><small id="healthText">권한이 거부되면 자동 출퇴근이 진행되지 않습니다.</small></div>
         </div>
         <div class="actions">
           <button class="btn secondary" data-action="refresh">🔄 위치 다시 확인</button>
@@ -119,8 +215,8 @@
         </div>
         <div class="info hidden" id="detailLocation" style="margin-top:10px">
           <span>상세 좌표</span>
-          <strong style="font-size:15px">36.63840, 127.38301</strong>
-          <p class="muted" style="margin:8px 0 0;font-size:12px;line-height:1.45">상세 좌표는 본인 확인용이며, 직원 화면에서는 기본 비공개로 둡니다.</p>
+          <strong id="detailCoord" style="font-size:15px">—</strong>
+          <p class="muted" style="margin:8px 0 0;font-size:12px;line-height:1.45">상세 좌표는 본인 확인용이며, 동료에게는 노출되지 않습니다.</p>
         </div>
       </section>
 
@@ -130,25 +226,21 @@
           <span id="mapToggleText">지도 보기</span>
         </button>
         <div class="map-wrap hidden" id="mapPanel">
-          <div class="mock-map" role="img" aria-label="근무지 권역과 내 위치만 표시하는 지도 데모">
-            <div class="road r1"></div><div class="road r2"></div><div class="road r3"></div>
-            <div class="worksite" title="잠사 근무지">🏢</div>
-            <div class="me" id="meMarker">나 · 22m</div>
-          </div>
+          <div class="real-map" id="realMap" role="img" aria-label="근무지 권역과 내 위치를 표시하는 지도"></div>
           <div class="map-caption"><span><b>표시 기준</b> 내 위치 · 근무지 권역</span><span>동료 위치 비공개</span></div>
         </div>
       </section>
 
       <section class="card card-pad">
         <div class="section-title">📋 오늘의 기록 <span class="right">직원용 요약</span></div>
-        <ul class="timeline" id="timeline"></ul>
+        <ul class="timeline" id="timeline"><li><span class="mark">…</span><span>오늘 기록 불러오는 중<small>—</small></span></li></ul>
         <div class="actions">
           <button class="btn secondary" data-action="correction">✍️ 정정 요청</button>
           <button class="btn ghost" id="toggleLog">상세 로그 보기</button>
         </div>
         <div class="info hidden" id="devLog" style="margin-top:10px">
           <span>상세 로그</span>
-          <p class="muted" style="margin:7px 0 0;font-size:12px;line-height:1.55">오후 01:32:18 위치 전송 성공 · 서버 저장 완료<br>오후 01:31:49 권역 진입 감지 · 자동 출근 후보<br>오후 01:31:46 체크인 시작</p>
+          <p class="muted" id="devLogBody" style="margin:7px 0 0;font-size:12px;line-height:1.55">—</p>
         </div>
       </section>
 
@@ -164,7 +256,7 @@
       <section class="card card-pad help wide">
         <div class="section-title">🛟 자동 처리가 안 되나요?</div>
         <div class="help-row">
-          <div><b>GPS 오류 또는 실내 인식 문제</b><small>위치가 튀거나 정확도가 낮으면 수동 출근 요청을 보낼 수 있습니다.</small></div>
+          <div><b>GPS 오류 또는 실내 인식 문제</b><small>위치가 튀거나 정확도가 낮으면 지금 수동 출근/퇴근을 누르세요.</small></div>
           <button class="tiny-btn" data-action="manual">수동 요청</button>
         </div>
         <div class="help-row">
@@ -174,197 +266,782 @@
       </section>
     </div>
 
-    <div class="footer-note">잠사플레이팜 출퇴근 · 직원용 인터페이스 데모 v2 · <a href="/staff-checkin" style="color:#60a5fa;text-decoration:none">v1 보기 →</a></div>
+    <div class="footer-note">잠사플레이팜 · 직원용 출퇴근 v2 · <a href="/staff-checkin">v1 보기 →</a></div>
   </main>
 
   <div class="bottom-bar" aria-label="하단 주요 액션">
     <div class="bottom-inner" id="bottomActions"></div>
   </div>
 
-  <dialog id="manualDialog" aria-labelledby="manualTitle">
-    <div class="modal-head"><h3 id="manualTitle">수동 출근 요청</h3><button class="close" data-close="manualDialog" aria-label="닫기">×</button></div>
+  <!-- 본인 선택 모달 -->
+  <dialog id="loginDialog" aria-labelledby="loginTitle">
+    <div class="modal-head"><h3 id="loginTitle">본인 선택</h3></div>
     <div class="modal-body">
-      <p class="muted" style="margin:0;line-height:1.55;font-size:13px">자동 출근이 되지 않거나 GPS 인식이 불안정할 때 관리자에게 요청합니다.</p>
-      <div class="field"><label>요청 사유</label><select><option>GPS 오류</option><option>실내 위치 인식 불가</option><option>현장 출근</option><option>기타</option></select></div>
-      <div class="field"><label>메모</label><textarea placeholder="예: 근무지 안에 도착했지만 자동 출근이 되지 않습니다."></textarea></div>
-      <div class="modal-actions"><button class="btn secondary" data-close="manualDialog">취소</button><button class="btn primary" data-submit="manualDialog">요청 보내기</button></div>
+      <p class="muted" style="margin:0;line-height:1.55;font-size:13px">이 기기를 출퇴근 기기로 등록할 본인을 선택하세요. 등록 후에는 다른 기기에서 출퇴근할 수 없습니다.</p>
+      <div class="field"><label>직원/알바</label>
+        <select id="staffSelect"><option value="">— 본인 선택 —</option></select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn ghost" id="loginCancel">취소</button>
+        <button class="btn primary" id="loginStart">이 기기로 출퇴근 시작</button>
+      </div>
     </div>
   </dialog>
 
+  <!-- 수동 출퇴근/요청 모달 -->
+  <dialog id="manualDialog" aria-labelledby="manualTitle">
+    <div class="modal-head"><h3 id="manualTitle">수동 출퇴근 처리</h3><button class="close" data-close="manualDialog" aria-label="닫기">×</button></div>
+    <div class="modal-body">
+      <p class="muted" style="margin:0;line-height:1.55;font-size:13px">자동 처리가 안 될 때 지금 즉시 출근 또는 퇴근 처리합니다. 본인 등록 기기에서만 가능합니다.</p>
+      <div class="field"><label>처리 종류</label>
+        <select id="manualKind"><option value="in">지금 출근 처리</option><option value="out">지금 퇴근 처리</option></select>
+      </div>
+      <div class="field"><label>메모(선택)</label><textarea id="manualMemo" placeholder="예: GPS 오류로 자동 출근이 안 되어 수동으로 출근합니다."></textarea></div>
+      <div class="modal-actions"><button class="btn secondary" data-close="manualDialog">취소</button><button class="btn primary" id="manualSubmit">처리</button></div>
+    </div>
+  </dialog>
+
+  <!-- 정정 요청 모달 -->
   <dialog id="correctionDialog" aria-labelledby="correctionTitle">
     <div class="modal-head"><h3 id="correctionTitle">출퇴근 정정 요청</h3><button class="close" data-close="correctionDialog" aria-label="닫기">×</button></div>
     <div class="modal-body">
-      <p class="muted" style="margin:0;line-height:1.55;font-size:13px">잘못 기록된 출근/퇴근 시간을 선택하고 사유를 남겨 주세요.</p>
-      <div class="field"><label>정정 항목</label><select><option>출근 시간</option><option>퇴근 시간</option><option>근무지</option><option>기타</option></select></div>
-      <div class="field"><label>요청 시간</label><input value="오후 01:31 → 오후 01:20" /></div>
-      <div class="field"><label>사유</label><textarea placeholder="예: 실제 도착은 오후 01:20이었으나 실내 GPS 문제로 늦게 처리되었습니다."></textarea></div>
-      <div class="modal-actions"><button class="btn secondary" data-close="correctionDialog">취소</button><button class="btn primary" data-submit="correctionDialog">요청 제출</button></div>
+      <p class="muted" style="margin:0;line-height:1.55;font-size:13px">잘못 기록된 출근/퇴근을 관리자에게 알립니다. (관리자 패널의 정정 요청 목록에 표시됩니다)</p>
+      <div class="field"><label>정정 항목</label><select id="corrKind"><option>출근 시간</option><option>퇴근 시간</option><option>근무지</option><option>기타</option></select></div>
+      <div class="field"><label>실제 시간</label><input id="corrTime" placeholder="예: 오후 01:20" /></div>
+      <div class="field"><label>사유</label><textarea id="corrReason" placeholder="예: 실제 도착은 오후 01:20이었으나 실내 GPS 문제로 늦게 처리되었습니다."></textarea></div>
+      <div class="modal-actions"><button class="btn secondary" data-close="correctionDialog">취소</button><button class="btn primary" id="corrSubmit">요청 제출</button></div>
     </div>
   </dialog>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+  <!-- Leaflet (lazy loaded only when map opens) -->
   <script>
+    let leafletLoaded = false;
+    function loadLeaflet(){
+      if (leafletLoaded || window.L) { leafletLoaded = true; return Promise.resolve(); }
+      return new Promise((resolve, reject)=>{
+        const s = document.createElement('script');
+        s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+        s.crossOrigin = '';
+        s.onload = ()=>{ leafletLoaded = true; resolve(); };
+        s.onerror = reject;
+        document.head.appendChild(s);
+      });
+    }
+  </script>
+
+  <script>
+    'use strict';
     const $ = (q, root=document) => root.querySelector(q);
     const $$ = (q, root=document) => [...root.querySelectorAll(q)];
-    const state = { current:'auto', countdown:38, timer:null, paused:false };
+    const pad = n => String(n).padStart(2,'0');
+    const fmtClock = (d) => {
+      d = d instanceof Date ? d : new Date(d);
+      const h = d.getHours(); const ampm = h < 12 ? '오전' : '오후';
+      return `${ampm} ${pad(h%12||12)}:${pad(d.getMinutes())}`;
+    };
+    const fmtRange = (a, b) => `${fmtClock(a)} → ${fmtClock(b)}`;
 
-    const data = {
+    // ─── 환경 / 키 ───
+    const LS_URL='jamsa_sb_url', LS_KEY='jamsa_sb_key';
+    const LS_STAFF='jamsa_checkin_staff_id_v2';
+    const LS_DEVICE_ID='jamsa_device_id_v1';   // v1과 공유
+    const DEFAULT_GEOFENCE={ centerLat:36.6383333, centerLng:127.3827778, radiusM:300, inMin:1, outMin:10 };
+    const isDemo = new URLSearchParams(location.search).get('demo') === '1';
+
+    // ─── 디바이스 ID (v1과 공유) ───
+    function getOrCreateDeviceId(){
+      try{
+        let id = localStorage.getItem(LS_DEVICE_ID);
+        if (id && id.length >= 20) return id;
+        id = crypto?.randomUUID ? ('dev_'+crypto.randomUUID()) : ('dev_'+Date.now().toString(36)+Math.random().toString(36).slice(2));
+        localStorage.setItem(LS_DEVICE_ID, id);
+        return id;
+      } catch(e){ return 'dev_fallback_'+Date.now(); }
+    }
+    function getDeviceName(){
+      const ua = navigator.userAgent || '';
+      let device='기기 미상';
+      if(/iPhone|iPad/.test(ua)) device='Apple';
+      else if(/Android/.test(ua)){ const m=ua.match(/Android[^;]*;\s*([^)]+)\)/); device=m?m[1].trim().split(/[;,]/)[0]:'Android'; }
+      else if(/Windows/.test(ua)) device='Windows PC';
+      else if(/Mac OS/.test(ua)) device='Mac';
+      let browser='';
+      if(/SamsungBrowser/.test(ua)) browser='Samsung Internet';
+      else if(/Chrome/.test(ua)) browser='Chrome';
+      else if(/Safari/.test(ua)) browser='Safari';
+      else if(/Firefox/.test(ua)) browser='Firefox';
+      else if(/Edg/.test(ua)) browser='Edge';
+      return browser ? `${device} · ${browser}` : device;
+    }
+    const DEVICE_ID = getOrCreateDeviceId();
+    const DEVICE_NAME = getDeviceName();
+
+    // ─── 거리 계산 ───
+    function distM(la1,lo1,la2,lo2){
+      const R=6371000, toRad=d=>d*Math.PI/180;
+      const dLat=toRad(la2-la1), dLng=toRad(lo2-lo1);
+      const a=Math.sin(dLat/2)**2+Math.cos(toRad(la1))*Math.cos(toRad(la2))*Math.sin(dLng/2)**2;
+      return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+    }
+
+    // ─── 상태 ───
+    const APP = {
+      sb: null,
+      naverClientId: null,
+      currentStaff: null,            // {id, name, dept}
+      geofence: { ...DEFAULT_GEOFENCE },
+      watchId: null,
+      lastPos: null,
+      geofenceState: 'unknown',
+      geofenceEnterAt: 0,
+      geofenceExitAt: 0,
+      paused: false,
+      attendance: { working:false, lastAttendance:null },
+      todayLogs: [],
+      uiState: 'loading',
+      // 지도
+      map: null,
+      meMarker: null,
+      fenceCircle: null,
+      mapOpen: false,
+      firstSent: false,
+      sendTimer: null,
+      evalTimer: null,
+      stateRefreshTimer: null,
+    };
+
+    // ─── 토스트 ───
+    function showToast(msg, dur=2600){
+      const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+      setTimeout(()=>t.classList.remove('show'), dur);
+    }
+    function logDev(msg){
+      const at = new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      APP.todayLogs.unshift(`${at} · ${msg}`);
+      APP.todayLogs = APP.todayLogs.slice(0, 40);
+      const body = $('#devLogBody');
+      if (body) body.innerHTML = APP.todayLogs.map(s=>s.replace(/</g,'&lt;')).join('<br>');
+    }
+
+    // ─── 초기 로드: 키 + 직원 목록 ───
+    async function bootstrap(){
+      // 1) 서버에서 config 로드
+      let url='', key='';
+      try{
+        const r = await fetch('/api/config', { cache:'no-store' });
+        if (r.ok){
+          const cfg = await r.json();
+          if (cfg.supabase_url && cfg.supabase_anon_key){
+            url = cfg.supabase_url; key = cfg.supabase_anon_key;
+            try{ localStorage.setItem(LS_URL,url); localStorage.setItem(LS_KEY,key); }catch(e){}
+          }
+          APP.naverClientId = cfg.naver_client_id || null;
+        }
+      }catch(e){}
+      // 2) 캐시 fallback
+      if (!url || !key){
+        url = localStorage.getItem(LS_URL) || '';
+        key = localStorage.getItem(LS_KEY) || '';
+      }
+      if (!url || !key){
+        renderState('error', { reason:'config_missing' });
+        $('#whoName').textContent = '서버 설정 누락';
+        $('#whoDept').textContent = '관리자에게 문의';
+        return;
+      }
+      APP.sb = supabase.createClient(url, key);
+
+      // 3) 직원 목록 가져오고 본인 선택
+      try{
+        const { data, error } = await APP.sb
+          .from('staff').select('id,name,dept_id,beacon_dept(name),is_part_time,active')
+          .order('name');
+        if (error) throw error;
+        const active = (data||[]).filter(s => s.active !== false);
+        const sel = $('#staffSelect');
+        sel.innerHTML = '<option value="">— 본인 선택 —</option>' +
+          active.map(s=>{
+            const dept = s.beacon_dept?.name || '';
+            const tag = s.is_part_time ? ' · 알바' : '';
+            return `<option value="${s.id}" data-name="${s.name}" data-dept="${dept}">${s.name}${dept?` (${dept})`:''}${tag}</option>`;
+          }).join('');
+
+        // 기억된 본인 자동 복원
+        const lastId = localStorage.getItem(LS_STAFF);
+        const found = lastId ? active.find(s => String(s.id) === String(lastId)) : null;
+        if (found){
+          APP.currentStaff = { id: found.id, name: found.name, dept: found.beacon_dept?.name || '' };
+          $('#whoName').textContent = APP.currentStaff.name;
+          $('#whoDept').textContent = APP.currentStaff.dept ? `· ${APP.currentStaff.dept}` : '';
+          startSession();
+        } else {
+          openLoginDialog();
+        }
+      } catch(e){
+        renderState('error', { reason:'staff_load_fail', msg:e.message });
+        showToast('직원 목록 로드 실패: '+e.message, 4000);
+      }
+    }
+
+    function openLoginDialog(){
+      const dlg = $('#loginDialog');
+      try{ dlg.showModal(); } catch(e){ dlg.setAttribute('open',''); }
+    }
+
+    $('#loginCancel').addEventListener('click', ()=> $('#loginDialog').close());
+    $('#loginStart').addEventListener('click', ()=>{
+      const sel = $('#staffSelect');
+      if (!sel.value){ showToast('본인을 선택하세요'); return; }
+      const opt = sel.options[sel.selectedIndex];
+      APP.currentStaff = { id: sel.value, name: opt.dataset.name, dept: opt.dataset.dept || '' };
+      try{ localStorage.setItem(LS_STAFF, sel.value); }catch(e){}
+      $('#loginDialog').close();
+      $('#whoName').textContent = APP.currentStaff.name;
+      $('#whoDept').textContent = APP.currentStaff.dept ? `· ${APP.currentStaff.dept}` : '';
+      startSession();
+    });
+    $('#switchUser').addEventListener('click', ()=>{
+      try{ localStorage.removeItem(LS_STAFF); }catch(e){}
+      stopSession();
+      $('#whoName').textContent = '본인 선택 대기'; $('#whoDept').textContent = '';
+      openLoginDialog();
+    });
+
+    // ─── 세션 시작 (본인 결정 후) ───
+    async function startSession(){
+      if (!navigator.geolocation){
+        renderState('error', { reason:'no_geolocation' });
+        return;
+      }
+      await refreshAttendanceState();
+      await refreshTodayLogs();
+      // GPS watch
+      APP.watchId = navigator.geolocation.watchPosition(onPosition, onPosError, {
+        enableHighAccuracy:true, maximumAge:10000, timeout:30000,
+      });
+      // 5초마다 위치 전송, 30초마다 자동 평가, 60초마다 attendance 상태 재조회
+      APP.sendTimer = setInterval(sendLocation, 15000);
+      APP.evalTimer = setInterval(runAutoEvaluation, 30000);
+      APP.stateRefreshTimer = setInterval(()=>{ refreshAttendanceState(); }, 60000);
+      // 카운트다운 1초마다
+      setInterval(updateCountdown, 1000);
+      logDev(`체크인 세션 시작 — ${APP.currentStaff.name}`);
+    }
+
+    function stopSession(){
+      if (APP.watchId != null && navigator.geolocation){
+        navigator.geolocation.clearWatch(APP.watchId);
+      }
+      APP.watchId = null;
+      [APP.sendTimer, APP.evalTimer, APP.stateRefreshTimer].forEach(t=>{ if(t) clearInterval(t); });
+      APP.sendTimer = APP.evalTimer = APP.stateRefreshTimer = null;
+    }
+
+    // ─── 위치 콜백 ───
+    function onPosition(pos){
+      const { latitude:lat, longitude:lng, accuracy } = pos.coords;
+      APP.lastPos = { lat, lng, accuracy, t: Date.now() };
+      const d = distM(lat, lng, APP.geofence.centerLat, APP.geofence.centerLng);
+      const inside = d < APP.geofence.radiusM;
+
+      // 거리 / 정확도 / 권역 / 좌표 표시
+      $('#distanceValue').textContent = d < 1000 ? Math.round(d)+'m' : (d/1000).toFixed(2)+'km';
+      $('#accuracyValue').textContent = `${accuracy<=15?'좋음':accuracy<=40?'보통':'낮음'} · ±${Math.round(accuracy)}m`;
+      $('#zoneValue').textContent = inside ? '안에 있음' : '밖에 있음';
+      $('#detailCoord').textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+      $('#locationRight').textContent = `마지막 확인 ${fmtClock(new Date())}`;
+
+      if (inside){
+        if (APP.geofenceState !== 'inside'){
+          APP.geofenceState = 'inside'; APP.geofenceEnterAt = Date.now();
+          logDev(`✅ 권역 진입 (${Math.round(d)}m) · 자동 출근 후보`);
+        }
+      } else {
+        if (APP.geofenceState !== 'outside'){
+          APP.geofenceState = 'outside'; APP.geofenceExitAt = Date.now();
+          logDev(`⚠ 권역 이탈 (${Math.round(d)}m) · 자동 퇴근 후보`);
+        }
+      }
+      renderCurrentState();
+      updateMyMarker();
+      if (!APP.firstSent){ APP.firstSent = true; sendLocation(); }
+    }
+    function onPosError(err){
+      logDev(`위치 오류: ${err.message}`);
+      renderState('error', { reason:'geo_'+err.code, msg:err.message });
+    }
+
+    // ─── attendance 상태 재조회 ───
+    async function refreshAttendanceState(){
+      if (!APP.sb || !APP.currentStaff) return;
+      const today = new Date(); today.setHours(0,0,0,0);
+      const todayStr = today.toISOString().slice(0,10);
+      try{
+        const { data, error } = await APP.sb.from('attendance').select('*')
+          .eq('staff_id', APP.currentStaff.id)
+          .gte('checked_in_at', todayStr+'T00:00:00')
+          .lte('checked_in_at', todayStr+'T23:59:59')
+          .order('checked_in_at', { ascending:false }).limit(1);
+        if (error) throw error;
+        const last = (data||[])[0];
+        const working = !!(last && !last.checked_out_at);
+        APP.attendance = { working, lastAttendance:last };
+        renderCurrentState();
+      }catch(e){
+        logDev('출근 상태 조회 실패: '+e.message);
+      }
+    }
+
+    async function refreshTodayLogs(){
+      if (!APP.sb || !APP.currentStaff) return;
+      const today = new Date(); today.setHours(0,0,0,0);
+      const todayStr = today.toISOString().slice(0,10);
+      try{
+        const { data } = await APP.sb.from('attendance').select('*')
+          .eq('staff_id', APP.currentStaff.id)
+          .gte('checked_in_at', todayStr+'T00:00:00')
+          .lte('checked_in_at', todayStr+'T23:59:59')
+          .order('checked_in_at', { ascending:true });
+        const items = (data||[]).flatMap(row=>{
+          const out = [];
+          out.push(['✓','출근 처리 완료', `${fmtClock(row.checked_in_at)} · ${labelSource(row.source)}`]);
+          if (row.checked_out_at){
+            const hours = ((new Date(row.checked_out_at) - new Date(row.checked_in_at))/3600000).toFixed(1);
+            out.push(['↩','퇴근 처리 완료', `${fmtRange(row.checked_in_at, row.checked_out_at)} · ${hours}h`]);
+          }
+          return out;
+        });
+        const tl = $('#timeline');
+        if (items.length === 0){
+          tl.innerHTML = '<li><span class="mark">·</span><span>오늘 출근 기록 없음<small>권역 진입 후 자동 처리됩니다</small></span></li>';
+        } else {
+          tl.innerHTML = items.map(it=>`<li><span class="mark">${it[0]}</span><span>${it[1]}<small>${it[2]}</small></span></li>`).join('');
+        }
+      }catch(e){}
+    }
+    function labelSource(s){
+      return ({ manual:'관리자 수동', mobile_manual:'모바일 수동', mobile_gps_auto:'GPS 자동', beacon_auto:'비콘 자동', gps_auto:'GPS 자동' }[s]) || (s || '자동');
+    }
+
+    // ─── 디바이스 검증 ───
+    async function verifyDevice(){
+      if (!APP.sb || !APP.currentStaff) return { ok:false, reason:'no_session' };
+      try{
+        const { data, error } = await APP.sb.rpc('verify_or_register_device', {
+          p_staff_id: parseInt(APP.currentStaff.id),
+          p_device_id: DEVICE_ID,
+          p_device_name: DEVICE_NAME,
+          p_ip: null,
+        });
+        if (error){ return { ok:true, status:'rpc_missing', warn:error.message }; }
+        const r = data || {};
+        if (r.status === 'ok' || r.status === 'ok_unlocked' || r.status === 'registered') return { ok:true, status:r.status };
+        if (r.status === 'mismatch') return { ok:false, status:'mismatch', registered:r.registered_device, attempted:r.attempted_device };
+        return { ok:false, status:r.status||'unknown' };
+      }catch(e){ return { ok:true, status:'exception', warn:e.message }; }
+    }
+
+    // ─── 수동 출근 ───
+    async function doCheckIn({ source='mobile_manual' } = {}){
+      if (!APP.sb || !APP.currentStaff) return;
+      if (APP.attendance.working){ showToast('이미 근무 중입니다'); return; }
+      const v = await verifyDevice();
+      if (!v.ok && v.status === 'mismatch'){
+        showToast(`🚨 본인 등록 기기가 아닙니다. 출근 거부됨.`, 4000);
+        logDev(`🚨 본인 기기 아님 — 출근 거부`);
+        return;
+      }
+      try{
+        let { data, error } = await APP.sb.from('attendance').insert({
+          staff_id: APP.currentStaff.id, source,
+          device_id: DEVICE_ID, device_name: DEVICE_NAME,
+          device_match: v.status === 'registered' ? 'new_register' : 'ok',
+        }).select().single();
+        if (error && /device_id|device_name|device_match|schema cache/i.test(error.message)){
+          ({ data, error } = await APP.sb.from('attendance').insert({
+            staff_id: APP.currentStaff.id, source,
+          }).select().single());
+        }
+        if (error) throw error;
+        APP.attendance = { working:true, lastAttendance:data };
+        showToast('✓ 출근 처리되었습니다');
+        logDev(`✓ ${source} 출근 완료`);
+        await refreshTodayLogs();
+        renderCurrentState();
+      }catch(e){
+        showToast('출근 실패: '+e.message, 4000);
+        logDev('출근 실패: '+e.message);
+      }
+    }
+
+    // ─── 수동 퇴근 ───
+    async function doCheckOut(){
+      if (!APP.sb || !APP.currentStaff || !APP.attendance.lastAttendance) return;
+      if (!APP.attendance.working){ showToast('출근 기록이 없습니다'); return; }
+      const v = await verifyDevice();
+      if (!v.ok && v.status === 'mismatch'){
+        showToast(`🚨 본인 등록 기기가 아닙니다. 퇴근 거부됨.`, 4000);
+        logDev(`🚨 본인 기기 아님 — 퇴근 거부`);
+        return;
+      }
+      try{
+        let { error } = await APP.sb.from('attendance').update({
+          checked_out_at: new Date().toISOString(),
+          device_id: DEVICE_ID, device_name: DEVICE_NAME,
+        }).eq('id', APP.attendance.lastAttendance.id);
+        if (error && /device_id|device_name|schema cache/i.test(error.message)){
+          ({ error } = await APP.sb.from('attendance').update({
+            checked_out_at: new Date().toISOString(),
+          }).eq('id', APP.attendance.lastAttendance.id));
+        }
+        if (error) throw error;
+        showToast('✓ 퇴근 처리되었습니다');
+        logDev('✓ 수동 퇴근 완료');
+        await refreshAttendanceState();
+        await refreshTodayLogs();
+      }catch(e){
+        showToast('퇴근 실패: '+e.message, 4000);
+        logDev('퇴근 실패: '+e.message);
+      }
+    }
+
+    // ─── 자동 평가 ───
+    async function runAutoEvaluation(){
+      if (APP.paused) return;
+      if (!APP.sb || !APP.currentStaff || !APP.lastPos) return;
+      const now = Date.now();
+      const inMs = (APP.geofence.inMin || 1) * 60 * 1000;
+      const outMs = (APP.geofence.outMin || 10) * 60 * 1000;
+
+      if (APP.geofenceState === 'inside' && (now - APP.geofenceEnterAt) >= inMs && !APP.attendance.working){
+        try{
+          let { data, error } = await APP.sb.from('attendance').insert({
+            staff_id: APP.currentStaff.id, source:'mobile_gps_auto',
+            device_id: DEVICE_ID, device_name: DEVICE_NAME,
+          }).select().single();
+          if (error && /device|schema cache/i.test(error.message)){
+            ({ data, error } = await APP.sb.from('attendance').insert({
+              staff_id: APP.currentStaff.id, source:'mobile_gps_auto',
+            }).select().single());
+          }
+          if (!error && data){
+            APP.attendance = { working:true, lastAttendance:data };
+            logDev(`🟢 자동 출근 완료 (권역 ${Math.round((now-APP.geofenceEnterAt)/60000)}분 체류)`);
+            showToast('🟢 자동 출근 처리되었습니다');
+            await refreshTodayLogs();
+            renderCurrentState();
+          }
+        }catch(e){ logDev('자동 출근 실패: '+e.message); }
+      }
+
+      if (APP.geofenceState === 'outside' && (now - APP.geofenceExitAt) >= outMs && APP.attendance.working){
+        const last = APP.attendance.lastAttendance;
+        if (last){
+          const inT = new Date(last.checked_in_at).getTime();
+          if (now - inT >= 60*60*1000){
+            try{
+              const { error } = await APP.sb.from('attendance').update({
+                checked_out_at: new Date().toISOString(),
+              }).eq('id', last.id);
+              if (!error){
+                logDev(`🔻 자동 퇴근 완료 (이탈 ${Math.round((now-APP.geofenceExitAt)/60000)}분)`);
+                showToast('🔻 자동 퇴근 처리되었습니다');
+                await refreshAttendanceState();
+                await refreshTodayLogs();
+              }
+            }catch(e){ logDev('자동 퇴근 실패: '+e.message); }
+          }
+        }
+      }
+    }
+
+    // ─── 위치 전송 ───
+    async function sendLocation(){
+      if (APP.paused || !APP.lastPos || !APP.currentStaff) return;
+      // 1) /api/staff-location-update (service_role upsert)
+      try{
+        await fetch('/api/staff-location-update', {
+          method:'POST',
+          headers:{ 'Content-Type':'application/json' },
+          body: JSON.stringify({
+            staffId: APP.currentStaff.id,
+            staffName: APP.currentStaff.name,
+            dept: APP.currentStaff.dept,
+            lat: APP.lastPos.lat, lng: APP.lastPos.lng,
+            accuracy: APP.lastPos.accuracy,
+            source: 'mobile_gps',
+            role: 'staff',
+            timestamp: new Date().toISOString(),
+          }),
+        });
+      }catch(e){}
+      // 공유 상태 표시
+      $('#shareValue').textContent = '관리자 확인 중';
+    }
+
+    // ─── UI 렌더 ───
+    function renderCurrentState(){
+      if (APP.paused){ return renderState('paused'); }
+      if (!APP.lastPos){ return renderState('waiting_geo'); }
+      if (APP.attendance.working){
+        if (APP.geofenceState === 'outside') renderState('leaving');
+        else renderState('working');
+      } else {
+        // 미출근
+        if (APP.geofenceState === 'inside') renderState('auto');
+        else if (APP.lastPos.accuracy > 60) renderState('error', { reason:'low_accuracy' });
+        else renderState('waiting');
+      }
+    }
+
+    function renderState(name, extra={}){
+      APP.uiState = name;
+      const d = STATE_MAP[name] || STATE_MAP.waiting;
+      // chip 활성 (데모 모드만)
+      if (isDemo){
+        $$('.chip').forEach(c => c.classList.toggle('active', c.dataset.state === (d.demoKey || name)));
+      }
+      $('#stateBadge').textContent = d.badge;
+      $('#stateDot').className = 'status-dot '+d.dot;
+      $('#stateEyebrow').textContent = d.eyebrow;
+      $('#stateTitle').textContent = d.title;
+      $('#stateText').textContent = (typeof d.text === 'function') ? d.text(extra) : d.text;
+      $('#healthTitle').textContent = d.health;
+      $('#healthText').textContent = d.healthText;
+      $('#healthBox').className = 'health '+(d.healthClass||'');
+
+      // 액션 버튼
+      const actions = d.actions(APP);
+      $('#stateActions').className = 'actions '+(actions.length===3?'three':'');
+      $('#stateActions').innerHTML = actions.map(a=>`<button class="btn ${a[0]}" data-action="${a[2]}">${a[1]}</button>`).join('');
+      const bottom = d.bottom(APP);
+      $('#bottomActions').innerHTML = bottom.map(a=>`<button class="btn ${a[0]}" data-action="${a[2]}">${a[1]}</button>`).join('');
+
+      // 카운트다운 표시 토글
+      const cd = $('#countdownBox');
+      if (d.showCountdown && APP.lastPos){ cd.classList.remove('hidden'); }
+      else { cd.classList.add('hidden'); }
+      updateCountdown();
+    }
+
+    function updateCountdown(){
+      if (!APP.lastPos) return;
+      const cd = $('#countdownBox'), txt = $('#countdownText');
+      const now = Date.now();
+      if (APP.uiState === 'auto' && APP.geofenceEnterAt > 0 && !APP.attendance.working){
+        const target = (APP.geofence.inMin||1)*60*1000;
+        const remain = Math.max(0, target - (now - APP.geofenceEnterAt));
+        if (remain > 0){ cd.classList.remove('hidden'); txt.textContent = `${Math.ceil(remain/1000)}초 뒤 자동 출근`; }
+        else { cd.classList.add('hidden'); }
+      } else if (APP.uiState === 'leaving' && APP.geofenceExitAt > 0 && APP.attendance.working){
+        const target = (APP.geofence.outMin||10)*60*1000;
+        const remain = Math.max(0, target - (now - APP.geofenceExitAt));
+        if (remain > 0){ cd.classList.remove('hidden'); txt.textContent = `${Math.ceil(remain/60000)}분 뒤 자동 퇴근`; }
+        else { cd.classList.add('hidden'); }
+      } else { cd.classList.add('hidden'); }
+    }
+
+    const STATE_MAP = {
+      loading:{
+        badge:'로딩 중', dot:'gray', eyebrow:'서버 연결 중', title:'잠시만 기다려 주세요',
+        text:'본인 출퇴근 상태를 확인하고 있습니다.',
+        health:'서버 연결 중', healthText:'위치 권한과 본인 상태를 확인합니다.', healthClass:'paused',
+        actions: () => [], bottom: () => [], demoKey:'auto',
+      },
+      waiting_geo:{
+        badge:'위치 권한 대기', dot:'blue', eyebrow:'위치 권한이 필요합니다', title:'위치 권한 허용',
+        text:'브라우저에서 위치 접근을 허용하면 자동 출퇴근이 시작됩니다.',
+        health:'위치 권한 미허용', healthText:'권한이 거부되면 자동 출퇴근이 진행되지 않습니다.', healthClass:'error',
+        actions: () => [['primary','위치 다시 확인','refresh'],['secondary','수동 처리','manual']],
+        bottom: () => [['primary','위치 다시 확인','refresh'],['secondary','수동','manual']],
+        demoKey:'waiting',
+      },
       waiting:{
         badge:'출근 전', dot:'blue', eyebrow:'출근 처리가 아직 없습니다', title:'출근 전',
-        text:'근무지 권역 안으로 이동하면 자동 출근 대기가 시작됩니다. 위치 인식이 어렵다면 수동 출근 요청을 보낼 수 있습니다.',
-        countdown:null, distance:'120m', accuracy:'좋음 · ±8m', zone:'밖에 있음', share:'대기 중', health:'근무지 권역 밖입니다', healthText:'권역 안으로 들어오면 자동 출근 조건을 확인합니다.', healthClass:'', marker:'나 · 120m',
-        actions:[['primary','지금 출근 처리','checkin'],['secondary','수동 출근 요청','manual']], bottom:[['primary','지금 출근 처리','checkin'],['secondary','수동 요청','manual']],
-        timeline:[['출근 확인 대기','근무지 권역 안으로 이동하면 자동 확인이 시작됩니다'],['위치 권한 정상','마지막 확인 오후 01:32']]
+        text:'근무지 권역 안으로 이동하면 자동 출근 대기가 시작됩니다. 위치 인식이 어렵다면 수동 출근 처리를 할 수 있습니다.',
+        health:'근무지 권역 밖입니다', healthText:'권역 안으로 들어오면 자동 출근 조건을 확인합니다.',
+        actions: () => [['primary','지금 출근 처리','checkin'],['secondary','수동 요청','manual']],
+        bottom: () => [['primary','지금 출근','checkin'],['secondary','수동','manual']],
+        demoKey:'waiting',
       },
       auto:{
         badge:'자동 처리 예정', dot:'yellow', eyebrow:'근무지 권역 안에 있습니다', title:'자동 출근 대기',
         text:'잠사 근무지 권역 안에서 위치가 안정적으로 확인되고 있습니다. 잠시 후 자동으로 출근 처리됩니다.',
-        countdown:'초 뒤 자동 출근', distance:'22m', accuracy:'좋음 · ±7m', zone:'안에 있음', share:'관리자 확인 중', health:'정상적으로 위치가 확인되고 있습니다', healthText:'60초 이상 권역 안에 머물면 자동 출근 처리됩니다.', healthClass:'', marker:'나 · 22m',
-        actions:[['primary','지금 출근 처리','checkin'],['secondary','자동 처리 취소','cancelAuto']], bottom:[['primary','지금 출근 처리','checkin'],['secondary','취소','cancelAuto']],
-        timeline:[['출근 확인 시작','오후 01:31 · 위치 확인 시작'],['근무지 권역 진입 확인','오후 01:31 · 자동 출근 후보'],['자동 출근 예정','38초 뒤 처리 예정']]
+        health:'정상적으로 위치가 확인되고 있습니다', healthText:'권역 안에서 일정 시간 머물면 자동 출근 처리됩니다.',
+        showCountdown:true,
+        actions: () => [['primary','지금 출근 처리','checkin'],['secondary','일시 중지','pause']],
+        bottom: () => [['primary','지금 출근','checkin'],['secondary','일시 중지','pause']],
+        demoKey:'auto',
       },
       working:{
         badge:'근무 중', dot:'green', eyebrow:'출근 처리가 완료되었습니다', title:'근무 중',
-        text:'오후 01:31 자동 출근 처리됨. 현재 위치 확인은 정상이며, 퇴근 후 위치 전송은 자동 종료됩니다.',
-        countdown:null, distance:'22m', accuracy:'좋음 · ±7m', zone:'안에 있음', share:'관리자 확인 중', health:'근무 중 위치 확인 정상', healthText:'근무시간 중 출퇴근 확인 목적으로만 사용됩니다.', healthClass:'', marker:'나 · 22m',
-        actions:[['primary','퇴근 처리','checkout'],['secondary','위치 전송 일시 중지','pause'],['ghost','정정 요청','correction']], bottom:[['primary','퇴근 처리','checkout'],['secondary','정정 요청','correction']],
-        timeline:[['출근 처리 완료','오후 01:31 · 자동 출근'],['위치 확인 정상','오후 01:32 · 정확도 ±7m'],['근무 중','퇴근 시 위치 전송 자동 종료']]
+        text: (e)=> {
+          const last = APP.attendance.lastAttendance;
+          if (last) return `${fmtClock(last.checked_in_at)} 출근 처리됨. 현재 위치 확인은 정상이며, 퇴근 후 위치 전송은 자동 종료됩니다.`;
+          return '출근 처리 완료. 위치 공유 중입니다.';
+        },
+        health:'근무 중 위치 확인 정상', healthText:'근무시간 중 출퇴근 확인 목적으로만 사용됩니다.',
+        actions: () => [['primary','퇴근 처리','checkout'],['secondary','위치 전송 일시 중지','pause'],['ghost','정정 요청','correction']],
+        bottom: () => [['primary','퇴근 처리','checkout'],['secondary','정정 요청','correction']],
+        demoKey:'working',
       },
       leaving:{
         badge:'자동 퇴근 예정', dot:'yellow', eyebrow:'근무지 권역을 벗어났습니다', title:'자동 퇴근 대기',
         text:'근무지 권역 밖에서 위치가 안정적으로 확인되고 있습니다. 잠시 후 자동으로 퇴근 처리됩니다.',
-        countdown:'초 뒤 자동 퇴근', distance:'86m', accuracy:'좋음 · ±9m', zone:'밖에 있음', share:'관리자 확인 중', health:'퇴근 후보 상태입니다', healthText:'권역 밖에서 60초 이상 유지되면 자동 퇴근 처리됩니다.', healthClass:'', marker:'나 · 86m',
-        actions:[['primary','지금 퇴근 처리','checkout'],['secondary','자동 퇴근 취소','working']], bottom:[['primary','지금 퇴근 처리','checkout'],['secondary','취소','working']],
-        timeline:[['근무지 이탈 확인','오후 06:02 · 권역 밖'],['자동 퇴근 대기','60초 뒤 처리 예정'],['위치 확인 정상','정확도 ±9m']]
+        health:'퇴근 후보 상태입니다', healthText:'권역 밖에서 일정 시간 유지되면 자동 퇴근 처리됩니다.',
+        showCountdown:true,
+        actions: () => [['primary','지금 퇴근 처리','checkout'],['secondary','자동 퇴근 취소','cancelAutoOut']],
+        bottom: () => [['primary','지금 퇴근','checkout'],['secondary','취소','cancelAutoOut']],
+        demoKey:'leaving',
       },
       error:{
-        badge:'확인 필요', dot:'red', eyebrow:'위치 정확도가 낮습니다', title:'위치 확인 필요',
-        text:'현재 GPS 정확도 ±82m로 출근 권역 확인이 어렵습니다. 창가나 야외에서 다시 시도하거나 수동 요청을 보내 주세요.',
-        countdown:null, distance:'확인 불가', accuracy:'낮음 · ±82m', zone:'판단 불가', share:'전송 보류', health:'위치 인식이 불안정합니다', healthText:'불이익이 없도록 수동 요청 또는 정정 요청을 사용할 수 있습니다.', healthClass:'error', marker:'나 · 확인 중',
-        actions:[['primary','위치 다시 확인','refresh'],['secondary','수동 출근 요청','manual']], bottom:[['primary','위치 다시 확인','refresh'],['secondary','수동 요청','manual']],
-        timeline:[['위치 정확도 낮음','오후 01:32 · ±82m'],['자동 출근 보류','권역 판단이 어려워 처리하지 않음'],['수동 요청 가능','GPS 오류 사유로 요청 가능']]
+        badge:'확인 필요', dot:'red', eyebrow:'위치 정확도가 낮거나 권한 없음', title:'위치 확인 필요',
+        text: (e)=> e.msg ? `위치 인식 오류: ${e.msg}` : '현재 GPS 정확도가 낮아 출근 권역 확인이 어렵습니다. 창가나 야외에서 다시 시도하거나 수동 처리를 하세요.',
+        health:'위치 인식이 불안정합니다', healthText:'불이익이 없도록 수동 처리 또는 정정 요청을 사용할 수 있습니다.', healthClass:'error',
+        actions: () => [['primary','위치 다시 확인','refresh'],['secondary','수동 처리','manual']],
+        bottom: () => [['primary','위치 다시 확인','refresh'],['secondary','수동','manual']],
+        demoKey:'error',
       },
       paused:{
         badge:'일시 중지', dot:'gray', eyebrow:'위치 전송이 중지되었습니다', title:'위치 전송 일시 중지',
         text:'자동 출퇴근 처리가 잠시 중단되어 있습니다. 다시 시작하면 현재 위치 기준으로 확인합니다.',
-        countdown:null, distance:'-', accuracy:'-', zone:'확인 중지', share:'중지됨', health:'위치 전송 중지 상태', healthText:'다시 시작 전까지 자동 처리되지 않습니다.', healthClass:'paused', marker:'전송 중지',
-        actions:[['primary','위치 전송 다시 시작','resume'],['secondary','정정 요청','correction']], bottom:[['primary','다시 시작','resume'],['secondary','정정 요청','correction']],
-        timeline:[['위치 전송 일시 중지','사용자 선택으로 자동 처리 중단'],['자동 처리 중지','다시 시작 버튼을 누르면 재개됩니다']]
+        health:'위치 전송 중지 상태', healthText:'다시 시작 전까지 자동 처리되지 않습니다.', healthClass:'paused',
+        actions: () => [['primary','위치 전송 다시 시작','resume'],['secondary','정정 요청','correction']],
+        bottom: () => [['primary','다시 시작','resume'],['secondary','정정 요청','correction']],
+        demoKey:'auto',
       },
-      done:{
-        badge:'퇴근 완료', dot:'green', eyebrow:'오늘 근무가 종료되었습니다', title:'퇴근 완료',
-        text:'오후 06:03 퇴근 처리됨. 위치 전송은 종료되었으며, 오늘의 출퇴근 기록만 확인할 수 있습니다.',
-        countdown:null, distance:'-', accuracy:'-', zone:'종료', share:'종료됨', health:'위치 전송이 종료되었습니다', healthText:'퇴근 후에는 위치가 더 이상 전송되지 않습니다.', healthClass:'paused', marker:'퇴근 완료',
-        actions:[['secondary','출퇴근 기록 보기','toastRecord'],['ghost','정정 요청','correction']], bottom:[['secondary','기록 보기','toastRecord'],['secondary','정정 요청','correction']],
-        timeline:[['출근 처리 완료','오후 01:31 · 자동 출근'],['퇴근 처리 완료','오후 06:03 · 자동 퇴근'],['위치 전송 종료','퇴근 후 위치 공유 종료']]
-      }
     };
 
-    function setState(next){
-      if(!data[next]) next='auto';
-      state.current = next;
-      const d=data[next];
-      $$('.chip').forEach(c=>c.classList.toggle('active', c.dataset.state===next));
-      $('#stateBadge').textContent=d.badge;
-      $('#stateDot').className='status-dot '+d.dot;
-      $('#stateEyebrow').textContent=d.eyebrow;
-      $('#stateTitle').textContent=d.title;
-      $('#stateText').textContent=d.text;
-      $('#distanceValue').textContent=d.distance;
-      $('#accuracyValue').textContent=d.accuracy;
-      $('#zoneValue').textContent=d.zone;
-      $('#shareValue').textContent=d.share;
-      $('#healthTitle').textContent=d.health;
-      $('#healthText').textContent=d.healthText;
-      $('#healthBox').className='health '+(d.healthClass||'');
-      $('#meMarker').textContent=d.marker;
-      $('#stateActions').className='actions '+(d.actions.length===3?'three':'');
-      $('#stateActions').innerHTML = d.actions.map(a=>`<button class="btn ${a[0]}" data-action="${a[2]}">${a[1]}</button>`).join('');
-      $('#bottomActions').innerHTML = d.bottom.map(a=>`<button class="btn ${a[0]}" data-action="${a[2]}">${a[1]}</button>`).join('');
-      $('#timeline').innerHTML = d.timeline.map(item=>`<li><span class="mark">✓</span><span>${item[0]}<small>${item[1]}</small></span></li>`).join('');
-      if(d.countdown){
-        $('#countdownBox').classList.remove('hidden');
-        $('#countdownBox').lastChild.textContent = d.countdown;
-        state.countdown = next==='leaving'?60:38;
-        $('#countdown').textContent=state.countdown;
-        startTimer();
-      } else {
-        $('#countdownBox').classList.add('hidden');
-        stopTimer();
-      }
-    }
-
-    function startTimer(){
-      stopTimer();
-      state.timer=setInterval(()=>{
-        if(!['auto','leaving'].includes(state.current)) return stopTimer();
-        state.countdown=Math.max(0,state.countdown-1);
-        $('#countdown').textContent=state.countdown;
-        if(state.countdown===0){
-          const current=state.current;
-          stopTimer();
-          if(current==='auto') { setState('working'); showToast('자동 출근 처리되었습니다.'); }
-          if(current==='leaving') { setState('done'); showToast('자동 퇴근 처리되었습니다. 위치 전송이 종료되었습니다.'); }
+    // ─── 액션 핸들러 ───
+    document.addEventListener('click', async (e)=>{
+      const action = e.target.closest('[data-action]');
+      if (action){
+        const a = action.dataset.action;
+        if (a === 'checkin') doCheckIn({ source:'mobile_manual' });
+        else if (a === 'checkout') doCheckOut();
+        else if (a === 'pause'){ APP.paused = true; showToast('위치 전송을 일시 중지했습니다'); renderCurrentState(); }
+        else if (a === 'resume'){ APP.paused = false; showToast('위치 전송을 다시 시작합니다'); renderCurrentState(); }
+        else if (a === 'cancelAutoOut'){ APP.geofenceExitAt = Date.now() + 10*60*1000; showToast('자동 퇴근 카운트가 초기화되었습니다'); renderCurrentState(); }
+        else if (a === 'refresh'){
+          if (navigator.geolocation){
+            navigator.geolocation.getCurrentPosition(onPosition, onPosError, { enableHighAccuracy:true, maximumAge:0, timeout:20000 });
+            showToast('위치를 다시 확인합니다');
+          }
         }
-      },1000);
-    }
-    function stopTimer(){ if(state.timer){ clearInterval(state.timer); state.timer=null; } }
+        else if (a === 'manual'){ openManual(); }
+        else if (a === 'correction'){ const d=$('#correctionDialog'); try{ d.showModal(); }catch(_){} }
+        else if (a === 'toastRecord') showToast('오늘 출퇴근 기록을 표시합니다');
+        return;
+      }
+      const close = e.target.closest('[data-close]');
+      if (close){ document.getElementById(close.dataset.close).close(); return; }
+      // 데모 chip
+      const chip = e.target.closest('.chip');
+      if (chip && isDemo){
+        renderState({waiting:'waiting',auto:'auto',working:'working',leaving:'leaving',error:'error'}[chip.dataset.state] || 'waiting');
+      }
+    });
 
-    function showToast(msg){
-      const t=$('#toast'); t.textContent=msg; t.classList.add('show');
-      setTimeout(()=>t.classList.remove('show'),2600);
+    function openManual(){
+      const kind = APP.attendance.working ? 'out' : 'in';
+      $('#manualKind').value = kind;
+      const d = $('#manualDialog');
+      try{ d.showModal(); }catch(_){}
+    }
+    $('#manualSubmit').addEventListener('click', async ()=>{
+      const kind = $('#manualKind').value;
+      const memo = $('#manualMemo').value.trim();
+      $('#manualDialog').close();
+      if (memo) logDev('수동 요청 메모: '+memo);
+      if (kind === 'in') await doCheckIn({ source:'mobile_manual' });
+      else await doCheckOut();
+    });
+
+    $('#corrSubmit').addEventListener('click', async ()=>{
+      const payload = {
+        staff_id: APP.currentStaff?.id,
+        kind: $('#corrKind').value,
+        target_time: $('#corrTime').value.trim(),
+        reason: $('#corrReason').value.trim(),
+        device_id: DEVICE_ID,
+      };
+      $('#correctionDialog').close();
+      try{
+        // 가장 가벼운 경로: attendance_corrections 테이블에 insert 시도, 없으면 attendance에 메모로 남김
+        if (APP.sb){
+          let r = await APP.sb.from('attendance_corrections').insert(payload);
+          if (r.error && /relation|does not exist|schema cache/i.test(r.error.message)){
+            // fallback: attendance 마지막 행에 note 추가 (실패 무시)
+            try{
+              const last = APP.attendance.lastAttendance;
+              if (last) await APP.sb.from('attendance').update({ note: `정정요청(${payload.kind}): ${payload.reason} / ${payload.target_time}` }).eq('id', last.id);
+            }catch(_){}
+          }
+        }
+        showToast('정정 요청이 접수되었습니다');
+        logDev(`정정 요청: ${payload.kind} / ${payload.target_time}`);
+      }catch(e){
+        showToast('정정 요청 실패: '+e.message, 4000);
+      }
+    });
+
+    // ─── 데모 모드 ───
+    if (isDemo){
+      $('#demoSwitch').classList.remove('hidden');
     }
 
-    function updateTime(){
-      const now=new Date();
-      const h=now.getHours(); const m=String(now.getMinutes()).padStart(2,'0');
-      const ampm=h<12?'오전':'오후'; const hh=h%12||12;
-      $('#locationRight').textContent=`마지막 확인 ${ampm} ${String(hh).padStart(2,'0')}:${m}`;
+    // ─── 지도 ───
+    $('#toggleMap').addEventListener('click', async ()=>{
+      const panel = $('#mapPanel'); const hidden = panel.classList.toggle('hidden');
+      $('#toggleMap').setAttribute('aria-expanded', String(!hidden));
+      $('#mapToggleText').textContent = hidden ? '지도 보기' : '지도 접기';
+      if (!hidden && !APP.map){ await initMap(); }
+    });
+    async function initMap(){
+      try{
+        await loadLeaflet();
+        const center = APP.lastPos ? [APP.lastPos.lat, APP.lastPos.lng] : [APP.geofence.centerLat, APP.geofence.centerLng];
+        const map = L.map('realMap', { zoomControl:true, attributionControl:true }).setView(center, 17);
+        // 위성 (ESRI)
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+          maxZoom: 19, attribution: 'Tiles © Esri',
+        }).addTo(map);
+        // 권역
+        APP.fenceCircle = L.circle([APP.geofence.centerLat, APP.geofence.centerLng], {
+          radius: APP.geofence.radiusM,
+          color:'#34d399', fillColor:'#10b981', fillOpacity:0.13, weight:2, dashArray:'4,5',
+        }).addTo(map);
+        APP.map = map;
+        updateMyMarker();
+      }catch(e){
+        logDev('지도 로드 실패: '+e.message);
+      }
     }
-
-    function handleAction(action){
-      switch(action){
-        case 'checkin': setState('working'); showToast('출근 처리되었습니다.'); break;
-        case 'checkout': setState('done'); showToast('퇴근 처리되었습니다. 위치 전송이 종료되었습니다.'); break;
-        case 'cancelAuto': setState('waiting'); showToast('자동 출근 처리를 취소했습니다.'); break;
-        case 'working': setState('working'); showToast('자동 퇴근 처리를 취소했습니다.'); break;
-        case 'pause': setState('paused'); showToast('위치 전송을 일시 중지했습니다.'); break;
-        case 'resume': setState('working'); showToast('위치 전송을 다시 시작했습니다.'); break;
-        case 'manual': $('#manualDialog').showModal(); break;
-        case 'correction': $('#correctionDialog').showModal(); break;
-        case 'refresh': updateTime(); if(state.current==='error'){ setState('auto'); showToast('위치를 다시 확인했습니다. 권역 안으로 판단됩니다.'); } else { showToast('위치를 다시 확인했습니다.'); } break;
-        case 'toastRecord': showToast('오늘 출퇴근 기록을 표시합니다.'); break;
+    function updateMyMarker(){
+      if (!APP.map || !APP.lastPos) return;
+      const ll = [APP.lastPos.lat, APP.lastPos.lng];
+      if (!APP.meMarker){
+        APP.meMarker = L.marker(ll, { icon: L.divIcon({ className:'me-marker', iconSize:[18,18] }) }).addTo(APP.map);
+      } else {
+        APP.meMarker.setLatLng(ll);
       }
     }
 
-    document.addEventListener('click', (e)=>{
-      const chip=e.target.closest('.chip');
-      if(chip){ setState(chip.dataset.state); return; }
-      const action=e.target.closest('[data-action]');
-      if(action){ handleAction(action.dataset.action); return; }
-      const close=e.target.closest('[data-close]');
-      if(close){ document.getElementById(close.dataset.close).close(); return; }
-      const submit=e.target.closest('[data-submit]');
-      if(submit){ document.getElementById(submit.dataset.submit).close(); showToast('요청이 접수되었습니다. 관리자 확인 대기 중입니다.'); return; }
+    // ─── 토글: 상세 위치 / 로그 ───
+    $('#toggleDetail').addEventListener('click', ()=>{
+      const hidden = $('#detailLocation').classList.toggle('hidden');
+      $('#toggleDetail').textContent = hidden ? '상세 위치 보기' : '상세 위치 숨기기';
+    });
+    $('#toggleLog').addEventListener('click', ()=>{
+      const hidden = $('#devLog').classList.toggle('hidden');
+      $('#toggleLog').textContent = hidden ? '상세 로그 보기' : '상세 로그 숨기기';
     });
 
-    $('#toggleMap').addEventListener('click',()=>{
-      const panel=$('#mapPanel'); const hidden=panel.classList.toggle('hidden');
-      $('#toggleMap').setAttribute('aria-expanded', String(!hidden));
-      $('#mapToggleText').textContent=hidden?'지도 보기':'지도 접기';
-    });
-    $('#toggleDetail').addEventListener('click',()=>{
-      const hidden=$('#detailLocation').classList.toggle('hidden');
-      $('#toggleDetail').textContent=hidden?'상세 위치 보기':'상세 위치 숨기기';
-    });
-    $('#toggleLog').addEventListener('click',()=>{
-      const hidden=$('#devLog').classList.toggle('hidden');
-      $('#toggleLog').textContent=hidden?'상세 로그 보기':'상세 로그 숨기기';
-    });
-
-    updateTime();
-    setState('auto');
+    // ─── 시작 ───
+    renderState('loading');
+    bootstrap();
   </script>
 </body>
 </html>
