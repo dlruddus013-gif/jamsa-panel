@@ -496,7 +496,7 @@
         const modeBadge = mode === 'client'
           ? '<span style="background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:bold">📱 로컬</span>'
           : '<span style="background:#dcfce7;color:#15803d;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:bold">☁ 서버</span>';
-        let html = '<div class="sr-header" style="display:flex;justify-content:space-between;align-items:center"><span>' + matches.length + '건 ' + modeBadge + '</span><span data-search-action="ask-chatbot" style="color:#9333ea;font-size:10px;cursor:pointer;font-weight:bold" onclick="window.__askChatbot()">🤖 AI에게 물어보기</span></div>';
+        let html = '<div class="sr-header" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><span>' + matches.length + '건 ' + modeBadge + '</span><button data-search-action="ask-chatbot" onclick="window.__askChatbot()" style="background:linear-gradient(90deg,#9333ea,#10b981);color:#fff;border:0;padding:6px 12px;border-radius:14px;font-size:11px;font-weight:bold;cursor:pointer">🤖 AI에게 물어보기</button></div>';
         for (const [coll, items] of Object.entries(grouped)) {
           const label = LABELS[coll] || coll.replace('jamsa_', '');
           items.slice(0, 6).forEach(m => {
@@ -509,8 +509,18 @@
         results.classList.add('active');
       };
 
+      // 🆕 자연어 질문 패턴 — 이게 매칭되면 단순 검색이 아닌 AI 질문으로 자동 처리
+      const looksLikeNLQuestion = (q) => {
+        if (!q || q.length < 3) return false;
+        if (/\?$|？$/.test(q)) return true;  // 끝에 물음표
+        if (q.length >= 12) return true;  // 12자 이상은 거의 자연어 문장
+        // 의문/요청/문제해결 키워드
+        return /(어떻게|어디서?|언제|왜|뭐가|무엇|방법|도와줘|해줘|해결|문제|안돼|안 돼|고장|오류|에러|어렵|알려줘|보여줘|추천|선택|결정|판단|차이|비교|분석|평가|만들어|등록 안|연결 안)/.test(q);
+      };
+
       const search = async (q) => {
         if (!q) { renderEmpty(); return; }
+        // 명시적 AI 트리거 (?/  접두사) — 그대로 유지
         if (q.startsWith('?') || q.startsWith('/')) {
           const question = q.slice(1).trim();
           if (!question) {
@@ -519,6 +529,12 @@
             return;
           }
           askChatbot(question);
+          return;
+        }
+        // 🆕 자연어 질문은 검색 대신 바로 AI에게 (단순 단어/이름 검색은 그대로 검색)
+        if (looksLikeNLQuestion(q)) {
+          saveHistory(q);
+          askChatbot(q);
           return;
         }
         // 1) 서버 검색 시도 (인증 있을 때) → 실패하면 클라이언트 검색 자동 폴백
@@ -531,8 +547,9 @@
               const matches = data.matches || [];
               saveHistory(q);
               if (matches.length === 0) {
-                results.innerHTML = '<div class="sr-empty">"' + q + '" 결과 없음 · 💡 AI에게 물어보려면 <strong style="color:#9333ea">?' + q + '</strong></div>';
-                results.classList.add('active'); return;
+                // 🆕 검색 결과 0건이면 자동으로 AI 호출
+                askChatbot(q);
+                return;
               }
               renderSearchMatches(q, matches, 'server');
               serverOk = true;
@@ -544,9 +561,11 @@
         const matches = clientSideSearch(q, 30);
         saveHistory(q);
         if (matches.length === 0) {
-          results.innerHTML = '<div class="sr-empty">"' + q + '" 결과 없음 (📱 로컬 검색)<br/><br/>💡 AI에게 물어보려면 <strong style="color:#9333ea">?' + q + '</strong></div>';
-          results.classList.add('active'); return;
+          // 🆕 결과 없으면 자동으로 AI 호출
+          askChatbot(q);
+          return;
         }
+        // 🆕 결과 있어도 상단에 "AI에게 물어보기" 큰 버튼 추가는 renderSearchMatches에서 처리
         renderSearchMatches(q, matches, 'client');
       };
       window.__openItem = (coll, idx) => {
