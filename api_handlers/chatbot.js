@@ -32,6 +32,15 @@ const SYSTEM_PROMPT = `당신은 한국잠사박물관 통합관리 시스템의
 5. **시설명/재고명 모호하면 후보 제시**.
 6. **긴급상황**: 절차 → 연락 → 현장 확인 순서.
 7. **추정/확인 정보 구분**: confidence를 솔직하게 (high/medium/low).
+8. **category 분류는 반드시 모듈명으로**. 메뉴 위치 질문이라도 "help"가 아니라 해당 모듈의 카테고리를 사용:
+   - "재고관리 메뉴 어디?" → category: "inventory" (not "help")
+   - "안전 캘린더 위치?" → category: "maintenance"
+   - "CCTV 어디서 켜?" → category: "facility"
+   - "사고 기록 어디?" → category: "emergency"
+   - "출퇴근 페이지?" → category: "facility"
+   - "보고서 어디?" → category: "report"
+   - "알림 설정?" → category: "alert"
+   "help"는 시스템 사용법 자체에 대한 메타 질문(어떤 기능들이 있어?, 도움말?)에만 사용한다.
 
 ## 응답 형식 (반드시 JSON만)
 {
@@ -246,11 +255,13 @@ function mergeCards(claudeRes, openaiRes, fallbackActions) {
   if (!c && !o) return null;
 
   // 둘 다 성공: 일치도 계산
+  // [케이스 스터디] 한국어 답변에서 0.55는 너무 높음 (실측 mean=0.11, max=0.35)
+  // → 0.30으로 하향 + category까지 같아야 agree로 인정
   const confLevel = { high: 3, medium: 2, low: 1 };
   const cConf = confLevel[c.confidence] || 2;
   const oConf = confLevel[o.confidence] || 2;
   const sameCategory = c.category === o.category;
-  const similar = stringSimilarity(c.answer, o.answer) > 0.55;
+  const similar = stringSimilarity(c.answer, o.answer) >= 0.30;
 
   // confidence가 더 높은 쪽을 primary로
   const primary = (cConf >= oConf) ? c : o;
@@ -328,11 +339,25 @@ export default async function handler(req, res) {
   if (mode === 'both' || mode === 'dual') mode = 'consensus';
   if (!question.trim()) return res.status(400).json({ ok: false, error: 'missing_question' });
 
-  // auto 모드 + 두 키 모두 있음 → consensus가 더 풍부한 답을 줌
+  // auto 모드 + 두 키 모두 있음 → 질문 성격에 따라 consensus 결정
+  // [케이스 스터디 결과 반영]
+  //  - 사실/네비게이션 질문(메뉴 위치)은 consensus 불필요 → Claude 단독 (cost/latency 절감)
+  //  - 분석/판단/비교/긴급 질문만 consensus
   if (mode === 'auto' && ANTHROPIC_API_KEY && OPENAI_API_KEY) {
-    // 짧은 단순 질문은 단일 모델로 답해 비용 절약
-    const isShortQuery = question.trim().length < 20 && !/(왜|어떻게|차이|비교|평가|분석|판단|결정)/.test(question);
-    if (!isShortQuery) mode = 'consensus';
+    const q = question.trim();
+    // 사실/네비게이션 질문: "어디", "메뉴", "위치", "어디서", "어떻게 가"
+    const isNavQuery = /(어디|메뉴 위치|어느 메뉴|위치\?|에서 (열|봐|확인|보)|어디(서|에|를)|페이지 (어디|위치))/.test(q);
+    // 짧은 단순 질문
+    const isShortQuery = q.length < 20 && !/(왜|어떻게|차이|비교|평가|분석|판단|결정)/.test(q);
+    // 분석/판단/비교 질문
+    const isAnalytical = /(왜|어떻게.*결정|차이|비교|평가|분석|판단|결정|우선순위|어느 게|어느게|어떤 게|어떻게 짜|어떤 순서|장단점|선택)/.test(q);
+    if (isNavQuery || isShortQuery) {
+      // 사실/짧은 질문 → Claude 단독 (actions 더 풍부)
+      mode = 'claude';
+    } else if (isAnalytical || q.length >= 30) {
+      mode = 'consensus';
+    }
+    // 그 외는 그대로 'auto' → Claude 단독
   }
 
   // mode 정규화: 요청한 모드에 필요한 키가 없으면 가능한 단일 모델로 자동 downgrade
