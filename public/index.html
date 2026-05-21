@@ -391,9 +391,19 @@
         const conf = data.confidence || 'medium';
         const confMeta = { high:{bg:'#dcfce7',color:'#15803d',label:'확실'}, medium:{bg:'#fef3c7',color:'#92400e',label:'보통'}, low:{bg:'#fee2e2',color:'#991b1b',label:'낮음'} }[conf] || { bg:'#f1f5f9',color:'#475569',label:conf };
         let src;
-        if (data.source === 'claude') {
+        if (data.source === 'consensus') {
+          const con = data.consensus || 'agree';
+          const conMeta = { agree: { bg: '#dcfce7', color: '#15803d', label: '✅ 일치' }, partial: { bg: '#fef3c7', color: '#92400e', label: '◑ 부분 일치' }, disagree: { bg: '#fee2e2', color: '#991b1b', label: '⚠ 의견 분기' }, claude_only: { bg: '#ede9fe', color: '#5b21b6', label: 'Claude 단독' }, openai_only: { bg: '#d1fae5', color: '#065f46', label: 'GPT 단독' } }[con] || { bg: '#f1f5f9', color: '#475569', label: con };
+          const simPct = data.similarity != null ? Math.round(data.similarity * 100) + '%' : '';
+          src = '<span style="background:linear-gradient(90deg,#9333ea,#10b981);color:#fff;padding:2px 8px;border-radius:4px;font-size:9px;font-weight:bold">🤝 Claude + GPT</span>'
+              + '<span style="background:' + conMeta.bg + ';color:' + conMeta.color + ';padding:1px 6px;border-radius:4px;font-size:9px;font-weight:bold;margin-left:4px">' + conMeta.label + (simPct ? ' ' + simPct : '') + '</span>';
+        } else if (data.source === 'claude' || data.source === 'openai_fallback') {
           const modelLabel = (data.model || 'claude').replace(/^claude-/, '').replace(/-\d{8}$/, '');
           src = '<span style="background:linear-gradient(90deg,#9333ea,#2563eb);color:#fff;padding:2px 8px;border-radius:4px;font-size:9px;font-weight:bold">✨ Claude ' + modelLabel + '</span>';
+          if (data.source === 'openai_fallback') src += '<span style="background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:bold;margin-left:4px">GPT fallback</span>';
+        } else if (data.source === 'openai') {
+          const modelLabel = data.model || 'gpt';
+          src = '<span style="background:linear-gradient(90deg,#10b981,#059669);color:#fff;padding:2px 8px;border-radius:4px;font-size:9px;font-weight:bold">⚡ GPT ' + modelLabel + '</span>';
         } else {
           src = '<span style="background:#f1f5f9;color:#475569;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:bold">📋 룰 기반</span>';
         }
