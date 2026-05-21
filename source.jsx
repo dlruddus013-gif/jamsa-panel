@@ -3804,8 +3804,21 @@ function FacCctvPage({ go, setActions, addAudit, user }) {
     // Check AI mode eligibility with explicit user confirmation
     let anthropicKey = "";
     try { anthropicKey = window.localStorage?.getItem("jamsa_anthropic_api_key") || ""; } catch(e){}
-    // 서버 프록시 사용 가능 여부: 로그인 토큰만 있으면 서버 env 키 사용
-    const hasServerProxy = !!(snapServerUrl && typeof window !== "undefined" && window.__authToken);
+
+    // ── 서버 환경변수 상태 미리 조회 (인증 없이 호출 가능한 /api/ai-status) ──
+    let serverAiReady = false;
+    let serverAiProviders = null;
+    try {
+      const sr = await fetch("/api/ai-status", { cache: "no-store" });
+      if (sr.ok) {
+        const sd = await sr.json();
+        serverAiReady = !!sd.ready;
+        serverAiProviders = sd.providers;
+      }
+    } catch (e) { /* 무시 — 서버 미가동 가능성 */ }
+
+    // 서버 프록시 사용 가능 여부: 로그인 토큰 + 서버에 환경변수 설정됨
+    const hasServerProxy = !!(snapServerUrl && typeof window !== "undefined" && window.__authToken && serverAiReady);
     const useRealAI = !!(snapServerUrl && (anthropicKey || hasServerProxy));
 
     // ─── PREFLIGHT CHECK for Real AI Mode ───
@@ -3870,12 +3883,26 @@ function FacCctvPage({ go, setActions, addAudit, user }) {
               + `계속하시겠습니까?`;
     } else {
       const reasons = [];
-      if (!snapServerUrl) reasons.push("• NVR 서버 URL 미설정");
-      if (!anthropicKey) reasons.push("• Anthropic API 키 미설정");
+      if (!snapServerUrl) reasons.push("• NVR/CCTV 서버 URL 미설정 (좌상단 'NVR 서버 설정' 확인)");
+      if (!anthropicKey && !serverAiReady) {
+        if (!window.__authToken) {
+          reasons.push("• 로그인 세션 만료 — 다시 로그인 필요 (서버 프록시 사용 불가)");
+        } else if (serverAiProviders) {
+          reasons.push("• Vercel 환경변수 ANTHROPIC_API_KEY / OPENAI_API_KEY 미설정");
+          reasons.push("  → Dashboard → Settings → Environment Variables → Add → Redeploy");
+        } else {
+          reasons.push("• /api/ai-status 응답 실패 (서버 또는 라우팅 문제)");
+        }
+        reasons.push("• 또는 로컬: 우상단 '🤖 AI 분석 설정' 에서 직접 API 키 입력");
+      }
       modeMsg = `⚠️ 시뮬레이션 모드로 실행됩니다.\n\n`
-              + `실제 AI 분석을 위해 다음이 필요합니다:\n${reasons.join("\n")}\n\n`
-              + `시뮬레이션으로 계속하시겠습니까?\n`
-              + `(취소 후 상단의 '🤖 AI 분석 설정' 또는 'NVR 서버 설정' 버튼을 확인하세요)`;
+              + `실제 AI 분석을 위해 다음 중 하나가 필요합니다:\n${reasons.join("\n")}\n\n`
+              + `해결 방법 (Vercel 환경변수 — 추천):\n`
+              + `1. https://vercel.com/jamsamuseum/jamsa-panel/settings/environment-variables 접속\n`
+              + `2. Add → Key: ANTHROPIC_API_KEY, Value: sk-ant-... (3개 환경 모두 체크)\n`
+              + `3. Deployments → 최신 → Redeploy\n`
+              + `4. 1~2분 후 새로고침 → 다시 일괄점검 실행\n\n`
+              + `시뮬레이션 모드로 그래도 계속하시겠습니까?`;
     }
     if (!confirm(modeMsg)) return;
 
