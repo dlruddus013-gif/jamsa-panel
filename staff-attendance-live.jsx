@@ -4,6 +4,14 @@
 // ════════════════════════════════════════════════════════════
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { StaffDetailModal } from "./staff-detail.jsx";
+import {
+  AttendanceAlertConfigModal,
+  triggerCheckInAlert,
+  triggerCheckOutAlert,
+  evaluateAbsent,
+  evaluateLongIdle,
+  dedupeTodayAttendance,
+} from "./attendance-alert-rules.jsx";
 
 const DEPT_CCTV_MAP_KEY = "jamsa_dept_cctv_map";   // { [dept_id]: channelNum }
 const COLLAPSED_KEY     = "jamsa_attendance_panel_collapsed";
@@ -85,6 +93,7 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
   const [err, setErr]               = useState(null);
   const [depts, setDepts]           = useState([]);
   const [staffList, setStaffList]   = useState([]);
+  const [alertConfigOpen, setAlertConfigOpen] = useState(false);
   const [today, setToday]           = useState([]);   // 오늘 attendance
   const [recent, setRecent]         = useState([]);   // 최근 행동 로그 (출근/퇴근 이벤트)
   const [deptCctv, setDeptCctv]     = useState(loadDeptCctvMap);
@@ -164,6 +173,18 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
       setLoading(false);
     }
   }
+
+  // ── D. 지각/결근/장기 부재 주기 평가 (5분마다) ──
+  useEffect(() => {
+    if (!staffList.length) return;
+    const run = () => {
+      try { evaluateAbsent({ staffList, todayAttendance: today, depts }); } catch (e) {}
+      try { evaluateLongIdle({ staffList, todayAttendance: today, depts }); } catch (e) {}
+    };
+    run(); // 즉시 한 번
+    const t = setInterval(run, 5 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [staffList, today, depts]);
 
   function subscribeRealtime(sb) {
     if (channelRef.current) return;
@@ -259,6 +280,24 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button onClick={() => setAlertConfigOpen(true)}
+            title="출퇴근 자동 SMS 알림 설정 — 출근/퇴근/지각/결근 이벤트별 발송 규칙 + 수신자 phone"
+            style={{ padding: "6px 12px", background: "rgba(15,23,42,0.35)", border: "1px solid rgba(255,255,255,0.25)", borderRadius: 6, fontSize: 11, fontWeight: 800, color: "#fff", cursor: "pointer", whiteSpace: "nowrap" }}>
+            🔔 알림 설정
+          </button>
+          <button onClick={async () => {
+            const sb = supabaseRef.current;
+            if (!sb) { alert("Supabase 연결 없음"); return; }
+            if (!confirm("오늘 출퇴근 기록 중 60초 이내 중복 출근을 자동으로 삭제할까요?\n\n조건: 같은 직원의 출근 기록이 60초 이내이고 아직 퇴근 안 된 행만 정리됩니다.")) return;
+            const res = await dedupeTodayAttendance(sb, today);
+            if (!res.ok) { alert("정리 실패: " + (res.error || "unknown")); return; }
+            alert(`✅ 중복 출근 ${res.deleted}건 정리 완료`);
+            await loadAll(sb);
+          }}
+            title="60초 이내 중복 출근 기록 자동 삭제"
+            style={{ padding: "6px 12px", background: "rgba(245,158,11,0.4)", border: "1px solid rgba(245,158,11,0.6)", borderRadius: 6, fontSize: 11, fontWeight: 800, color: "#fff", cursor: "pointer", whiteSpace: "nowrap" }}>
+            🧹 중복 정리
+          </button>
           <a href="/attendance" target="_blank" rel="noopener"
             style={{ padding: "6px 12px", background: "rgba(15,23,42,0.35)", border: "1px solid rgba(255,255,255,0.25)", borderRadius: 6, fontSize: 11, fontWeight: 700, color: "#fff", textDecoration: "none", whiteSpace: "nowrap" }}>
             전체화면 ↗
@@ -270,6 +309,15 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
           </button>
         </div>
       </div>
+
+      {/* 알림 설정 모달 */}
+      {alertConfigOpen && (
+        <AttendanceAlertConfigModal
+          depts={depts}
+          staffList={staffList}
+          onClose={() => setAlertConfigOpen(false)}
+        />
+      )}
 
       {/* ─── 본문 ─── */}
       {loading ? (
@@ -321,16 +369,62 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
                     onCheckIn={async () => {
                       const sb = supabaseRef.current;
                       if (!sb) return;
-                      const { error } = await sb.from("attendance").insert({ staff_id: staff.id, source: "manual" });
-                      if (error) alert("출근 실패: " + error.message);
+                      // ── A. 중복 출근 방지 ──
+                      const myAtt = today.filter(a => a.staff_id === staff.id);
+                      const stillWorking = myAtt.find(a => !a.checked_out_at);
+                      if (stillWorking) {
+                        alert(`${staff.name}님은 이미 출근 상태입니다 (${new Date(stillWorking.checked_in_at).toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"})}). 먼저 퇴근 처리하세요.`);
+                        return;
+                      }
+                      // 60초 이내 직전 출근 있으면 차단
+                      const recent = myAtt.find(a => Date.now() - new Date(a.checked_in_at).getTime() < 60_000);
+                      if (recent) {
+                        alert(`방금 출근 기록(${new Date(recent.checked_in_at).toLocaleTimeString("ko-KR")})이 있습니다. 1분 후 다시 시도하세요.`);
+                        return;
+                      }
+                      // ── 낙관적 업데이트: 즉시 카드 working 표시 ──
+                      const tempRec = {
+                        id: "tmp_" + Date.now(),
+                        staff_id: staff.id,
+                        checked_in_at: new Date().toISOString(),
+                        checked_out_at: null,
+                        source: "manual",
+                      };
+                      setToday(prev => [tempRec, ...prev]);
+                      const { data, error } = await sb.from("attendance")
+                        .insert({ staff_id: staff.id, source: "manual" })
+                        .select()
+                        .single();
+                      if (error) {
+                        // rollback
+                        setToday(prev => prev.filter(a => a.id !== tempRec.id));
+                        alert("출근 실패: " + error.message);
+                        return;
+                      }
+                      // 실제 레코드로 교체
+                      setToday(prev => prev.map(a => a.id === tempRec.id ? data : a));
+                      // ── C. SMS 자동 알림 트리거 ──
+                      const dept = depts.find(d => d.id === staff.dept_id);
+                      triggerCheckInAlert({ staff, dept, attendanceRecord: data }).catch(() => {});
                     }}
                     onCheckOut={async () => {
                       const sb = supabaseRef.current;
                       if (!sb || !last) return;
+                      const checkoutTime = new Date().toISOString();
+                      // 낙관적 업데이트
+                      setToday(prev => prev.map(a => a.id === last.id ? { ...a, checked_out_at: checkoutTime } : a));
                       const { error } = await sb.from("attendance")
-                        .update({ checked_out_at: new Date().toISOString() })
+                        .update({ checked_out_at: checkoutTime })
                         .eq("id", last.id);
-                      if (error) alert("퇴근 실패: " + error.message);
+                      if (error) {
+                        // rollback
+                        setToday(prev => prev.map(a => a.id === last.id ? { ...a, checked_out_at: null } : a));
+                        alert("퇴근 실패: " + error.message);
+                        return;
+                      }
+                      // SMS 자동 알림
+                      const dept = depts.find(d => d.id === staff.dept_id);
+                      triggerCheckOutAlert({ staff, dept, attendanceRecord: { ...last, checked_out_at: checkoutTime } }).catch(() => {});
                     }}
                     onShowLog={() => setLogModalStaff(staff)}
                     onSetCctv={() => setEditCctvDept(staff.dept_id)}
