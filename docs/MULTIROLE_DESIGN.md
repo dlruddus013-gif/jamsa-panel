@@ -464,18 +464,238 @@ export async function handlePreciseLocationView(req, res) {
 
 ---
 
-## 9. 미해결 의사결정 사항
+## 9. 의사결정 사항 (확정 — 2026-05-21)
 
-데모 페이지 만들면서 정해야 할 것들:
-
-| # | 항목 | 옵션 |
+| # | 항목 | 결정 |
 |---|---|---|
-| 1 | **고객 포털 인증** | (a) 토큰 URL만, (b) 토큰 + 이메일 OTP, (c) 별도 고객 계정 |
-| 2 | **익명 ID (`E-XXXX`) 생성 규칙** | (a) staff_id 해시 4자리, (b) DB 시퀀스, (c) hashids 라이브러리 |
-| 3 | **정밀 위치 캐시 TTL** | (a) 매번 DB 조회, (b) 5분 캐시 (성능 ↑ 추적성 ↓) |
-| 4 | **노무사 계정 발급** | (a) 외부 노무법인 계정 직접 추가, (b) 시한부 토큰 발급 |
-| 5 | **CEO 화면 접근 시간 제한** | 업무시간 외 접근 차단? 알림? |
-| 6 | **감사 패키지 암호화** | zip 패스워드? 노무사 공개키 암호화? |
+| 1 | **고객 포털 인증** | **하이브리드** — 토큰 URL(기본) + OTP(민감 정보) + 정식 고객 계정(요청 시) **모두 지원** → §11.1 |
+| 2 | 익명 ID (`E-XXXX`) 생성 규칙 | hashids 라이브러리 (staff_id seed, 박물관 단위 salt) |
+| 3 | 정밀 위치 캐시 TTL | 매번 DB 조회 (추적성 우선, 캐시 X) |
+| 4 | **노무사 계정 발급** | **하이브리드** — 외부 노무법인 직접 계정(실시간) + 정기 감사 패키지(자동 발송) **모두 지원** → §11.2 |
+| 5 | CEO 화면 접근 시간 제한 | 차단 없음. 단, 업무시간 외 접근은 `audit_logs`에 별도 표시 |
+| 6 | 감사 패키지 암호화 | zip 패스워드(기본) + 노무사 공개키 암호화(요청 시) — 둘 다 지원 |
+
+---
+
+## 10. 참고
+
+### 10.1 관련 파일
+- 데모: `public/multirole-demo.html` (`/roles`)
+- 기존 인증: `lib/auth.js`
+- 기존 스키마: `schema.sql`, `supabase/staff_*.sql`
+- 기존 대시보드: `source.jsx` (`IntegratedHomeDashboard`)
+
+### 10.2 외부 자료 (검증 필요)
+- 위치정보법 시행령 동의 양식
+- 한국인터넷진흥원(KISA) 개인위치정보 처리 가이드라인
+- 노무사 협회 표준 근태 시스템 점검 체크리스트
+
+### 10.3 다음 액션
+설계 문서 검토 후 합의되면 **Phase 1** 부터 실제 코드 작업 시작.
+
+---
+
+## 11. 하이브리드 구조 상세 설계
+
+> §9에서 "둘 다 가능"으로 결정된 항목의 구체 구현.
+
+### 11.1 고객 포털 — 3단계 인증 동시 지원
+
+**한 시스템에서 3가지 진입 경로를 모두 지원.** 고객사 상황에 맞게 선택.
+
+```
+                ┌─────────────────────────────────────────┐
+                │     /customer/:token                    │
+                │  (모든 진입 공통 시작점)                │
+                └────────────────┬────────────────────────┘
+                                 │
+              ┌──────────────────┼──────────────────┐
+              ▼                  ▼                  ▼
+       ┌──────────┐       ┌──────────┐       ┌──────────┐
+       │ Tier 1   │       │ Tier 2   │       │ Tier 3   │
+       │ 토큰만   │       │ + OTP    │       │ 정식 계정│
+       └──────────┘       └──────────┘       └──────────┘
+       익명·즉시           민감 정보 조회       다회 방문·이력
+       (기본)              시 1회 인증          관리 필요 시
+```
+
+#### Tier 1 — 토큰 URL만 (기본)
+- 가장 간편. 링크만 클릭하면 진행 상태 확인 가능.
+- 노출되는 정보: 도착/진행/완료, 익명 인원수, 지연 여부
+- 별도 인증 없음. 토큰 자체가 인증.
+- 토큰은 서비스 세션 1건당 발급, 90일 후 자동 만료.
+
+#### Tier 2 — 토큰 + 이메일 OTP (민감 정보 열람 시 트리거)
+- Tier 1 화면에서 "상세 리포트", "현장 사진", "이슈 상세" 등을 누르면 OTP 모달.
+- 등록된 고객 이메일로 6자리 코드 발송, 10분 유효.
+- 인증 후 같은 세션 동안은 재인증 없음.
+- 사용 시나리오: 청주시 시설관리공단이 작업 결과 보고서를 보고 싶을 때.
+
+#### Tier 3 — 정식 고객 계정 (요청 시 발급)
+- 단골·다회 방문 고객사용. 로그인 후 모든 과거 세션 이력 조회.
+- `memberships.role = 'customer'` 사용 (이미 §3.1에 포함).
+- 본인 고객사가 발주한 세션만 보임 (RLS).
+
+#### 스키마 추가
+
+```sql
+-- service_sessions 에 OTP 발송 대상 이메일 추가
+alter table public.service_sessions add column if not exists
+  customer_contact_email text;
+
+-- OTP 발송 기록 (Tier 2)
+create table if not exists public.customer_otp_log (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid references public.service_sessions(id) on delete cascade,
+  email text not null,
+  code_hash text not null,                  -- SHA-256 (평문 저장 금지)
+  purpose text not null,                    -- 'detail_view','photo_view'
+  sent_at timestamptz default now(),
+  expires_at timestamptz not null,
+  consumed_at timestamptz,
+  attempts int default 0
+);
+create index customer_otp_session_idx on public.customer_otp_log (session_id, sent_at desc);
+
+-- 정식 고객 계정 ↔ 고객사 매핑 (Tier 3)
+create table if not exists public.customer_org_members (
+  user_id uuid references auth.users(id) on delete cascade,
+  customer_org text not null,               -- service_sessions.customer_org 와 매칭
+  is_primary boolean default false,
+  created_at timestamptz default now(),
+  primary key (user_id, customer_org)
+);
+```
+
+#### RLS — service_sessions 고객 조회
+
+```sql
+alter table public.service_sessions enable row level security;
+
+-- Tier 3: 로그인한 고객 계정은 본인 고객사 세션만
+create policy "customer_account_view" on public.service_sessions
+  for select using (
+    exists (
+      select 1 from public.customer_org_members com
+      where com.user_id = auth.uid()
+        and com.customer_org = service_sessions.customer_org
+    )
+  );
+
+-- Tier 1·2: 토큰 기반 조회는 RPC 함수로 (auth 없이 호출)
+create or replace function public.get_session_by_token(p_token text)
+returns table (id uuid, status text, delay_min int, assigned_staff_count int, scheduled_at timestamptz)
+language sql security definer as $$
+  select id, status, delay_min, assigned_staff_count, scheduled_at
+  from public.service_sessions
+  where customer_view_token = p_token
+    and created_at > now() - interval '90 days';
+$$;
+
+-- Tier 2: 상세 RPC 는 OTP 검증 후에만 server-side 에서 호출
+```
+
+### 11.2 노무사 접근 — 실시간 + 정기 패키지 동시 운영
+
+**둘 다 운영.** 노무법인 사정에 따라 선택 가능.
+
+```
+   ┌──────────────────────────────┐
+   │     노무사 접근 통로 2가지   │
+   └───────────┬──────────────────┘
+               │
+       ┌───────┴───────┐
+       ▼               ▼
+   ┌────────┐    ┌────────────────┐
+   │실시간  │    │정기 패키지      │
+   │대시보드│    │(월 1회 자동)    │
+   └────────┘    └────────────────┘
+   웹 로그인      이메일 첨부 zip
+   상시 조회      오프라인 보관
+```
+
+#### 경로 A — 실시간 대시보드 (외부 노무법인 계정 직접 발급)
+- `memberships.role = 'lawyer'` 계정을 노무법인 담당자에게 발급.
+- 시한부 토큰 옵션: `memberships.expires_at` 컬럼 추가, 계약 종료 시 자동 만료.
+- 접근 시 매번 본인의 행위도 `audit_logs`에 기록 (감시자도 감시받음).
+- 사용 시나리오: 분쟁 발생 시 즉시 들어와서 조사.
+
+#### 경로 B — 정기 감사 패키지 (자동 발송)
+- 매월 1일 새벽 03:00 cron 으로 전월 감사 패키지 생성.
+- 포함: `consent_records`, `location_access_log`, `attendance_corrections`, `audit_logs` JSON + 요약 PDF + 무결성 해시.
+- zip 패스워드(기본) 또는 노무사 공개키 암호화(옵션) 후 등록 이메일로 발송.
+- 노무사가 별도 시스템 접근 없이도 오프라인 보관·검토 가능.
+- 사용 시나리오: 정기 점검 / 노동청 자료 제출 / 분쟁 예방 검토.
+
+#### 스키마 추가
+
+```sql
+-- 시한부 멤버십 (경로 A)
+alter table public.memberships add column if not exists
+  expires_at timestamptz;
+
+-- 경로 B 발송 기록
+create table if not exists public.audit_package_log (
+  id uuid primary key default gen_random_uuid(),
+  org_id text not null references public.organizations(id),
+  period_start date not null,
+  period_end date not null,
+  generated_at timestamptz default now(),
+  recipient_email text not null,
+  encryption_method text not null check (encryption_method in ('zip_password','pgp_pubkey')),
+  package_sha256 text not null,             -- 발송본 무결성 증명
+  delivered_at timestamptz,
+  delivery_status text,                     -- 'sent','failed','bounced'
+  unique (org_id, period_start, recipient_email)
+);
+
+-- 노무사 공개키 보관 (PGP 옵션)
+create table if not exists public.lawyer_recipients (
+  id uuid primary key default gen_random_uuid(),
+  org_id text not null references public.organizations(id),
+  name text not null,
+  email text not null,
+  pgp_public_key text,                      -- 있으면 PGP, 없으면 zip 패스워드
+  zip_password_hint text,                   -- 패스워드 전달 방법 메모
+  active boolean default true,
+  created_at timestamptz default now()
+);
+```
+
+#### Cron 작업 (경로 B)
+
+```js
+// scripts/monthly_audit_package.js
+// 매월 1일 03:00 실행 (vercel cron 또는 GitHub Actions)
+async function generateMonthlyPackage(orgId, periodStart, periodEnd) {
+  const data = {
+    consent_records: await fetchConsentRecords(orgId, periodStart, periodEnd),
+    location_access_log: await fetchAccessLog(orgId, periodStart, periodEnd),
+    attendance_corrections: await fetchCorrections(orgId, periodStart, periodEnd),
+    audit_logs: await fetchAuditLogs(orgId, periodStart, periodEnd),
+  };
+  const json = JSON.stringify(data, null, 2);
+  const summary = await renderSummaryPdf(data);
+  const hash = sha256(json + summary);
+
+  for (const recipient of await fetchActiveLawyers(orgId)) {
+    const pkg = recipient.pgp_public_key
+      ? await encryptPgp([json, summary], recipient.pgp_public_key)
+      : await zipWithPassword([json, summary], generatePassword());
+    await sendEmail(recipient.email, pkg);
+    await logDelivery(orgId, periodStart, recipient.email, hash);
+  }
+}
+```
+
+### 11.3 Phase 영향
+
+§7 phase 계획 업데이트:
+
+- **Phase 3** — `customer_otp_log`, `customer_org_members`, `get_session_by_token` RPC 추가. 고객 포털을 3 tier 모두 지원하는 UI로 구현.
+- **Phase 4** — `audit_package_log`, `lawyer_recipients` 추가. 월간 cron 스크립트 작성. 노무사 화면에서 본인 계정 정보 + 발송된 패키지 이력 동시 확인.
+
+추가 작업량: 각 phase에 약 2~3일 추가 (총 1주 정도 phase 3·4 길어짐).
 
 ---
 
