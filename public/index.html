@@ -184,9 +184,12 @@
       <circle cx="11" cy="11" r="8"></circle>
       <path d="m21 21-4.3-4.3"></path>
     </svg>
-    <input id="searchInput" type="text" placeholder="재고/시설/조치/이력 전체 검색... (Ctrl+K)" autocomplete="off">
+    <input id="searchInput" type="text" placeholder="재고/시설/조치/이력 전체 검색... (Ctrl+K, 이미지는 붙여넣기/드래그 가능)" autocomplete="off">
+    <button id="imgAttachBtn" title="이미지 첨부 (Ctrl+V로 붙여넣기도 가능)" style="background:transparent;border:0;cursor:pointer;font-size:18px;color:#6366f1;padding:0 6px" onclick="document.getElementById('imgPicker').click()">📷</button>
+    <input id="imgPicker" type="file" accept="image/*" multiple style="display:none">
     <span class="shortcut">⌘K</span>
   </div>
+  <div id="attachedImagesPreview" style="display:none;padding:6px 12px;background:#f8fafc;border-bottom:1px solid #e2e8f0;gap:6px;flex-wrap:wrap;border-radius:8px;margin:4px 0"></div>
   <div id="searchResults"></div>
 
   <div id="root"></div>
@@ -440,8 +443,114 @@
         html += '<span style="color:#3b82f6;font-size:11px;font-weight:bold">➕ 새로운 질문하기</span></div>';
         results.innerHTML = html;
       };
+      // 🆕 첨부된 이미지 관리 — Vercel body limit 4.5MB 고려해 3장/장당 ~1MB로 제한
+      window.__attachedImages = window.__attachedImages || [];
+      const MAX_IMAGES = 3;
+      const MAX_TOTAL_BYTES = 3.5 * 1024 * 1024;  // 전체 합 ~3.5MB (base64 overhead 포함하면 ~4MB)
+
+      // 이미지 자동 압축 — 점진적으로 품질·크기 낮추며 1MB 이하 목표
+      const compressImage = (file) => new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const img = new Image();
+          img.onload = () => {
+            const tryCompress = (maxDim, quality) => {
+              let w = img.width, h = img.height;
+              if (Math.max(w, h) > maxDim) {
+                const ratio = maxDim / Math.max(w, h);
+                w = Math.round(w * ratio); h = Math.round(h * ratio);
+              }
+              const c = document.createElement('canvas');
+              c.width = w; c.height = h;
+              c.getContext('2d').drawImage(img, 0, 0, w, h);
+              return c.toDataURL('image/jpeg', quality);
+            };
+            // 1차: 1280px @ 0.85 → 2차: 1024 @ 0.75 → 3차: 800 @ 0.7
+            const targets = [[1280,0.85],[1024,0.75],[800,0.70],[640,0.65]];
+            let result = null;
+            for (const [d,q] of targets) {
+              result = tryCompress(d, q);
+              // base64 size 추정 (4/3 overhead)
+              if (result.length < 1.2 * 1024 * 1024) break;
+            }
+            resolve(result);
+          };
+          img.onerror = reject;
+          img.src = reader.result;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      const renderImagePreviews = () => {
+        const box = document.getElementById('attachedImagesPreview');
+        if (!box) return;
+        if (window.__attachedImages.length === 0) {
+          box.style.display = 'none'; box.innerHTML = ''; return;
+        }
+        box.style.display = 'flex';
+        box.innerHTML = window.__attachedImages.map((src, i) =>
+          '<div style="position:relative;width:60px;height:60px;border-radius:6px;overflow:hidden;border:1px solid #cbd5e1">'
+          + '<img src="' + src + '" style="width:100%;height:100%;object-fit:cover">'
+          + '<button onclick="window.__removeImg(' + i + ')" style="position:absolute;top:0;right:0;background:rgba(239,68,68,0.9);color:#fff;border:0;width:18px;height:18px;border-radius:0 0 0 6px;cursor:pointer;font-size:11px;line-height:1">×</button>'
+          + '</div>'
+        ).join('') + '<button onclick="document.getElementById(\'imgPicker\').click()" style="width:60px;height:60px;border:2px dashed #cbd5e1;background:#fff;border-radius:6px;cursor:pointer;color:#94a3b8;font-size:20px">+</button>';
+      };
+      window.__removeImg = (i) => { window.__attachedImages.splice(i, 1); renderImagePreviews(); };
+      window.__clearImgs = () => { window.__attachedImages = []; renderImagePreviews(); };
+
+      const addImageFile = async (file) => {
+        if (!file || !file.type.startsWith('image/')) return;
+        if (window.__attachedImages.length >= MAX_IMAGES) {
+          alert('최대 ' + MAX_IMAGES + '장까지 첨부 가능합니다');
+          return;
+        }
+        try {
+          const dataUrl = await compressImage(file);
+          // 전체 합 크기 검증
+          const totalSize = window.__attachedImages.reduce((s, u) => s + u.length, 0) + dataUrl.length;
+          if (totalSize > MAX_TOTAL_BYTES * 1.4) {  // base64 overhead 고려
+            alert('이미지 합계 크기가 너무 큽니다. 첨부된 사진을 줄여주세요.');
+            return;
+          }
+          window.__attachedImages.push(dataUrl);
+          renderImagePreviews();
+          if (!input.value.trim()) input.focus();
+        } catch (e) { alert('이미지 처리 실패: ' + e.message); }
+      };
+
+      // 파일 선택
+      document.getElementById('imgPicker').addEventListener('change', async (e) => {
+        for (const f of e.target.files) await addImageFile(f);
+        e.target.value = '';
+      });
+
+      // 클립보드 붙여넣기 (Ctrl+V)
+      input.addEventListener('paste', async (e) => {
+        const items = e.clipboardData?.items || [];
+        for (const it of items) {
+          if (it.type.startsWith('image/')) {
+            e.preventDefault();
+            await addImageFile(it.getAsFile());
+          }
+        }
+      });
+
+      // 드래그 앤 드롭 (전체 검색바)
+      const searchWrap = document.querySelector('.search-wrap') || input.parentElement;
+      if (searchWrap) {
+        ['dragover','dragenter'].forEach(ev => searchWrap.addEventListener(ev, e => { e.preventDefault(); searchWrap.style.outline = '2px dashed #6366f1'; }));
+        ['dragleave','drop'].forEach(ev => searchWrap.addEventListener(ev, e => { searchWrap.style.outline = ''; }));
+        searchWrap.addEventListener('drop', async (e) => {
+          e.preventDefault();
+          for (const f of e.dataTransfer.files || []) await addImageFile(f);
+        });
+      }
+
       const askChatbot = async (question) => {
-        results.innerHTML = '<div class="sr-header">🤖 AI 작업 도우미</div><div class="sr-empty" style="padding:20px;text-align:center;color:#6366f1">⏳ Claude가 분석 중...</div>';
+        const imgs = window.__attachedImages || [];
+        const imgInfo = imgs.length > 0 ? ` (이미지 ${imgs.length}장 첨부)` : '';
+        results.innerHTML = '<div class="sr-header">🤖 AI 작업 도우미' + imgInfo + '</div><div class="sr-empty" style="padding:20px;text-align:center;color:#6366f1">⏳ ' + (imgs.length > 0 ? 'Vision 분석 중' : 'Claude가 분석 중') + '...</div>';
         results.classList.add('active');
         try {
           const fetcher = window.authFetch || ((p,o)=>fetch(p,o));
@@ -452,6 +561,7 @@
               question,
               userRole: window.__jamsa_role || 'master',
               currentPage: window.__jamsa_current_page || '',
+              images: imgs,  // 🆕 base64 data URL 배열
             }),
           });
           if (!r.ok) {
@@ -466,6 +576,8 @@
             return;
           }
           const data = await r.json();
+          // 🆕 응답 받으면 첨부 이미지 클리어 (다음 질문은 깨끗하게)
+          window.__clearImgs && window.__clearImgs();
           renderChatbotResponse(question, data);
         } catch (e) {
           results.innerHTML = '<div class="sr-empty">❌ AI 호출 실패<br/><span style="font-size:10px;opacity:0.7">' + e.message + '</span><br/><br/>💡 네트워크 확인 또는 새로고침</div>';

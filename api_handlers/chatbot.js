@@ -42,6 +42,14 @@ const SYSTEM_PROMPT = `당신은 한국잠사박물관 통합관리 시스템의
    - "알림 설정?" → category: "alert"
    "help"는 시스템 사용법 자체에 대한 메타 질문(어떤 기능들이 있어?, 도움말?)에만 사용한다.
 
+## 이미지 첨부 시 (사진/스크린샷 분석)
+- 사진이 함께 첨부된 경우 이미지 내용을 먼저 분석하고 그 결과를 답변에 반영한다.
+- 시설 사진: 손상/위험/유지보수 필요 항목 식별 → actions로 사고기록·점검등록 제안.
+- 화면 스크린샷(에러/UI): 에러 메시지·UI 상태를 정확히 읽고 원인·조치 제안.
+- 재고/제품 사진: 품목 추정, 수량 단서, 보관 상태 평가.
+- 이미지의 한국어/숫자가 보이면 정확히 인용하고 confidence를 솔직하게 표기.
+- 사진만 있고 질문이 비어있으면 "이미지 자동 분석" 모드로 동작.
+
 ## 응답 형식 (반드시 JSON만)
 {
   "answer": "사용자에게 보여줄 답변 (2~5문장, 한국어)",
@@ -186,7 +194,30 @@ function parseJsonCard(text) {
   try { return JSON.parse(match[0]); } catch (e) { return null; }
 }
 
-async function callClaude(userMessage, { maxTokens = 900 } = {}) {
+// 🆕 data URL 파싱 → {mediaType, data}
+function parseDataUrl(dataUrl) {
+  if (typeof dataUrl !== 'string') return null;
+  const m = dataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,([A-Za-z0-9+/=]+)$/);
+  if (!m) return null;
+  return { mediaType: m[1], data: m[2] };
+}
+
+async function callClaude(userMessage, { maxTokens = 900, images = [] } = {}) {
+  // Vision 요청 시 maxTokens 증가
+  const tokens = images.length > 0 ? Math.max(maxTokens, 1500) : maxTokens;
+  // content 배열 구성: 이미지들 + 텍스트
+  let content;
+  if (images.length > 0) {
+    const blocks = [];
+    for (const url of images.slice(0, 4)) {
+      const p = parseDataUrl(url);
+      if (p) blocks.push({ type: 'image', source: { type: 'base64', media_type: p.mediaType, data: p.data } });
+    }
+    blocks.push({ type: 'text', text: userMessage });
+    content = blocks;
+  } else {
+    content = userMessage;
+  }
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -196,9 +227,9 @@ async function callClaude(userMessage, { maxTokens = 900 } = {}) {
     },
     body: JSON.stringify({
       model: ANTHROPIC_MODEL,
-      max_tokens: maxTokens,
+      max_tokens: tokens,
       system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userMessage }],
+      messages: [{ role: 'user', content }],
     }),
   });
   if (!r.ok) {
@@ -214,7 +245,21 @@ async function callClaude(userMessage, { maxTokens = 900 } = {}) {
   return { card, raw: text, usage: data?.usage || null, model: ANTHROPIC_MODEL };
 }
 
-async function callOpenAI(userMessage, { maxTokens = 900 } = {}) {
+async function callOpenAI(userMessage, { maxTokens = 900, images = [] } = {}) {
+  const tokens = images.length > 0 ? Math.max(maxTokens, 1500) : maxTokens;
+  // OpenAI vision: image_url 객체 사용 (data URL 그대로 가능)
+  let userContent;
+  if (images.length > 0) {
+    const parts = [{ type: 'text', text: userMessage }];
+    for (const url of images.slice(0, 4)) {
+      // 유효성 검사
+      const p = parseDataUrl(url);
+      if (p) parts.push({ type: 'image_url', image_url: { url, detail: 'auto' } });
+    }
+    userContent = parts;
+  } else {
+    userContent = userMessage;
+  }
   const r = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -223,11 +268,11 @@ async function callOpenAI(userMessage, { maxTokens = 900 } = {}) {
     },
     body: JSON.stringify({
       model: OPENAI_MODEL,
-      max_tokens: maxTokens,
+      max_tokens: tokens,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userMessage },
+        { role: 'user', content: userContent },
       ],
     }),
   });
@@ -334,17 +379,27 @@ export default async function handler(req, res) {
   const context = body.context || '';
   const userRole = body.userRole || 'master';
   const currentPage = body.currentPage || '';
+  // 🆕 이미지 첨부 (data URL 배열, 최대 4장)
+  const images = Array.isArray(body.images)
+    ? body.images.filter(u => typeof u === 'string' && u.startsWith('data:image/')).slice(0, 4)
+    : [];
   // mode: 'auto' | 'claude' | 'openai' | 'consensus' | 'both' (=consensus 별명)
   let mode = (body.mode || 'auto').toLowerCase();
   if (mode === 'both' || mode === 'dual') mode = 'consensus';
-  if (!question.trim()) return res.status(400).json({ ok: false, error: 'missing_question' });
+  if (!question.trim() && images.length === 0) return res.status(400).json({ ok: false, error: 'missing_question' });
+  // 이미지가 있을 때 질문이 비어있으면 기본 분석 프롬프트
+  const effectiveQuestion = question.trim() || '첨부된 이미지를 박물관 운영 관점에서 분석하고, 발견되는 문제·위험·개선점을 알려줘.';
 
+  // 🆕 이미지가 있으면 무조건 consensus (둘 다 vision으로 분석, 두 시각 비교가 가치)
+  if (images.length > 0 && mode === 'auto' && ANTHROPIC_API_KEY && OPENAI_API_KEY) {
+    mode = 'consensus';
+  }
   // auto 모드 + 두 키 모두 있음 → 질문 성격에 따라 consensus 결정
   // [케이스 스터디 결과 반영]
   //  - 사실/네비게이션 질문(메뉴 위치)은 consensus 불필요 → Claude 단독 (cost/latency 절감)
   //  - 분석/판단/비교/긴급 질문만 consensus
   if (mode === 'auto' && ANTHROPIC_API_KEY && OPENAI_API_KEY) {
-    const q = question.trim();
+    const q = effectiveQuestion.trim();
     // 사실/네비게이션 질문: "어디", "메뉴", "위치", "어디서", "어떻게 가"
     const isNavQuery = /(어디|메뉴 위치|어느 메뉴|위치\?|에서 (열|봐|확인|보)|어디(서|에|를)|페이지 (어디|위치))/.test(q);
     // 짧은 단순 질문
@@ -369,7 +424,7 @@ export default async function handler(req, res) {
   if (mode === 'claude' && !ANTHROPIC_API_KEY && OPENAI_API_KEY) mode = 'openai';
   if (mode === 'openai' && !OPENAI_API_KEY && ANTHROPIC_API_KEY) mode = 'claude';
 
-  const userMessage = buildUserMessage({ question, context, userRole, currentPage });
+  const userMessage = buildUserMessage({ question: effectiveQuestion, context, userRole, currentPage });
   const wantConsensus = mode === 'consensus' && ANTHROPIC_API_KEY && OPENAI_API_KEY;
   const wantClaude    = (mode === 'claude' || mode === 'auto') && ANTHROPIC_API_KEY;
   const wantOpenAI    = (mode === 'openai' || mode === 'auto') && OPENAI_API_KEY && !wantClaude;
@@ -378,8 +433,8 @@ export default async function handler(req, res) {
   if (wantConsensus) {
     const fallbackActions = ruleBasedCard(question).actions;
     const [claudeR, openaiR] = await Promise.allSettled([
-      callClaude(userMessage),
-      callOpenAI(userMessage),
+      callClaude(userMessage, { images }),
+      callOpenAI(userMessage, { images }),
     ]);
     const claudeOk = claudeR.status === 'fulfilled' ? claudeR.value : null;
     const openaiOk = openaiR.status === 'fulfilled' ? openaiR.value : null;
@@ -413,7 +468,7 @@ export default async function handler(req, res) {
   // 단일 OpenAI 모드
   if (wantOpenAI || (mode === 'auto' && !ANTHROPIC_API_KEY && OPENAI_API_KEY)) {
     try {
-      const { card, usage, model } = await callOpenAI(userMessage);
+      const { card, usage, model } = await callOpenAI(userMessage, { images });
       if (!card.actions || card.actions.length === 0) {
         card.actions = ruleBasedCard(question).actions;
       }
@@ -426,7 +481,7 @@ export default async function handler(req, res) {
       // 🆕 OpenAI 실패 시 Claude 키 있으면 Claude로 fallback (quota/429 등)
       if (ANTHROPIC_API_KEY) {
         try {
-          const { card, usage, model } = await callClaude(userMessage);
+          const { card, usage, model } = await callClaude(userMessage, { images });
           if (!card.actions || card.actions.length === 0) {
             card.actions = ruleBasedCard(question).actions;
           }
@@ -445,7 +500,7 @@ export default async function handler(req, res) {
   // 단일 Claude 모드 (기본)
   if (wantClaude) {
     try {
-      const { card, usage, model } = await callClaude(userMessage);
+      const { card, usage, model } = await callClaude(userMessage, { images });
       if (!card.actions || card.actions.length === 0) {
         card.actions = ruleBasedCard(question).actions;
       }
@@ -458,7 +513,7 @@ export default async function handler(req, res) {
       // Claude 실패 시 OpenAI로 fallback
       if (OPENAI_API_KEY && mode === 'auto') {
         try {
-          const { card, usage, model } = await callOpenAI(userMessage);
+          const { card, usage, model } = await callOpenAI(userMessage, { images });
           if (!card.actions || card.actions.length === 0) {
             card.actions = ruleBasedCard(question).actions;
           }
