@@ -398,6 +398,22 @@ export default async function handler(req, res) {
       });
     } catch (e) {
       console.warn('[chatbot] OpenAI failed:', e.message);
+      // 🆕 OpenAI 실패 시 Claude 키 있으면 Claude로 fallback (quota/429 등)
+      if (ANTHROPIC_API_KEY) {
+        try {
+          const { card, usage, model } = await callClaude(userMessage);
+          if (!card.actions || card.actions.length === 0) {
+            card.actions = ruleBasedCard(question).actions;
+          }
+          return res.status(200).json({
+            ok: true, ...card,
+            source: 'claude_fallback', model, mode_used: 'claude',
+            usage, note: `OpenAI 호출 실패로 Claude로 fallback: ${e.message.slice(0,120)}`,
+          });
+        } catch (e2) {
+          console.warn('[chatbot] Claude fallback failed:', e2.message);
+        }
+      }
     }
   }
 
