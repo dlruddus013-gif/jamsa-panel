@@ -23609,6 +23609,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
               bgMode={bgMode} onChangeBgMode={changeBgMode}
               cctvSnapshotData={cctvSnapshotData}
               cctvEditMode={cctvEditMode}
+              cctvMap={cctvMap}
               onMoveCctv={moveChannelToZone} />
           )}
 
@@ -26448,7 +26449,7 @@ window.onload = () => {
 }
 
 /* ─── OSM FALLBACK MAP (네이버 API 키 없거나 오류 시) ─── */
-function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, errorMsg, bgMode = "satellite", onChangeBgMode, cctvSnapshotData = null, cctvEditMode = false, onMoveCctv = null }) {
+function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, errorMsg, bgMode = "satellite", onChangeBgMode, cctvSnapshotData = null, cctvEditMode = false, onMoveCctv = null, cctvMap = {} }) {
   // 박물관 영역 경계 (한국잠사박물관 청주 - 정확한 좌표)
   const LAT_MIN = 36.6378, LAT_MAX = 36.6395, LNG_MIN = 127.4880, LNG_MAX = 127.4905;
   const LAT_CENTER = (LAT_MIN + LAT_MAX) / 2;
