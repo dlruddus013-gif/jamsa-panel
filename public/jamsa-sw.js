@@ -1,7 +1,7 @@
 // jamsa-sw.js — Service Worker
 // 캐시 정책: 정적 자원만 캐시, API/동적 자원은 무조건 네트워크
 
-const CACHE_NAME = 'jamsa-v4-2026-05-17b';  // bump again to force re-activate
+const CACHE_NAME = 'jamsa-v5-2026-05-21-no-html-cache';  // bump again to force re-activate
 const STATIC_ASSETS = [
   '/manifest.json',
 ];  // index.html은 절대 캐시 안 함 (항상 최신)
@@ -39,15 +39,21 @@ self.addEventListener('fetch', (event) => {
     return; // 기본 fetch 동작
   }
 
-  // HTML/번들은 항상 네트워크 우선 (캐시 폴백)
-  if (url.pathname === '/' || url.pathname === '/index.html' || url.pathname === '/app.bundle.js') {
+  // 🆕 모든 HTML 페이지 + JS 번들은 항상 네트워크 우선 (캐시 폴백)
+  //    .html 파일들이 SW에 의해 stale 캐시되는 문제 방지
+  if (url.pathname === '/'
+      || url.pathname.endsWith('.html')
+      || url.pathname.endsWith('.js')
+      || url.pathname === '/staff-checkin'
+      || url.pathname === '/attendance'
+      || url.pathname === '/m') {
     event.respondWith(
       fetch(event.request, { cache: 'no-store' }).catch(() => caches.match(event.request))
     );
     return;
   }
 
-  // 기타 정적 자원은 cache-first
+  // 기타 정적 자원(이미지/CSS/폰트 등)은 cache-first
   event.respondWith(
     caches.match(event.request).then(cached => {
       return cached || fetch(event.request).then(res => {
