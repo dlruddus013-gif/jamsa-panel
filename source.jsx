@@ -27925,6 +27925,187 @@ function HomeNaverApiKeyModal({ currentKey, onSave, onClose }) {
   );
 }
 
+/* ==================== Phase 3 — 동의 / 정정 요청 모달 ====================
+   설계 §3.2, §3.4, §6.1. 직원이 본인 입장에서 사용. admin은 별도 검토 UI 사용.
+*/
+const CONSENT_TEXT_V32_LINES = [
+  "수집 항목: GPS 좌표, BLE 신호, 디바이스 ID",
+  "수집 목적: 출퇴근 자동 인식, 근무지 이탈 방지, 비상 안전",
+  "수집 시간: 근무 시작 1시간 전 ~ 종료 30분 후",
+  "보유 기간: 원본 90일 / 집계 3년",
+  "제3자 제공: 없음 (고객사에는 익명화 후)",
+  "동의 거부 시 불이익: 없음 (수동 출근 대체)",
+];
+const CONSENT_SCOPE_OPTIONS = [
+  { key: "gps",              label: "GPS 좌표 수집" },
+  { key: "ble",              label: "BLE 비콘 신호 수집" },
+  { key: "work_hours_only",  label: "근무 시간대만 (외 시간 미수집)" },
+];
+
+function getAuthToken() {
+  try {
+    return window.__authToken
+      || window.localStorage?.getItem("__supabase_token")
+      || "";
+  } catch (e) { return ""; }
+}
+
+function ConsentModal({ onClose, onAgreed }) {
+  const [scope, setScope] = useState(["gps", "ble", "work_hours_only"]);
+  const [agreed, setAgreed] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const toggle = (key) => setScope(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
+
+  async function submit() {
+    if (!agreed) { setError("동의 체크박스를 선택해주세요"); return; }
+    if (scope.length === 0) { setError("최소 1개 수집 범위는 동의해야 합니다"); return; }
+    setSubmitting(true); setError("");
+    try {
+      const r = await fetch("/api/consent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getAuthToken()}` },
+        body: JSON.stringify({ scope }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) {
+        if (j.error === "consent_already_active") {
+          onAgreed?.({ alreadyActive: true });
+          onClose();
+          return;
+        }
+        setError(j.error || "동의 등록 실패");
+        return;
+      }
+      onAgreed?.(j);
+      onClose();
+    } catch (e) { setError("네트워크 오류: " + e.message); }
+    finally { setSubmitting(false); }
+  }
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10095, background: "rgba(15,23,42,0.65)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: 540, maxWidth: "95vw", maxHeight: "90vh", overflow: "auto", padding: 24 }}>
+        <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 4 }}>📜 위치정보 수집·이용 동의 (v3.2)</div>
+        <div style={{ fontSize: 11.5, color: "#64748b", marginBottom: 14 }}>위치정보법 제18조 · 한국잠사플레이팜 통합관리 시스템</div>
+
+        <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 14, marginBottom: 14, fontSize: 12.5, lineHeight: 1.75 }}>
+          {CONSENT_TEXT_V32_LINES.map((line, i) => <div key={i}>• {line}</div>)}
+        </div>
+
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#475569", marginBottom: 8 }}>수집 범위 선택 (직원이 직접 선택 가능)</div>
+        {CONSENT_SCOPE_OPTIONS.map(o => (
+          <label key={o.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", fontSize: 12.5, cursor: "pointer" }}>
+            <input type="checkbox" checked={scope.includes(o.key)} onChange={() => toggle(o.key)} />
+            {o.label}
+          </label>
+        ))}
+
+        <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 4px 4px", fontSize: 13, fontWeight: 700, cursor: "pointer", borderTop: "1px solid #e2e8f0", marginTop: 12 }}>
+          <input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)} />
+          위 내용을 모두 확인하였으며, 위치정보 수집·이용에 동의합니다.
+        </label>
+
+        {error && (
+          <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, padding: "8px 12px", margin: "10px 0", fontSize: 11.5, color: "#b91c1c" }}>❌ {error}</div>
+        )}
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+          <button onClick={onClose} style={{ padding: "9px 16px", borderRadius: 6, border: "1px solid #e2e8f0", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>나중에</button>
+          <button onClick={submit} disabled={!agreed || submitting}
+            style={{ padding: "9px 18px", borderRadius: 6, border: "none", background: agreed ? "linear-gradient(135deg,#16a34a,#15803d)" : "#cbd5e1", color: "#fff", fontSize: 12, fontWeight: 700, cursor: agreed ? "pointer" : "not-allowed" }}>
+            {submitting ? "등록 중..." : "동의 등록"}
+          </button>
+        </div>
+        <div style={{ fontSize: 10.5, color: "#94a3b8", marginTop: 10, lineHeight: 1.55 }}>
+          ※ 동의 후에도 언제든 직원 화면에서 철회 가능합니다. 철회 시 GPS·BLE 수집이 즉시 중단되며, 수동 출근으로 대체됩니다.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CorrectionRequestModal({ onClose, onSubmitted }) {
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [field, setField] = useState("check_in");
+  const [valueBefore, setValueBefore] = useState("");
+  const [valueAfter, setValueAfter] = useState("");
+  const [reason, setReason] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const reasonOk = reason.trim().length >= 10;
+
+  async function submit() {
+    if (!valueAfter) { setError("정정 후 시각을 입력해주세요"); return; }
+    if (!reasonOk) { setError("사유를 10자 이상 입력해주세요"); return; }
+    setSubmitting(true); setError("");
+    try {
+      const r = await fetch("/api/correction", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getAuthToken()}` },
+        body: JSON.stringify({ date, field, valueBefore: valueBefore || null, valueAfter, reason: reason.trim() }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) { setError(j.error || "요청 실패"); return; }
+      onSubmitted?.(j);
+      onClose();
+    } catch (e) { setError("네트워크 오류: " + e.message); }
+    finally { setSubmitting(false); }
+  }
+
+  const labelStyle = { display: "block", fontSize: 11, fontWeight: 700, marginBottom: 4, color: "#475569" };
+  const inputStyle = { width: "100%", padding: "8px 10px", border: "1px solid #e2e8f0", borderRadius: 6, fontSize: 12.5, marginBottom: 10, fontFamily: "inherit" };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 10095, background: "rgba(15,23,42,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, width: 480, maxWidth: "95vw", maxHeight: "90vh", overflow: "auto", padding: 22 }}>
+        <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 6 }}>📝 출퇴근 정정 요청</div>
+        <div style={{ fontSize: 11.5, color: "#64748b", marginBottom: 14, lineHeight: 1.55 }}>
+          관리자 승인 후 반영됩니다. 사유는 영구 보존되며 노무사 감사 대상입니다 (근로기준법 §42).
+        </div>
+
+        <label style={labelStyle}>일자</label>
+        <input type="date" value={date} onChange={e => setDate(e.target.value)} style={inputStyle} />
+
+        <label style={labelStyle}>항목</label>
+        <select value={field} onChange={e => setField(e.target.value)} style={inputStyle}>
+          <option value="check_in">출근시각</option>
+          <option value="check_out">퇴근시각</option>
+          <option value="break_time">휴게 시작</option>
+        </select>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div>
+            <label style={labelStyle}>기존 기록 (선택)</label>
+            <input type="time" value={valueBefore} onChange={e => setValueBefore(e.target.value)} style={inputStyle} />
+          </div>
+          <div>
+            <label style={labelStyle}>정정 후 시각</label>
+            <input type="time" value={valueAfter} onChange={e => setValueAfter(e.target.value)} style={inputStyle} />
+          </div>
+        </div>
+
+        <label style={labelStyle}>사유 (10자 이상) <span style={{ float: "right", color: reasonOk ? "#16a34a" : "#dc2626", fontWeight: 700 }}>{reason.trim().length} / 10</span></label>
+        <textarea value={reason} onChange={e => setReason(e.target.value)}
+          placeholder="예: BLE 인식 지연으로 출근 시각이 잘못 기록됨. 실제 도착 시각은 08:55."
+          style={{ ...inputStyle, minHeight: 70, resize: "vertical" }} />
+
+        {error && (
+          <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, padding: "8px 12px", marginBottom: 10, fontSize: 11.5, color: "#b91c1c" }}>❌ {error}</div>
+        )}
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button onClick={onClose} style={{ padding: "9px 16px", borderRadius: 6, border: "1px solid #e2e8f0", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>취소</button>
+          <button onClick={submit} disabled={!reasonOk || !valueAfter || submitting}
+            style={{ padding: "9px 18px", borderRadius: 6, border: "none", background: (reasonOk && valueAfter) ? "linear-gradient(135deg,#3b82f6,#2563eb)" : "#cbd5e1", color: "#fff", fontSize: 12, fontWeight: 700, cursor: (reasonOk && valueAfter) ? "pointer" : "not-allowed" }}>
+            {submitting ? "요청 중..." : "정정 요청"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ==================== Phase 2 — 정밀 위치 사유 입력 모달 ====================
    설계 §5.3, §11.1. admin만 사용 가능, lawyer는 사후 로그 조회만.
    서버에 reason_detail 50자 이상 + legal_basis 전송, 로그 INSERT 후 좌표 반환.
@@ -28459,6 +28640,10 @@ function AppInner() {
     return () => window.removeEventListener("jamsa-precise-location-open", h);
   }, []);
 
+  // Phase 3: 동의 / 정정 모달
+  const [showConsent, setShowConsent] = useState(false);
+  const [showCorrection, setShowCorrection] = useState(false);
+
   // Shared audit log - every AI analysis, action creation, and completion is logged
   const [auditLog, setAuditLog] = useLocalStorage("jamsa_audit_log", []);
   const [showAuditLog, setShowAuditLog] = useState(false);
@@ -28610,6 +28795,19 @@ function AppInner() {
             style={{ padding: "5px 10px", borderRadius: 6, background: "rgba(14,165,233,0.16)", border: "1px solid rgba(14,165,233,0.35)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 800, display: "flex", alignItems: "center", gap: 4 }}>
             ☁️ DB
           </a>
+          {/* Phase 3: 본인 동의/정정 — staff/lead/admin 모두 노출 (본인용) */}
+          {(role6 === "staff" || role6 === "lead" || role6 === "admin") && (
+            <>
+              <button onClick={() => setShowConsent(true)} title="위치정보 수집 동의 (v3.2)"
+                style={{ padding: "5px 10px", borderRadius: 6, background: "rgba(22,163,74,0.18)", border: "1px solid rgba(22,163,74,0.35)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>
+                📜 동의
+              </button>
+              <button onClick={() => setShowCorrection(true)} title="출퇴근 기록 정정 요청"
+                style={{ padding: "5px 10px", borderRadius: 6, background: "rgba(59,130,246,0.18)", border: "1px solid rgba(59,130,246,0.35)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>
+                📝 정정
+              </button>
+            </>
+          )}
           <span style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}>{currentUser.dept}</span>
           <span style={{ fontSize: 12, fontWeight: 700 }}>{currentUser.name}</span>
           <span title={`6역할: ${role6}`}
@@ -28650,6 +28848,8 @@ function AppInner() {
         />}
       </div>
       {preciseTarget && <PreciseLocationModal targetUser={preciseTarget} currentUser={currentUser} onClose={() => setPreciseTarget(null)} onSuccess={() => {}} />}
+      {showConsent && <ConsentModal onClose={() => setShowConsent(false)} onAgreed={(r) => { addAudit({ kind: "CONSENT", note: r.alreadyActive ? "이미 동의됨" : `동의 v${r.version || "3.2"}` }); }} />}
+      {showCorrection && <CorrectionRequestModal onClose={() => setShowCorrection(false)} onSubmitted={(r) => { addAudit({ kind: "CORRECTION_REQ", note: `정정 요청 id=${r.id}` }); }} />}
       {showAuditLog && <AuditLogModal log={auditLog} onClose={() => setShowAuditLog(false)} />}
       {showWorklog && <WorklogPage onClose={() => setShowWorklog(false)} addAudit={addAudit} facActions={facActions} worklogs={worklogs} setWorklogs={setWorklogs} currentUser={currentUser} />}
       {showBackup && <BackupRestoreModal onClose={() => setShowBackup(false)} />}

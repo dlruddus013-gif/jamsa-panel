@@ -87,9 +87,40 @@ function openModal(html) { $("#modal-inner").innerHTML = html; $("#modal-bg").cl
 function closeModal() { $("#modal-bg").classList.remove("open"); }
 $("#modal-bg").addEventListener("click", e => { if (e.target.id === "modal-bg") closeModal(); });
 
-// Phase 1: mock 데이터 (실제는 Phase 3에서 /api/customer/session?token= 호출로 교체)
-const MOCK_SESSIONS = {
-  "DEMO-1234": {
+// Phase 3: 실제 API 연동 (Tier 1 익명 조회)
+async function fetchSession(token) {
+  try {
+    const r = await fetch(`/api/customer-session?token=${encodeURIComponent(token)}`);
+    if (!r.ok) {
+      // 운영 환경에서 DB 미세팅이거나 토큰 만료 시 mock 으로 fallback (시연용)
+      if (r.status === 404 && token === "DEMO-1234") return mockFallback();
+      return null;
+    }
+    const j = await r.json();
+    if (!j.ok || !j.session) return null;
+    const s = j.session;
+    const fmt = (iso) => iso ? new Date(iso).toTimeString().slice(0, 5) : "-";
+    return {
+      customer_org: s.customer_org,
+      site: s.site,
+      scheduled_time: fmt(s.scheduled_at),
+      status: s.status,
+      delay_min: s.delay_min || 0,
+      issues: s.issue_count || 0,
+      actual_arrival: fmt(s.actual_arrival_at),
+      scheduled_end: fmt(new Date(new Date(s.scheduled_at).getTime() + (s.scheduled_duration_min || 60) * 60000).toISOString()),
+      report_at: "18:00",
+      staff_team: "한국잠사박물관 운영팀",
+      staff_count: s.assigned_staff_count || 0,
+      session_id: s.id,
+    };
+  } catch (e) {
+    console.warn("[customer-portal] fetch failed:", e);
+    return token === "DEMO-1234" ? mockFallback() : null;
+  }
+}
+function mockFallback() {
+  return {
     customer_org: "청주시 시설관리공단",
     site: "한국잠사박물관",
     scheduled_time: "14:00",
@@ -101,14 +132,9 @@ const MOCK_SESSIONS = {
     report_at: "18:00",
     staff_team: "한국잠사박물관 운영팀",
     staff_count: 2,
-  },
-};
-
-async function fetchSession(token) {
-  // Phase 3: fetch(`/api/customer/session?token=${token}`).then(r=>r.json())
-  // Phase 1: mock
-  return MOCK_SESSIONS[token] || null;
+  };
 }
+window.__sessionToken = "";
 
 function renderEmpty(reason) {
   $("#root").innerHTML = `
@@ -134,6 +160,7 @@ async function main() {
     renderEmpty("토큰이 없습니다. 발급받은 링크로 접속해주세요.");
     return;
   }
+  window.__sessionToken = token;
   const s = await fetchSession(token);
   if (!s) {
     renderEmpty("유효하지 않거나 만료된 토큰입니다. 새 링크를 요청해주세요.");
@@ -205,10 +232,28 @@ window.openIssue = function() {
     </div>
   `);
 };
-window.submitIssue = function() {
-  // Phase 3: POST /api/customer/issue { token, type, detail, contact }
-  closeModal();
-  toast("이슈 접수 완료 · 30분 내 회신", "good");
+window.submitIssue = async function() {
+  const type = $("#issueType").value;
+  const detail = $("#issueDetail").value.trim();
+  const contact = $("#issueContact").value.trim();
+  if (detail.length < 5) { toast("상세 내용을 더 자세히 작성해주세요", "warn"); return; }
+  try {
+    const r = await fetch("/api/customer-session?action=issue", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: window.__sessionToken, type, detail, contact: contact || null }),
+    });
+    const j = await r.json();
+    closeModal();
+    if (r.ok && j.ok) {
+      toast("이슈 접수 완료 · 30분 내 회신", "good");
+    } else {
+      toast("접수 실패: " + (j.error || "unknown"));
+    }
+  } catch (e) {
+    closeModal();
+    toast("네트워크 오류 — 다시 시도해주세요");
+  }
 };
 window.openOtpRequest = function() {
   openModal(`

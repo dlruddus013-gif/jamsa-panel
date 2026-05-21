@@ -25,6 +25,9 @@ import staffDispatch from '../api_handlers/staff-dispatch.js';
 import staffLocations from '../api_handlers/staff-locations.js';
 import staffLocationUpdate from '../api_handlers/staff-location-update.js';
 import preciseLocation from '../api_handlers/precise-location.js';
+import consent from '../api_handlers/consent.js';
+import correction from '../api_handlers/correction.js';
+import customerSession from '../api_handlers/customer-session.js';
 import stats from '../api_handlers/stats.js';
 import tapoAutomations from '../api_handlers/tapo-automations.js';
 import tapoCamera from '../api_handlers/tapo-camera.js';
@@ -60,6 +63,9 @@ const routes = {
   'staff-locations': staffLocations,
   'staff-location-update': staffLocationUpdate,
   'precise-location': preciseLocation,
+  'consent': consent,
+  'correction': correction,
+  'customer-session': customerSession,
   'stats': stats,
   'tapo-automations': tapoAutomations,
   'tapo-camera': tapoCamera,
