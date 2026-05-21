@@ -63,6 +63,22 @@
   .btn-secondary{background:var(--surface);color:var(--text-soft);border:1px solid var(--line)}
   .btn-secondary:active{background:var(--line)}
   .btn-danger{background:#dc2626;color:#fff}
+  .btn-checkin{
+    background:linear-gradient(135deg,#10b981,#059669);color:#fff;font-size:17px;padding:18px;
+    box-shadow:0 4px 12px rgba(16,185,129,0.4);
+  }
+  .btn-checkin:active{transform:scale(.97);box-shadow:0 2px 6px rgba(16,185,129,0.5)}
+  .btn-checkout{
+    background:linear-gradient(135deg,#ef4444,#b91c1c);color:#fff;font-size:17px;padding:18px;
+    box-shadow:0 4px 12px rgba(239,68,68,0.4);
+  }
+  .btn-checkout:active{transform:scale(.97);box-shadow:0 2px 6px rgba(239,68,68,0.5)}
+  .state-badge{
+    display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:800;letter-spacing:.04em;
+  }
+  .state-on{background:rgba(52,211,153,0.2);color:var(--accent);border:1px solid rgba(52,211,153,0.4)}
+  .state-off{background:rgba(148,163,184,0.15);color:var(--text-soft);border:1px solid rgba(148,163,184,0.3)}
+  .state-done{background:rgba(99,102,241,0.18);color:#a5b4fc;border:1px solid rgba(99,102,241,0.35)}
 
   #setup-card{display:flex;flex-direction:column;gap:12px}
   #setup-card .field{display:flex;flex-direction:column;gap:6px}
@@ -165,6 +181,25 @@
       <div class="val" id="statusDept" style="color:var(--text-soft);margin-top:2px">—</div>
     </div>
 
+    <!-- 🆕 출근/퇴근 큰 버튼 + 현재 상태 -->
+    <div class="card" id="attendanceCard">
+      <div class="lbl" style="display:flex;justify-content:space-between;align-items:center">
+        <span>🕐 현재 출근 상태</span>
+        <span id="attStateBadge" class="state-badge state-off">미출근</span>
+      </div>
+      <div class="val-big mono" id="attTime" style="margin-top:6px">—</div>
+      <div id="attBtns" style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn btn-checkin" id="btnCheckIn" onclick="manualCheckIn()">✓ 지금 출근</button>
+        <button class="btn btn-checkout" id="btnCheckOut" onclick="manualCheckOut()" style="display:none">✗ 지금 퇴근</button>
+      </div>
+      <div id="autoCountdown" style="margin-top:8px;padding:8px;background:rgba(34,197,94,0.08);border:1px dashed rgba(34,197,94,0.3);border-radius:6px;font-size:11px;color:#86efac;display:none">
+        🟢 권역 진입 감지 — <span id="autoInCounter">3분</span> 후 자동 출근
+      </div>
+      <div id="autoOutCountdown" style="margin-top:8px;padding:8px;background:rgba(251,191,36,0.08);border:1px dashed rgba(251,191,36,0.3);border-radius:6px;font-size:11px;color:#fcd34d;display:none">
+        🟡 권역 이탈 감지 — <span id="autoOutCounter">30분</span> 후 자동 퇴근
+      </div>
+    </div>
+
     <div class="status-grid">
       <div class="status-tile">
         <div class="lbl">📡 위치</div>
@@ -209,25 +244,28 @@ let currentStaff = null;
 let watchId = null;
 let lastPos = null;
 let sendTimer = null;
-let geofence = null; // {centerLat, centerLng, radiusM}
+let evalTimer = null;
+let geofence = null; // {centerLat, centerLng, radiusM, inMin, outMin}
 let geofenceState = "unknown"; // "inside" | "outside" | "unknown"
 let geofenceEnterAt = 0;
 let geofenceExitAt = 0;
+let attendanceState = { working: false, lastAttendance: null }; // 현재 출근 상태
 
 const LS_URL  = "jamsa_sb_url";
 const LS_KEY  = "jamsa_sb_key";
 const LS_STAFF= "jamsa_checkin_staff_id";
 
-// 잠사박물관 기본 중심 + 100m 반경 (관리자가 설정 변경 가능)
-const DEFAULT_GEOFENCE = { centerLat: 36.6383333, centerLng: 127.3827778, radiusM: 200 };
+// 잠사박물관 기본 중심 + 200m 반경 (관리자가 설정 변경 가능)
+const DEFAULT_GEOFENCE = { centerLat: 36.6383333, centerLng: 127.3827778, radiusM: 200, inMin: 3, outMin: 30 };
 const LS_GEOFENCE = "jamsa_geofence";
 
-function loadGeofence() {
+async function loadGeofence() {
+  // 우선 서버 측 config에서 가져오기 시도 (관리자가 패널에서 설정한 값)
   try {
     const raw = localStorage.getItem(LS_GEOFENCE);
-    if (raw) return JSON.parse(raw);
+    if (raw) return { ...DEFAULT_GEOFENCE, ...JSON.parse(raw) };
   } catch (e) {}
-  return DEFAULT_GEOFENCE;
+  return { ...DEFAULT_GEOFENCE };
 }
 
 // haversine 거리 계산 (m)
@@ -271,7 +309,7 @@ async function init() {
   document.getElementById("setup").style.display = "none";
   document.getElementById("login").style.display = "block";
   sb = supabase.createClient(url, key);
-  geofence = loadGeofence();
+  geofence = await loadGeofence();
 
   // 직원 목록 로드
   try {
@@ -289,7 +327,7 @@ async function init() {
   }
 }
 
-function startCheckin() {
+async function startCheckin() {
   const sel = document.getElementById("staffSelect");
   if (!sel.value) { alert("본인을 선택하세요"); return; }
   const opt = sel.options[sel.selectedIndex];
@@ -307,6 +345,9 @@ function startCheckin() {
   document.getElementById("statusDept").textContent = currentStaff.dept || "—";
   logRow(`체크인 시작 — ${currentStaff.name}`, "ok");
 
+  // 현재 출근 상태 로드
+  await refreshAttendanceState();
+
   // GPS watch 시작
   watchId = navigator.geolocation.watchPosition(onPosition, onPosError, {
     enableHighAccuracy: true,
@@ -314,9 +355,198 @@ function startCheckin() {
     timeout: 30000,
   });
 
-  // 30초마다 위치 전송
+  // 30초마다 위치 전송 + 자동 평가
   sendTimer = setInterval(sendLocation, 30000);
+  evalTimer = setInterval(runAutoEvaluation, 30000);
+
+  // 출근 상태 5분마다 새로고침
+  setInterval(refreshAttendanceState, 5 * 60 * 1000);
 }
+
+// ─── 현재 출근 상태 조회 ───────────────────────────────────────
+async function refreshAttendanceState() {
+  if (!sb || !currentStaff) return;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const todayStr = today.toISOString().slice(0,10);
+  try {
+    const { data, error } = await sb.from("attendance").select("*")
+      .eq("staff_id", currentStaff.id)
+      .gte("checked_in_at", todayStr + "T00:00:00")
+      .lte("checked_in_at", todayStr + "T23:59:59")
+      .order("checked_in_at", { ascending: false }).limit(1);
+    if (error) throw error;
+    const last = (data || [])[0];
+    const working = !!(last && !last.checked_out_at);
+    attendanceState = { working, lastAttendance: last };
+    renderAttendanceState();
+  } catch (e) {
+    logRow("출근 상태 조회 실패: " + e.message, "err");
+  }
+}
+
+function renderAttendanceState() {
+  const badge = document.getElementById("attStateBadge");
+  const time = document.getElementById("attTime");
+  const btnIn = document.getElementById("btnCheckIn");
+  const btnOut = document.getElementById("btnCheckOut");
+
+  const last = attendanceState.lastAttendance;
+  if (attendanceState.working && last) {
+    badge.textContent = "● 근무 중";
+    badge.className = "state-badge state-on";
+    const t = new Date(last.checked_in_at);
+    time.textContent = `${pad(t.getHours())}:${pad(t.getMinutes())} 출근`;
+    btnIn.style.display = "none";
+    btnOut.style.display = "block";
+  } else if (last && last.checked_out_at) {
+    badge.textContent = "퇴근 완료";
+    badge.className = "state-badge state-done";
+    const tIn = new Date(last.checked_in_at);
+    const tOut = new Date(last.checked_out_at);
+    const hours = ((tOut - tIn) / 3600000).toFixed(1);
+    time.textContent = `${pad(tIn.getHours())}:${pad(tIn.getMinutes())} → ${pad(tOut.getHours())}:${pad(tOut.getMinutes())} (${hours}h)`;
+    btnIn.style.display = "block";
+    btnIn.textContent = "✓ 다시 출근";
+    btnOut.style.display = "none";
+  } else {
+    badge.textContent = "미출근";
+    badge.className = "state-badge state-off";
+    time.textContent = "—";
+    btnIn.style.display = "block";
+    btnIn.textContent = "✓ 지금 출근";
+    btnOut.style.display = "none";
+  }
+}
+
+const pad = (n) => String(n).padStart(2, "0");
+
+// ─── 수동 출근 ─────────────────────────────────────────────────
+async function manualCheckIn() {
+  if (!sb || !currentStaff) return;
+  if (attendanceState.working) { alert("이미 근무 중입니다"); return; }
+  if (!confirm(`${currentStaff.name}님 지금 출근 처리하시겠습니까?`)) return;
+  const btnIn = document.getElementById("btnCheckIn");
+  btnIn.disabled = true; btnIn.textContent = "처리 중...";
+  try {
+    const { data, error } = await sb.from("attendance")
+      .insert({ staff_id: currentStaff.id, source: "mobile_manual" })
+      .select().single();
+    if (error) throw error;
+    attendanceState = { working: true, lastAttendance: data };
+    logRow(`✓ 수동 출근 완료 — ${new Date().toLocaleTimeString("ko-KR")}`, "ok");
+    renderAttendanceState();
+    alert(`✅ ${currentStaff.name}님 출근 처리되었습니다`);
+  } catch (e) {
+    logRow(`출근 실패: ${e.message}`, "err");
+    alert("출근 실패: " + e.message);
+  } finally {
+    btnIn.disabled = false;
+  }
+}
+
+// ─── 수동 퇴근 ─────────────────────────────────────────────────
+async function manualCheckOut() {
+  if (!sb || !currentStaff || !attendanceState.lastAttendance) return;
+  if (!attendanceState.working) { alert("출근 기록이 없습니다"); return; }
+  if (!confirm(`${currentStaff.name}님 지금 퇴근 처리하시겠습니까?`)) return;
+  const btnOut = document.getElementById("btnCheckOut");
+  btnOut.disabled = true; btnOut.textContent = "처리 중...";
+  try {
+    const { error } = await sb.from("attendance")
+      .update({ checked_out_at: new Date().toISOString() })
+      .eq("id", attendanceState.lastAttendance.id);
+    if (error) throw error;
+    logRow(`✗ 수동 퇴근 완료 — ${new Date().toLocaleTimeString("ko-KR")}`, "ok");
+    await refreshAttendanceState();
+    alert(`✅ ${currentStaff.name}님 퇴근 처리되었습니다`);
+  } catch (e) {
+    logRow(`퇴근 실패: ${e.message}`, "err");
+    alert("퇴근 실패: " + e.message);
+  } finally {
+    btnOut.disabled = false;
+  }
+}
+
+// ─── 자동 평가 (30초마다) — 자체 처리 ─────────────────────────────
+async function runAutoEvaluation() {
+  if (!sb || !currentStaff || !lastPos) return;
+  const now = Date.now();
+  const inMs  = (geofence.inMin  || 3)  * 60 * 1000;
+  const outMs = (geofence.outMin || 30) * 60 * 1000;
+
+  // 권역 안 + N분 이상 머무름 + 미출근 → 자동 출근
+  if (geofenceState === "inside" && (now - geofenceEnterAt) >= inMs && !attendanceState.working) {
+    try {
+      const { data, error } = await sb.from("attendance")
+        .insert({ staff_id: currentStaff.id, source: "mobile_gps_auto" })
+        .select().single();
+      if (!error && data) {
+        attendanceState = { working: true, lastAttendance: data };
+        logRow(`🟢 자동 출근 완료 (권역 ${Math.round((now-geofenceEnterAt)/60000)}분 체류)`, "ok");
+        renderAttendanceState();
+        document.getElementById("autoCountdown").style.display = "none";
+      }
+    } catch (e) { logRow("자동 출근 실패: " + e.message, "err"); }
+  }
+
+  // 권역 밖 + N분 이상 + 근무중 (출근 1h+ 경과) → 자동 퇴근
+  if (geofenceState === "outside" && (now - geofenceExitAt) >= outMs && attendanceState.working) {
+    const last = attendanceState.lastAttendance;
+    if (last) {
+      const inT = new Date(last.checked_in_at).getTime();
+      if (now - inT >= 60 * 60 * 1000) {
+        try {
+          const { error } = await sb.from("attendance")
+            .update({ checked_out_at: new Date().toISOString() })
+            .eq("id", last.id);
+          if (!error) {
+            logRow(`🔻 자동 퇴근 완료 (권역 이탈 ${Math.round((now-geofenceExitAt)/60000)}분)`, "ok");
+            await refreshAttendanceState();
+            document.getElementById("autoOutCountdown").style.display = "none";
+          }
+        } catch (e) { logRow("자동 퇴근 실패: " + e.message, "err"); }
+      }
+    }
+  }
+
+  updateCountdowns();
+}
+
+// 자동 출퇴근까지 남은 시간 표시
+function updateCountdowns() {
+  const inCd = document.getElementById("autoCountdown");
+  const outCd = document.getElementById("autoOutCountdown");
+  if (!inCd || !outCd) return;
+
+  if (geofenceState === "inside" && !attendanceState.working && geofenceEnterAt > 0) {
+    const inMs = (geofence.inMin || 3) * 60 * 1000;
+    const remain = Math.max(0, inMs - (Date.now() - geofenceEnterAt));
+    if (remain > 0) {
+      const min = Math.floor(remain / 60000);
+      const sec = Math.floor((remain % 60000) / 1000);
+      document.getElementById("autoInCounter").textContent = min > 0 ? `${min}분 ${sec}초` : `${sec}초`;
+      inCd.style.display = "block";
+    } else {
+      inCd.style.display = "none";
+    }
+  } else { inCd.style.display = "none"; }
+
+  if (geofenceState === "outside" && attendanceState.working && geofenceExitAt > 0) {
+    const outMs = (geofence.outMin || 30) * 60 * 1000;
+    const remain = Math.max(0, outMs - (Date.now() - geofenceExitAt));
+    if (remain > 0) {
+      const min = Math.floor(remain / 60000);
+      const sec = Math.floor((remain % 60000) / 1000);
+      document.getElementById("autoOutCounter").textContent = min > 0 ? `${min}분 ${sec}초` : `${sec}초`;
+      outCd.style.display = "block";
+    } else {
+      outCd.style.display = "none";
+    }
+  } else { outCd.style.display = "none"; }
+}
+
+// 1초마다 카운터 갱신
+setInterval(updateCountdowns, 1000);
 
 function onPosError(err) {
   logRow("위치 오류: " + err.message, "err");
@@ -403,8 +633,9 @@ async function sendLocation() {
 function stop() {
   if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
   if (sendTimer) { clearInterval(sendTimer); sendTimer = null; }
+  if (evalTimer) { clearInterval(evalTimer); evalTimer = null; }
   setStatus("warn", "일시 중지됨");
-  logRow("일시 중지", "evt");
+  logRow("일시 중지 — 수동 출퇴근 버튼은 계속 사용 가능", "evt");
 }
 
 function logout() {
