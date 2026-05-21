@@ -56,7 +56,8 @@ export default async function handler(req, res) {
       if (!id && !name) return res.status(400).json({ error: 'id_or_name_required' });
       const allowed = ['name','dept_id','phone','beacon_id','unique_uid','wifi_mac','gps_device_id','card_uid',
                        'is_part_time','hired_at','contract_end','active','memo',
-                       'visa_type','visa_expiry'];
+                       'visa_type','visa_expiry',
+                       'primary_device_id','primary_device_at','primary_device_name','primary_device_ip','device_locked'];
       const cleanPatch = {};
       for (const k of allowed) {
         if (k in patch) cleanPatch[k] = patch[k];

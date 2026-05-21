@@ -7,7 +7,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<meta name="build" content="v5-2026-05-21-naver-sat">
+<meta name="build" content="v6-2026-05-21-device-auth">
 <title>잠사플레이팜 · 출퇴근 체크인</title>
 <link rel="manifest" href="/manifest.json">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -350,6 +350,50 @@ let naverClientId = null;
 const LS_URL  = "jamsa_sb_url";
 const LS_KEY  = "jamsa_sb_key";
 const LS_STAFF= "jamsa_checkin_staff_id";
+const LS_DEVICE_ID = "jamsa_device_id_v1";  // 🆕 디바이스 고유 식별자
+
+// 🔐 디바이스 ID — 이 기기에서 첫 사용 시 생성, 이후 영구 보관
+function getOrCreateDeviceId() {
+  try {
+    let id = localStorage.getItem(LS_DEVICE_ID);
+    if (id && id.length >= 20) return id;
+    // UUID v4 생성
+    if (crypto?.randomUUID) {
+      id = "dev_" + crypto.randomUUID();
+    } else {
+      const buf = new Uint8Array(16);
+      crypto.getRandomValues(buf);
+      id = "dev_" + Array.from(buf).map(b => b.toString(16).padStart(2,"0")).join("");
+    }
+    localStorage.setItem(LS_DEVICE_ID, id);
+    return id;
+  } catch (e) {
+    return "dev_fallback_" + Date.now();
+  }
+}
+
+function getDeviceName() {
+  try {
+    const ua = navigator.userAgent || "";
+    let device = "기기 미상";
+    if (/iPhone|iPad/.test(ua)) device = "Apple";
+    else if (/Android/.test(ua)) {
+      const m = ua.match(/Android[^;]*;\s*([^)]+)\)/);
+      device = m ? m[1].trim().split(/[;,]/)[0] : "Android";
+    } else if (/Windows/.test(ua)) device = "Windows PC";
+    else if (/Mac OS/.test(ua)) device = "Mac";
+    let browser = "";
+    if (/SamsungBrowser/.test(ua)) browser = "Samsung Internet";
+    else if (/Chrome/.test(ua)) browser = "Chrome";
+    else if (/Safari/.test(ua)) browser = "Safari";
+    else if (/Firefox/.test(ua)) browser = "Firefox";
+    else if (/Edg/.test(ua)) browser = "Edge";
+    return browser ? `${device} · ${browser}` : device;
+  } catch (e) { return "Unknown"; }
+}
+
+const DEVICE_ID = getOrCreateDeviceId();
+const DEVICE_NAME = getDeviceName();
 
 // 잠사박물관 기본 중심 + 300m 반경 (관리자가 설정 변경 가능)
 // 빠른 반응을 위해 inMin 1분, outMin 10분으로 단축
@@ -760,6 +804,38 @@ function renderAttendanceState() {
 
 const pad = (n) => String(n).padStart(2, "0");
 
+// ─── 🔐 디바이스 본인 인증 ──────────────────────────────────────
+async function verifyDevice() {
+  if (!sb || !currentStaff) return { ok: false, reason: "no_session" };
+  try {
+    const { data, error } = await sb.rpc("verify_or_register_device", {
+      p_staff_id: parseInt(currentStaff.id),
+      p_device_id: DEVICE_ID,
+      p_device_name: DEVICE_NAME,
+      p_ip: null,  // 클라이언트는 IP 모름 (서버측에서 기록은 가능)
+    });
+    if (error) {
+      // RPC 함수가 없을 수도 (마이그레이션 미실행) — 그 경우 통과
+      console.warn("[device verify] RPC 호출 실패:", error.message);
+      return { ok: true, status: "rpc_missing", warn: error.message };
+    }
+    const result = data || {};
+    if (result.status === "ok" || result.status === "ok_unlocked") {
+      return { ok: true, status: result.status };
+    }
+    if (result.status === "registered") {
+      logRow(`🔐 이 기기를 ${currentStaff.name}님의 출퇴근 기기로 등록`, "evt");
+      return { ok: true, status: "registered" };
+    }
+    if (result.status === "mismatch") {
+      return { ok: false, status: "mismatch", registered: result.registered_device, attempted: result.attempted_device };
+    }
+    return { ok: false, status: result.status || "unknown" };
+  } catch (e) {
+    return { ok: true, status: "exception", warn: e.message };  // 안전을 위해 통과
+  }
+}
+
 // ─── 수동 출근 ─────────────────────────────────────────────────
 async function manualCheckIn() {
   if (!sb || !currentStaff) return;
@@ -768,14 +844,38 @@ async function manualCheckIn() {
   const btnIn = document.getElementById("btnCheckIn");
   btnIn.disabled = true; btnIn.textContent = "처리 중...";
   try {
+    // 🔐 디바이스 검증
+    const v = await verifyDevice();
+    if (!v.ok && v.status === "mismatch") {
+      alert(
+        `🚨 본인 기기가 아닙니다!\n\n` +
+        `${currentStaff.name}님의 출퇴근 기기는 이미 등록되어 있습니다.\n` +
+        `다른 기기에서는 출근할 수 없습니다 (대리 출석 방지).\n\n` +
+        `만약 기기를 분실/교체했다면 관리자에게 디바이스 리셋을 요청하세요.`
+      );
+      logRow(`🚨 본인 기기 아님 — 출근 거부 (등록: ${(v.registered||"").slice(-12)}, 시도: ${DEVICE_ID.slice(-12)})`, "err");
+      btnIn.disabled = false; btnIn.textContent = "✓ 지금 출근";
+      return;
+    }
+    // attendance insert + 디바이스 정보 같이 기록
     const { data, error } = await sb.from("attendance")
-      .insert({ staff_id: currentStaff.id, source: "mobile_manual" })
+      .insert({
+        staff_id: currentStaff.id,
+        source: "mobile_manual",
+        device_id: DEVICE_ID,
+        device_name: DEVICE_NAME,
+        device_match: v.status === "registered" ? "new_register" : "ok",
+      })
       .select().single();
     if (error) throw error;
     attendanceState = { working: true, lastAttendance: data };
     logRow(`✓ 수동 출근 완료 — ${new Date().toLocaleTimeString("ko-KR")}`, "ok");
     renderAttendanceState();
-    alert(`✅ ${currentStaff.name}님 출근 처리되었습니다`);
+    alert(
+      v.status === "registered"
+        ? `✅ ${currentStaff.name}님 출근 처리되었습니다\n\n🔐 이 기기가 ${currentStaff.name}님의 출퇴근 기기로 자동 등록되었습니다. 다음부터는 이 기기에서만 출퇴근 가능합니다.`
+        : `✅ ${currentStaff.name}님 출근 처리되었습니다`
+    );
   } catch (e) {
     logRow(`출근 실패: ${e.message}`, "err");
     alert("출근 실패: " + e.message);
@@ -792,8 +892,24 @@ async function manualCheckOut() {
   const btnOut = document.getElementById("btnCheckOut");
   btnOut.disabled = true; btnOut.textContent = "처리 중...";
   try {
+    // 🔐 디바이스 검증 (퇴근도 본인 기기만)
+    const v = await verifyDevice();
+    if (!v.ok && v.status === "mismatch") {
+      alert(
+        `🚨 본인 기기가 아닙니다!\n\n` +
+        `${currentStaff.name}님의 출퇴근 기기에서만 퇴근할 수 있습니다.\n` +
+        `관리자에게 디바이스 리셋을 요청하세요.`
+      );
+      logRow(`🚨 본인 기기 아님 — 퇴근 거부`, "err");
+      btnOut.disabled = false; btnOut.textContent = "✗ 지금 퇴근";
+      return;
+    }
     const { error } = await sb.from("attendance")
-      .update({ checked_out_at: new Date().toISOString() })
+      .update({
+        checked_out_at: new Date().toISOString(),
+        device_id: DEVICE_ID,
+        device_name: DEVICE_NAME,
+      })
       .eq("id", attendanceState.lastAttendance.id);
     if (error) throw error;
     logRow(`✗ 수동 퇴근 완료 — ${new Date().toLocaleTimeString("ko-KR")}`, "ok");

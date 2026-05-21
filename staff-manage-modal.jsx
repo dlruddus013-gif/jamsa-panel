@@ -125,6 +125,46 @@ export function StaffManageModal({ depts = [], onClose, onChanged }) {
     } catch (e) { alert("실패: " + e.message); }
   };
 
+  // 🔐 디바이스 리셋 (기기 분실/교체)
+  const resetDevice = async (s) => {
+    const hasDevice = !!s.primary_device_id;
+    if (!hasDevice) { alert(`${s.name}님은 아직 등록된 기기가 없습니다.`); return; }
+    if (!confirm(
+      `🔐 ${s.name}님의 등록 기기를 리셋할까요?\n\n` +
+      `현재 등록: ${s.primary_device_name || "이름 없음"}\n` +
+      `(${(s.primary_device_id||"").slice(-12)})\n` +
+      `등록일: ${s.primary_device_at ? new Date(s.primary_device_at).toLocaleString("ko-KR") : "—"}\n\n` +
+      `리셋 후 ${s.name}님이 모바일에서 출근을 다시 시도하면, 그때 사용하는 기기가 새로 등록됩니다.`
+    )) return;
+    try {
+      await apiFetch("PATCH", {
+        id: s.id,
+        primary_device_id: null,
+        primary_device_at: null,
+        primary_device_name: null,
+        primary_device_ip: null,
+      });
+      alert(`✅ ${s.name}님 디바이스 리셋 완료. 다음 출근 시 새 기기로 자동 등록됩니다.`);
+      await load();
+      onChanged?.();
+    } catch (e) { alert("실패: " + e.message); }
+  };
+
+  // 🔓 디바이스 잠금 해제 (다른 기기도 임시 허용)
+  const toggleDeviceLock = async (s) => {
+    const newLocked = !(s.device_locked !== false);
+    if (!confirm(
+      newLocked
+        ? `🔒 ${s.name}님의 디바이스 잠금을 활성화할까요? (등록된 기기에서만 출퇴근 가능)`
+        : `🔓 ${s.name}님의 디바이스 잠금을 해제할까요? (어느 기기에서나 출퇴근 가능 — 보안 약화)`
+    )) return;
+    try {
+      await apiFetch("PATCH", { id: s.id, device_locked: newLocked });
+      await load();
+      onChanged?.();
+    } catch (e) { alert("실패: " + e.message); }
+  };
+
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 10500, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 820, maxHeight: "94vh", overflowY: "auto", background: "#0f172a", color: "#f1f5f9", borderRadius: 12, border: "1px solid rgba(255,255,255,0.12)" }}>
@@ -176,6 +216,8 @@ export function StaffManageModal({ depts = [], onClose, onChanged }) {
                   onDeactivate={() => deactivate(s)}
                   onReactivate={() => reactivate(s)}
                   onDelete={() => hardDelete(s)}
+                  onResetDevice={() => resetDevice(s)}
+                  onToggleLock={() => toggleDeviceLock(s)}
                 />
               ))}
             </div>
@@ -258,7 +300,7 @@ function AddForm({ depts, onSubmit, onCancel }) {
   );
 }
 
-function StaffRow({ staff: s, depts, editing, onEdit, onCancelEdit, onSave, onDeactivate, onReactivate, onDelete }) {
+function StaffRow({ staff: s, depts, editing, onEdit, onCancelEdit, onSave, onDeactivate, onReactivate, onDelete, onResetDevice, onToggleLock }) {
   const [edit, setEdit] = useState({ ...s });
   useEffect(() => { setEdit({ ...s }); }, [s.id, editing]);
   const dept = depts.find(d => d.id === s.dept_id);
@@ -320,15 +362,40 @@ function StaffRow({ staff: s, depts, editing, onEdit, onCancelEdit, onSave, onDe
           {s.beacon_id && <> · 📡 {s.beacon_id}</>}
           {s.contract_end && <> · 종료 {s.contract_end}</>}
         </div>
-      </div>
-      <div style={{ display: "flex", gap: 4 }}>
-        <button onClick={onEdit} style={btnIcon("#a5b4fc","rgba(99,102,241,0.15)","rgba(99,102,241,0.3)")} title="편집">✎</button>
-        {isActive ? (
-          <button onClick={onDeactivate} style={btnIcon("#fcd34d","rgba(245,158,11,0.15)","rgba(245,158,11,0.3)")} title="비활성">⏸</button>
+        {/* 🔐 디바이스 등록 상태 */}
+        {s.primary_device_id ? (
+          <div style={{ fontSize: 9, marginTop: 3, color: s.device_locked !== false ? "#6ee7b7" : "#fcd34d" }}>
+            {s.device_locked !== false ? "🔒" : "🔓"} 등록 기기: {s.primary_device_name || "(이름 없음)"}{" "}
+            <span style={{ color: "#64748b", fontFamily: "ui-monospace,monospace" }}>...{(s.primary_device_id||"").slice(-8)}</span>
+          </div>
         ) : (
-          <button onClick={onReactivate} style={btnIcon("#6ee7b7","rgba(16,185,129,0.15)","rgba(16,185,129,0.3)")} title="활성화">▶</button>
+          <div style={{ fontSize: 9, marginTop: 3, color: "#94a3b8" }}>
+            ⚪ 등록 기기 없음 (첫 출근 시 자동 등록)
+          </div>
         )}
-        <button onClick={onDelete} style={btnIcon("#fca5a5","rgba(220,38,38,0.15)","rgba(220,38,38,0.3)")} title="영구 삭제">🗑</button>
+      </div>
+      <div style={{ display: "flex", gap: 4, flexDirection: "column" }}>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button onClick={onEdit} style={btnIcon("#a5b4fc","rgba(99,102,241,0.15)","rgba(99,102,241,0.3)")} title="편집">✎</button>
+          {isActive ? (
+            <button onClick={onDeactivate} style={btnIcon("#fcd34d","rgba(245,158,11,0.15)","rgba(245,158,11,0.3)")} title="비활성">⏸</button>
+          ) : (
+            <button onClick={onReactivate} style={btnIcon("#6ee7b7","rgba(16,185,129,0.15)","rgba(16,185,129,0.3)")} title="활성화">▶</button>
+          )}
+          <button onClick={onDelete} style={btnIcon("#fca5a5","rgba(220,38,38,0.15)","rgba(220,38,38,0.3)")} title="영구 삭제">🗑</button>
+        </div>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button onClick={onResetDevice}
+            style={btnIcon("#67e8f9","rgba(8,145,178,0.15)","rgba(8,145,178,0.3)")}
+            title="등록 기기 리셋 (분실/교체 시)">🔄</button>
+          <button onClick={onToggleLock}
+            style={btnIcon(s.device_locked === false ? "#fcd34d" : "#86efac",
+                           s.device_locked === false ? "rgba(245,158,11,0.15)" : "rgba(16,185,129,0.15)",
+                           s.device_locked === false ? "rgba(245,158,11,0.3)"  : "rgba(16,185,129,0.3)")}
+            title={s.device_locked === false ? "잠금 해제 상태 (어느 기기나 가능)" : "잠금 활성 (등록 기기만)"}>
+            {s.device_locked === false ? "🔓" : "🔒"}
+          </button>
+        </div>
       </div>
     </div>
   );
