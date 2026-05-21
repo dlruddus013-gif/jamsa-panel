@@ -22071,6 +22071,8 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   const [warehouseModelZone, setWarehouseModelZone] = useState(null);
   const [spotAiModalOpen, setSpotAiModalOpen] = useState(false);
   const [filterMode, setFilterMode] = useState("all"); // all | urgent | stock | facility
+  // 🗺️ 지도 크게 보기 모드 — 상단 패널/헤더를 숨기고 지도가 화면 전체를 차지
+  const [mapFullscreen, setMapFullscreen] = useState(false);
   const [viewMode, setViewMode] = useState(() => {
     // 사용자 마지막 뷰 모드 기억 (단, 'map'이 아닌 값이면 일단 map으로 시작)
     try {
@@ -23495,13 +23497,13 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         .jamsa-cctv-mini { transition:transform 0.15s; transform-origin:left center; }
         .jamsa-cctv-mini:hover { transform:scale(1.5); z-index:1000; }
       `}</style>
-      {/* ─── 실시간 출퇴근/위치/CCTV/행동로그 통합 패널 ─── */}
-      <StaffAttendanceLivePanel onAddFacAction={onAddFacAction} />
+      {/* ─── 실시간 출퇴근/위치/CCTV/행동로그 통합 패널 (지도 크게보기 모드에서 숨김) ─── */}
+      {!mapFullscreen && <StaffAttendanceLivePanel onAddFacAction={onAddFacAction} />}
 
-      {/* ─── BLE 게이트웨이 → 구역 → CCTV → 행동 로그 (실시간) ─── */}
-      <PresenceTrackingPanel />
+      {/* ─── BLE 게이트웨이 → 구역 → CCTV → 행동 로그 (지도 크게보기 모드에서 숨김) ─── */}
+      {!mapFullscreen && <PresenceTrackingPanel />}
 
-      <div style={{ background: "#0f172a", color: "#fff", padding: "14px 20px", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
+      {!mapFullscreen && <div style={{ background: "#0f172a", color: "#fff", padding: "14px 20px", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
         <div style={{ fontSize: 13, fontWeight: 800 }}>🗺️ 통합 상황판</div>
         <div style={{ flex: 1, display: "flex", gap: 10, flexWrap: "wrap" }}>
           <div style={{ padding: "4px 10px", background: kpis.totalUrgent > 0 ? "rgba(220,38,38,0.25)" : "rgba(255,255,255,0.06)", border: `1px solid ${kpis.totalUrgent > 0 ? "rgba(220,38,38,0.5)" : "rgba(255,255,255,0.1)"}`, borderRadius: 6, fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
@@ -23525,7 +23527,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
             <strong style={{ fontSize: 14 }}>{kpis.zonesNeedingAttention}/{zoneStatus.length}</strong>
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* ─── Filter bar + View toggle ─── */}
       <div style={{ background: "#fff", padding: "10px 20px", display: "flex", gap: 8, borderBottom: "1px solid #e5e7eb", flexWrap: "wrap", alignItems: "center" }}>
@@ -23600,6 +23602,14 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                 fontSize: 11, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 4 }}>
               🤖 AI 자동 정렬
             </button>
+            <button onClick={() => setMapFullscreen(v => !v)}
+              title={mapFullscreen ? "상단 패널 다시 보이기" : "지도를 화면 전체로 크게 보기"}
+              style={{ padding: "6px 12px", borderRadius: 6, border: "none",
+                background: mapFullscreen ? "linear-gradient(135deg,#dc2626,#ea580c)" : "linear-gradient(135deg,#0f172a,#334155)",
+                color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 800,
+                boxShadow: mapFullscreen ? "0 0 0 3px rgba(220,38,38,0.25)" : "none" }}>
+              {mapFullscreen ? "✕ 크게보기 종료" : "⛶ 지도 크게보기"}
+            </button>
           </>
         )}
 
@@ -23623,7 +23633,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
 
       {/* ─── Map view (Naver or OSM) ─── */}
       {viewMode === "map" && (
-        <div style={{ flex: 1, position: "relative", background: "#e5e7eb", minHeight: 400 }}>
+        <div style={{ flex: 1, position: "relative", background: "#e5e7eb", minHeight: mapFullscreen ? "calc(100vh - 120px)" : "max(560px, calc(100vh - 280px))" }}>
           {mapProvider === "naver" && naverClientId && naverLoaded && !naverLoadError ? (
             <div ref={naverMapContainerRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
           ) : mapProvider === "naver" && naverClientId && !naverLoaded && !naverLoadError ? (
