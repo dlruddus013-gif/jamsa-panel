@@ -441,10 +441,16 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
                         source: "manual",
                       };
                       setToday(prev => [tempRec, ...prev]);
-                      const { data, error } = await sb.from("attendance")
+                      let { data, error } = await sb.from("attendance")
                         .insert({ staff_id: staff.id, source: "manual" })
                         .select()
                         .single();
+                      // device 컬럼 누락 등 schema cache 에러는 무시 (구버전 DB 호환)
+                      if (error && /schema cache|device_id|device_name/i.test(error.message)) {
+                        ({ data, error } = await sb.from("attendance")
+                          .insert({ staff_id: staff.id })
+                          .select().single());
+                      }
                       if (error) {
                         // rollback
                         setToday(prev => prev.filter(a => a.id !== tempRec.id));

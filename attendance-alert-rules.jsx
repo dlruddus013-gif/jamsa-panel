@@ -302,9 +302,13 @@ export async function evaluateBeaconAutoAttendance({ sb, staffList, todayAttenda
       const recentDupe = myAtt.find(a => Date.now() - new Date(a.checked_in_at).getTime() < 60_000);
       if (recentDupe) continue;
       try {
-        const { data, error } = await sb.from("attendance")
+        let { data, error } = await sb.from("attendance")
           .insert({ staff_id: staff.id, source: "beacon_auto" })
           .select().single();
+        if (error && /schema cache|device/i.test(error.message)) {
+          ({ data, error } = await sb.from("attendance")
+            .insert({ staff_id: staff.id }).select().single());
+        }
         if (!error && data) {
           autoIn++;
           const dept = depts.find(d => d.id === staff.dept_id);
@@ -435,9 +439,13 @@ export async function evaluateGpsAutoAttendance({ sb, staffList, todayAttendance
       const recentDupe = myAtt.find(a => now - new Date(a.checked_in_at).getTime() < 60_000);
       if (recentDupe) continue;
       try {
-        const { data, error } = await sb.from("attendance")
+        let { data, error } = await sb.from("attendance")
           .insert({ staff_id: staff.id, source: "gps_auto" })
           .select().single();
+        if (error && /schema cache|device/i.test(error.message)) {
+          ({ data, error } = await sb.from("attendance")
+            .insert({ staff_id: staff.id }).select().single());
+        }
         if (!error && data) {
           autoIn++;
           const dept = depts.find(d => d.id === staff.dept_id);
