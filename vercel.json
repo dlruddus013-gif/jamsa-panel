@@ -37,7 +37,31 @@
       ]
     },
     {
+      "source": "/staff-checkin-v2.html",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
+        { "key": "Pragma", "value": "no-cache" },
+        { "key": "Expires", "value": "0" }
+      ]
+    },
+    {
+      "source": "/ticket-test.html",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
+        { "key": "Pragma", "value": "no-cache" },
+        { "key": "Expires", "value": "0" }
+      ]
+    },
+    {
       "source": "/attendance.html",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
+        { "key": "Pragma", "value": "no-cache" },
+        { "key": "Expires", "value": "0" }
+      ]
+    },
+    {
+      "source": "/ticket-test.html",
       "headers": [
         { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
         { "key": "Pragma", "value": "no-cache" },
@@ -70,6 +94,10 @@
     { "source": "/attendance", "destination": "/attendance.html" },
     { "source": "/staff-checkin", "destination": "/staff-checkin.html" },
     { "source": "/m", "destination": "/staff-checkin.html" },
+    { "source": "/ticket-test", "destination": "/ticket-test.html" },
+    { "source": "/t", "destination": "/ticket-test.html" },
+    { "source": "/staff-checkin-v2", "destination": "/staff-checkin-v2.html" },
+    { "source": "/m2", "destination": "/staff-checkin-v2.html" },
     { "source": "/", "destination": "/index.html" }
   ]
 }

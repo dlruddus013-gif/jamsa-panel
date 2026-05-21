@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#1e293b">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<meta name="build" content="v1-2026-05-21-ticket-test">
+<title>잠사플레이팜 · 발권 테스트</title>
+<style>
+  :root {
+    --bg:#0f172a; --bg2:#1e293b; --bg3:#334155; --line:#475569;
+    --text:#f1f5f9; --text-soft:#cbd5e1; --text-mute:#94a3b8;
+    --green:#10b981; --green-deep:#059669;
+    --warn:#fbbf24; --danger:#ef4444; --primary:#3b82f6;
+    --purple:#a855f7; --pink:#ec4899;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;background:var(--bg);color:var(--text);
+    font-family:-apple-system,'Pretendard','Apple SD Gothic Neo','Malgun Gothic',sans-serif;
+    -webkit-text-size-adjust:100%;-webkit-font-smoothing:antialiased;
+  }
+  body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
+  button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+  input,select{font-family:inherit;font-size:16px}
+  .mono{font-family:ui-monospace,'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
+
+  /* 헤더 */
+  header{
+    padding:14px 18px;background:linear-gradient(135deg,#7c3aed,#ec4899);
+    color:#fff;display:flex;align-items:center;gap:12px;
+    box-shadow:0 4px 12px rgba(0,0,0,0.3);
+  }
+  .h-icon{font-size:30px;line-height:1}
+  .h-title h1{font-size:17px;font-weight:900;letter-spacing:-.01em}
+  .h-title small{display:block;font-size:11px;opacity:.85;margin-top:2px;font-weight:500}
+  .h-badge{margin-left:auto;background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.45);
+    padding:4px 10px;border-radius:14px;font-size:10px;font-weight:800;letter-spacing:.04em}
+
+  /* 메인 컨테이너 */
+  main{max-width:780px;margin:0 auto;padding:14px 14px 80px;display:flex;flex-direction:column;gap:14px}
+
+  .test-banner{
+    background:linear-gradient(135deg,rgba(245,158,11,0.18),rgba(220,38,38,0.12));
+    border:1px solid rgba(245,158,11,0.4);border-radius:8px;padding:10px 14px;
+    font-size:12px;color:#fcd34d;line-height:1.5;display:flex;gap:10px;align-items:flex-start;
+  }
+  .test-banner b{color:#fef3c7;display:block;margin-bottom:2px}
+
+  /* 카드 */
+  .card{
+    background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:14px 16px;
+  }
+  .card h3{
+    font-size:11px;color:var(--text-mute);font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+    margin-bottom:10px;
+  }
+
+  /* 입장권 카드 그리드 */
+  .ticket-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+  .ticket-item{
+    padding:14px 12px;border:1.5px solid var(--line);border-radius:10px;
+    background:rgba(255,255,255,0.02);cursor:pointer;transition:.12s;
+    display:flex;flex-direction:column;gap:6px;
+    position:relative;overflow:hidden;
+  }
+  .ticket-item:hover{border-color:var(--primary);background:rgba(59,130,246,0.05)}
+  .ticket-item:active{transform:scale(.98)}
+  .ticket-item.selected{border-color:var(--green);background:rgba(16,185,129,0.1)}
+  .ticket-item.selected::after{
+    content:'✓';position:absolute;top:6px;right:8px;
+    color:var(--green);font-weight:900;font-size:14px;
+  }
+  .ti-name{font-size:14px;font-weight:800}
+  .ti-price{font-size:13px;font-weight:600;color:var(--text-soft)}
+  .ti-desc{font-size:10px;color:var(--text-mute);line-height:1.4;margin-top:auto}
+
+  /* 수량 선택 */
+  .qty-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line)}
+  .qty-row:last-child{border:none}
+  .qty-info{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
+  .qty-info .nm{font-size:13px;font-weight:700}
+  .qty-info .pr{font-size:11px;color:var(--text-mute);font-family:ui-monospace,monospace}
+  .qty-control{display:flex;align-items:center;gap:8px}
+  .qty-btn{
+    width:34px;height:34px;border-radius:8px;background:var(--bg3);color:#fff;font-size:18px;font-weight:800;
+    display:grid;place-items:center;user-select:none;
+  }
+  .qty-btn:active{background:var(--line);transform:scale(.92)}
+  .qty-btn.minus{background:rgba(239,68,68,0.18);color:#fca5a5}
+  .qty-btn.plus{background:rgba(16,185,129,0.18);color:#6ee7b7}
+  .qty-val{min-width:32px;text-align:center;font-size:16px;font-weight:800;font-family:ui-monospace,monospace}
+  .qty-sub{font-size:11px;color:var(--green);font-weight:700;margin-top:1px;font-family:ui-monospace,monospace;text-align:right;min-width:70px}
+
+  /* 결제 방법 */
+  .pay-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:6px}
+  .pay-btn{
+    padding:10px 6px;border-radius:8px;background:var(--bg3);
+    border:1.5px solid var(--line);font-size:12px;font-weight:700;
+    display:flex;flex-direction:column;align-items:center;gap:4px;
+  }
+  .pay-btn .ic{font-size:20px;line-height:1}
+  .pay-btn.selected{background:rgba(59,130,246,0.15);border-color:var(--primary);color:#93c5fd}
+
+  /* 합계 */
+  .total-block{
+    background:linear-gradient(135deg,#1e3a8a,#0c4a6e);
+    border:1px solid rgba(147,197,253,0.3);
+    border-radius:10px;padding:12px 14px;
+    display:flex;justify-content:space-between;align-items:center;
+  }
+  .total-label{font-size:12px;color:#bfdbfe;font-weight:600}
+  .total-val{font-size:22px;font-weight:900;color:#fff;font-family:ui-monospace,monospace}
+  .total-val small{font-size:13px;color:#bfdbfe;font-weight:600;margin-left:4px}
+
+  /* 액션 */
+  .btn{
+    width:100%;padding:15px;border-radius:10px;font-size:15px;font-weight:800;transition:.15s;
+  }
+  .btn-primary{background:linear-gradient(135deg,#10b981,#0891b2);color:#fff;
+    box-shadow:0 4px 12px rgba(16,185,129,0.35)}
+  .btn-primary:active{transform:scale(.98)}
+  .btn-primary:disabled{background:#475569;cursor:not-allowed;opacity:.6;box-shadow:none}
+  .btn-secondary{background:var(--bg3);color:var(--text-soft);border:1px solid var(--line)}
+
+  /* 띠지 (영수증/입장권 미리보기) */
+  .receipt-overlay{
+    position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:1000;
+    display:none;align-items:center;justify-content:center;padding:20px;
+    backdrop-filter:blur(8px);overflow-y:auto;
+  }
+  .receipt-overlay.show{display:flex}
+  .receipt{
+    background:#fff;color:#0f172a;width:100%;max-width:320px;
+    border-radius:12px;padding:0;font-family:'Pretendard','Malgun Gothic',sans-serif;
+    box-shadow:0 20px 60px rgba(0,0,0,0.5);max-height:90vh;overflow-y:auto;
+  }
+  .r-head{
+    background:linear-gradient(135deg,#7c3aed,#ec4899);color:#fff;
+    padding:14px 18px;text-align:center;border-radius:12px 12px 0 0;
+  }
+  .r-head .r-museum{font-size:11px;opacity:.9;letter-spacing:.1em;font-weight:600}
+  .r-head .r-title{font-size:20px;font-weight:900;margin-top:3px;letter-spacing:-.01em}
+  .r-head .r-test{
+    display:inline-block;margin-top:6px;background:rgba(255,255,255,0.25);
+    padding:2px 10px;border-radius:10px;font-size:10px;font-weight:800;letter-spacing:.06em;
+  }
+  .r-body{padding:18px 20px}
+  .r-section{padding:10px 0;border-bottom:1px dashed #cbd5e1}
+  .r-section:last-child{border:none}
+  .r-row{display:flex;justify-content:space-between;font-size:13px;margin:3px 0}
+  .r-row .lbl{color:#64748b}
+  .r-row .val{font-weight:700;font-family:ui-monospace,monospace}
+  .r-items{margin:6px 0}
+  .r-item{display:flex;justify-content:space-between;padding:4px 0;font-size:12px}
+  .r-item .nm{flex:1;color:#0f172a}
+  .r-item .qty{margin:0 8px;color:#64748b;font-family:ui-monospace,monospace}
+  .r-item .pr{font-family:ui-monospace,monospace;font-weight:700;color:#0f172a;min-width:60px;text-align:right}
+  .r-total{
+    background:#f8fafc;margin:8px -20px -18px;padding:14px 20px;
+    display:flex;justify-content:space-between;align-items:center;
+    border-radius:0 0 12px 12px;
+  }
+  .r-total .lbl{font-size:12px;color:#64748b;font-weight:700}
+  .r-total .val{font-size:22px;font-weight:900;font-family:ui-monospace,monospace;color:#0f172a}
+
+  .r-band{
+    background:repeating-linear-gradient(45deg,#fbbf24,#fbbf24 8px,#f59e0b 8px,#f59e0b 16px);
+    padding:6px;text-align:center;color:#78350f;font-size:9px;font-weight:800;letter-spacing:.2em;
+  }
+
+  .receipt-actions{
+    display:flex;gap:8px;padding:12px;background:#f1f5f9;
+    border-radius:0 0 12px 12px;
+  }
+  .receipt-actions button{
+    flex:1;padding:11px;border-radius:8px;font-weight:800;font-size:13px;
+  }
+  .ra-print{background:#3b82f6;color:#fff}
+  .ra-close{background:#fff;color:#0f172a;border:1px solid #cbd5e1}
+
+  /* 히스토리 */
+  .history-row{
+    display:grid;grid-template-columns:auto 1fr auto;gap:10px;
+    padding:8px 10px;background:rgba(255,255,255,0.03);
+    border:1px solid var(--line);border-radius:6px;
+    font-size:11px;
+  }
+  .history-row .h-time{color:var(--text-mute);font-family:ui-monospace,monospace;font-size:10px}
+  .history-row .h-items{color:var(--text-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .history-row .h-amt{font-weight:800;color:#6ee7b7;font-family:ui-monospace,monospace}
+
+  .empty{padding:18px;text-align:center;color:var(--text-mute);font-size:11px}
+  .footer-hint{text-align:center;font-size:10px;color:var(--text-mute);padding:14px 0 28px}
+
+  /* 인쇄 */
+  @media print{
+    body{background:#fff !important;color:#000 !important}
+    header,.test-banner,.card,.btn,.receipt-actions{display:none !important}
+    .receipt-overlay{position:static !important;display:block !important;background:#fff !important;padding:0 !important;backdrop-filter:none !important;overflow:visible !important}
+    .receipt{box-shadow:none !important;max-height:none !important;max-width:none !important}
+    .r-test{display:none !important}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="h-icon">🎫</div>
+  <div class="h-title">
+    <h1>잠사플레이팜 발권 시스템</h1>
+    <small>띠지 발권 테스트 모드</small>
+  </div>
+  <div class="h-badge">⚠ TEST</div>
+</header>
+
+<main>
+
+  <!-- 안내 배너 -->
+  <div class="test-banner">
+    <div style="font-size:18px">⚠️</div>
+    <div>
+      <b>이 화면은 직원 교육용 테스트 모드입니다</b>
+      실제 결제·DB 저장 없이 발권 흐름만 시뮬레이션합니다. 마음껏 연습하세요.
+    </div>
+  </div>
+
+  <!-- 1) 입장권 선택 -->
+  <section class="card">
+    <h3>1️⃣ 입장권 종류 선택 + 수량</h3>
+    <div id="ticketList"></div>
+  </section>
+
+  <!-- 2) 결제 방법 -->
+  <section class="card">
+    <h3>2️⃣ 결제 방법</h3>
+    <div class="pay-grid" id="payMethods"></div>
+  </section>
+
+  <!-- 3) 합계 + 발권 -->
+  <section class="card">
+    <div class="total-block" style="margin-bottom:12px">
+      <div>
+        <div class="total-label">합계 (<span id="totalCount">0</span>매)</div>
+      </div>
+      <div class="total-val" id="totalAmount">0<small>원</small></div>
+    </div>
+    <button class="btn btn-primary" id="btnIssue" onclick="issueTicket()" disabled>🎫 발권 (테스트)</button>
+    <button class="btn btn-secondary" onclick="resetAll()" style="margin-top:6px">↺ 초기화</button>
+  </section>
+
+  <!-- 4) 발권 이력 -->
+  <section class="card">
+    <h3>📜 발권 이력 (최근 10건 · 테스트 모드만)</h3>
+    <div id="historyBox" style="display:flex;flex-direction:column;gap:5px"></div>
+  </section>
+
+  <div class="footer-hint">
+    잠사플레이팜 발권 테스트 · v1 ·
+    <a href="/staff-checkin" style="color:var(--primary);text-decoration:none">출퇴근 →</a> ·
+    <a href="/" style="color:var(--primary);text-decoration:none">관리 패널 →</a>
+  </div>
+
+</main>
+
+<!-- 띠지/영수증 모달 -->
+<div class="receipt-overlay" id="receiptModal" onclick="if(event.target===this)closeReceipt()">
+  <div class="receipt">
+    <div class="r-band">⚠ TEST MODE · 실제 발권 아님 ⚠</div>
+    <div class="r-head">
+      <div class="r-museum">한국잠사박물관 · 잠사플레이팜</div>
+      <div class="r-title">🎫 입장권</div>
+      <div class="r-test">교육용 테스트 발권</div>
+    </div>
+    <div class="r-body">
+      <div class="r-section">
+        <div class="r-row"><span class="lbl">발권 일시</span><span class="val mono" id="rDate">—</span></div>
+        <div class="r-row"><span class="lbl">발권 번호</span><span class="val mono" id="rNumber">—</span></div>
+        <div class="r-row"><span class="lbl">발권 담당</span><span class="val" id="rIssuer">테스트 직원</span></div>
+      </div>
+      <div class="r-section">
+        <div style="font-size:11px;color:#64748b;font-weight:700;margin-bottom:6px">입장권 내역</div>
+        <div class="r-items" id="rItems"></div>
+      </div>
+      <div class="r-section">
+        <div class="r-row"><span class="lbl">결제 방법</span><span class="val" id="rPayMethod">—</span></div>
+        <div class="r-row"><span class="lbl">총 매수</span><span class="val mono" id="rCount">0매</span></div>
+      </div>
+      <div class="r-total">
+        <span class="lbl">결제 금액</span>
+        <span class="val" id="rTotal">0원</span>
+      </div>
+    </div>
+    <div class="receipt-actions">
+      <button class="ra-print" onclick="window.print()">🖨 인쇄</button>
+      <button class="ra-close" onclick="closeReceipt()">닫기</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── 입장권 정의 ───
+const TICKETS = [
+  { id: "adult",  name: "어른",       price: 5000, desc: "만 19세 이상" },
+  { id: "youth",  name: "청소년",     price: 4000, desc: "만 13~18세" },
+  { id: "child",  name: "어린이",     price: 3000, desc: "만 5~12세" },
+  { id: "infant", name: "유아",       price: 0,    desc: "만 5세 미만 무료" },
+  { id: "senior", name: "경로/장애",  price: 2500, desc: "만 65세+/등록장애인" },
+  { id: "group",  name: "단체",       price: 4000, desc: "20명 이상" },
+];
+
+const PAY_METHODS = [
+  { id: "cash",    name: "현금",       icon: "💵" },
+  { id: "card",    name: "카드",       icon: "💳" },
+  { id: "mobile",  name: "모바일",     icon: "📱" },
+  { id: "naver",   name: "네이버",     icon: "Ⓝ" },
+  { id: "kakao",   name: "카카오페이", icon: "🟡" },
+  { id: "free",    name: "무료입장",   icon: "🎁" },
+];
+
+let qty = {}; // {id: count}
+let selectedPay = "cash";
+
+// 입장권 리스트 렌더
+function renderTickets() {
+  const box = document.getElementById("ticketList");
+  box.innerHTML = TICKETS.map(t => {
+    const q = qty[t.id] || 0;
+    const sub = q * t.price;
+    return `
+      <div class="qty-row">
+        <div class="qty-info">
+          <div class="nm">${t.name} <span style="font-size:10px;color:#64748b">· ${t.desc}</span></div>
+          <div class="pr">${t.price.toLocaleString()}원</div>
+        </div>
+        <div class="qty-control">
+          <button class="qty-btn minus" onclick="changeQty('${t.id}', -1)">−</button>
+          <div style="display:flex;flex-direction:column;align-items:center">
+            <div class="qty-val">${q}</div>
+            ${sub > 0 ? `<div class="qty-sub">${sub.toLocaleString()}원</div>` : '<div class="qty-sub" style="color:transparent">.</div>'}
+          </div>
+          <button class="qty-btn plus" onclick="changeQty('${t.id}', +1)">+</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+// 결제 방법 렌더
+function renderPayMethods() {
+  const box = document.getElementById("payMethods");
+  box.innerHTML = PAY_METHODS.map(p => `
+    <button class="pay-btn ${p.id === selectedPay ? 'selected' : ''}" onclick="selectPay('${p.id}')">
+      <div class="ic">${p.icon}</div>
+      <div>${p.name}</div>
+    </button>
+  `).join("");
+}
+
+function changeQty(id, delta) {
+  qty[id] = Math.max(0, (qty[id] || 0) + delta);
+  renderTickets();
+  updateTotal();
+}
+
+function selectPay(id) {
+  selectedPay = id;
+  renderPayMethods();
+  updateTotal();
+}
+
+function updateTotal() {
+  let total = 0, count = 0;
+  TICKETS.forEach(t => {
+    const q = qty[t.id] || 0;
+    total += q * t.price;
+    count += q;
+  });
+  document.getElementById("totalAmount").innerHTML = `${total.toLocaleString()}<small>원</small>`;
+  document.getElementById("totalCount").textContent = count;
+  const btn = document.getElementById("btnIssue");
+  btn.disabled = count === 0;
+  if (selectedPay === "free") {
+    btn.textContent = count > 0 ? `🎁 무료 발권 (테스트) · ${count}매` : "🎫 발권 (테스트)";
+  } else {
+    btn.textContent = count > 0 ? `🎫 ${total.toLocaleString()}원 발권 (테스트)` : "🎫 발권 (테스트)";
+  }
+}
+
+function resetAll() {
+  if (!confirm("전체 초기화하시겠습니까?")) return;
+  qty = {};
+  selectedPay = "cash";
+  renderTickets();
+  renderPayMethods();
+  updateTotal();
+}
+
+// 발권
+function issueTicket() {
+  let total = 0, count = 0;
+  const items = [];
+  TICKETS.forEach(t => {
+    const q = qty[t.id] || 0;
+    if (q > 0) {
+      items.push({ name: t.name, qty: q, price: t.price, sub: q * t.price });
+      total += q * t.price;
+      count += q;
+    }
+  });
+  if (count === 0) return;
+
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const dateStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  const number = `T-${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}-${String(Math.floor(Math.random()*9000)+1000)}`;
+  const payMethod = PAY_METHODS.find(p => p.id === selectedPay);
+
+  // 영수증 표시
+  document.getElementById("rDate").textContent = dateStr;
+  document.getElementById("rNumber").textContent = number;
+  document.getElementById("rPayMethod").textContent = `${payMethod.icon} ${payMethod.name}`;
+  document.getElementById("rCount").textContent = `${count}매`;
+  document.getElementById("rTotal").textContent = `${total.toLocaleString()}원`;
+  document.getElementById("rItems").innerHTML = items.map(i => `
+    <div class="r-item">
+      <span class="nm">${i.name}</span>
+      <span class="qty">${i.qty}매 × ${i.price.toLocaleString()}원</span>
+      <span class="pr">${i.sub.toLocaleString()}원</span>
+    </div>
+  `).join("");
+  document.getElementById("receiptModal").classList.add("show");
+
+  // 이력 저장 (localStorage)
+  saveHistory({ at: now.toISOString(), dateStr, number, items, total, count, payMethod: payMethod.name });
+
+  // 진동 피드백 (모바일)
+  if (navigator.vibrate) navigator.vibrate([50, 30, 50]);
+}
+
+function closeReceipt() {
+  document.getElementById("receiptModal").classList.remove("show");
+  // 발권 완료 후 자동 초기화
+  qty = {};
+  renderTickets();
+  updateTotal();
+}
+
+// 이력 저장/로드
+const HISTORY_KEY = "jamsa_ticket_test_history_v1";
+function loadHistory() { try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch (e) { return []; } }
+function saveHistory(entry) {
+  const arr = loadHistory();
+  arr.unshift(entry);
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(arr.slice(0, 10))); } catch (e) {}
+  renderHistory();
+}
+function renderHistory() {
+  const box = document.getElementById("historyBox");
+  const arr = loadHistory();
+  if (arr.length === 0) {
+    box.innerHTML = `<div class="empty">아직 발권 이력이 없습니다 — 위에서 입장권 선택 후 발권해보세요</div>`;
+    return;
+  }
+  box.innerHTML = arr.map(h => `
+    <div class="history-row">
+      <div class="h-time">${(h.dateStr || h.at || "").slice(5, 16)}</div>
+      <div class="h-items">${(h.items || []).map(i => i.name + "×" + i.qty).join(", ")} · ${h.payMethod || ""}</div>
+      <div class="h-amt">${(h.total || 0).toLocaleString()}원</div>
+    </div>
+  `).join("");
+}
+
+// 초기화
+renderTickets();
+renderPayMethods();
+updateTotal();
+renderHistory();
+</script>
+
+</body>
+</html>

@@ -7,7 +7,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<meta name="build" content="v6-2026-05-21-device-auth">
+<meta name="build" content="v7-2026-05-21-label-marker">
 <title>잠사플레이팜 · 출퇴근 체크인</title>
 <link rel="manifest" href="/manifest.json">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -129,6 +129,56 @@
   .other-marker.visitor{background:#a855f7}
   .other-marker.beacon{background:#f59e0b}
   .other-marker.stale{opacity:0.5}
+
+  /* 🆕 영구 라벨 마커 (이름 + 출근시각 항상 표시) */
+  .staff-pin-wrap { background: transparent !important; border: none !important; }
+  .staff-pin {
+    position: relative;
+    display: flex; flex-direction: column; align-items: center;
+    transform: translateY(-100%);
+  }
+  .staff-pin-dot {
+    width: 14px; height: 14px; border-radius: 50%;
+    background: #10b981; border: 2.5px solid #fff;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.6);
+    margin-bottom: 4px;
+  }
+  .staff-pin .staff-pin-dot.visitor { background: #a855f7; }
+  .staff-pin .staff-pin-dot.beacon { background: #f59e0b; }
+  .staff-pin .staff-pin-dot.stale { opacity: 0.45; }
+  .staff-pin.me .staff-pin-dot {
+    background: #3b82f6; width: 18px; height: 18px; border-width: 3px;
+    box-shadow: 0 0 0 4px rgba(59,130,246,0.35), 0 2px 6px rgba(0,0,0,0.5);
+    animation: pulse 1.5s infinite;
+  }
+  .staff-pin-label {
+    background: rgba(15,23,42,0.92);
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 8px;
+    padding: 4px 8px;
+    color: #fff;
+    text-align: center;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+    white-space: nowrap;
+    backdrop-filter: blur(4px);
+  }
+  .staff-pin.me .staff-pin-label {
+    background: rgba(30,64,175,0.95);
+    border-color: rgba(147,197,253,0.4);
+  }
+  .staff-pin-name {
+    font-size: 11px; font-weight: 800; line-height: 1.2;
+  }
+  .staff-pin-me { font-size: 9px; opacity: 0.8; font-weight: 600; }
+  .staff-pin-tag {
+    font-size: 8px; padding: 1px 4px; border-radius: 3px;
+    background: rgba(168,85,247,0.4); color: #ddd6fe; margin-left: 2px;
+  }
+  .staff-pin-time {
+    font-size: 9px; font-weight: 600; margin-top: 1px; line-height: 1.2;
+    font-family: ui-monospace, monospace;
+  }
+  .staff-pin-age { color: rgba(255,255,255,0.55); font-weight: 400; }
 
   #setup-card{display:flex;flex-direction:column;gap:12px}
   #setup-card .field{display:flex;flex-direction:column;gap:6px}
@@ -650,34 +700,84 @@ function centerOnMe() {
   map.setView([lastPos.lat, lastPos.lng], 18, { animate: true });
 }
 
-// 내 마커 갱신
+// 내 마커 갱신 — 이름 + 출근 상태 라벨 영구 표시
 function updateMyMarker() {
   if (!map || !lastPos) return;
   const ll = [lastPos.lat, lastPos.lng];
+  const att = staffAttendanceLabel(currentStaff.id);
+  const html = `
+    <div class="staff-pin me">
+      <div class="staff-pin-dot"></div>
+      <div class="staff-pin-label">
+        <div class="staff-pin-name">${currentStaff.name} <span class="staff-pin-me">(나)</span></div>
+        <div class="staff-pin-time" style="color:${att.color}">${att.text}</div>
+      </div>
+    </div>`;
+  const icon = L.divIcon({
+    className: "staff-pin-wrap",
+    html,
+    iconSize: [120, 50],
+    iconAnchor: [60, 50],
+  });
   if (!myMarker) {
-    myMarker = L.marker(ll, {
-      icon: L.divIcon({ className: "me-marker", iconSize: [18, 18] }),
-      zIndexOffset: 1000,
-    }).addTo(map);
-    myMarker.bindPopup(`<b>${currentStaff.name}</b> (나)<br>±${Math.round(lastPos.accuracy)}m`);
-    // 첫 fix에 지도를 본인 위치로 이동
+    myMarker = L.marker(ll, { icon, zIndexOffset: 1000 }).addTo(map);
     map.setView(ll, 17);
   } else {
     myMarker.setLatLng(ll);
-    myMarker.setPopupContent(`<b>${currentStaff.name}</b> (나)<br>±${Math.round(lastPos.accuracy)}m`);
+    myMarker.setIcon(icon);
   }
 }
 
-// ─── 다른 직원/관람객 위치 가져오기 ─────────────────────────────
+// 직원별 오늘 출근 정보 캐시 — Map<staff_id, {checked_in_at, checked_out_at}>
+let todayAttendanceMap = new Map();
+
+// ─── 다른 직원/관람객 위치 + 오늘 출근 정보 가져오기 ─────────────
 async function fetchPeople() {
   try {
     const r = await fetch("/api/staff-locations", { cache: "no-store" });
     if (!r.ok) return;
     const j = await r.json();
     const users = (j.users || []).filter(u => String(u.id) !== String(currentStaff?.id));
+
+    // 오늘 attendance 같이 조회 (가장 최근 1건씩)
+    if (sb) {
+      try {
+        const today = new Date(); today.setHours(0,0,0,0);
+        const todayStr = today.toISOString().slice(0,10);
+        const { data: atts } = await sb.from("attendance").select("staff_id,checked_in_at,checked_out_at")
+          .gte("checked_in_at", todayStr + "T00:00:00")
+          .lte("checked_in_at", todayStr + "T23:59:59")
+          .order("checked_in_at", { ascending: false });
+        const m = new Map();
+        (atts || []).forEach(a => {
+          // 같은 직원의 가장 최근(근무중 우선) 기록만
+          const prev = m.get(a.staff_id);
+          if (!prev || (!a.checked_out_at && prev.checked_out_at)) {
+            m.set(a.staff_id, a);
+          }
+        });
+        todayAttendanceMap = m;
+      } catch (e) {}
+    }
+
     renderPeople(users);
     updateOthersOnMap(users);
   } catch (e) { /* silent */ }
+}
+
+// 직원 출근 상태 라벨 ("근무 09:25" / "퇴근 18:30" / "미출근")
+function staffAttendanceLabel(staffId) {
+  const a = todayAttendanceMap.get(parseInt(staffId)) || todayAttendanceMap.get(String(staffId));
+  if (!a) return { text: "미출근", color: "#94a3b8", working: false };
+  const pad2 = n => String(n).padStart(2, "0");
+  const inT = new Date(a.checked_in_at);
+  const inLabel = `${pad2(inT.getHours())}:${pad2(inT.getMinutes())}`;
+  if (a.checked_out_at) {
+    const outT = new Date(a.checked_out_at);
+    const outLabel = `${pad2(outT.getHours())}:${pad2(outT.getMinutes())}`;
+    return { text: `퇴근 ${outLabel}`, color: "#94a3b8", working: false, checkIn: inLabel, checkOut: outLabel };
+  }
+  return { text: `근무 ${inLabel}~`, color: "#34d399", working: true, checkIn: inLabel };
 }
 
 function renderPeople(users) {
@@ -725,16 +825,31 @@ function updateOthersOnMap(users) {
     keepIds.add(String(u.id));
     const isVisitor = u.role === "visitor";
     const isBeacon = u.source === "beacon";
-    const className = "other-marker" + (isVisitor ? " visitor" : "") + (isBeacon ? " beacon" : "") + (u.ageSec > 180 ? " stale" : "");
+    const isStale = u.ageSec > 180;
+    const dotCls = "staff-pin-dot " + (isVisitor ? "visitor" : "") + (isBeacon ? " beacon" : "") + (isStale ? " stale" : "");
+    const att = staffAttendanceLabel(u.id);
+    const ageMin = Math.floor((u.ageSec || 0) / 60);
+    const ageLabel = ageMin === 0 ? `${u.ageSec||0}초전` : `${ageMin}분전`;
+    const html = `
+      <div class="staff-pin">
+        <div class="${dotCls}"></div>
+        <div class="staff-pin-label">
+          <div class="staff-pin-name">${u.name || "익명"}${isVisitor ? " <span class='staff-pin-tag'>관람객</span>" : ""}</div>
+          <div class="staff-pin-time" style="color:${att.color}">${att.text} <span class="staff-pin-age">· ${ageLabel}</span></div>
+        </div>
+      </div>`;
+    const icon = L.divIcon({
+      className: "staff-pin-wrap",
+      html,
+      iconSize: [120, 50],
+      iconAnchor: [60, 50],
+    });
     const existing = othersMarkers.get(String(u.id));
     if (existing) {
       existing.setLatLng([u.lat, u.lng]);
+      existing.setIcon(icon);
     } else {
-      const m = L.marker([u.lat, u.lng], {
-        icon: L.divIcon({ className, iconSize: [14, 14] }),
-      }).addTo(map);
-      const ageMin = Math.floor((u.ageSec || 0) / 60);
-      m.bindPopup(`<b>${u.name||"익명"}</b><br>${u.dept || ""} ${isVisitor ? "· 관람객" : ""}<br><small>${ageMin === 0 ? (u.ageSec||0)+"초전" : ageMin+"분전"}</small>`);
+      const m = L.marker([u.lat, u.lng], { icon }).addTo(map);
       othersMarkers.set(String(u.id), m);
     }
   });
