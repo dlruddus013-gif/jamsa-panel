@@ -31,11 +31,9 @@ export default async function handler(req, res) {
   if (!ctx) return;
 
   // ── PUT/POST: 데이터 저장 (전체 교체) ──
+  // 로그인된 멤버는 누구나 쓰기 가능 (잠사박물관 전체 공유 데이터 모델).
+  // 역할 제한을 두지 않음 — staff/lead/admin 누구든 같은 데이터를 편집.
   if (req.method === 'PUT' || req.method === 'POST') {
-    if (!hasRole(ctx, 'admin', 'manager', 'inspector')) {
-      return res.status(403).json({ error: 'insufficient_role', need: 'inspector+', have: ctx.role });
-    }
-
     const value = req.body;
     if (value === undefined || value === null) {
       return res.status(400).json({ error: 'missing_body' });
@@ -63,11 +61,8 @@ export default async function handler(req, res) {
   }
 
   // ── DELETE: 컬렉션 삭제 ──
+  // 로그인된 멤버 누구나 가능 (단일 org 공유 모델).
   if (req.method === 'DELETE') {
-    if (!hasRole(ctx, 'admin', 'manager')) {
-      return res.status(403).json({ error: 'insufficient_role', need: 'manager+', have: ctx.role });
-    }
-
     const { error } = await adminClient
       .from('kv_store')
       .delete()

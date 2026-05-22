@@ -2,7 +2,7 @@
 // 캐시 정책: 정적 자원만 캐시, API/동적 자원은 무조건 네트워크
 // 🆕 백그라운드 위치 추적: periodicsync + sync 이벤트 (체크인 상태일 때)
 
-const CACHE_NAME = 'jamsa-v6-2026-05-21-bg-track';
+const CACHE_NAME = 'jamsa-v7-2026-05-22-cloud-sync-public';
 const STATIC_ASSETS = [
   '/manifest.json',
 ];  // index.html은 절대 캐시 안 함 (항상 최신)
