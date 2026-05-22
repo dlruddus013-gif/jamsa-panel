@@ -22677,6 +22677,10 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
 
   // CCTV 스냅샷 데이터 (스팟 옆 미니창 표시용)
   const [cctvSnapshotData, setCctvSnapshotData] = useState({ snapshots: {}, analyses: {}, chToZone: {}, enabled: true });
+  // staff-detail.jsx / 외부 모듈이 분석 결과를 읽을 수 있도록 window 노출
+  useEffect(() => {
+    if (typeof window !== "undefined") window.__jamsaCctvAnalyses = cctvSnapshotData?.analyses || {};
+  }, [cctvSnapshotData]);
 
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   // 사용자 위치 추적 (GPS + Wi-Fi + BLE 비콘)

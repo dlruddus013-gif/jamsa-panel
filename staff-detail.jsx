@@ -191,6 +191,7 @@ export function StaffDetailModal({ staff, dept, sb, onClose, onAddFacAction }) {
           {[
             ["overview", "📊 개요·평가"],
             ["timeline", "📋 오늘 타임라인"],
+            ["activity", "🔬 상세 활동"],
             ["identity", "🆔 식별자 등록"],
             ["schedule", "📅 근무 스케줄"],
             ["weekly",   "📈 주간 통계"],
@@ -219,6 +220,7 @@ export function StaffDetailModal({ staff, dept, sb, onClose, onAddFacAction }) {
             <>
               {tab === "overview" && <OverviewTab summary={summary} timeline={timeline} staff={staff} />}
               {tab === "timeline" && <TimelineTab timeline={timeline} />}
+              {tab === "activity" && <ActivityDetailTab staff={staff} />}
               {tab === "identity" && (
                 <IdentityTab
                   staff={staff}
@@ -497,6 +499,186 @@ function TimelineTab({ timeline }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+//  탭 3: 🔬 상세 활동 — 직원의 비콘 감지 / CCTV AI 분석 / 재고 입출고
+//  (통합지도 스팟 클릭 모달의 3개 섹션을 직원 시점에서 다시 보여줌)
+// ────────────────────────────────────────────────────────────
+function ActivityDetailTab({ staff }) {
+  // localStorage 데이터를 그때그때 읽음 (자동 30s 동기화가 폰/PC 둘 다 최신 유지)
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const onLog = () => setTick(t => t + 1);
+    window.addEventListener("jamsa:presence-log", onLog);
+    window.addEventListener("jamsa:presence-log-updated", onLog);
+    return () => {
+      window.removeEventListener("jamsa:presence-log", onLog);
+      window.removeEventListener("jamsa:presence-log-updated", onLog);
+    };
+  }, []);
+
+  const data = useMemo(() => {
+    let pLogs = [];
+    try { pLogs = JSON.parse(localStorage.getItem("jamsa_presence_logs") || "[]"); } catch (e) {}
+    let invHist = [];
+    try { invHist = JSON.parse(localStorage.getItem("jamsa_inv_hist") || "[]"); } catch (e) {}
+    let zc = {};
+    try { zc = JSON.parse(localStorage.getItem("jamsa_zone_customizations") || "{}"); } catch (e) {}
+    let cm = {};
+    try { cm = JSON.parse(localStorage.getItem("jamsa_cctv_zone_map") || "{}"); } catch (e) {}
+    let cctvAnalyses = {};
+    try {
+      // 패널 본체에서 window.__jamsaCctvAnalyses 로 expose (있으면)
+      cctvAnalyses = window.__jamsaCctvAnalyses || {};
+    } catch (e) {}
+
+    // 직원 매칭: beacon_id → employeeId → employeeName 순서로
+    const byBeaconId = staff.beacon_id;
+    const byName = staff.name;
+    const byId = staff.id;
+    const empLogs = pLogs.filter(l =>
+      (byBeaconId && (l.beaconId === byBeaconId || String(l.beaconId).toUpperCase() === String(byBeaconId).toUpperCase())) ||
+      (byId && l.employeeId === byId) ||
+      (byName && l.employeeName === byName)
+    ).slice(0, 20);
+
+    // 이 직원이 최근 갔던 zone 집합
+    const visitedZones = new Set(empLogs.map(l => l.zoneId).filter(Boolean));
+
+    // 현재 CCTV AI 분석 — 직원이 최근 방문한 zone 의 채널들에 대해
+    const currentAnalyses = [];
+    for (const zid of visitedZones) {
+      const channels = cm[zid] || [];
+      for (const ch of channels) {
+        const a = cctvAnalyses[String(ch)] || cctvAnalyses[`ch${ch}`];
+        if (a) currentAnalyses.push({ ch, zoneId: zid, ...a });
+      }
+    }
+
+    // 재고 입출고: 직원 이름 매칭 (act log 의 user 필드)
+    const empInv = invHist.filter(h =>
+      (h.user && h.user === byName) ||
+      (h.det && byName && h.det.includes(byName))
+    ).slice(0, 12);
+
+    return { empLogs, currentAnalyses, empInv, visitedZones: Array.from(visitedZones) };
+  }, [staff.id, staff.beacon_id, staff.name, tick]);
+
+  const fmtDT = (iso) => {
+    try {
+      const d = new Date(iso);
+      return `${pad(d.getMonth()+1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    } catch (e) { return iso; }
+  };
+
+  const Empty = ({ children }) => (
+    <div style={{ padding: 16, textAlign: "center", color: "#64748b", fontSize: 11, lineHeight: 1.6 }}>{children}</div>
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {/* 📡 비콘 감지 로그 (이 직원) */}
+      <section>
+        <div style={{ fontSize: 11, fontWeight: 800, color: "#a78bfa", letterSpacing: ".1em", textTransform: "uppercase", marginBottom: 8 }}>
+          📡 비콘 감지 로그 ({data.empLogs.length}건)
+        </div>
+        {data.empLogs.length === 0 ? (
+          <Empty>
+            아직 이 직원의 비콘 감지 기록이 없습니다.<br/>
+            <small>비콘이 직원에 매칭돼 있어야 합니다 (식별자 탭의 <strong>beacon_id</strong> 확인)</small>
+          </Empty>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {data.empLogs.map(l => (
+              <div key={l.id} style={{ padding: 8, background: "rgba(124,58,237,0.08)", borderLeft: "3px solid #a78bfa", borderRadius: 4 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+                  <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 10, color: "#a78bfa" }}>{fmtDT(l.at)}</span>
+                  <span style={{ color: "#f1f5f9", fontWeight: 700 }}>→ {l.zoneName || l.zoneId}</span>
+                  {l.cctvChannel != null && (
+                    <span style={{ marginLeft: "auto", fontSize: 9, color: "#67e8f9", background: "rgba(8,145,178,0.25)", padding: "1px 5px", borderRadius: 3, fontWeight: 700 }}>CH{l.cctvChannel}</span>
+                  )}
+                  {l.rssi != null && (
+                    <span style={{ fontSize: 9, color: "#94a3b8" }}>RSSI {l.rssi}</span>
+                  )}
+                </div>
+                {l.aiAnalysis?.summary && (
+                  <div style={{ marginTop: 4, padding: 5, background: "rgba(15,23,42,0.4)", borderLeft: `2px solid ${l.aiAnalysis.level === "DANGER" ? "#ef4444" : l.aiAnalysis.level === "WARNING" ? "#f59e0b" : "#10b981"}`, borderRadius: 3, fontSize: 10, lineHeight: 1.5, color: "#cbd5e1" }}>
+                    <strong style={{ color: "#a78bfa" }}>🤖 AI:</strong> {l.aiAnalysis.summary}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* 🤖 현재 CCTV AI 분석 (이 직원이 최근 갔던 zone 의 채널) */}
+      <section>
+        <div style={{ fontSize: 11, fontWeight: 800, color: "#67e8f9", letterSpacing: ".1em", textTransform: "uppercase", marginBottom: 8 }}>
+          🤖 현재 CCTV AI 분석 ({data.currentAnalyses.length}채널)
+        </div>
+        {data.currentAnalyses.length === 0 ? (
+          <Empty>
+            방문 구역의 CCTV AI 분석 결과가 없습니다.<br/>
+            <small>CCTV 서버가 가동 중이어야 자동 분석이 누적됩니다.</small>
+          </Empty>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {data.currentAnalyses.slice(0, 6).map(a => {
+              const lvl = (a.level || "").toUpperCase();
+              const color = lvl === "DANGER" ? "#ef4444" : lvl === "WARNING" ? "#f59e0b" : "#34d399";
+              return (
+                <div key={`${a.zoneId}-${a.ch}`} style={{ padding: 8, background: "rgba(8,145,178,0.08)", borderLeft: `3px solid ${color}`, borderRadius: 4 }}>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 3 }}>
+                    <span style={{ fontSize: 9, fontWeight: 800, padding: "1px 6px", borderRadius: 3, background: color, color: "#0b1220" }}>{lvl || "?"}</span>
+                    <span style={{ fontSize: 10, color: "#67e8f9", fontWeight: 700 }}>CH{a.ch}</span>
+                    {a.category && <span style={{ fontSize: 10, color: "#94a3b8" }}>· {a.category}</span>}
+                    {a.score != null && <span style={{ marginLeft: "auto", fontSize: 9, color: "#64748b", fontFamily: "ui-monospace,monospace" }}>score {a.score}</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#e2e8f0", lineHeight: 1.5 }}>{a.summary || a.detail || "(요약 없음)"}</div>
+                  {a.analyzedAt && (
+                    <div style={{ marginTop: 3, fontSize: 9, color: "#64748b", fontFamily: "ui-monospace,monospace" }}>분석 시각: {fmtDT(a.analyzedAt)}</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* 📥 재고 입출고 (이 직원이 작업) */}
+      <section>
+        <div style={{ fontSize: 11, fontWeight: 800, color: "#34d399", letterSpacing: ".1em", textTransform: "uppercase", marginBottom: 8 }}>
+          📥 재고 입출고 ({data.empInv.length}건)
+        </div>
+        {data.empInv.length === 0 ? (
+          <Empty>이 직원과 관련된 재고 입출고 기록이 없습니다</Empty>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {data.empInv.map(h => {
+              const isIn = (h.act || "").includes("입고") || (h.act || "").includes("등록");
+              const isOut = (h.act || "").includes("출고") || (h.act || "").includes("사용") || (h.act || "").includes("폐기");
+              const color = isIn ? "#34d399" : isOut ? "#ef4444" : "#67e8f9";
+              return (
+                <div key={h.id} style={{ padding: 6, background: "rgba(52,211,153,0.08)", borderLeft: `3px solid ${color}`, borderRadius: 3, fontSize: 11 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                    <span style={{ fontSize: 9, fontWeight: 800, padding: "1px 6px", borderRadius: 3, background: color, color: "#0b1220" }}>{h.act}</span>
+                    <span style={{ fontWeight: 700, color: "#f1f5f9", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.pn || "—"}</span>
+                    {h.q != null && h.q !== 0 && (
+                      <span style={{ fontSize: 11, fontWeight: 900, color }}>{h.q > 0 ? "+" : ""}{h.q}</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 10, color: "#cbd5e1" }}>{h.det}</div>
+                  <div style={{ fontSize: 9, color: "#64748b", marginTop: 2 }}>{fmtDT(h.date)}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
