@@ -15256,7 +15256,7 @@ function SujangoInteriorPlan({ onSelectSpot, selectedSpot, spotCounts = {}, read
   const [bgImg, setBgImg] = React.useState(() => {
     try { return localStorage.getItem(SUJANGO_BG_KEY) || null; } catch { return null; }
   });
-  const [bgOpacity, setBgOpacity] = React.useState(0.22);
+  const [bgTransparency, setBgTransparency] = React.useState(30); // 투명도 % (0=완전불투명, 100=완전투명)
 
   const saveBg = (dataUrl) => {
     setBgImg(dataUrl);
@@ -15345,9 +15345,9 @@ function SujangoInteriorPlan({ onSelectSpot, selectedSpot, spotCounts = {}, read
         {bgImg && <>
           <label style={{ fontSize:10, color:"#94a3b8" }}>
             투명도:
-            <input type="range" min={5} max={60} value={Math.round(bgOpacity*100)} onChange={e => setBgOpacity(Number(e.target.value)/100)}
+            <input type="range" min={0} max={80} value={bgTransparency} onChange={e => setBgTransparency(Number(e.target.value))}
               style={{ marginLeft:4, width:70, verticalAlign:"middle" }} />
-            {Math.round(bgOpacity*100)}%
+            {bgTransparency}%
           </label>
           <button onClick={clearBg} style={{ fontSize:10, padding:"2px 8px", background:"#dc2626", color:"#fff", border:"none", borderRadius:4, cursor:"pointer" }}>✕ 제거</button>
         </>}
@@ -15357,11 +15357,11 @@ function SujangoInteriorPlan({ onSelectSpot, selectedSpot, spotCounts = {}, read
         {/* 전체 배경 */}
         <rect x={0} y={0} width={VW} height={VH} fill="#1e293b" rx={8} />
 
-        {/* 실제 창고 사진 워터마크 */}
+        {/* 실제 창고 사진 배경 */}
         {bgImg && (
           <image href={bgImg} x={0} y={0} width={VW} height={VH}
-            preserveAspectRatio="xMidYMid meet"
-            style={{ opacity: bgOpacity, filter:"grayscale(30%)" }} />
+            preserveAspectRatio="xMidYMid slice"
+            style={{ opacity: 1 - bgTransparency / 100 }} />
         )}
 
         {/* A구역 방 */}
