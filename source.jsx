@@ -22441,6 +22441,30 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   const [selectedZone, setSelectedZone] = useState(null);
   const [warehouseModelZone, setWarehouseModelZone] = useState(null);
   const [spotAiModalOpen, setSpotAiModalOpen] = useState(false);
+  // CCTV 원본 크기 모달 (지도에서 미니창 클릭 시 열림)
+  const [cctvFullView, setCctvFullView] = useState(null); // {ch, zoneId, zoneName} | null
+  const [cctvFullTick, setCctvFullTick] = useState(0); // 3초마다 스냅샷 강제 갱신
+  useEffect(() => {
+    const onOpen = (e) => {
+      const d = e?.detail;
+      if (!d || d.ch == null) return;
+      setCctvFullView({ ch: d.ch, zoneId: d.zoneId, zoneName: d.zoneName });
+    };
+    window.addEventListener("jamsa:cctv-open", onOpen);
+    return () => window.removeEventListener("jamsa:cctv-open", onOpen);
+  }, []);
+  useEffect(() => {
+    if (!cctvFullView) return;
+    const id = setInterval(() => setCctvFullTick(t => t + 1), 3000);
+    return () => clearInterval(id);
+  }, [cctvFullView]);
+  // ESC 키로 닫기
+  useEffect(() => {
+    if (!cctvFullView) return;
+    const onKey = (e) => { if (e.key === "Escape") setCctvFullView(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [cctvFullView]);
   const [filterMode, setFilterMode] = useState("all"); // all | urgent | stock | facility
   // 🗺️ 지도 크게 보기 모드 — 상단 패널/헤더를 숨기고 지도가 화면 전체를 차지
   const [mapFullscreen, setMapFullscreen] = useState(false);
@@ -23778,7 +23802,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         const _outerShadow = cctvEditMode ? "0 0 0 3px rgba(251,191,36,0.4),0 4px 14px rgba(0,0,0,0.5)" : "0 4px 14px rgba(0,0,0,0.5)";
         const _cctvClick = cctvEditMode && _firstCh
           ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${_firstCh})"`
-          : `onclick="event.stopPropagation();this.classList.toggle('expanded')"`;
+          : ``; // 각 셀이 자체 클릭 핸들러로 모달 오픈 — 외곽 toggle 비활성화
 
         // 각 채널 셀 HTML 생성
         const _cellsHtml = _n > 0 ? _dispChs.map(ch => {
@@ -23790,7 +23814,11 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           let _cellAnim = "";
           if (_ca?.level === "DANGER") { _cellBorder = "1px solid #dc2626"; _cellAnim = "animation:cctvDangerPulse 1.2s infinite;"; }
           else if (_ca?.level === "WARNING") { _cellBorder = "1px solid #f59e0b"; }
-          return `<div style="position:relative;width:${_cellW}px;height:${_cellH}px;border-radius:3px;overflow:hidden;border:${_cellBorder};${_cellAnim}background:#0f172a;flex-shrink:0;">
+          // 셀 클릭 → 원본 크기 CCTV 모달 열기 (다른 아이콘에 가려지지 않게)
+          const _cellClick = cctvEditMode
+            ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${ch})"`
+            : `onclick="event.stopPropagation();window.dispatchEvent(new CustomEvent('jamsa:cctv-open',{detail:{ch:${ch},zoneId:'${z.id}',zoneName:${JSON.stringify(z.name)}}}))"`;
+          return `<div ${_cellClick} title="CH${ch} — 클릭하면 원본 크기로 보기" style="position:relative;width:${_cellW}px;height:${_cellH}px;border-radius:3px;overflow:hidden;border:${_cellBorder};${_cellAnim}background:#0f172a;flex-shrink:0;cursor:pointer;">
             <img src="${_url}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';var fb=document.getElementById('${_fbId}');if(fb)fb.style.display='flex';"/>
             <div id="${_fbId}" style="display:none;position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);background:rgba(15,23,42,0.93);">
               <div style="font-size:${_n===1?'16':'11'}px;">📷</div>
@@ -26527,6 +26555,77 @@ window.onload = () => {
           onClose={() => setSpotAiModalOpen(false)} />
       )}
 
+      {/* ─── 📹 CCTV 원본 크기 보기 모달 (지도 미니창 셀 클릭 시) ─── */}
+      {cctvFullView && (() => {
+        const { ch, zoneId, zoneName } = cctvFullView;
+        // eslint-disable-next-line no-unused-vars
+        const _tick = cctvFullTick; // 갱신 트리거 (URL 재계산)
+        const directBase = (() => { try { return getEffectiveCctvServerUrl(); } catch (e) { return DEFAULT_CCTV_SERVER_URL; } })();
+        const liveTs = Date.now();
+        const snapUrl = `${directBase.replace(/\/+$/, "")}/api/snap/${ch}?t=${liveTs}`;
+        const liveUrl = `${directBase.replace(/\/+$/, "")}/api/stream/${ch}`;
+        const analyses = cctvSnapshotData?.analyses || {};
+        const a = analyses[String(ch)] || analyses[`ch${ch}`] || null;
+        const levelColor = a?.level === "DANGER" ? "#dc2626" : a?.level === "WARNING" ? "#f59e0b" : "#10b981";
+        return (
+          <div onClick={() => setCctvFullView(null)}
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.92)", zIndex: 20000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+            <div onClick={e => e.stopPropagation()}
+              style={{ background: "#0b1220", borderRadius: 12, maxWidth: "min(96vw, 1200px)", maxHeight: "94vh", width: "100%", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 30px 80px rgba(0,0,0,0.7)", border: "1px solid rgba(255,255,255,0.1)" }}>
+              {/* 헤더 */}
+              <div style={{ padding: "12px 16px", background: "linear-gradient(135deg,#0891b2,#7c3aed)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ fontSize: 18, fontWeight: 900 }}>📹 CH{ch}</div>
+                  {zoneName && <div style={{ fontSize: 12, opacity: 0.95, background: "rgba(255,255,255,0.15)", padding: "3px 8px", borderRadius: 4 }}>{zoneName}</div>}
+                  {a?.level && (
+                    <div style={{ fontSize: 11, fontWeight: 800, padding: "2px 8px", borderRadius: 4, background: levelColor, color: "#0b1220" }}>{a.level}</div>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => window.open(liveUrl, "_blank", "noopener")}
+                    style={{ padding: "6px 12px", background: "rgba(255,255,255,0.2)", border: "1px solid rgba(255,255,255,0.3)", color: "#fff", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                    🔗 라이브 스트림
+                  </button>
+                  <button onClick={() => setCctvFullView(null)}
+                    style={{ width: 32, height: 32, background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.25)", color: "#fff", borderRadius: 6, fontSize: 18, cursor: "pointer", lineHeight: 1 }}>×</button>
+                </div>
+              </div>
+              {/* 본체: 스냅샷 + (있으면) AI 분석 */}
+              <div style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column", background: "#000" }}>
+                <div style={{ position: "relative", flex: 1, minHeight: 280, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <img src={snapUrl} alt={`CH${ch}`} referrerPolicy="no-referrer"
+                    style={{ maxWidth: "100%", maxHeight: "76vh", width: "auto", height: "auto", objectFit: "contain", display: "block" }}
+                    onError={(e) => { e.currentTarget.style.display = "none"; const fb = e.currentTarget.nextSibling; if (fb) fb.style.display = "flex"; }} />
+                  <div style={{ display: "none", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 40, color: "#94a3b8", textAlign: "center" }}>
+                    <div style={{ fontSize: 48 }}>📷</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, marginTop: 8 }}>스냅샷을 가져올 수 없습니다</div>
+                    <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>CCTV 서버가 꺼져 있거나 네트워크가 차단되었을 수 있습니다.</div>
+                    <div style={{ fontSize: 10, color: "#475569", marginTop: 6, fontFamily: "ui-monospace,monospace" }}>{snapUrl}</div>
+                  </div>
+                </div>
+                {a && (
+                  <div style={{ padding: 12, background: "#0f172a", borderTop: `2px solid ${levelColor}` }}>
+                    <div style={{ fontSize: 11, fontWeight: 800, color: levelColor, marginBottom: 4 }}>
+                      🤖 Claude AI 분석 {a.category ? `· ${a.category}` : ""} {a.score != null ? `· 점수 ${a.score}` : ""}
+                    </div>
+                    <div style={{ fontSize: 13, color: "#e2e8f0", lineHeight: 1.5 }}>{a.summary || a.detail || "(요약 없음)"}</div>
+                    {a.detail && a.detail !== a.summary && (
+                      <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4, lineHeight: 1.5 }}>{a.detail}</div>
+                    )}
+                    {a.analyzedAt && (
+                      <div style={{ fontSize: 9, color: "#64748b", marginTop: 4, fontFamily: "ui-monospace,monospace" }}>분석: {new Date(a.analyzedAt).toLocaleString("ko")}</div>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div style={{ padding: "8px 14px", background: "#0b1220", borderTop: "1px solid rgba(255,255,255,0.08)", fontSize: 10, color: "#64748b", textAlign: "center" }}>
+                3초마다 자동 갱신 · 클릭으로 닫기 · 라이브 스트림은 새 탭에서 열림
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ─── CCTV 서버 상태 배지 (우하단) ─── */}
       <div onClick={() => setCctvGuideOpen(true)}
         title="클릭하면 자세한 가이드"
@@ -27379,7 +27478,7 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
       const outerBorderColor = cctvEditMode ? "#fbbf24" : hasAnyDanger ? "#dc2626" : hasAnyWarn ? "#f59e0b" : "rgba(255,255,255,0.85)";
       const outerBorderStyle = cctvEditMode ? "dashed" : "solid";
       const outerAnim = hasAnyDanger ? "animation:cctvDangerPulse 1.2s infinite;" : hasAnyWarn ? "animation:cctvWarnPulse 1.6s infinite;" : "";
-      const cctvClickAttr = cctvEditMode ? '' : `onclick="event.stopPropagation();this.classList.toggle('expanded')"`;
+      const cctvClickAttr = ''; // 외곽 toggle 비활성 — 각 셀이 직접 모달 오픈
 
       const liveTs = Math.floor(Date.now() / 5000) * 5000;
       const dirBase = (() => { try { return getEffectiveCctvServerUrl?.() || DEFAULT_CCTV_SERVER_URL; } catch (e) { return DEFAULT_CCTV_SERVER_URL; } })();
@@ -27389,7 +27488,10 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
         const ca = ana[ch];
         const url = (s2?.url && !s2?.error) ? s2.url : `${dirBase.replace(/\/+$/,"")}/api/snap/${ch}?t=${liveTs}`;
         const fbId = `cctvFbL_${z.id}_${ch}`;
-        return `<div style="position:relative;width:${cellW}px;height:${cellH}px;border-radius:3px;overflow:hidden;border:1px solid ${ca?.level==="DANGER"?"#dc2626":ca?.level==="WARNING"?"#f59e0b":"rgba(255,255,255,0.2)"};background:#0f172a;flex-shrink:0;">
+        const cellClick = cctvEditMode
+          ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${ch})"`
+          : `onclick="event.stopPropagation();window.dispatchEvent(new CustomEvent('jamsa:cctv-open',{detail:{ch:${ch},zoneId:'${z.id}',zoneName:${JSON.stringify(z.name)}}}))"`;
+        return `<div ${cellClick} title="CH${ch} — 클릭하면 원본 크기로 보기" style="position:relative;width:${cellW}px;height:${cellH}px;border-radius:3px;overflow:hidden;border:1px solid ${ca?.level==="DANGER"?"#dc2626":ca?.level==="WARNING"?"#f59e0b":"rgba(255,255,255,0.2)"};background:#0f172a;flex-shrink:0;cursor:pointer;">
           <img src="${url}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';var fb=document.getElementById('${fbId}');if(fb)fb.style.display='flex';"/>
           <div id="${fbId}" style="display:none;position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);background:rgba(15,23,42,0.93);">
             <div style="font-size:${nCh===1?'16':'11'}px;">📷</div>
