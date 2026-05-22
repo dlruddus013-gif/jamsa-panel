@@ -161,8 +161,25 @@ async function mountReactApp() {
   //    1회 제한을 없애서 매번 boot 마다 확인 (idempotent).
   if (supabase && session) {
     setTimeout(() => bootstrapPushLocalToCloud().catch(() => {}), 1500);
+    // 🔁 30초마다 자동 동기화 — 사용자가 클라우드 버튼 누를 필요 없이
+    //    항상 로컬 변경이 클라우드로 올라가고 클라우드 변경이 로컬에 받아짐
+    if (!window.__jamsaAutoSyncTimer) {
+      window.__jamsaAutoSyncTimer = setInterval(() => {
+        bootstrapPushLocalToCloud().catch(() => {});
+      }, 30_000);
+    }
   }
 }
+
+// localStorage 키가 동기화 대상인지 (true) 또는 기기 전용인지 (false) 판정
+function isSyncableKey(k) {
+  if (!k || !k.startsWith(SYNC_PREFIX)) return false;
+  if (k === 'jamsa_sb_session' || k === 'jamsa_bootstrap_pushed_at') return false;
+  if (k.endsWith('_collapsed') || k.endsWith('_dismissed')) return false;
+  if (k.startsWith('jamsa_data_protection_')) return false;
+  return true;
+}
+window.__jamsaIsSyncableKey = isSyncableKey;
 
 // 부팅마다: localStorage 의 모든 jamsa_* 키를 클라우드와 비교 후 누락된/다른 키만 푸시.
 // 매번 실행 (idempotent: 차이 없으면 0건 푸시).  로그인 상태에서만 동작.
@@ -364,16 +381,45 @@ window.__jamsaForcePushAll = async () => {
   alert('클라우드 강제 푸시 완료 (콘솔에서 결과 확인)');
 };
 // 빠른 진단: 클라우드 상태 + 로컬 키 수
+// localKeys: 전체 jamsa_* 개수
+// syncableLocalKeys: 실제 동기화 대상 개수 (세션/임시 키 제외)
+// cloudKeys: 클라우드에 있는 키 개수
+// missingInCloud: 로컬에는 있는데 클라우드에 없는 키 이름 배열
 window.__jamsaSyncDiag = async () => {
-  const result = { localKeys: 0, cloudKeys: 0, session: !!session, supabase: !!supabase };
+  const result = {
+    localKeys: 0,
+    syncableLocalKeys: 0,
+    cloudKeys: 0,
+    session: !!session,
+    supabase: !!supabase,
+    autoSync: !!window.__jamsaAutoSyncTimer,
+    missingInCloud: [],
+    deviceOnlyKeys: [],
+  };
   try {
+    const localKeys = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && k.startsWith(SYNC_PREFIX)) result.localKeys++;
+      if (k && k.startsWith(SYNC_PREFIX)) {
+        localKeys.push(k);
+        result.localKeys++;
+        if (isSyncableKey(k)) result.syncableLocalKeys++;
+        else result.deviceOnlyKeys.push(k);
+      }
     }
     const r = await fetch(PANEL_ORIGIN + '/api/data-bulk', { cache: 'no-store' });
-    if (r.ok) result.cloudKeys = Object.keys((await r.json()).data || {}).length;
-    else result.cloudError = r.status;
+    if (r.ok) {
+      const cloudData = (await r.json()).data || {};
+      result.cloudKeys = Object.keys(cloudData).length;
+      // 로컬에 있는데 클라우드에 없는 syncable 키들
+      for (const k of localKeys) {
+        if (isSyncableKey(k) && cloudData[k] === undefined) {
+          result.missingInCloud.push(k);
+        }
+      }
+    } else {
+      result.cloudError = r.status;
+    }
   } catch (e) { result.error = e.message; }
   console.log('[jamsa sync diag]', result);
   return result;

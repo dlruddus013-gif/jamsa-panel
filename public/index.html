@@ -33,7 +33,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin defer></script>
   <!-- bundle preload -->
-  <link rel="modulepreload" href="/app.bundle.js?v=b7815fa0" crossorigin>
+  <link rel="modulepreload" href="/app.bundle.js?v=019310a8" crossorigin>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
   <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
@@ -837,15 +837,24 @@
             body.innerHTML = '<div style="color:#fca5a5;">진단 함수를 사용할 수 없습니다 (앱이 아직 로딩 중)</div>';
             return;
           }
+          // 실제 동기화 대상 키만 비교 — 세션/임시 키는 기기 전용이라 클라우드에 안 올라감
+          const syncable = diag.syncableLocalKeys ?? diag.localKeys;
+          const missing = (diag.missingInCloud || []).length;
+          const fullySync = diag.session && missing === 0 && diag.cloudKeys >= syncable;
           const lines = [];
           lines.push(`<div>🔐 로그인: <strong style="color:${diag.session ? '#34d399' : '#f87171'}">${diag.session ? '예' : '아니오 (편집 불가)'}</strong></div>`);
           lines.push(`<div>☁️ Supabase: <strong style="color:${diag.supabase ? '#34d399' : '#f87171'}">${diag.supabase ? '연결됨' : '미연결'}</strong></div>`);
-          lines.push(`<div>📦 이 기기 로컬 키: <strong>${diag.localKeys}</strong>개</div>`);
-          lines.push(`<div>☁️ 클라우드 키: <strong style="color:${diag.cloudKeys >= diag.localKeys ? '#34d399' : '#fbbf24'}">${diag.cloudKeys}</strong>개</div>`);
+          lines.push(`<div>🔁 자동 동기화: <strong style="color:${diag.autoSync ? '#34d399' : '#fbbf24'}">${diag.autoSync ? '활성 (30초마다)' : '비활성'}</strong></div>`);
+          lines.push(`<div>📦 동기화 대상 로컬 키: <strong>${syncable}</strong>개${diag.deviceOnlyKeys?.length ? ` <span style="color:#64748b;font-size:11px;">(+ 기기 전용 ${diag.deviceOnlyKeys.length}개 제외)</span>` : ''}</div>`);
+          lines.push(`<div>☁️ 클라우드 키: <strong style="color:${fullySync ? '#34d399' : (missing > 0 ? '#fbbf24' : '#34d399')}">${diag.cloudKeys}</strong>개</div>`);
           if (diag.cloudError) lines.push(`<div style="color:#fca5a5;">⚠ 클라우드 응답 에러: ${diag.cloudError}</div>`);
           if (diag.error) lines.push(`<div style="color:#fca5a5;">⚠ 에러: ${diag.error}</div>`);
-          if (diag.session && diag.cloudKeys < diag.localKeys) {
-            lines.push(`<div style="margin-top:8px;padding:8px;background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.3);border-radius:6px;color:#fbbf24;">⚠ 이 기기 데이터가 클라우드보다 많습니다. <strong>⬆ 강제 푸시</strong>를 눌러주세요.</div>`);
+          if (fullySync) {
+            lines.push(`<div style="margin-top:8px;padding:8px;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.3);border-radius:6px;color:#34d399;">✓ 완전 동기화 됨. 모든 기기에서 같은 데이터를 봅니다.</div>`);
+          } else if (diag.session && missing > 0) {
+            const preview = (diag.missingInCloud || []).slice(0, 5).map(k => `<code style="background:rgba(255,255,255,0.05);padding:1px 4px;border-radius:2px;font-size:10px;">${k}</code>`).join(' ');
+            const more = (diag.missingInCloud.length > 5) ? ` 외 ${diag.missingInCloud.length - 5}개` : '';
+            lines.push(`<div style="margin-top:8px;padding:8px;background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.3);border-radius:6px;color:#fbbf24;font-size:11px;">⚠ 클라우드에 없는 키 ${missing}개: ${preview}${more}<br><br><strong>⬆ 강제 푸시</strong>를 누르면 즉시 올라갑니다. 30초 후 자동 재시도도 됩니다.</div>`);
           }
           if (!diag.session) {
             lines.push(`<div style="margin-top:8px;padding:8px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;color:#fca5a5;">⚠ 로그인이 필요합니다. 편집 권한이 없으면 푸시도 불가합니다. 읽기는 가능합니다.</div>`);
@@ -897,7 +906,7 @@
       });
     })();
   </script>
-  <script type="module" src="/app.bundle.js?v=b7815fa0"></script>
+  <script type="module" src="/app.bundle.js?v=019310a8"></script>
   <script>
     // React 앱 마운트 감지 — 모바일 친화적, 다중 폴백
     (function waitForApp() {
