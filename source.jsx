@@ -23839,9 +23839,43 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
       }
     });
 
-    // 초기 뷰는 DEFAULT_MAP_VIEW(zoom 18, 고정 center)로 고정 — fitBounds 자동조정 없음
-    if (!naverInitialFitRef.current) {
-      naverInitialFitRef.current = true;
+    // 🔒 스팟 영역에 꽉 차게 fitBounds + minZoom 고정 — 스팟 밖으로 zoom-out 못 함
+    if (!naverInitialFitRef.current && zoneStatus.length > 0) {
+      try {
+        const bounds = new naver.maps.LatLngBounds();
+        let hasAny = false;
+        zoneStatus.forEach(s => {
+          if (s.zone && typeof s.zone.lat === "number" && typeof s.zone.lng === "number") {
+            const d = _displayLatLng(s.zone);
+            bounds.extend(new naver.maps.LatLng(d.lat, d.lng));
+            hasAny = true;
+          }
+        });
+        if (hasAny) {
+          // 스팟이 꽉 차도록 fitBounds — 패딩 60px (마커가 잘리지 않게)
+          naverMapRef.current.fitBounds(bounds, { top: 60, right: 60, bottom: 60, left: 60 });
+          // fitBounds 완료 후 현재 zoom을 minZoom·maxBounds로 잠금
+          setTimeout(() => {
+            try {
+              const z = naverMapRef.current.getZoom();
+              naverMapRef.current.setOptions({ minZoom: z, maxZoom: 21 });
+              // panning 제한: 스팟 영역에서 살짝(약 30% 외곽) 벗어나는 정도까지만 허용
+              const sw = bounds.getSW(), ne = bounds.getNE();
+              const latPad = (ne.lat() - sw.lat()) * 0.3;
+              const lngPad = (ne.lng() - sw.lng()) * 0.3;
+              const padded = new naver.maps.LatLngBounds(
+                new naver.maps.LatLng(sw.lat() - latPad, sw.lng() - lngPad),
+                new naver.maps.LatLng(ne.lat() + latPad, ne.lng() + lngPad),
+              );
+              naverMapRef.current.setOptions({ maxBounds: padded });
+            } catch (e) { console.warn("[NaverMap] minZoom/maxBounds set failed:", e?.message); }
+          }, 250);
+          naverInitialFitRef.current = true;
+        }
+      } catch (e) {
+        console.warn("[NaverMap] fitBounds 실패:", e?.message);
+        naverInitialFitRef.current = true;
+      }
     }
 
     // In edit mode, allow click on empty map area to add new zone
