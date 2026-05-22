@@ -15248,142 +15248,190 @@ function BatchAddModal({cats,locs,storageSections,onAdd,onClose}){
 // ============================================================
 // 🏪 수장고 내부 인터랙티브 평면도
 // ============================================================
-function SujangoInteriorPlan({ onSelectSpot, selectedSpot, spotCounts = {}, readOnly = false }) {
-  const [hoverId, setHoverId] = React.useState(null);
+const SUJANGO_BG_KEY = "jamsa_sujango_interior_bg";
 
-  const handleClick = (id) => {
-    if (readOnly) return;
-    if (onSelectSpot) onSelectSpot(id);
+function SujangoInteriorPlan({ onSelectSpot, selectedSpot, spotCounts = {}, readOnly = false, onBgChange }) {
+  const [hoverId, setHoverId] = React.useState(null);
+  const [bgImg, setBgImg] = React.useState(() => {
+    try { return localStorage.getItem(SUJANGO_BG_KEY) || null; } catch { return null; }
+  });
+  const [bgOpacity, setBgOpacity] = React.useState(0.22);
+
+  const saveBg = (dataUrl) => {
+    setBgImg(dataUrl);
+    try { localStorage.setItem(SUJANGO_BG_KEY, dataUrl); } catch {}
+    onBgChange?.(dataUrl);
+  };
+  const clearBg = () => {
+    setBgImg(null);
+    try { localStorage.removeItem(SUJANGO_BG_KEY); } catch {}
+    onBgChange?.(null);
   };
 
   const shelfColor = (id) => {
     if (id === selectedSpot) return "#e63946";
-    if (hoverId === id) return "#1971c2";
-    return "#3b5bdb";
+    if (hoverId === id) return "#1d4ed8";
+    return "#2563eb";
   };
   const floorColor = (id) => {
     if (id === selectedSpot) return "#e63946";
-    if (hoverId === id) return "#5b21b6";
+    if (hoverId === id) return "#6d28d9";
     return "#7c3aed";
   };
+
+  // viewBox: 760 × 440 — wider to fit 3 shelf units without overlap
+  // A구역(좌): x=8~168(w=160), Connector: x=168~218(w=50), B구역(우): x=218~752(w=534)
+  const VW = 760, VH = 440;
+  const AX = 8, AY = 12, AW = 160, AH = 370;  // A room
+  const CX = AX+AW, CY = AY+110, CW = 50, CH = 150; // connector
+  const BX = CX+CW, BY = AY, BW = VW-BX-8, BH = AH;  // B room
 
   const Zone = ({ id, x, y, w, h, label, type = "shelf" }) => {
     const color = type === "floor" ? floorColor(id) : shelfColor(id);
     const count = spotCounts[id] || 0;
+    const lines = label.split("\n");
     return (
-      <g
-        style={{ cursor: readOnly ? "default" : "pointer" }}
-        onClick={() => handleClick(id)}
+      <g style={{ cursor: readOnly ? "default" : "pointer" }}
+        onClick={() => { if (!readOnly && onSelectSpot) onSelectSpot(id); }}
         onMouseEnter={() => setHoverId(id)}
-        onMouseLeave={() => setHoverId(null)}
-      >
-        <rect
-          x={x} y={y} width={w} height={h}
-          fill={color}
-          rx={3}
-          stroke={id === selectedSpot ? "#dc2626" : "rgba(255,255,255,0.3)"}
-          strokeWidth={id === selectedSpot ? 2 : 1}
-          style={{ filter: hoverId === id ? "brightness(1.15)" : "none", transition: "fill 0.15s" }}
-        />
-        <text x={x + w / 2} y={y + h / 2 + 3} textAnchor="middle" fill="#fff" fontSize={9} fontWeight="700" style={{ pointerEvents: "none", userSelect: "none" }}>
-          {label}
-        </text>
-        {count > 0 && (
-          <g>
-            <circle cx={x + w - 5} cy={y + 5} r={7} fill="#f97316" stroke="#fff" strokeWidth={1} style={{ pointerEvents: "none" }} />
-            <text x={x + w - 5} y={y + 8} textAnchor="middle" fill="#fff" fontSize={7} fontWeight="900" style={{ pointerEvents: "none", userSelect: "none" }}>
-              {count > 9 ? "9+" : count}
-            </text>
-          </g>
-        )}
+        onMouseLeave={() => setHoverId(null)}>
+        <rect x={x} y={y} width={w} height={h} fill={color} rx={3}
+          stroke={id === selectedSpot ? "#fff" : "rgba(255,255,255,0.25)"}
+          strokeWidth={id === selectedSpot ? 2.5 : 1}
+          style={{ filter: hoverId===id ? "brightness(1.18)" : "none", transition: "fill 0.12s" }} />
+        {lines.map((ln, i) => (
+          <text key={i} x={x+w/2} y={y+h/2+(i-(lines.length-1)/2)*10+1}
+            textAnchor="middle" fill="#fff" fontSize={8} fontWeight="800"
+            style={{ pointerEvents:"none", userSelect:"none" }}>{ln}</text>
+        ))}
+        {count > 0 && <>
+          <circle cx={x+w-5} cy={y+5} r={7} fill="#f97316" stroke="#fff" strokeWidth={1.5} style={{ pointerEvents:"none" }} />
+          <text x={x+w-5} y={y+8} textAnchor="middle" fill="#fff" fontSize={7} fontWeight="900"
+            style={{ pointerEvents:"none", userSelect:"none" }}>{count>99?"99+":count}</text>
+        </>}
       </g>
     );
   };
 
+  // A구역 좌선반 5개: 각 h=66, gap=4
+  const aLSW=30, aLSH=66, aLSX=AX+4;
+  // A구역 우선반 4개: 우측벽
+  const aRSW=28, aRSH=80, aRSX=AX+AW-aRSW-4;
+  // A구역 바닥 2칸
+  const aFX=AX+aLSW+6, aFW=AW-aLSW-aRSW-16;
+
+  // B구역 좌선반 2개
+  const bLSW=30, bLSX=BX+4;
+  // B구역 바닥 3칸
+  const bFX=BX+bLSW+6, bFW=BW-bLSW-138-6; // 138 = 3 shelf units × 46
+  // B구역 우선반 3유닛 × 4단: 각 유닛 w=42, gap=4
+  const bRSW=42, bRSH=84, bRSX1=BX+BW-4-(bRSW*3+8); // 3 units right-aligned
+
   return (
-    <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: 8, overflow: "auto" }}>
-      <svg viewBox="0 0 620 420" style={{ width: "100%", maxWidth: 620, display: "block" }}>
-        {/* 배경 */}
-        <rect x={0} y={0} width={620} height={420} fill="#f1f5f9" rx={8} />
+    <div style={{ background:"#0f172a", border:"1px solid #334155", borderRadius:10, padding:8, overflow:"auto" }}>
+      {/* 배경사진 컨트롤 */}
+      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6, flexWrap:"wrap" }}>
+        <label style={{ fontSize:10, fontWeight:800, color:"#94a3b8" }}>실제 창고 사진 배경:</label>
+        <label style={{ padding:"3px 10px", background:"#1e40af", color:"#fff", borderRadius:5, fontSize:10, fontWeight:700, cursor:"pointer", display:"inline-flex", alignItems:"center", gap:4 }}>
+          📷 사진 업로드
+          <input type="file" accept="image/*" style={{ display:"none" }} onChange={e => {
+            const f = e.target.files?.[0]; if (!f) return;
+            const rd = new FileReader();
+            rd.onload = ev => saveBg(ev.target.result);
+            rd.readAsDataURL(f);
+          }} />
+        </label>
+        {bgImg && <>
+          <label style={{ fontSize:10, color:"#94a3b8" }}>
+            투명도:
+            <input type="range" min={5} max={60} value={Math.round(bgOpacity*100)} onChange={e => setBgOpacity(Number(e.target.value)/100)}
+              style={{ marginLeft:4, width:70, verticalAlign:"middle" }} />
+            {Math.round(bgOpacity*100)}%
+          </label>
+          <button onClick={clearBg} style={{ fontSize:10, padding:"2px 8px", background:"#dc2626", color:"#fff", border:"none", borderRadius:4, cursor:"pointer" }}>✕ 제거</button>
+        </>}
+      </div>
+
+      <svg viewBox={`0 0 ${VW} ${VH}`} style={{ width:"100%", maxWidth:VW, display:"block" }}>
+        {/* 전체 배경 */}
+        <rect x={0} y={0} width={VW} height={VH} fill="#1e293b" rx={8} />
+
+        {/* 실제 창고 사진 워터마크 */}
+        {bgImg && (
+          <image href={bgImg} x={0} y={0} width={VW} height={VH}
+            preserveAspectRatio="xMidYMid meet"
+            style={{ opacity: bgOpacity, filter:"grayscale(30%)" }} />
+        )}
 
         {/* A구역 방 */}
-        <rect x={10} y={10} width={130} height={360} fill="#fff" stroke="#374151" strokeWidth={2} rx={4} />
-        <text x={75} y={390} textAnchor="middle" fill="#374151" fontSize={11} fontWeight="800">A구역 (좌측)</text>
+        <rect x={AX} y={AY} width={AW} height={AH} fill="rgba(255,255,255,0.05)" stroke="#64748b" strokeWidth={2} rx={4} />
+        <text x={AX+AW/2} y={AY+AH+16} textAnchor="middle" fill="#94a3b8" fontSize={11} fontWeight="800">A구역 (좌측 창고)</text>
 
         {/* 연결 통로 */}
-        <rect x={140} y={130} width={50} height={120} fill="#e2e8f0" stroke="#374151" strokeWidth={1.5} strokeDasharray="4,2" rx={2} />
-        <text x={165} y={194} textAnchor="middle" fill="#6b7280" fontSize={8} fontWeight="600">통로</text>
+        <rect x={CX} y={CY} width={CW} height={CH} fill="rgba(255,255,255,0.04)" stroke="#475569" strokeWidth={1.5} strokeDasharray="5,3" rx={2} />
+        <text x={CX+CW/2} y={CY+CH/2+4} textAnchor="middle" fill="#6b7280" fontSize={9} fontWeight="700">통로</text>
 
         {/* B구역 방 */}
-        <rect x={190} y={10} width={420} height={360} fill="#fff" stroke="#374151" strokeWidth={2} rx={4} />
-        <text x={400} y={390} textAnchor="middle" fill="#374151" fontSize={11} fontWeight="800">B구역 (우측 대형창고)</text>
+        <rect x={BX} y={BY} width={BW} height={BH} fill="rgba(255,255,255,0.05)" stroke="#64748b" strokeWidth={2} rx={4} />
+        <text x={BX+BW/2} y={BY+BH+16} textAnchor="middle" fill="#94a3b8" fontSize={11} fontWeight="800">B구역 (우측 대형창고)</text>
 
-        {/* === A구역 좌측 선반 5개 === */}
-        <Zone id="A-좌1" x={14} y={20}  w={28} h={56} label="A-좌1" type="shelf" />
-        <Zone id="A-좌2" x={14} y={82}  w={28} h={56} label="A-좌2" type="shelf" />
-        <Zone id="A-좌3" x={14} y={144} w={28} h={56} label="A-좌3" type="shelf" />
-        <Zone id="A-좌4" x={14} y={206} w={28} h={56} label="A-좌4" type="shelf" />
-        <Zone id="A-좌5" x={14} y={268} w={28} h={56} label="A-좌5" type="shelf" />
+        {/* ─── A구역 좌측 선반 5개 ─── */}
+        {[0,1,2,3,4].map(i => (
+          <Zone key={`a-l${i+1}`} id={`A-좌${i+1}`} x={aLSX} y={AY+4+i*(aLSH+4)} w={aLSW} h={aLSH} label={`A\n좌${i+1}`} type="shelf" />
+        ))}
 
-        {/* === A구역 우측 선반 3개 === */}
-        <Zone id="A-우1" x={108} y={20}  w={24} h={64} label="A-우1" type="shelf" />
-        <Zone id="A-우2" x={108} y={90}  w={24} h={64} label="A-우2" type="shelf" />
-        <Zone id="A-우3" x={108} y={160} w={24} h={64} label="A-우3" type="shelf" />
+        {/* ─── A구역 우측 선반 4개 ─── */}
+        {[0,1,2,3].map(i => (
+          <Zone key={`a-r${i+1}`} id={`A-우${i+1}`} x={aRSX} y={AY+4+i*(aRSH+4)} w={aRSW} h={aRSH} label={`A\n우${i+1}`} type="shelf" />
+        ))}
 
-        {/* === A구역 바닥 2개 === */}
-        <Zone id="A-바닥1" x={46} y={20}  w={58} h={145} label="A-바닥1" type="floor" />
-        <Zone id="A-바닥2" x={46} y={172} w={58} h={145} label="A-바닥2" type="floor" />
+        {/* ─── A구역 바닥 2칸 ─── */}
+        <Zone id="A-바닥1" x={aFX} y={AY+4} w={aFW} h={(AH-8)/2-3} label={"A구역\n바닥 앞"} type="floor" />
+        <Zone id="A-바닥2" x={aFX} y={AY+4+(AH-8)/2+2} w={aFW} h={(AH-8)/2-3} label={"A구역\n바닥 뒤"} type="floor" />
 
-        {/* === B구역 우측 선반 유닛 3개 × 4단 === */}
-        {/* 선반유닛1 */}
-        <Zone id="B-선반1-1단" x={486} y={18}  w={44} h={80} label="B-선1-1단" type="shelf" />
-        <Zone id="B-선반1-2단" x={486} y={103} w={44} h={80} label="B-선1-2단" type="shelf" />
-        <Zone id="B-선반1-3단" x={486} y={188} w={44} h={80} label="B-선1-3단" type="shelf" />
-        <Zone id="B-선반1-4단" x={486} y={273} w={44} h={80} label="B-선1-4단" type="shelf" />
-        <text x={508} y={365} textAnchor="middle" fill="#6b7280" fontSize={8}>선반1</text>
+        {/* ─── B구역 좌측 선반 2개 ─── */}
+        <Zone id="B-좌선반1" x={bLSX} y={BY+4} w={bLSW} h={(BH-8)/2-3} label={"B\n좌1"} type="shelf" />
+        <Zone id="B-좌선반2" x={bLSX} y={BY+4+(BH-8)/2+2} w={bLSW} h={(BH-8)/2-3} label={"B\n좌2"} type="shelf" />
 
-        {/* 선반유닛2 */}
-        <Zone id="B-선반2-1단" x={536} y={18}  w={44} h={80} label="B-선2-1단" type="shelf" />
-        <Zone id="B-선반2-2단" x={536} y={103} w={44} h={80} label="B-선2-2단" type="shelf" />
-        <Zone id="B-선반2-3단" x={536} y={188} w={44} h={80} label="B-선2-3단" type="shelf" />
-        <Zone id="B-선반2-4단" x={536} y={273} w={44} h={80} label="B-선2-4단" type="shelf" />
-        <text x={558} y={365} textAnchor="middle" fill="#6b7280" fontSize={8}>선반2</text>
+        {/* ─── B구역 바닥 3칸 ─── */}
+        {[0,1,2].map(i => (
+          <Zone key={`b-f${i+1}`} id={`B-바닥${i+1}`}
+            x={bFX} y={BY+4+i*((BH-8)/3+2)} w={bFW} h={(BH-8)/3-2}
+            label={`B구역\n바닥 ${i+1}구역`} type="floor" />
+        ))}
 
-        {/* 선반유닛3 */}
-        <Zone id="B-선반3-1단" x={560} y={18}  w={44} h={80} label="B-선3-1단" type="shelf" />
-        <Zone id="B-선반3-2단" x={560} y={103} w={44} h={80} label="B-선3-2단" type="shelf" />
-        <Zone id="B-선반3-3단" x={560} y={188} w={44} h={80} label="B-선3-3단" type="shelf" />
-        <Zone id="B-선반3-4단" x={560} y={273} w={44} h={80} label="B-선3-4단" type="shelf" />
-        <text x={582} y={365} textAnchor="middle" fill="#6b7280" fontSize={8}>선반3</text>
-
-        {/* === B구역 좌측 선반 2개 === */}
-        <Zone id="B-좌선반1" x={194} y={18}  w={28} h={160} label="B-좌선반1" type="shelf" />
-        <Zone id="B-좌선반2" x={194} y={184} w={28} h={160} label="B-좌선반2" type="shelf" />
-
-        {/* === B구역 바닥 3개 === */}
-        <Zone id="B-바닥1" x={228} y={18}  w={252} h={108} label="B-바닥1" type="floor" />
-        <Zone id="B-바닥2" x={228} y={133} w={252} h={108} label="B-바닥2" type="floor" />
-        <Zone id="B-바닥3" x={228} y={248} w={252} h={106} label="B-바닥3" type="floor" />
+        {/* ─── B구역 우측 선반 3유닛 × 4단 ─── */}
+        {[0,1,2].map(u => {
+          const sx = bRSX1 + u*(bRSW+4);
+          return [0,1,2,3].map(lv => (
+            <Zone key={`b-s${u+1}-${lv+1}`} id={`B-선반${u+1}-${lv+1}단`}
+              x={sx} y={BY+4+lv*(bRSH+4)} w={bRSW} h={bRSH}
+              label={`선반${u+1}\n${lv+1}단`} type="shelf" />
+          ));
+        })}
+        {/* 선반 유닛 라벨 */}
+        {[0,1,2].map(u => (
+          <text key={`bl${u}`} x={bRSX1+u*(bRSW+4)+bRSW/2} y={BY+BH+14} textAnchor="middle" fill="#6b7280" fontSize={9}>선반{u+1}</text>
+        ))}
 
         {/* 범례 */}
-        <rect x={10} y={400} width={600} height={16} fill="none" />
-        <rect x={14} y={402} width={10} height={10} fill="#3b5bdb" rx={2} />
-        <text x={28} y={411} fill="#475569" fontSize={9}>선반 구역</text>
-        <rect x={100} y={402} width={10} height={10} fill="#7c3aed" rx={2} />
-        <text x={114} y={411} fill="#475569" fontSize={9}>바닥 구역</text>
-        <rect x={186} y={402} width={10} height={10} fill="#e63946" rx={2} />
-        <text x={200} y={411} fill="#475569" fontSize={9}>선택됨</text>
-        <text x={350} y={411} fill="#94a3b8" fontSize={9}>클릭하여 위치 선택 | 숫자 = 보관 물품 수</text>
+        <rect x={10} y={VH-18} width={12} height={12} fill="#2563eb" rx={2} />
+        <text x={26} y={VH-8} fill="#94a3b8" fontSize={9}>선반</text>
+        <rect x={70} y={VH-18} width={12} height={12} fill="#7c3aed" rx={2} />
+        <text x={86} y={VH-8} fill="#94a3b8" fontSize={9}>바닥</text>
+        <rect x={126} y={VH-18} width={12} height={12} fill="#e63946" rx={2} />
+        <text x={142} y={VH-8} fill="#94a3b8" fontSize={9}>선택</text>
+        <circle cx={190} cy={VH-12} r={7} fill="#f97316" />
+        <text x={202} y={VH-8} fill="#94a3b8" fontSize={9}>물품수</text>
+        <text x={360} y={VH-8} fill="#475569" fontSize={9} textAnchor="middle">클릭 → 위치 선택 | 숫자 배지 = 보관 물품 수</text>
       </svg>
+
       {selectedSpot && (
-        <div style={{ marginTop: 4, padding: "4px 10px", background: "#dbeafe", border: "1px solid #93c5fd", borderRadius: 6, fontSize: 11, color: "#1e40af", fontWeight: 700 }}>
-          선택된 위치: <strong>{selectedSpot}</strong>
+        <div style={{ marginTop:6, padding:"5px 12px", background:"#1e40af", border:"1px solid #3b82f6", borderRadius:6, fontSize:11, color:"#fff", fontWeight:700, display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+          <span>📍 선택된 위치: <strong>{selectedSpot}</strong></span>
           {!readOnly && (
-            <button
-              type="button"
-              onClick={() => onSelectSpot && onSelectSpot("")}
-              style={{ marginLeft: 8, fontSize: 10, color: "#64748b", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}
-            >
+            <button type="button" onClick={() => onSelectSpot?.("")}
+              style={{ fontSize:10, color:"#93c5fd", background:"none", border:"none", cursor:"pointer", textDecoration:"underline" }}>
               선택 해제
             </button>
           )}
@@ -15639,8 +15687,27 @@ function ZoneLayoutModal({zone, layout, allProds, focusProdId, onSave, onAssignP
   const [selMarkerId, setSelMarkerId] = useState(null);
   const [placing, setPlacing] = useState(false);
   const [mvLoaded, setMvLoaded] = useState(false);
+  const [bgAutoMsg, setBgAutoMsg] = useState(""); // 내부도 사진 자동적용 알림
   const imgRef = useRef(null);
   const panoRef = useRef(null);
+
+  const handleInteriorBgChange = (dataUrl) => {
+    if (!dataUrl) return;
+    const msgs = [];
+    if (!floorUrl) { setFloorUrl(dataUrl); msgs.push("📐 평면도"); }
+    if (!panoUrl) {
+      const img = new Image();
+      img.onload = () => {
+        if (img.width > img.height * 1.6) {
+          setPanoUrl(dataUrl);
+          if (img.width > img.height * 1.85) setPano360(true);
+          setBgAutoMsg(prev => prev ? prev + " · 🌄 파노라마" : "✅ 자동적용: 🌄 파노라마");
+        }
+      };
+      img.src = dataUrl;
+    }
+    if (msgs.length) setBgAutoMsg("✅ 자동적용: " + msgs.join(" · "));
+  };
 
   // 평면도/파노라마 마커 분리
   const planMarkers = markers.filter(m => m.view === "plan");
@@ -15771,6 +15838,8 @@ function ZoneLayoutModal({zone, layout, allProds, focusProdId, onSave, onAssignP
 
       {/* 평면도 탭 */}
       {tab === "plan" && (
+        <div>
+        {bgAutoMsg && floorUrl && <div style={{marginBottom:8,padding:"5px 12px",background:"#f0fdf4",border:"1px solid #86efac",borderRadius:6,fontSize:10,color:"#166534"}}>📷 내부도 탭에서 업로드한 창고 사진이 자동 적용되었습니다. 사진 위를 클릭해 위치 마커를 추가하세요.</div>}
         <div style={{display:"grid",gridTemplateColumns:"1fr 280px",gap:12}}>
           <div style={{position:"relative",background:"#f1f5f9",border:"2px dashed #cbd5e1",borderRadius:8,minHeight:380,overflow:"hidden"}}>
             {floorUrl ? (
@@ -15874,6 +15943,7 @@ function ZoneLayoutModal({zone, layout, allProds, focusProdId, onSave, onAssignP
               💡 마커 색상: <span style={{color:"#10b981"}}>●</span> 물건 할당됨, <span style={{color:"#3b5bdb"}}>●</span> 빈 위치, <span style={{color:"#dc2626"}}>●</span> 선택중
             </div>
           </div>
+        </div>
         </div>
       )}
 
@@ -16242,6 +16312,12 @@ function ZoneLayoutModal({zone, layout, allProds, focusProdId, onSave, onAssignP
           <div style={{marginBottom:10,padding:"8px 12px",background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,fontSize:11,color:"#1e40af"}}>
             🏪 수장고 내부 배치도 — 위치를 클릭하면 마커가 생성되거나 선택됩니다
           </div>
+          {bgAutoMsg && (
+            <div style={{marginBottom:8,padding:"6px 12px",background:"#f0fdf4",border:"1px solid #86efac",borderRadius:6,fontSize:11,color:"#166534",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <span>{bgAutoMsg} — 해당 탭에서 확인하세요</span>
+              <button onClick={()=>setBgAutoMsg("")} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#166534",lineHeight:1}}>✕</button>
+            </div>
+          )}
           <SujangoInteriorPlan
             onSelectSpot={(spotId) => {
               if (!spotId) { setSelMarkerId(null); return; }
@@ -16263,6 +16339,7 @@ function ZoneLayoutModal({zone, layout, allProds, focusProdId, onSave, onAssignP
               return counts;
             })()}
             readOnly={false}
+            onBgChange={handleInteriorBgChange}
           />
           {selMarkerId && markers.find(m => m.id === selMarkerId) && (() => {
             const sm = markers.find(m => m.id === selMarkerId);
