@@ -6008,9 +6008,14 @@ function nextId(){ return _nextId++; }
    아래 lat/lng 값을 직접 덮어쓰면 됩니다. */
 const JAMSA_CENTER = { lat: 36.6383333, lng: 127.3827778 };
 
+// ── 통합지도 디폴트(고정) 뷰 ──────────────────────────────
+// 위치안내도 레이아웃이 보이도록 고정한 중심·줌. BASE_ZONES 변경 시 중심 재계산.
+const DEFAULT_MAP_VIEW = { lat: 36.63838, lng: 127.38292, zoom: 18 };
+
 // ── 지도 뷰(중심·줌) 영속화 ──────────────────────────────
 // 사용자가 마지막으로 보던 위치를 localStorage에 저장 → 다음 진입시 자동 복원
-const MAP_VIEW_KEY = "jamsa_map_view";
+// v2: 위치안내도 레이아웃 적용 후 이전 캐시 무효화
+const MAP_VIEW_KEY = "jamsa_map_view_v2";
 function loadMapView() {
   try {
     const raw = localStorage.getItem(MAP_VIEW_KEY);
@@ -6031,6 +6036,8 @@ function saveMapView(lat, lng, zoom) {
 }
 function clearMapView() {
   try { localStorage.removeItem(MAP_VIEW_KEY); } catch (e) {}
+  // 구 버전 캐시도 함께 제거
+  try { localStorage.removeItem("jamsa_map_view"); } catch (e) {}
 }
 
 // ── CCTV-구역 자동 매핑 (구역 ID → 채널 배열) ──
@@ -10426,12 +10433,12 @@ function MapView({mapWrap,hZone,setHZone,tip,setTip,zQty,zProds,zHist,setSelZone
         return;
       }
       try {
-        // 저장된 마지막 뷰가 있으면 복원, 없으면 잠사박물관 기본 중심 + 줌 18
+        // 저장된 마지막 뷰가 있으면 복원, 없으면 위치안내도 디폴트(고정) 뷰
         const savedView = loadMapView();
         const initialCenter = savedView
           ? new naver.maps.LatLng(savedView.lat, savedView.lng)
-          : new naver.maps.LatLng(JAMSA_CENTER.lat, JAMSA_CENTER.lng);
-        const initialZoom = savedView ? savedView.zoom : 18;
+          : new naver.maps.LatLng(DEFAULT_MAP_VIEW.lat, DEFAULT_MAP_VIEW.lng);
+        const initialZoom = savedView ? savedView.zoom : DEFAULT_MAP_VIEW.zoom;
 
         const map = new naver.maps.Map(naverMapContainerRef.current, {
           center: initialCenter,
@@ -23488,37 +23495,9 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
       }
     });
 
-    // ✨ 초기 1회: 모든 스팟이 한 화면에 보이도록 자동 줌/팬 (사용자 조작 보존)
-    //    펼치기 OFF: 좁은 영역(60~70m)이라 최소 줌 20 강제
-    //    펼치기 ON:  4배 펼쳐서 fit-bounds 자연값(z=17~18)으로 충분
-    if (!naverInitialFitRef.current && naverMapRef.current && naverMarkersRef.current.length > 0) {
-      try {
-        const _LB = naver?.maps?.LatLngBounds;
-        if (_LB) {
-          const bounds = new _LB();
-          naverMarkersRef.current.forEach(m => {
-            try { bounds.extend(m.getPosition()); } catch (e) {}
-          });
-          if (typeof naverMapRef.current.fitBounds === "function") {
-            naverMapRef.current.fitBounds(bounds, { top: 80, right: 100, bottom: 80, left: 80 });
-            try {
-              const _center = (typeof bounds.getCenter === "function") ? bounds.getCenter() : null;
-              const _z = naverMapRef.current.getZoom();
-              // 위치안내도처럼 박물관 영역 + 주변 일부를 보여주는 디폴트 줌
-              const _minZ = spreadMode ? 17 : 18;
-              if (_z < _minZ) {
-                if (_center) naverMapRef.current.setCenter(_center);
-                naverMapRef.current.setZoom(_minZ);
-              } else if (_z > 19) {
-                // 너무 확대되지 않도록 상한 19
-                if (_center) naverMapRef.current.setCenter(_center);
-                naverMapRef.current.setZoom(19);
-              }
-            } catch (e) {}
-          }
-          naverInitialFitRef.current = true;
-        }
-      } catch (e) { console.warn("[NaverMap] fitBounds 실패:", e?.message); }
+    // 초기 뷰는 DEFAULT_MAP_VIEW(zoom 18, 고정 center)로 고정 — fitBounds 자동조정 없음
+    if (!naverInitialFitRef.current) {
+      naverInitialFitRef.current = true;
     }
 
     // In edit mode, allow click on empty map area to add new zone
