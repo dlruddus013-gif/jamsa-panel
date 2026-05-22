@@ -258,12 +258,109 @@ window.submitIssue = async function() {
 window.openOtpRequest = function() {
   openModal(`
     <h3>🔐 OTP 인증 (Tier 2)</h3>
-    <p class="sub">상세 리포트·현장 사진 등 민감 정보 열람은 OTP 인증이 필요합니다.<br/>등록된 고객 이메일로 6자리 인증코드를 발송합니다. (Phase 3에서 활성화)</p>
+    <p class="sub">상세 리포트·현장 사진 등 민감 정보 열람은 OTP 인증이 필요합니다.<br/>등록된 담당자 이메일로 6자리 인증코드를 발송합니다.</p>
     <label>이메일</label>
     <input id="otpEmail" type="email" placeholder="등록된 담당자 이메일" />
+    <div id="otpSendError" style="display:none;font-size:11.5px;color:#b91c1c;margin-top:6px"></div>
     <div class="actions">
       <button class="btn" onclick="closeModal()">취소</button>
-      <button class="btn primary" onclick="closeModal();toast('Phase 3에서 OTP 발송 활성화됩니다')">인증코드 발송</button>
+      <button class="btn primary" onclick="sendOtp()">인증코드 발송</button>
+    </div>
+  `);
+};
+
+window.sendOtp = async function() {
+  const email = document.getElementById("otpEmail").value.trim();
+  const errEl = document.getElementById("otpSendError");
+  errEl.style.display = "none";
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    errEl.textContent = "올바른 이메일을 입력해주세요"; errEl.style.display = "block"; return;
+  }
+  try {
+    const r = await fetch("/api/customer-otp?action=send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: window.__sessionToken, email, purpose: "detail_view" }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      const msg = j.error === "email_mismatch" ? "등록된 담당자 이메일과 다릅니다"
+        : j.error === "rate_limit" ? "1분 후 다시 시도해주세요"
+        : j.error === "session_has_no_contact_email" ? "이 세션에 담당자 이메일이 등록되어 있지 않습니다"
+        : (j.detail || j.error || "발송 실패");
+      errEl.textContent = msg; errEl.style.display = "block"; return;
+    }
+    window.__otpEmail = email;
+    openOtpVerify(j.provider === "simulated");
+  } catch (e) {
+    errEl.textContent = "네트워크 오류: " + e.message; errEl.style.display = "block";
+  }
+};
+
+window.openOtpVerify = function(simulated) {
+  openModal(`
+    <h3>🔐 인증코드 입력</h3>
+    <p class="sub">${escape_(window.__otpEmail)} 로 발송된 6자리 코드를 입력하세요.<br/>유효시간 10분.${simulated ? '<br/><b style="color:#92400e">⚠️ 시연 모드 — 코드는 서버 콘솔에 출력됩니다 (RESEND_API_KEY 미설정).</b>' : ''}</p>
+    <label>인증코드 (6자리)</label>
+    <input id="otpCode" inputmode="numeric" maxlength="6" placeholder="000000" style="font-size:18px;letter-spacing:6px;text-align:center" />
+    <div id="otpVerifyError" style="display:none;font-size:11.5px;color:#b91c1c;margin-top:6px"></div>
+    <div class="actions">
+      <button class="btn" onclick="closeModal()">취소</button>
+      <button class="btn primary" onclick="verifyOtp()">인증</button>
+    </div>
+  `);
+};
+
+window.verifyOtp = async function() {
+  const code = document.getElementById("otpCode").value.trim();
+  const errEl = document.getElementById("otpVerifyError");
+  errEl.style.display = "none";
+  if (!/^\d{6}$/.test(code)) {
+    errEl.textContent = "6자리 숫자를 입력해주세요"; errEl.style.display = "block"; return;
+  }
+  try {
+    const r = await fetch("/api/customer-otp?action=verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: window.__sessionToken, email: window.__otpEmail, code, purpose: "detail_view" }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      const msg = j.error === "invalid_code" ? `잘못된 코드 (남은 시도: ${j.remaining})`
+        : j.error === "otp_expired" ? "코드 만료 — 다시 발송해주세요"
+        : j.error === "too_many_attempts" ? "시도 횟수 초과"
+        : (j.detail || j.error || "검증 실패");
+      errEl.textContent = msg; errEl.style.display = "block"; return;
+    }
+    closeModal();
+    showDetailReport(j);
+  } catch (e) {
+    errEl.textContent = "네트워크 오류: " + e.message; errEl.style.display = "block";
+  }
+};
+
+window.showDetailReport = function(data) {
+  const s = data.session || {};
+  const events = data.events || [];
+  openModal(`
+    <h3>📋 상세 리포트 (Tier 2)</h3>
+    <p class="sub">${escape_(s.customer_org || "")} · ${escape_(s.site_name || "")}</p>
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin:10px 0;font-size:12px;line-height:1.8">
+      <div>📅 예정: ${escape_(s.scheduled_at ? new Date(s.scheduled_at).toLocaleString("ko-KR") : "-")}</div>
+      <div>⏱️ 진행 시간: ${s.scheduled_duration_min || 0}분</div>
+      <div>📍 실제 도착: ${escape_(s.actual_arrival_at ? new Date(s.actual_arrival_at).toLocaleString("ko-KR") : "미도착")}</div>
+      <div>👥 배정 인원: ${s.assigned_staff_count || 0}명 (직원 식별 정보 비공개)</div>
+      <div>📊 현재 상태: <b>${escape_(s.status || "-")}</b> · 지연 ${s.delay_min || 0}분 · 이슈 ${s.issue_count || 0}건</div>
+    </div>
+    ${events.length > 0 ? `
+      <div style="font-size:12px;font-weight:700;margin:10px 0 6px">📜 이벤트 이력</div>
+      <div style="max-height:200px;overflow:auto;font-size:11.5px">
+        ${events.map(e => `<div style="padding:6px 0;border-top:1px solid #f1f5f9">• ${escape_(e.action)} · ${escape_(new Date(e.at).toLocaleString("ko-KR"))}</div>`).join("")}
+      </div>
+    ` : '<div style="font-size:11.5px;color:#64748b">기록된 이벤트 없음</div>'}
+    <div class="privacy" style="margin-top:12px">⚠️ Tier 2 인증으로 열람한 데이터입니다. 직원 실명·좌표·이동경로는 여전히 제공되지 않습니다.</div>
+    <div class="actions">
+      <button class="btn primary" onclick="closeModal()">확인</button>
     </div>
   `);
 };

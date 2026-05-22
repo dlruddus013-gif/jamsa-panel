@@ -441,6 +441,23 @@ export async function handlePreciseLocationView(req, res) {
 - ⏳ 일일 익명화 리포트 자동 발송 — Phase 4·5 인프라
 - ⏳ 사용자 작업: Supabase에서 multirole_phase3.sql 실행
 
+### Phase 5 — 메일 워커·OTP·좌표 마스킹 ✅ 코드 작성 완료
+**추가 작업 — 운영 활성화 단계**
+- ✅ 메일 발송 워커 `scripts/send_audit_packages.mjs`
+  · `audit_package_log` delivery_status=pending 픽업
+  · RESEND_API_KEY 있으면 Resend, 없으면 시뮬레이션 모드
+  · zip 패스워드 + SHA-256 본문 포함, 발송 후 status=sent
+  · audit_logs에 AUDIT_PACKAGE_SENT 기록
+- ✅ Tier 2 OTP 실 활성화 — `/api/customer-otp?action=send|verify`
+  · 6자리 코드, SHA-256 해시 저장 (평문 X)
+  · TTL 10분 / 최대 5회 시도 / 1분 1회 발송 제한
+  · 등록 contact_email 매칭 강제
+  · 검증 성공 시 상세 세션 + audit 이벤트 반환
+- ✅ 고객 포털 OTP UI 활성화 (이메일 → 발송 → 6자리 → 상세 리포트)
+- ✅ 클라이언트 좌표·실명 마스킹 (`source.jsx` 통합지도 팝업)
+  · 본인 / 관람객 / admin·lead·lawyer 외에는 익명 ID
+  · admin은 "🔍 정밀 위치 열람" 모달로만 사유 입력 후 표시
+
 ### Phase 4 — 감사·노무사 (1주) ✅ 코드 작성 완료
 **목표: 우선순위 7·8**
 - ✅ 노무사 화면 — `/api/audit-data` 실 DB fetch (consent/access/correction/retention/stats)

@@ -25967,24 +25967,50 @@ window.onload = () => {
                 style={{ position: "fixed", inset: 0, zIndex: 10080, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
                 <div onClick={e => e.stopPropagation()}
                   style={{ background: "#fff", borderRadius: 12, width: 360, maxWidth: "95vw", padding: 16, boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-                    <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                      <div style={{ width: 40, height: 40, borderRadius: "50%", background: u.role === "staff" ? "#3b82f6" : "#94a3b8", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 900, fontSize: 16 }}>
-                        {u.role === "staff" ? (u.name?.[0] || "?") : "👤"}
-                      </div>
-                      <div>
-                        <div style={{ fontSize: 15, fontWeight: 900, color: "#0f172a" }}>{u.name}</div>
-                        <div style={{ fontSize: 11, color: "#64748b" }}>
-                          {u.role === "staff" ? "직원" : "관람객"}
-                          {u.dept && ` · ${u.dept}`}
+                  {(() => {
+                    // Phase 5: 실명 마스킹 — admin/lead/lawyer/본인은 실명, ceo/customer/타직원은 익명 ID
+                    const role6Viewer = normalizeRole6(userCtx?.role);
+                    const isSelf = userCtx && u.id === userCtx.id;
+                    const canSeeName = isSelf || ["admin","lead","lawyer"].includes(role6Viewer) || u.role !== "staff";
+                    const anonId = u.anon || `E-${String(u.id || "").slice(0, 4).toUpperCase()}`;
+                    const displayName = canSeeName ? u.name : anonId;
+                    return (
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                          <div style={{ width: 40, height: 40, borderRadius: "50%", background: u.role === "staff" ? "#3b82f6" : "#94a3b8", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 900, fontSize: 16 }}>
+                            {canSeeName && u.role === "staff" ? (u.name?.[0] || "?") : "👤"}
+                          </div>
+                          <div>
+                            <div style={{ fontSize: 15, fontWeight: 900, color: "#0f172a" }}>{displayName}</div>
+                            <div style={{ fontSize: 11, color: "#64748b" }}>
+                              {u.role === "staff" ? "직원" : "관람객"}
+                              {u.dept && canSeeName && ` · ${u.dept}`}
+                              {!canSeeName && <span style={{ marginLeft: 4, fontStyle: "italic" }}>(익명)</span>}
+                            </div>
+                          </div>
                         </div>
+                        <button onClick={() => setSelectedUserId(null)}
+                          style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#94a3b8", padding: 0, lineHeight: 1 }}>×</button>
                       </div>
-                    </div>
-                    <button onClick={() => setSelectedUserId(null)}
-                      style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#94a3b8", padding: 0, lineHeight: 1 }}>×</button>
-                  </div>
+                    );
+                  })()}
                   <div style={{ background: "#f8fafc", borderRadius: 8, padding: 10, fontSize: 11, color: "#475569", lineHeight: 1.7 }}>
-                    <div>📍 위치: {u.lat?.toFixed(5)}, {u.lng?.toFixed(5)}</div>
+                    {(() => {
+                      // Phase 5: 정밀 좌표 마스킹 — 본인 외에는 익명 표시 (admin은 별도 사유 모달로만 열람)
+                      const isSelf = userCtx && u.id === userCtx.id;
+                      const role6Viewer = normalizeRole6(userCtx?.role);
+                      const isCustomer = u.role === "visitor" || u.role === "customer";
+                      const showRaw = isSelf || isCustomer;  // 본인 또는 관람객(공개 위치)
+                      const anonId = u.anon || `E-${String(u.id || "").slice(0, 4).toUpperCase()}`;
+                      return showRaw ? (
+                        <div>📍 위치: {u.lat?.toFixed(5)}, {u.lng?.toFixed(5)}</div>
+                      ) : (
+                        <div title="개인정보 보호 — 정밀 좌표는 비공개">
+                          📍 위치: <span style={{ padding: "1px 6px", borderRadius: 4, background: "#e2e8f0", fontWeight: 700, color: "#0f172a" }}>{anonId}</span>
+                          <span style={{ marginLeft: 6, color: "#94a3b8", fontSize: 10 }}>정밀 좌표 비공개</span>
+                        </div>
+                      );
+                    })()}
                     <div>{u.source === "gps" ? "🛰️ GPS" : u.source === "wifi" ? "📶 Wi-Fi" : "🔵 BLE 비콘"}{u.beaconName && ` (${u.beaconName})`} · 정확도 ±{Math.round(u.accuracy || 0)}m</div>
                     <div>⏱️ {u.ageSec === 0 ? "실시간" : `${u.ageSec}초 전`}</div>
                   </div>

@@ -28,6 +28,7 @@ import preciseLocation from '../api_handlers/precise-location.js';
 import consent from '../api_handlers/consent.js';
 import correction from '../api_handlers/correction.js';
 import customerSession from '../api_handlers/customer-session.js';
+import customerOtp from '../api_handlers/customer-otp.js';
 import auditData from '../api_handlers/audit-data.js';
 import auditPackage from '../api_handlers/audit-package.js';
 import stats from '../api_handlers/stats.js';
@@ -68,6 +69,7 @@ const routes = {
   'consent': consent,
   'correction': correction,
   'customer-session': customerSession,
+  'customer-otp': customerOtp,
   'audit-data': auditData,
   'audit-package': auditPackage,
   'stats': stats,
