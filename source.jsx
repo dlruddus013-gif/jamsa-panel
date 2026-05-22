@@ -23125,6 +23125,25 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   const updateZoneField = (zoneId, patch) => {
     const newCust = { ...zoneCustomizations, [zoneId]: { ...(zoneCustomizations[zoneId] || {}), ...patch } };
     saveZoneCustomizations(newCust);
+    // 🆕 cctvChannels 변경 시 cctvMap도 동기화 — 라이브 분석/위험감지 파이프라인이 채널을 집어가도록
+    if (Array.isArray(patch.cctvChannels)) {
+      try {
+        const cleaned = patch.cctvChannels.map(c => parseInt(c, 10)).filter(n => !isNaN(n));
+        setCctvMap(prev => {
+          const next = { ...(prev || {}) };
+          // 다른 zone에서 동일 채널 제거 (1채널 = 1zone 보장)
+          Object.keys(next).forEach(zid => {
+            if (zid === zoneId) return;
+            next[zid] = (next[zid] || []).filter(c => !cleaned.includes(c));
+            if (next[zid].length === 0) delete next[zid];
+          });
+          if (cleaned.length > 0) next[zoneId] = cleaned;
+          else delete next[zoneId];
+          try { window.localStorage?.setItem("jamsa_cctv_zone_map", JSON.stringify(next)); } catch (e) {}
+          return next;
+        });
+      } catch (e) { console.warn("cctvMap sync 실패:", e?.message); }
+    }
   };
 
   // Delete a zone (mark deleted in customizations OR remove from customZones)
@@ -23342,6 +23361,17 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         if (!_zoneToCh[zid].includes(chNum)) _zoneToCh[zid].push(chNum);
       });
     }
+    // 🆕 스팟 편집 패널에서 저장한 cctvChannels(zoneCustomizations)도 합쳐 표시
+    zoneStatus.forEach(s => {
+      const _zChs = s.zone?.cctvChannels;
+      if (!Array.isArray(_zChs) || _zChs.length === 0) return;
+      if (!_zoneToCh[s.zone.id]) _zoneToCh[s.zone.id] = [];
+      _zChs.forEach(c => {
+        const cn = parseInt(c, 10);
+        if (!isNaN(cn) && !_zoneToCh[s.zone.id].includes(cn)) _zoneToCh[s.zone.id].push(cn);
+      });
+      _zoneToCh[s.zone.id].sort((a, b) => a - b);
+    });
 
     // 🌐 지도 펼치기: 좁은 영역에 몰린 스팟의 화면 표시 좌표를 centroid에서 방사형으로 확대
     //    실제 좌표(z.lat/z.lng)는 보존, _displayLatLng()만 변환
@@ -23426,27 +23456,27 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         const _fallbackId = `cctvFallback_${z.id}_${_firstCh || "x"}`;
 
         const _cctvHtml = _showMini ? `
-          <div class="jamsa-cctv-mini" ${_cctvClick} style="position:absolute;left:50px;top:-2px;width:96px;height:64px;border-radius:6px;overflow:hidden;border:${_cctvBorderEdit};${_cctvAnim}box-shadow:${_cctvBoxShadowEdit};background:#0f172a;cursor:${_cctvCursor};z-index:3;">
+          <div class="jamsa-cctv-mini" ${_cctvClick} style="position:absolute;left:50px;top:-2px;width:140px;height:95px;border-radius:8px;overflow:hidden;border:${_cctvBorderEdit};${_cctvAnim}box-shadow:${_cctvBoxShadowEdit};background:#0f172a;cursor:${_cctvCursor};z-index:3;">
             <img src="${_liveUrl}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';var fb=document.getElementById('${_fallbackId}');if(fb)fb.style.display='flex';"/>
             <div id="${_fallbackId}" style="display:none;position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.65);background:rgba(15,23,42,0.92);">
-              <div style="font-size:18px;">📷</div>
-              <div style="font-size:9px;font-weight:700;margin-top:2px;">CH${_firstCh}</div>
-              <div style="font-size:8px;margin-top:1px;color:rgba(255,255,255,0.45);">신호 없음</div>
+              <div style="font-size:24px;">📷</div>
+              <div style="font-size:11px;font-weight:700;margin-top:3px;">CH${_firstCh}</div>
+              <div style="font-size:9px;margin-top:1px;color:rgba(255,255,255,0.45);">신호 없음</div>
             </div>
-            <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.7),transparent);padding:2px 4px;font-size:9px;color:#fff;font-weight:700;">CH${_firstCh}${_channels.length > 1 ? ` +${_channels.length-1}` : ''}</div>
-            ${_chAna?.level === "DANGER" || _chAna?.level === "WARNING" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:${_chAna.level === "DANGER" ? "rgba(220,38,38,0.95)" : "rgba(245,158,11,0.95)"};padding:1px 4px;font-size:9px;color:#fff;font-weight:800;text-align:center;">${_chAna.level === "DANGER" ? "🚨 위험" : "⚠️ 주의"} ${_chAna.score || ""}%</div>` : _editLabel}
-            <div style="position:absolute;top:3px;right:3px;width:7px;height:7px;background:#22c55e;border-radius:50%;box-shadow:0 0 5px #22c55e;animation:cctvLiveBlink 1.5s infinite;z-index:2;"></div>
+            <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.75),transparent);padding:3px 6px;font-size:10px;color:#fff;font-weight:800;">CH${_firstCh}${_channels.length > 1 ? ` +${_channels.length-1}` : ''}</div>
+            ${_chAna?.level === "DANGER" || _chAna?.level === "WARNING" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:${_chAna.level === "DANGER" ? "rgba(220,38,38,0.96)" : "rgba(245,158,11,0.96)"};padding:2px 5px;font-size:10px;color:#fff;font-weight:900;text-align:center;letter-spacing:0.3px;">${_chAna.level === "DANGER" ? "🚨 위험감지" : "⚠️ 주의"} ${_chAna.score || ""}%</div>` : _editLabel}
+            <div style="position:absolute;top:4px;right:4px;width:8px;height:8px;background:#22c55e;border-radius:50%;box-shadow:0 0 6px #22c55e;animation:cctvLiveBlink 1.5s infinite;z-index:2;"></div>
           </div>
         ` : (_cctvEnabled && _firstCh ? `
-          <div class="jamsa-cctv-mini" ${_cctvClick} style="position:absolute;left:50px;top:-2px;width:96px;height:64px;border-radius:6px;overflow:hidden;border:${_cctvBorderEdit};background:rgba(15,23,42,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.7);box-shadow:${_cctvBoxShadowEdit};z-index:3;cursor:${_cctvCursor};">
-            <div style="font-size:20px;">📷</div>
-            <div style="font-size:9px;font-weight:700;margin-top:2px;">CH${_firstCh}</div>
-            <div style="font-size:8px;color:${cctvEditMode ? '#fbbf24' : 'rgba(255,255,255,0.5)'};margin-top:1px;font-weight:${cctvEditMode ? '800' : '400'};">${cctvEditMode ? '📝 클릭→변경' : '서버 미가동'}</div>
+          <div class="jamsa-cctv-mini" ${_cctvClick} style="position:absolute;left:50px;top:-2px;width:140px;height:95px;border-radius:8px;overflow:hidden;border:${_cctvBorderEdit};background:rgba(15,23,42,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.7);box-shadow:${_cctvBoxShadowEdit};z-index:3;cursor:${_cctvCursor};">
+            <div style="font-size:26px;">📷</div>
+            <div style="font-size:11px;font-weight:700;margin-top:3px;">CH${_firstCh}${_channels.length > 1 ? ` +${_channels.length-1}` : ''}</div>
+            <div style="font-size:9px;color:${cctvEditMode ? '#fbbf24' : 'rgba(255,255,255,0.5)'};margin-top:2px;font-weight:${cctvEditMode ? '800' : '400'};">${cctvEditMode ? '📝 클릭→변경' : '서버 미가동'}</div>
           </div>
         ` : '');
 
         // 마커 컨테이너 너비 — CCTV 미니창 있으면 더 넓게
-        const _markerWidth = (_cctvEnabled && _firstCh) ? 150 : 46;
+        const _markerWidth = (_cctvEnabled && _firstCh) ? 195 : 46;
 
         // 🆕 zonePhotos 로컬스토리지 직접 조회 (구역별 최신 사진 1장)
         let _photoThumb = "";
@@ -23558,9 +23588,9 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         @keyframes cctvWarnPulse { 0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,0.7),0 4px 12px rgba(0,0,0,0.4)} 50%{box-shadow:0 0 0 8px rgba(245,158,11,0),0 4px 12px rgba(0,0,0,0.4)} }
         @keyframes cctvLiveBlink { 0%,100%{opacity:1} 50%{opacity:0.3} }
         .jamsa-cctv-mini { transition:transform 0.2s; transform-origin:left center; }
-        .jamsa-cctv-mini:hover { transform:scale(1.5); z-index:1000; }
-        .jamsa-cctv-mini.expanded { transform:scale(4)!important; z-index:2500; box-shadow:0 8px 30px rgba(0,0,0,0.6)!important; }
-        .jamsa-cctv-mini.expanded:hover { transform:scale(4)!important; }
+        .jamsa-cctv-mini:hover { transform:scale(1.2); z-index:1000; }
+        .jamsa-cctv-mini.expanded { transform:scale(3)!important; z-index:2500; box-shadow:0 8px 30px rgba(0,0,0,0.6)!important; }
+        .jamsa-cctv-mini.expanded:hover { transform:scale(3)!important; }
       `}</style>
       {/* ─── 실시간 출퇴근/위치/CCTV/행동로그 통합 패널 (지도 크게보기 모드에서 숨김) ─── */}
       {!mapFullscreen && <StaffAttendanceLivePanel onAddFacAction={onAddFacAction} />}
@@ -26758,6 +26788,17 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
         if (!zoneToCh[zid].includes(chNum)) zoneToCh[zid].push(chNum);
       });
     }
+    // 🆕 스팟 편집 패널에서 저장한 cctvChannels(zoneCustomizations)도 합쳐 표시
+    zoneStatus.forEach(s => {
+      const _zChs = s.zone?.cctvChannels;
+      if (!Array.isArray(_zChs) || _zChs.length === 0) return;
+      if (!zoneToCh[s.zone.id]) zoneToCh[s.zone.id] = [];
+      _zChs.forEach(c => {
+        const cn = parseInt(c, 10);
+        if (!isNaN(cn) && !zoneToCh[s.zone.id].includes(cn)) zoneToCh[s.zone.id].push(cn);
+      });
+      zoneToCh[s.zone.id].sort((a, b) => a - b);
+    });
 
     // 🌐 지도 펼치기: centroid에서 방사형으로 화면 표시 좌표 확대 (실제 좌표는 보존)
     const _validZ = zoneStatus.filter(s => s.zone?.lat && s.zone?.lng);
@@ -26804,16 +26845,16 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
       const cctvClickAttr = cctvEditMode ? '' : `onclick="event.stopPropagation();this.classList.toggle('expanded')"`;
 
       const cctvHtml = showCctvMini ? `
-        <div class="jamsa-cctv-mini" ${cctvDraggableAttr} ${cctvClickAttr} style="position:absolute;left:42px;top:-6px;width:88px;height:60px;border-radius:6px;overflow:hidden;border:${editBorder};${cctvAnimation}${editStyle}box-shadow:0 4px 12px rgba(0,0,0,0.35);background:#0f172a;cursor:${cctvEditMode ? 'move' : 'pointer'};pointer-events:auto;">
+        <div class="jamsa-cctv-mini" ${cctvDraggableAttr} ${cctvClickAttr} style="position:absolute;left:42px;top:-6px;width:140px;height:95px;border-radius:8px;overflow:hidden;border:${editBorder};${cctvAnimation}${editStyle}box-shadow:0 4px 12px rgba(0,0,0,0.35);background:#0f172a;cursor:${cctvEditMode ? 'move' : 'pointer'};pointer-events:auto;">
           <img src="${snap.url}" style="width:100%;height:100%;object-fit:cover;${cctvEditMode ? 'opacity:0.7;' : ''}" onerror="this.style.display='none'"/>
-          <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.6),transparent);padding:2px 4px;font-size:8px;color:#fff;font-weight:700;">CH${firstCh}${channels.length > 1 ? ` +${channels.length-1}` : ''}${cctvEditMode ? ' ↔' : ''}</div>
-          ${chAna?.level === "DANGER" || chAna?.level === "WARNING" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:${chAna.level === "DANGER" ? "rgba(220,38,38,0.95)" : "rgba(245,158,11,0.95)"};padding:1px 4px;font-size:8px;color:#fff;font-weight:800;">${chAna.level === "DANGER" ? "🚨 위험" : "⚠️ 주의"} ${chAna.score || ""}%</div>` : ''}
-          <div style="position:absolute;top:0;right:0;width:6px;height:6px;background:#22c55e;border-radius:50%;margin:3px;box-shadow:0 0 4px #22c55e;animation:cctvLiveBlink 1.5s infinite;"></div>
+          <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.75),transparent);padding:3px 6px;font-size:10px;color:#fff;font-weight:800;">CH${firstCh}${channels.length > 1 ? ` +${channels.length-1}` : ''}${cctvEditMode ? ' ↔' : ''}</div>
+          ${chAna?.level === "DANGER" || chAna?.level === "WARNING" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:${chAna.level === "DANGER" ? "rgba(220,38,38,0.96)" : "rgba(245,158,11,0.96)"};padding:2px 5px;font-size:10px;color:#fff;font-weight:900;text-align:center;letter-spacing:0.3px;">${chAna.level === "DANGER" ? "🚨 위험감지" : "⚠️ 주의"} ${chAna.score || ""}%</div>` : ''}
+          <div style="position:absolute;top:4px;right:4px;width:8px;height:8px;background:#22c55e;border-radius:50%;box-shadow:0 0 5px #22c55e;animation:cctvLiveBlink 1.5s infinite;"></div>
         </div>
       ` : (cctvEnabled && firstCh ? `
-        <div class="jamsa-cctv-mini" ${cctvDraggableAttr} ${cctvClickAttr} style="position:absolute;left:42px;top:-6px;width:88px;height:60px;border-radius:6px;overflow:hidden;border:${editBorder};background:rgba(15,23,42,0.7);display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);${editStyle}cursor:${cctvEditMode ? 'move' : 'pointer'};pointer-events:auto;">
-          <div style="font-size:18px;">📷</div>
-          <div style="font-size:8px;font-weight:700;margin-top:2px;">CH${firstCh}${cctvEditMode ? ' ↔' : ''}</div>
+        <div class="jamsa-cctv-mini" ${cctvDraggableAttr} ${cctvClickAttr} style="position:absolute;left:42px;top:-6px;width:140px;height:95px;border-radius:8px;overflow:hidden;border:${editBorder};background:rgba(15,23,42,0.75);display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.7);${editStyle}cursor:${cctvEditMode ? 'move' : 'pointer'};pointer-events:auto;">
+          <div style="font-size:26px;">📷</div>
+          <div style="font-size:11px;font-weight:700;margin-top:3px;">CH${firstCh}${channels.length > 1 ? ` +${channels.length-1}` : ''}${cctvEditMode ? ' ↔' : ''}</div>
         </div>
       ` : '');
 
@@ -26832,12 +26873,12 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
       `;
 
       // 아이콘 사이즈 — CCTV 미니창 있으면 더 넓게
-      const iconWidth = showCctvMini || (cctvEnabled && firstCh) ? 132 : 44;
+      const iconWidth = showCctvMini || (cctvEnabled && firstCh) ? 186 : 44;
 
       const icon = L.divIcon({
         html,
         className: "jamsa-zone-marker",
-        iconSize: [iconWidth, 60],
+        iconSize: [iconWidth, 95],
         iconAnchor: [22, 36],
       });
 
@@ -26958,9 +26999,9 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
         @keyframes cctvWarnPulse { 0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,0.7),0 4px 12px rgba(0,0,0,0.35)} 50%{box-shadow:0 0 0 6px rgba(245,158,11,0),0 4px 12px rgba(0,0,0,0.35)} }
         @keyframes cctvLiveBlink { 0%,100%{opacity:1} 50%{opacity:0.3} }
         .jamsa-cctv-mini { transition:transform 0.2s; transform-origin:left center; }
-        .jamsa-cctv-mini:hover { transform:scale(1.4); z-index:1000; }
-        .jamsa-cctv-mini.expanded { transform:scale(4)!important; z-index:2500; box-shadow:0 8px 30px rgba(0,0,0,0.6)!important; }
-        .jamsa-cctv-mini.expanded:hover { transform:scale(4)!important; }
+        .jamsa-cctv-mini:hover { transform:scale(1.2); z-index:1000; }
+        .jamsa-cctv-mini.expanded { transform:scale(3)!important; z-index:2500; box-shadow:0 8px 30px rgba(0,0,0,0.6)!important; }
+        .jamsa-cctv-mini.expanded:hover { transform:scale(3)!important; }
       `}</style>
 
       {/* Leaflet 지도 */}
