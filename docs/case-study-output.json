@@ -1,0 +1,3417 @@
+[
+  {
+    "cat": "inventory",
+    "qtype": "analysis",
+    "question": "여름 성수기 대비 음료 적정재고를 어떻게 산정할지 분석해줘",
+    "ms": 10429,
+    "data": {
+      "ok": true,
+      "answer": "📊 **종합 의견** (카테고리: inventory)\n\n▸ Claude (medium): 여름 성수기(6~8월) 음료 적정재고는 일반적으로 전년 동기 일평균 판매량의 1.5~2배를 안전재고로 두는 방식을 권장합니다. 다만 현재 시스템에 누적된 음료 카테고리 입출고 데이터를 분석해야 정확한 산정이 가능합니다. 우선 재고관리에서 음료 카테고리 최근 12개월 출고 이력을 확인하고, 작년 6~8월 피크 주간 출고량을 기준으로 안전재고 + 발주 리드타임을 더해 적정재고를 설정하는 것이 좋습니다.\n\n▸ GPT (medium): 여름 성수기 음료 적정재고를 산정하기 위해서는 지난해 성수기 판매 데이터를 기반으로 예측을 할 수 있습니다. 그리고 음료의 종류와 보관 조건, 공급망 상황 등을 고려하여 추가적 안전재고를 설정하는 것이 좋습니다.\n\n→ 권장: 여름 성수기(6~8월) 음료 적정재고는 일반적으로 전년 동기 일평균 판매량의 1.",
+      "confidence": "medium",
+      "category": "inventory",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "음료 재고 현황 보기",
+          "type": "open_page",
+          "payload": {
+            "page": "products",
+            "filter": {
+              "category": "음료"
+            }
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "성수기 수요 분석 보고서 생성",
+          "type": "generate_report",
+          "payload": {
+            "type": "inventory_demand",
+            "period": "last_12_months",
+            "category": "음료",
+            "focus": "summer_peak"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "적정재고 부족 시 자동 알림 설정",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:reports",
+            "tab": "alerts"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "지난해 성수기 분석 보고서 생성",
+          "type": "generate_report",
+          "payload": {
+            "period": "last_summer_peak",
+            "category": "beverages"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "현재 재고 확인",
+          "type": "open_page",
+          "payload": {
+            "page": "products"
+          },
+          "requiresConfirmation": false
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "여름 성수기(6~8월) 음료 적정재고는 일반적으로 전년 동기 일평균 판매량의 1.5~2배를 안전재고로 두는 방식을 권장합니다. 다만 현재 시스템에 누적된 음료 카테고리 입출고 데이터를 분석해야 정확한 산정이 가능합니다. 우선 재고관리에서 음료 카테고리 최근 12개월 출고 이력을 확인하고, 작년 6~8월 피크 주간 출고량을 기준으로 안전재고 + 발주 리드타임을 더해 적정재고를 설정하는 것이 좋습니다.",
+          "confidence": "medium",
+          "category": "inventory",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "음료 재고 현황 보기",
+              "type": "open_page",
+              "payload": {
+                "page": "products",
+                "filter": {
+                  "category": "음료"
+                }
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "성수기 수요 분석 보고서 생성",
+              "type": "generate_report",
+              "payload": {
+                "type": "inventory_demand",
+                "period": "last_12_months",
+                "category": "음료",
+                "focus": "summer_peak"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "적정재고 부족 시 자동 알림 설정",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:reports",
+                "tab": "alerts"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        },
+        "openai": {
+          "answer": "여름 성수기 음료 적정재고를 산정하기 위해서는 지난해 성수기 판매 데이터를 기반으로 예측을 할 수 있습니다. 그리고 음료의 종류와 보관 조건, 공급망 상황 등을 고려하여 추가적 안전재고를 설정하는 것이 좋습니다.",
+          "confidence": "medium",
+          "category": "inventory",
+          "data_source": [
+            "manual",
+            "sales_db"
+          ],
+          "actions": [
+            {
+              "label": "지난해 성수기 분석 보고서 생성",
+              "type": "generate_report",
+              "payload": {
+                "period": "last_summer_peak",
+                "category": "beverages"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "현재 재고 확인",
+              "type": "open_page",
+              "payload": {
+                "page": "products"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        }
+      },
+      "consensus": "partial",
+      "similarity": 0.11594202898550725,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1198,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 539,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 763,
+          "completion_tokens": 202,
+          "total_tokens": 965,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "inventory",
+    "qtype": "fact",
+    "question": "재고관리 메뉴 어디 있어?",
+    "ms": 4886,
+    "data": {
+      "ok": true,
+      "answer": "⚠ **두 AI 의견이 갈립니다** — 사람 판단 필요\n\n▸ Claude (help, high): 좌측 메뉴의 '📦 재고관리' 또는 상단 내비게이션에서 접근할 수 있습니다. 바로 이동하시려면 아래 버튼을 눌러주세요.\n\n▸ GPT (inventory, high): 재고 관리 메뉴에 액세스하려면 'products' 페이지로 이동하시면 됩니다.",
+      "confidence": "medium",
+      "category": "help",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "재고관리 페이지 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "products"
+          },
+          "requiresConfirmation": false
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "좌측 메뉴의 '📦 재고관리' 또는 상단 내비게이션에서 접근할 수 있습니다. 바로 이동하시려면 아래 버튼을 눌러주세요.",
+          "confidence": "high",
+          "category": "help",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "재고관리 페이지 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "products"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        },
+        "openai": {
+          "answer": "재고 관리 메뉴에 액세스하려면 'products' 페이지로 이동하시면 됩니다.",
+          "confidence": "high",
+          "category": "inventory",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "재고 관리 페이지 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "products"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        }
+      },
+      "consensus": "disagree",
+      "similarity": 0,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1180,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 157,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 749,
+          "completion_tokens": 101,
+          "total_tokens": 850,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "inventory",
+    "qtype": "judgment",
+    "question": "냉동고가 자주 비는데 ROP를 올려야 할까 발주주기를 줄여야 할까?",
+    "ms": 7046,
+    "data": {
+      "ok": true,
+      "answer": "📊 **종합 의견** (카테고리: inventory)\n\n▸ Claude (medium): 둘 다 검토 가능하지만, 우선 최근 3개월 출고 패턴을 봐야 정확합니다. 출고가 일정하면 ROP 상향, 변동이 크면 발주주기 단축이 효과적입니다. 냉동고 품목별 회전율을 먼저 확인하세요.\n\n▸ GPT (medium): 최근 냉동고의 빈도 문제를 해결하기 위해 ROP(재주문점)를 올리는 것과 발주주기를 줄이는 것 중 효율적인 방안을 선택해야 합니다. 재고 사용 패턴을 분석하여 가장 적합한 방법을 선택하도록 권장합니다.\n\n→ 권장: 둘 다 검토 가능하지만, 우선 최근 3개월 출고 패턴을 봐야 정확합니다.",
+      "confidence": "medium",
+      "category": "inventory",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "냉동고 재고 현황 보기",
+          "type": "open_page",
+          "payload": {
+            "page": "products",
+            "filter": {
+              "location": "냉동고"
+            }
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "재고 회전율 보고서 생성",
+          "type": "generate_report",
+          "payload": {
+            "reportType": "inventory_turnover",
+            "location": "냉동고",
+            "period": "3months"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "냉동고 ROP 일괄 조정",
+          "type": "create_inventory",
+          "payload": {
+            "action": "adjust_rop",
+            "location": "냉동고"
+          },
+          "requiresConfirmation": true
+        },
+        {
+          "label": "재고 사용 패턴 분석하기",
+          "type": "generate_report",
+          "payload": {},
+          "requiresConfirmation": true
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "둘 다 검토 가능하지만, 우선 최근 3개월 출고 패턴을 봐야 정확합니다. 출고가 일정하면 ROP 상향, 변동이 크면 발주주기 단축이 효과적입니다. 냉동고 품목별 회전율을 먼저 확인하세요.",
+          "confidence": "medium",
+          "category": "inventory",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "냉동고 재고 현황 보기",
+              "type": "open_page",
+              "payload": {
+                "page": "products",
+                "filter": {
+                  "location": "냉동고"
+                }
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "재고 회전율 보고서 생성",
+              "type": "generate_report",
+              "payload": {
+                "reportType": "inventory_turnover",
+                "location": "냉동고",
+                "period": "3months"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "냉동고 ROP 일괄 조정",
+              "type": "create_inventory",
+              "payload": {
+                "action": "adjust_rop",
+                "location": "냉동고"
+              },
+              "requiresConfirmation": true
+            }
+          ]
+        },
+        "openai": {
+          "answer": "최근 냉동고의 빈도 문제를 해결하기 위해 ROP(재주문점)를 올리는 것과 발주주기를 줄이는 것 중 효율적인 방안을 선택해야 합니다. 재고 사용 패턴을 분석하여 가장 적합한 방법을 선택하도록 권장합니다.",
+          "confidence": "medium",
+          "category": "inventory",
+          "data_source": [
+            "manual",
+            "facility_db"
+          ],
+          "actions": [
+            {
+              "label": "재고 사용 패턴 분석하기",
+              "type": "generate_report",
+              "payload": {},
+              "requiresConfirmation": true
+            }
+          ]
+        }
+      },
+      "consensus": "partial",
+      "similarity": 0.06,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1203,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 416,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 769,
+          "completion_tokens": 139,
+          "total_tokens": 908,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "safety",
+    "qtype": "analysis",
+    "question": "박물관에 필요한 일일 안전 점검 항목을 우선순위로 정리해줘",
+    "ms": 12606,
+    "data": {
+      "ok": true,
+      "answer": "📊 **종합 의견** (카테고리: maintenance)\n\n▸ Claude (medium): 박물관 일일 안전점검 우선순위는 다음과 같습니다.\n1순위 (생명·자산 직결): 화재경보기/소화기 압력, 비상구·피난동선, CCTV 작동상태\n2순위 (전시품 보존): 항온항습 수치, 누수 흔적, 자외선 차단·조도\n3순위 (운영 안전): 출입통제·잠금, IoT 전원·플러그, 청소상태\n4순위 (외부 요인): 기상특보 확인, 외부 시설물(간판·옥상) 상태\n자동 점검 캘린더 또는 보고서로 등록해 드릴까요?\n\n▸ GPT (high): 일일 안전 점검 항목은 시설의 특성에 따라 다를 수 있습니다. 하지만 일반적으로 다음이 우선순위로 점검됩니다: 비상구 및 피난 통로 확인, 소화기 및 화재 감지기 작동 여부 확인, 전기 및 기계 설비 점검, CCTV 및 보안 시스템 작동 여부 확인.\n\n→ 권장: 일일 안전 점검 항목은 시설의 특성에 따라 다를 수 있습니다.",
+      "confidence": "medium",
+      "category": "maintenance",
+      "data_source": [
+        "claude+openai",
+        "manual",
+        "facility_db"
+      ],
+      "actions": [
+        {
+          "label": "안전 점검 캘린더 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:calendar"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "일일 점검 일정 생성",
+          "type": "create_task",
+          "payload": {
+            "title": "박물관 일일 안전점검",
+            "frequency": "daily",
+            "checklist": [
+              "화재경보기/소화기 점검",
+              "비상구·피난동선 확인",
+              "CCTV 작동 확인",
+              "항온항습 수치 확인",
+              "누수·결로 점검",
+              "출입통제·잠금 확인",
+              "IoT 전원/플러그 상태",
+              "기상특보 확인"
+            ]
+          },
+          "requiresConfirmation": true
+        },
+        {
+          "label": "안전 대시보드 보기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:dashboard"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "점검 보고서 생성",
+          "type": "generate_report",
+          "payload": {
+            "reportType": "daily_safety_check"
+          },
+          "requiresConfirmation": true
+        },
+        {
+          "label": "점검 일정 생성",
+          "type": "create_task",
+          "payload": {
+            "tasks": [
+              "비상구 및 피난 통로 확인",
+              "소화기 및 화재 감지기 작동 여부 확인",
+              "전기 및 기계 설비 점검",
+              "CCTV 및 보안 시스템 확인"
+            ]
+          },
+          "requiresConfirmation": true
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "박물관 일일 안전점검 우선순위는 다음과 같습니다.\n1순위 (생명·자산 직결): 화재경보기/소화기 압력, 비상구·피난동선, CCTV 작동상태\n2순위 (전시품 보존): 항온항습 수치, 누수 흔적, 자외선 차단·조도\n3순위 (운영 안전): 출입통제·잠금, IoT 전원·플러그, 청소상태\n4순위 (외부 요인): 기상특보 확인, 외부 시설물(간판·옥상) 상태\n자동 점검 캘린더 또는 보고서로 등록해 드릴까요?",
+          "confidence": "medium",
+          "category": "maintenance",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "안전 점검 캘린더 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:calendar"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "일일 점검 일정 생성",
+              "type": "create_task",
+              "payload": {
+                "title": "박물관 일일 안전점검",
+                "frequency": "daily",
+                "checklist": [
+                  "화재경보기/소화기 점검",
+                  "비상구·피난동선 확인",
+                  "CCTV 작동 확인",
+                  "항온항습 수치 확인",
+                  "누수·결로 점검",
+                  "출입통제·잠금 확인",
+                  "IoT 전원/플러그 상태",
+                  "기상특보 확인"
+                ]
+              },
+              "requiresConfirmation": true
+            },
+            {
+              "label": "안전 대시보드 보기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:dashboard"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "점검 보고서 생성",
+              "type": "generate_report",
+              "payload": {
+                "reportType": "daily_safety_check"
+              },
+              "requiresConfirmation": true
+            }
+          ]
+        },
+        "openai": {
+          "answer": "일일 안전 점검 항목은 시설의 특성에 따라 다를 수 있습니다. 하지만 일반적으로 다음이 우선순위로 점검됩니다: 비상구 및 피난 통로 확인, 소화기 및 화재 감지기 작동 여부 확인, 전기 및 기계 설비 점검, CCTV 및 보안 시스템 작동 여부 확인.",
+          "confidence": "high",
+          "category": "maintenance",
+          "data_source": [
+            "manual",
+            "facility_db"
+          ],
+          "actions": [
+            {
+              "label": "점검 일정 생성",
+              "type": "create_task",
+              "payload": {
+                "tasks": [
+                  "비상구 및 피난 통로 확인",
+                  "소화기 및 화재 감지기 작동 여부 확인",
+                  "전기 및 기계 설비 점검",
+                  "CCTV 및 보안 시스템 확인"
+                ]
+              },
+              "requiresConfirmation": true
+            }
+          ]
+        }
+      },
+      "consensus": "partial",
+      "similarity": 0.09210526315789473,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1197,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 702,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 764,
+          "completion_tokens": 203,
+          "total_tokens": 967,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "safety",
+    "qtype": "fact",
+    "question": "안전관리 캘린더는 어디서 열어?",
+    "ms": 3559,
+    "data": {
+      "ok": true,
+      "answer": "⚠ **두 AI 의견이 갈립니다** — 사람 판단 필요\n\n▸ Claude (help, high): 좌측 메뉴의 '안전관리 > 캘린더'에서 열 수 있습니다. 아래 버튼으로 바로 이동하실 수 있어요.\n\n▸ GPT (maintenance, high): 안전관리 캘린더는 '안전 관리 대시보드'에서 확인할 수 있습니다. 바로 이동하려면 아래 버튼을 클릭하세요.",
+      "confidence": "medium",
+      "category": "help",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "안전관리 캘린더 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:calendar"
+          },
+          "requiresConfirmation": false
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "좌측 메뉴의 '안전관리 > 캘린더'에서 열 수 있습니다. 아래 버튼으로 바로 이동하실 수 있어요.",
+          "confidence": "high",
+          "category": "help",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "안전관리 캘린더 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:calendar"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        },
+        "openai": {
+          "answer": "안전관리 캘린더는 '안전 관리 대시보드'에서 확인할 수 있습니다. 바로 이동하려면 아래 버튼을 클릭하세요.",
+          "confidence": "high",
+          "category": "maintenance",
+          "data_source": [
+            "facility_db"
+          ],
+          "actions": [
+            {
+              "label": "안전 관리 캘린더 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:calendar"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        }
+      },
+      "consensus": "disagree",
+      "similarity": 0.2857142857142857,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1182,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 151,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 755,
+          "completion_tokens": 119,
+          "total_tokens": 874,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "safety",
+    "qtype": "judgment",
+    "question": "관람객 미끄러짐 사고가 발생했을 때 가장 먼저 할 일을 결정해줘",
+    "ms": 9045,
+    "data": {
+      "ok": true,
+      "answer": "📊 **종합 의견** (카테고리: emergency)\n\n▸ Claude (high): 1) 부상자 안전 확보 및 119 신고(중상 시) → 2) 사고 현장 보존 및 추가 사고 방지(경고 표시·통제) → 3) 응급처치 및 부상자 상태 확인 → 4) 관리자 보고 및 사고 기록 작성, CCTV 영상 확보. 보험 처리를 위해 사고기록부에 즉시 등록하는 것이 중요합니다.\n\n▸ GPT (high): 관람객 미끄러짐 사고 발생 시, 먼저 현장 상황을 즉시 확인하고 부상자가 있는지 확인합니다. 필요시 응급 의료 지원 요청을 해야 합니다.\n\n→ 권장: 1) 부상자 안전 확보 및 119 신고(중상 시) → 2) 사고 현장 보존 및 추가 사고 방지(경고 표시·통제) → 3) 응급처치 및 부상자 상태 확인 → 4) 관리자 보고 및 사고 기록 작성, CCTV 영상 확보.",
+      "confidence": "medium",
+      "category": "emergency",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "119 긴급전화",
+          "type": "external_link",
+          "payload": {
+            "url": "tel:119"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "사고기록 등록",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:incident"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "CCTV 확인",
+          "type": "open_page",
+          "payload": {
+            "page": "panoramaAddon"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "관리자 긴급 알림 발송",
+          "type": "send_alert",
+          "payload": {
+            "channel": "telegram",
+            "level": "emergency",
+            "message": "관람객 미끄러짐 사고 발생 - 현장 대응 중"
+          },
+          "requiresConfirmation": true
+        },
+        {
+          "label": "보험 처리 페이지",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:insurance"
+          },
+          "requiresConfirmation": false
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "1) 부상자 안전 확보 및 119 신고(중상 시) → 2) 사고 현장 보존 및 추가 사고 방지(경고 표시·통제) → 3) 응급처치 및 부상자 상태 확인 → 4) 관리자 보고 및 사고 기록 작성, CCTV 영상 확보. 보험 처리를 위해 사고기록부에 즉시 등록하는 것이 중요합니다.",
+          "confidence": "high",
+          "category": "emergency",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "119 긴급전화",
+              "type": "external_link",
+              "payload": {
+                "url": "tel:119"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "사고기록 등록",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:incident"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "CCTV 확인",
+              "type": "open_page",
+              "payload": {
+                "page": "panoramaAddon"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "관리자 긴급 알림 발송",
+              "type": "send_alert",
+              "payload": {
+                "channel": "telegram",
+                "level": "emergency",
+                "message": "관람객 미끄러짐 사고 발생 - 현장 대응 중"
+              },
+              "requiresConfirmation": true
+            },
+            {
+              "label": "보험 처리 페이지",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:insurance"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        },
+        "openai": {
+          "answer": "관람객 미끄러짐 사고 발생 시, 먼저 현장 상황을 즉시 확인하고 부상자가 있는지 확인합니다. 필요시 응급 의료 지원 요청을 해야 합니다.",
+          "confidence": "high",
+          "category": "emergency",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "안전 사고 보고",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:incident"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        }
+      },
+      "consensus": "partial",
+      "similarity": 0.07547169811320754,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1203,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 564,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 762,
+          "completion_tokens": 122,
+          "total_tokens": 884,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "cctv",
+    "qtype": "analysis",
+    "question": "CCTV 항시작동 모드와 이벤트 감지 모드를 비교해서 어느 게 박물관에 맞는지 평가해줘",
+    "ms": 11188,
+    "data": {
+      "ok": true,
+      "answer": "📊 **종합 의견** (카테고리: facility)\n\n▸ Claude (medium): 박물관 운영 특성상 두 모드를 혼합하는 것이 가장 적합합니다. 항시작동은 24시간 전 구간을 녹화해 사후 추적과 분실/도난 증거 확보에 강하지만 저장공간과 대역폭 부담이 큽니다. 이벤트 감지는 AI가 침입·화재·이상행동만 잡아 알림 정확도와 비용 효율이 높지만 사각지대 위험이 있습니다. 권장안: 수장고·전시실·출입구는 항시작동, 외곽·창고·복도는 이벤트 감지 + 야간 항시 전환. CCTV 페이지에서 구역별 모드 설정을 검토해 주세요.\n\n▸ GPT (medium): CCTV 항시작동 모드는 모든 시간 동안 연속적인 감시를 제공하며, 이벤트 감지 모드는 특정 상황에서만 녹화가 시작됩니다. 박물관의 안전 목적에 따라 항시작동 모드는 전체 보안 강화를 위한 반면, 이벤트 감지 모드는 효율적이고 경제적인 운영이 가능합니다.\n\n→ 권장: 박물관 운영 특성상 두 모드를 혼합하는 것이 가장 적합합니다.",
+      "confidence": "medium",
+      "category": "facility",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "CCTV 설정 페이지 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:dashboard"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "통합지도에서 CCTV 배치 보기",
+          "type": "open_page",
+          "payload": {
+            "page": "map"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "CCTV 운영 모드 비교 보고서 생성",
+          "type": "generate_report",
+          "payload": {
+            "topic": "cctv_mode_comparison",
+            "scope": "museum_wide"
+          },
+          "requiresConfirmation": true
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "박물관 운영 특성상 두 모드를 혼합하는 것이 가장 적합합니다. 항시작동은 24시간 전 구간을 녹화해 사후 추적과 분실/도난 증거 확보에 강하지만 저장공간과 대역폭 부담이 큽니다. 이벤트 감지는 AI가 침입·화재·이상행동만 잡아 알림 정확도와 비용 효율이 높지만 사각지대 위험이 있습니다. 권장안: 수장고·전시실·출입구는 항시작동, 외곽·창고·복도는 이벤트 감지 + 야간 항시 전환. CCTV 페이지에서 구역별 모드 설정을 검토해 주세요.",
+          "confidence": "medium",
+          "category": "facility",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "CCTV 설정 페이지 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:dashboard"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "통합지도에서 CCTV 배치 보기",
+              "type": "open_page",
+              "payload": {
+                "page": "map"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "CCTV 운영 모드 비교 보고서 생성",
+              "type": "generate_report",
+              "payload": {
+                "topic": "cctv_mode_comparison",
+                "scope": "museum_wide"
+              },
+              "requiresConfirmation": true
+            }
+          ]
+        },
+        "openai": {
+          "answer": "CCTV 항시작동 모드는 모든 시간 동안 연속적인 감시를 제공하며, 이벤트 감지 모드는 특정 상황에서만 녹화가 시작됩니다. 박물관의 안전 목적에 따라 항시작동 모드는 전체 보안 강화를 위한 반면, 이벤트 감지 모드는 효율적이고 경제적인 운영이 가능합니다.",
+          "confidence": "medium",
+          "category": "facility",
+          "data_source": [
+            "manual",
+            "facility_db"
+          ],
+          "actions": [
+            {
+              "label": "CCTV 설정 변경",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:dashboard"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        }
+      },
+      "consensus": "partial",
+      "similarity": 0.04819277108433735,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1215,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 538,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 770,
+          "completion_tokens": 160,
+          "total_tokens": 930,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "cctv",
+    "qtype": "fact",
+    "question": "카메라 항시작동 어디서 켜?",
+    "ms": 3463,
+    "data": {
+      "ok": true,
+      "answer": "⚠ **두 AI 의견이 갈립니다** — 사람 판단 필요\n\n▸ Claude (help, high): CCTV 페이지에서 '항시작동 모드' 토글을 켜시면 됩니다. AI 자동감지도 함께 활성화하실 수 있습니다.\n\n▸ GPT (facility, high): CCTV의 항시작동 모드는 'CCTV' 메뉴에서 설정할 수 있습니다. 원하는 카메라를 선택하고 설정을 변경하세요.",
+      "confidence": "medium",
+      "category": "help",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "CCTV 페이지 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "cctv"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "CCTV 페이지로 이동",
+          "type": "open_page",
+          "payload": {
+            "page": "panoramaAddon"
+          },
+          "requiresConfirmation": false
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "CCTV 페이지에서 '항시작동 모드' 토글을 켜시면 됩니다. AI 자동감지도 함께 활성화하실 수 있습니다.",
+          "confidence": "high",
+          "category": "help",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "CCTV 페이지 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "cctv"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        },
+        "openai": {
+          "answer": "CCTV의 항시작동 모드는 'CCTV' 메뉴에서 설정할 수 있습니다. 원하는 카메라를 선택하고 설정을 변경하세요.",
+          "confidence": "high",
+          "category": "facility",
+          "data_source": [
+            "facility_db"
+          ],
+          "actions": [
+            {
+              "label": "CCTV 페이지로 이동",
+              "type": "open_page",
+              "payload": {
+                "page": "panoramaAddon"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        }
+      },
+      "consensus": "disagree",
+      "similarity": 0.18181818181818182,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1180,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 148,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 754,
+          "completion_tokens": 115,
+          "total_tokens": 869,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "cctv",
+    "qtype": "emergency",
+    "question": "한 채널 영상이 갑자기 검게 나오면 어떻게 대응해?",
+    "ms": 8040,
+    "data": {
+      "ok": true,
+      "answer": "📊 **종합 의견** (카테고리: maintenance)\n\n▸ Claude (medium): CCTV 한 채널이 검게 표시되면 케이블/PoE/카메라 본체 순으로 점검합니다. 1) NVR에서 해당 채널 재부팅, 2) PoE 포트 LED 및 케이블 연결 확인, 3) 다른 포트로 교차 테스트, 4) 카메라 렌즈/전원 확인. 그래도 안 되면 카메라 하드웨어 고장 가능성이 높아 교체가 필요합니다.\n\n▸ GPT (medium): CCTV 채널이 검게 나온다면, 우선 카메라와 연결 장비의 전원을 확인하세요. 이후 네트워크 연결 상태를 점검하고, 필요 시 해당 채널의 문제가 지속되면 유지보수 담당자에게 즉시 보고하세요.\n\n→ 권장: CCTV 한 채널이 검게 표시되면 케이블/PoE/카메라 본체 순으로 점검합니다.",
+      "confidence": "medium",
+      "category": "maintenance",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "CCTV 페이지 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "cctv"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "점검 일정 생성",
+          "type": "create_task",
+          "payload": {
+            "title": "CCTV 채널 블랙아웃 점검",
+            "category": "cctv"
+          },
+          "requiresConfirmation": true
+        },
+        {
+          "label": "사고/장애 기록",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:incident"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "CCTV 페이지로 이동",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:dashboard"
+          },
+          "requiresConfirmation": false
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "CCTV 한 채널이 검게 표시되면 케이블/PoE/카메라 본체 순으로 점검합니다. 1) NVR에서 해당 채널 재부팅, 2) PoE 포트 LED 및 케이블 연결 확인, 3) 다른 포트로 교차 테스트, 4) 카메라 렌즈/전원 확인. 그래도 안 되면 카메라 하드웨어 고장 가능성이 높아 교체가 필요합니다.",
+          "confidence": "medium",
+          "category": "maintenance",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "CCTV 페이지 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "cctv"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "점검 일정 생성",
+              "type": "create_task",
+              "payload": {
+                "title": "CCTV 채널 블랙아웃 점검",
+                "category": "cctv"
+              },
+              "requiresConfirmation": true
+            },
+            {
+              "label": "사고/장애 기록",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:incident"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        },
+        "openai": {
+          "answer": "CCTV 채널이 검게 나온다면, 우선 카메라와 연결 장비의 전원을 확인하세요. 이후 네트워크 연결 상태를 점검하고, 필요 시 해당 채널의 문제가 지속되면 유지보수 담당자에게 즉시 보고하세요.",
+          "confidence": "medium",
+          "category": "maintenance",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "CCTV 페이지로 이동",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:dashboard"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        }
+      },
+      "consensus": "partial",
+      "similarity": 0.08620689655172414,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1194,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 374,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 758,
+          "completion_tokens": 140,
+          "total_tokens": 898,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "emergency",
+    "qtype": "judgment",
+    "question": "관람객이 쓰러졌어 어떻게 대처해야 해?",
+    "ms": 9386,
+    "data": {
+      "ok": true,
+      "answer": "📊 **종합 의견** (카테고리: emergency)\n\n▸ Claude (high): 긴급상황입니다. 즉시 다음 순서로 대응하세요. ① 환자 의식·호흡 확인 ② 119 신고(위치: 한국잠사박물관 + 정확한 구역) ③ 주변 직원 호출 및 관람객 통제 ④ 의식 없고 호흡 없으면 즉시 CPR, AED 사용(있는 경우) ⑤ 현장 CCTV 확인 및 사고기록 작성. 마스터 권한이시니 즉시 전 직원 긴급 알림 발송이 가능합니다.\n\n▸ GPT (high): 관람객이 쓰러진 긴급 상황입니다. 즉시 응급 대처를 시작하고 필요한 경우 긴급 구조 팀에 연락해야 합니다. 나중에 사고 기록을 남겨야 합니다.\n\n→ 권장: 긴급상황입니다.",
+      "confidence": "medium",
+      "category": "emergency",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "📞 119 신고하기",
+          "type": "external_link",
+          "payload": {
+            "url": "tel:119"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "🚨 전 직원 긴급 알림 발송",
+          "type": "send_alert",
+          "payload": {
+            "level": "emergency",
+            "channels": [
+              "telegram",
+              "sms"
+            ],
+            "message": "[긴급] 관람객 쓰러짐 사고 발생. 즉시 현장 지원 바랍니다."
+          },
+          "requiresConfirmation": true
+        },
+        {
+          "label": "📹 CCTV 실시간 확인",
+          "type": "open_page",
+          "payload": {
+            "page": "map"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "📝 사고기록 작성",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:incident"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "🛡️ 보험 정보 확인",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:insurance"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "긴급 구조팀에 연락하기",
+          "type": "send_alert",
+          "payload": {
+            "contact": "emergency_services"
+          },
+          "requiresConfirmation": true
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "긴급상황입니다. 즉시 다음 순서로 대응하세요. ① 환자 의식·호흡 확인 ② 119 신고(위치: 한국잠사박물관 + 정확한 구역) ③ 주변 직원 호출 및 관람객 통제 ④ 의식 없고 호흡 없으면 즉시 CPR, AED 사용(있는 경우) ⑤ 현장 CCTV 확인 및 사고기록 작성. 마스터 권한이시니 즉시 전 직원 긴급 알림 발송이 가능합니다.",
+          "confidence": "high",
+          "category": "emergency",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "📞 119 신고하기",
+              "type": "external_link",
+              "payload": {
+                "url": "tel:119"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "🚨 전 직원 긴급 알림 발송",
+              "type": "send_alert",
+              "payload": {
+                "level": "emergency",
+                "channels": [
+                  "telegram",
+                  "sms"
+                ],
+                "message": "[긴급] 관람객 쓰러짐 사고 발생. 즉시 현장 지원 바랍니다."
+              },
+              "requiresConfirmation": true
+            },
+            {
+              "label": "📹 CCTV 실시간 확인",
+              "type": "open_page",
+              "payload": {
+                "page": "map"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "📝 사고기록 작성",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:incident"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "🛡️ 보험 정보 확인",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:insurance"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        },
+        "openai": {
+          "answer": "관람객이 쓰러진 긴급 상황입니다. 즉시 응급 대처를 시작하고 필요한 경우 긴급 구조 팀에 연락해야 합니다. 나중에 사고 기록을 남겨야 합니다.",
+          "confidence": "high",
+          "category": "emergency",
+          "data_source": [
+            "manual",
+            "facility_db"
+          ],
+          "actions": [
+            {
+              "label": "긴급 구조팀에 연락하기",
+              "type": "send_alert",
+              "payload": {
+                "contact": "emergency_services"
+              },
+              "requiresConfirmation": true
+            },
+            {
+              "label": "현장 확인 체크리스트",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:incident"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        }
+      },
+      "consensus": "partial",
+      "similarity": 0.05084745762711865,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1189,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 653,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 756,
+          "completion_tokens": 176,
+          "total_tokens": 932,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "emergency",
+    "qtype": "fact",
+    "question": "사고 기록 등록 메뉴 위치?",
+    "ms": 3848,
+    "data": {
+      "ok": true,
+      "answer": "⚠ **두 AI 의견이 갈립니다** — 사람 판단 필요\n\n▸ Claude (help, high): 안전관리 모듈의 '사고기록' 페이지에서 등록할 수 있습니다. 아래 버튼으로 바로 이동하세요.\n\n▸ GPT (maintenance, high): 사고 기록 등록은 안전관리 메뉴의 사고기록 페이지에서 가능합니다.",
+      "confidence": "medium",
+      "category": "help",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "사고기록 페이지 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:incident"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "안전관리 대시보드",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:dashboard"
+          },
+          "requiresConfirmation": false
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "안전관리 모듈의 '사고기록' 페이지에서 등록할 수 있습니다. 아래 버튼으로 바로 이동하세요.",
+          "confidence": "high",
+          "category": "help",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "사고기록 페이지 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:incident"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "안전관리 대시보드",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:dashboard"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        },
+        "openai": {
+          "answer": "사고 기록 등록은 안전관리 메뉴의 사고기록 페이지에서 가능합니다.",
+          "confidence": "high",
+          "category": "maintenance",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "사고 기록 페이지 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:incident"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        }
+      },
+      "consensus": "disagree",
+      "similarity": 0.1875,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1181,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 194,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 749,
+          "completion_tokens": 100,
+          "total_tokens": 849,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "emergency",
+    "qtype": "analysis",
+    "question": "화재가 났을 때와 정전이 됐을 때 우선순위를 비교해서 알려줘",
+    "ms": 12723,
+    "data": {
+      "ok": true,
+      "answer": "📊 **종합 의견** (카테고리: emergency)\n\n▸ Claude (high): 두 상황의 우선순위 비교입니다.\n\n🔥 **화재**: ①인명대피 → ②119 신고 → ③초기 소화(가능 시) → ④관장 보고 → ⑤전기/가스 차단 → ⑥CCTV/IoT 원격 확인\n\n⚡ **정전**: ①CCTV·보안 백업 확인 → ②한전(123) 신고 → ③온습도 민감 구역(수장고/유물) 점검 → ④관람객 안전 안내 → ⑤비상조명·UPS 상태 확인 → ⑥관장 보고\n\n핵심 차이: 화재는 **인명 → 신고 → 진압**, 정전은 **확인 → 신고 → 자산보호** 순서입니다. 화재는 즉시 대피가 최우선이고, 정전은 패닉 방지와 유물 보존 환경 유지가 관건입니다.\n\n▸ GPT (high): 화재와 정전 상황은 둘 다 긴급하지만 화재 발생 시에는 인명 피해가 있을 수 있으므로 최우선적으로 대피와 소방에 집중해야 합니다. 정전은 그에 비해 상대적으로 인명 피해 우려가 적으므로 즉시 전력을 복구하는 데 초점을 맞춥니다.\n\n→ 권장: 두 상황의 우선순위 비교입니다.",
+      "confidence": "medium",
+      "category": "emergency",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "긴급대응 매뉴얼 보기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:dashboard"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "사고기록부 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:incident"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "IoT 상태 확인 (전원/CCTV)",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:iot"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "전 직원 비상 알림 발송",
+          "type": "send_alert",
+          "payload": {
+            "channel": "telegram",
+            "template": "emergency_drill"
+          },
+          "requiresConfirmation": true
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "두 상황의 우선순위 비교입니다.\n\n🔥 **화재**: ①인명대피 → ②119 신고 → ③초기 소화(가능 시) → ④관장 보고 → ⑤전기/가스 차단 → ⑥CCTV/IoT 원격 확인\n\n⚡ **정전**: ①CCTV·보안 백업 확인 → ②한전(123) 신고 → ③온습도 민감 구역(수장고/유물) 점검 → ④관람객 안전 안내 → ⑤비상조명·UPS 상태 확인 → ⑥관장 보고\n\n핵심 차이: 화재는 **인명 → 신고 → 진압**, 정전은 **확인 → 신고 → 자산보호** 순서입니다. 화재는 즉시 대피가 최우선이고, 정전은 패닉 방지와 유물 보존 환경 유지가 관건입니다.",
+          "confidence": "high",
+          "category": "emergency",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "긴급대응 매뉴얼 보기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:dashboard"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "사고기록부 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:incident"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "IoT 상태 확인 (전원/CCTV)",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:iot"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "전 직원 비상 알림 발송",
+              "type": "send_alert",
+              "payload": {
+                "channel": "telegram",
+                "template": "emergency_drill"
+              },
+              "requiresConfirmation": true
+            }
+          ]
+        },
+        "openai": {
+          "answer": "화재와 정전 상황은 둘 다 긴급하지만 화재 발생 시에는 인명 피해가 있을 수 있으므로 최우선적으로 대피와 소방에 집중해야 합니다. 정전은 그에 비해 상대적으로 인명 피해 우려가 적으므로 즉시 전력을 복구하는 데 초점을 맞춥니다.",
+          "confidence": "high",
+          "category": "emergency",
+          "data_source": [
+            "facility_db",
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "긴급 대피 절차 검토",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:incident"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "정전 대응 프로토콜 확인",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:iot"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        }
+      },
+      "consensus": "partial",
+      "similarity": 0.05952380952380952,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1199,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 662,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 765,
+          "completion_tokens": 212,
+          "total_tokens": 977,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "schedule",
+    "qtype": "analysis",
+    "question": "월간 시설 점검 일정을 어떻게 짜는 게 효율적일지 분석해줘",
+    "ms": 9874,
+    "data": {
+      "ok": true,
+      "answer": "📊 **종합 의견** (카테고리: maintenance)\n\n▸ Claude (medium): 월간 점검은 ①주차별 구역 분할, ②위험도 기반 우선순위, ③날씨 연동 자동 권장의 3축으로 짜는 것이 효율적입니다. 1주차는 고위험 시설(전기/소방), 2주차는 IoT/CCTV 정상동작 점검, 3주차는 일반 구역 순회, 4주차는 보험·문서·재고 적정량 확인을 권장합니다. 기상청 API와 연동해 강풍·폭우·폭염 예보일에는 외부 시설 점검을 자동 권장하도록 캘린더에 룰을 걸어두시면 누락을 줄일 수 있습니다.\n\n▸ GPT (medium): 월간 시설 점검 일정은 주요 시설의 운영 시간, 점검 필요 빈도, 인력 가용성 등을 고려하여 짜야 합니다. 특히 위험 요소가 있는 구역은 우선적으로 점검해야 합니다. 구체적인 일정 제안을 원하시면 현재 점검 기록과 시설 정보를 추가로 분석해야 합니다.\n\n→ 권장: 월간 점검은 ①주차별 구역 분할, ②위험도 기반 우선순위, ③날씨 연동 자동 권장의 3축으로 짜는 것이 효율적입니다.",
+      "confidence": "medium",
+      "category": "maintenance",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "점검 캘린더 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:calendar"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "AI 위험성평가로 우선순위 확인",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:dashboard"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "월간 점검 보고서 템플릿 생성",
+          "type": "generate_report",
+          "payload": {
+            "type": "monthly_inspection_plan"
+          },
+          "requiresConfirmation": true
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "월간 점검은 ①주차별 구역 분할, ②위험도 기반 우선순위, ③날씨 연동 자동 권장의 3축으로 짜는 것이 효율적입니다. 1주차는 고위험 시설(전기/소방), 2주차는 IoT/CCTV 정상동작 점검, 3주차는 일반 구역 순회, 4주차는 보험·문서·재고 적정량 확인을 권장합니다. 기상청 API와 연동해 강풍·폭우·폭염 예보일에는 외부 시설 점검을 자동 권장하도록 캘린더에 룰을 걸어두시면 누락을 줄일 수 있습니다.",
+          "confidence": "medium",
+          "category": "maintenance",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "점검 캘린더 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:calendar"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "AI 위험성평가로 우선순위 확인",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:dashboard"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "월간 점검 보고서 템플릿 생성",
+              "type": "generate_report",
+              "payload": {
+                "type": "monthly_inspection_plan"
+              },
+              "requiresConfirmation": true
+            }
+          ]
+        },
+        "openai": {
+          "answer": "월간 시설 점검 일정은 주요 시설의 운영 시간, 점검 필요 빈도, 인력 가용성 등을 고려하여 짜야 합니다. 특히 위험 요소가 있는 구역은 우선적으로 점검해야 합니다. 구체적인 일정 제안을 원하시면 현재 점검 기록과 시설 정보를 추가로 분석해야 합니다.",
+          "confidence": "medium",
+          "category": "maintenance",
+          "data_source": [
+            "facility_db",
+            "maintenance_records"
+          ],
+          "actions": [
+            {
+              "label": "점검 일정 생성",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:calendar"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        }
+      },
+      "consensus": "partial",
+      "similarity": 0.036585365853658534,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1199,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 511,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 762,
+          "completion_tokens": 155,
+          "total_tokens": 917,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "schedule",
+    "qtype": "fact",
+    "question": "AI 자동 일정 생성 어디서 눌러?",
+    "ms": 4661,
+    "data": {
+      "ok": true,
+      "answer": "⚠ **두 AI 의견이 갈립니다** — 사람 판단 필요\n\n▸ Claude (help, high): 안전관리 > 캘린더 페이지 우측 상단의 'AI 자동 일정 생성' 버튼에서 실행할 수 있습니다. 날씨/계절/시설 위험도를 반영해 점검 일정을 자동 배치합니다.\n\n▸ GPT (maintenance, high): AI 자동 일정 생성은 이곳에서 수행할 수 있습니다. 안전관리 메뉴의 대시보드에서 일정 생성 기능을 사용하세요.",
+      "confidence": "medium",
+      "category": "help",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "캘린더 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:calendar"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "안전관리 대시보드 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:dashboard"
+          },
+          "requiresConfirmation": false
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "안전관리 > 캘린더 페이지 우측 상단의 'AI 자동 일정 생성' 버튼에서 실행할 수 있습니다. 날씨/계절/시설 위험도를 반영해 점검 일정을 자동 배치합니다.",
+          "confidence": "high",
+          "category": "help",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "캘린더 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:calendar"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        },
+        "openai": {
+          "answer": "AI 자동 일정 생성은 이곳에서 수행할 수 있습니다. 안전관리 메뉴의 대시보드에서 일정 생성 기능을 사용하세요.",
+          "confidence": "high",
+          "category": "maintenance",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "안전관리 대시보드 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:dashboard"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        }
+      },
+      "consensus": "disagree",
+      "similarity": 0.25,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1184,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 177,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 752,
+          "completion_tokens": 116,
+          "total_tokens": 868,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "report",
+    "qtype": "analysis",
+    "question": "월간 안전 보고서에 꼭 들어가야 할 항목을 분석해줘",
+    "ms": 10800,
+    "data": {
+      "ok": true,
+      "answer": "📊 **종합 의견** (카테고리: report)\n\n▸ Claude (high): 월간 안전 보고서 핵심 항목은 다음과 같습니다: ① 일일점검 이행률 및 미점검 사유, ② 사고/이상징후 기록과 조치 결과, ③ AI 위험성평가 등급 변동(전월 대비), ④ 보험 갱신·만료 일정, ⑤ IoT/CCTV 가동률과 자동감지 이벤트 통계, ⑥ 재고 적정선 유지율 및 안전용품 소진 현황, ⑦ 기상 특보 대응 이력, ⑧ 다음 달 점검 일정 및 권장 조치. 이 8개 섹션을 자동 집계하도록 보고서 템플릿을 구성하시면 감사·내부 점검 대응이 쉬워집니다.\n\n▸ GPT (medium): 월간 안전 보고서에 포함될 필수 항목은 일반적으로 다음과 같습니다: 1) 안전 점검 결과 요약, 2) 사고 및 문제 발생 기록, 3) 보험 상황 및 변경 사항, 4) 개선 필요한 사항 및 조치 계획, 5) AI 위험성 평가 결과. 각 항목의 중요도와 추가적인 정보는 상황에 따라 달라질 수 있습니다.\n\n→ 권장: 월간 안전 보고서 핵심 항목은 다음과 같습니다: ① 일일점검 이행률 및 미점검 사유, ② 사고/이상징후 기록과 조치 결과, ③ AI 위험성평가 등급 변동(전월 대비), ④ 보험 갱신·만료 일정, ⑤ IoT/CCTV 가동률과 자동감지 이벤트 통계, ⑥ 재고 적정선 유지율 및 안전용품 소진 현황, ⑦ 기상 특보 대응 이력, ⑧ 다음 달 점검 일정 및 권장 조치.",
+      "confidence": "medium",
+      "category": "report",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "월간 보고서 생성",
+          "type": "generate_report",
+          "payload": {
+            "period": "monthly",
+            "scope": "safety",
+            "sections": [
+              "daily_inspection",
+              "incidents",
+              "risk_assessment",
+              "insurance",
+              "iot_cctv",
+              "inventory_safety",
+              "weather_response",
+              "next_month_plan"
+            ]
+          },
+          "requiresConfirmation": true
+        },
+        {
+          "label": "안전 대시보드 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:dashboard"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "보고서 페이지 이동",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:reports"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "안전 보고서 생성",
+          "type": "generate_report",
+          "payload": {},
+          "requiresConfirmation": true
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "월간 안전 보고서 핵심 항목은 다음과 같습니다: ① 일일점검 이행률 및 미점검 사유, ② 사고/이상징후 기록과 조치 결과, ③ AI 위험성평가 등급 변동(전월 대비), ④ 보험 갱신·만료 일정, ⑤ IoT/CCTV 가동률과 자동감지 이벤트 통계, ⑥ 재고 적정선 유지율 및 안전용품 소진 현황, ⑦ 기상 특보 대응 이력, ⑧ 다음 달 점검 일정 및 권장 조치. 이 8개 섹션을 자동 집계하도록 보고서 템플릿을 구성하시면 감사·내부 점검 대응이 쉬워집니다.",
+          "confidence": "high",
+          "category": "report",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "월간 보고서 생성",
+              "type": "generate_report",
+              "payload": {
+                "period": "monthly",
+                "scope": "safety",
+                "sections": [
+                  "daily_inspection",
+                  "incidents",
+                  "risk_assessment",
+                  "insurance",
+                  "iot_cctv",
+                  "inventory_safety",
+                  "weather_response",
+                  "next_month_plan"
+                ]
+              },
+              "requiresConfirmation": true
+            },
+            {
+              "label": "안전 대시보드 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:dashboard"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "보고서 페이지 이동",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:reports"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        },
+        "openai": {
+          "answer": "월간 안전 보고서에 포함될 필수 항목은 일반적으로 다음과 같습니다: 1) 안전 점검 결과 요약, 2) 사고 및 문제 발생 기록, 3) 보험 상황 및 변경 사항, 4) 개선 필요한 사항 및 조치 계획, 5) AI 위험성 평가 결과. 각 항목의 중요도와 추가적인 정보는 상황에 따라 달라질 수 있습니다.",
+          "confidence": "medium",
+          "category": "report",
+          "data_source": [
+            "manual",
+            "facility_db"
+          ],
+          "actions": [
+            {
+              "label": "안전 대시보드 확인",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:dashboard"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "안전 보고서 생성",
+              "type": "generate_report",
+              "payload": {},
+              "requiresConfirmation": true
+            }
+          ]
+        }
+      },
+      "consensus": "partial",
+      "similarity": 0.12371134020618557,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1195,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 591,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 759,
+          "completion_tokens": 211,
+          "total_tokens": 970,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "report",
+    "qtype": "fact",
+    "question": "종합 보고 메뉴 어디?",
+    "ms": 4386,
+    "data": {
+      "ok": true,
+      "answer": "⚠ **두 AI 의견이 갈립니다** — 사람 판단 필요\n\n▸ Claude (help, high): 안전관리 > 종합 보고서 메뉴에서 확인하실 수 있습니다. 바로 이동해 드릴까요?\n\n▸ GPT (report, high): 종합 보고서는 여러 형식으로 확인할 수 있습니다. 이메일, SMS, 텔레그램, 카카오톡 등으로 받을 수 있으며 텔레그램/이메일 형태는 자동 발송 설정이 가능합니다.",
+      "confidence": "medium",
+      "category": "help",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "종합 보고서 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:reports"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "안전 대시보드",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:dashboard"
+          },
+          "requiresConfirmation": false
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "안전관리 > 종합 보고서 메뉴에서 확인하실 수 있습니다. 바로 이동해 드릴까요?",
+          "confidence": "high",
+          "category": "help",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "종합 보고서 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:reports"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "안전 대시보드",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:dashboard"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        },
+        "openai": {
+          "answer": "종합 보고서는 여러 형식으로 확인할 수 있습니다. 이메일, SMS, 텔레그램, 카카오톡 등으로 받을 수 있으며 텔레그램/이메일 형태는 자동 발송 설정이 가능합니다.",
+          "confidence": "high",
+          "category": "report",
+          "data_source": [
+            "facility_db",
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "보고서 페이지 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:reports"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        }
+      },
+      "consensus": "disagree",
+      "similarity": 0.11538461538461539,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1178,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 184,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 748,
+          "completion_tokens": 133,
+          "total_tokens": 881,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "attendance",
+    "qtype": "judgment",
+    "question": "비콘과 GPS 자동 출퇴근을 동시에 쓸 때 우선순위를 어떻게 정해야 할까?",
+    "ms": 7834,
+    "data": {
+      "ok": true,
+      "answer": "⚠ **두 AI 의견이 갈립니다** — 사람 판단 필요\n\n▸ Claude (help, medium): 실내는 비콘(BLE), 실외는 GPS를 사용하되 비콘 신호가 잡히는 동안에는 비콘을 1순위로 두는 것이 일반적입니다. 박물관 본관처럼 GPS 오차가 큰 실내 공간에서는 비콘 RSSI가 -75dBm 이상이면 출근 처리, GPS는 비콘 미수신 시 fallback으로 쓰는 구조를 권장드립니다. 실제 적용 전에 현장 비콘 배치도와 RSSI 테스트 결과 확인이 필요합니다.\n\n▸ GPT (facility, medium): 비콘과 GPS 자동 출퇴근 기능을 동시에 사용하는 경우, 우선순위 설정은 근무 환경과 사용 목적에 따라 다를 수 있습니다. 일반적으로 실내에서는 비콘을, 실외에서는 GPS를 활용하는 것이 일반적입니다. 우선순위는 시스템 설정에 따라 조정할 수 있기에 세부적인 설정 검토가 필요합니다. 시스템 관리자에게 문의하거나 상세 설정 페이지에서 확인하세요.",
+      "confidence": "medium",
+      "category": "help",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "IoT 설정 페이지 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:iot"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "통합지도에서 비콘 설치 위치 확인",
+          "type": "open_page",
+          "payload": {
+            "page": "map"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "설정 페이지 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "settings:attendance"
+          },
+          "requiresConfirmation": false
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "실내는 비콘(BLE), 실외는 GPS를 사용하되 비콘 신호가 잡히는 동안에는 비콘을 1순위로 두는 것이 일반적입니다. 박물관 본관처럼 GPS 오차가 큰 실내 공간에서는 비콘 RSSI가 -75dBm 이상이면 출근 처리, GPS는 비콘 미수신 시 fallback으로 쓰는 구조를 권장드립니다. 실제 적용 전에 현장 비콘 배치도와 RSSI 테스트 결과 확인이 필요합니다.",
+          "confidence": "medium",
+          "category": "help",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "IoT 설정 페이지 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:iot"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "통합지도에서 비콘 설치 위치 확인",
+              "type": "open_page",
+              "payload": {
+                "page": "map"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        },
+        "openai": {
+          "answer": "비콘과 GPS 자동 출퇴근 기능을 동시에 사용하는 경우, 우선순위 설정은 근무 환경과 사용 목적에 따라 다를 수 있습니다. 일반적으로 실내에서는 비콘을, 실외에서는 GPS를 활용하는 것이 일반적입니다. 우선순위는 시스템 설정에 따라 조정할 수 있기에 세부적인 설정 검토가 필요합니다. 시스템 관리자에게 문의하거나 상세 설정 페이지에서 확인하세요.",
+          "confidence": "medium",
+          "category": "facility",
+          "data_source": [
+            "facility_db"
+          ],
+          "actions": [
+            {
+              "label": "설정 페이지 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "settings:attendance"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        }
+      },
+      "consensus": "disagree",
+      "similarity": 0.07792207792207792,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1211,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 401,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 765,
+          "completion_tokens": 174,
+          "total_tokens": 939,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "attendance",
+    "qtype": "fact",
+    "question": "직원 출퇴근 페이지 어디?",
+    "ms": 5542,
+    "data": {
+      "ok": true,
+      "answer": "📊 **종합 의견** (카테고리: help)\n\n▸ Claude (low): 현재 시스템 메뉴 구조에서 '직원 출퇴근' 전용 페이지는 확인되지 않습니다. 업무일지(일일 근무 기록) 또는 별도 인사관리 모듈로 운영 중인지 확인이 필요합니다. 업무일지 페이지에서 근무 기록을 보시겠어요?\n\n▸ GPT (high): 직원 출퇴근 페이지는 시스템 메뉴에서 '업무일지' 섹션에 위치해 있습니다. 해당 페이지로 이동하여 개별 출퇴근 기록을 관리할 수 있습니다.\n\n→ 권장: 직원 출퇴근 페이지는 시스템 메뉴에서 '업무일지' 섹션에 위치해 있습니다.",
+      "confidence": "medium",
+      "category": "help",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "업무일지 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "worklog"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "안전 대시보드 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:dashboard"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "출퇴근 페이지로 이동",
+          "type": "open_page",
+          "payload": {
+            "page": "attendance"
+          },
+          "requiresConfirmation": false
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "현재 시스템 메뉴 구조에서 '직원 출퇴근' 전용 페이지는 확인되지 않습니다. 업무일지(일일 근무 기록) 또는 별도 인사관리 모듈로 운영 중인지 확인이 필요합니다. 업무일지 페이지에서 근무 기록을 보시겠어요?",
+          "confidence": "low",
+          "category": "help",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "업무일지 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "worklog"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "안전 대시보드 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:dashboard"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        },
+        "openai": {
+          "answer": "직원 출퇴근 페이지는 시스템 메뉴에서 '업무일지' 섹션에 위치해 있습니다. 해당 페이지로 이동하여 개별 출퇴근 기록을 관리할 수 있습니다.",
+          "confidence": "high",
+          "category": "help",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "출퇴근 페이지로 이동",
+              "type": "open_page",
+              "payload": {
+                "page": "attendance"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        }
+      },
+      "consensus": "partial",
+      "similarity": 0.17142857142857143,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1180,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 257,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 750,
+          "completion_tokens": 122,
+          "total_tokens": 872,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "sales",
+    "qtype": "analysis",
+    "question": "관람객 수 대비 매출이 낮을 때 어떤 액션을 취해야 할지 비교 분석해줘",
+    "ms": 9005,
+    "data": {
+      "ok": true,
+      "answer": "📊 **종합 의견** (카테고리: report)\n\n▸ Claude (low): 관람객 대비 매출이 낮을 때는 ①객단가 분석(체험·기념품 구매율) ②요금제/패키지 점검 ③매점·체험 동선 개선 ④타겟 마케팅 강화 4가지 액션을 비교해야 합니다. 정확한 진단을 위해 최근 3개월 관람객/매출/체험참여율 데이터 비교 보고서를 먼저 생성하는 것을 권장합니다. 실제 운영 데이터 기반 분석이 필요하므로 확인이 필요합니다.\n\n▸ GPT (high): 관람객 수 대비 매출이 낮을 때, 첫 번째로 방문자 경험을 점검하여 개선할 수 있는지 확인하는 것이 중요합니다. 두 번째로 추가적인 상품 판매나 프로모션 방안을 검토할 수 있습니다. 세 번째로 설문조사를 통해 관람객의 의견을 수집해 매출 증대 방안을 모색해야 합니다.\n\n→ 권장: 관람객 수 대비 매출이 낮을 때, 첫 번째로 방문자 경험을 점검하여 개선할 수 있는지 확인하는 것이 중요합니다.",
+      "confidence": "medium",
+      "category": "report",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "관람객·매출 비교 보고서 생성",
+          "type": "generate_report",
+          "payload": {
+            "reportType": "visitor_vs_sales",
+            "period": "last_3_months"
+          },
+          "requiresConfirmation": true
+        },
+        {
+          "label": "종합 대시보드 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:dashboard"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "재고/기념품 회전율 확인",
+          "type": "open_page",
+          "payload": {
+            "page": "products"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "점검 일정 생성",
+          "type": "create_task",
+          "payload": {
+            "task_name": "방문자 경험 점검",
+            "department": "customer_service"
+          },
+          "requiresConfirmation": true
+        },
+        {
+          "label": "설문조사 준비하기",
+          "type": "generate_report",
+          "payload": {
+            "report_type": "visitor_feedback"
+          },
+          "requiresConfirmation": false
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "관람객 대비 매출이 낮을 때는 ①객단가 분석(체험·기념품 구매율) ②요금제/패키지 점검 ③매점·체험 동선 개선 ④타겟 마케팅 강화 4가지 액션을 비교해야 합니다. 정확한 진단을 위해 최근 3개월 관람객/매출/체험참여율 데이터 비교 보고서를 먼저 생성하는 것을 권장합니다. 실제 운영 데이터 기반 분석이 필요하므로 확인이 필요합니다.",
+          "confidence": "low",
+          "category": "report",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "관람객·매출 비교 보고서 생성",
+              "type": "generate_report",
+              "payload": {
+                "reportType": "visitor_vs_sales",
+                "period": "last_3_months"
+              },
+              "requiresConfirmation": true
+            },
+            {
+              "label": "종합 대시보드 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:dashboard"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "재고/기념품 회전율 확인",
+              "type": "open_page",
+              "payload": {
+                "page": "products"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        },
+        "openai": {
+          "answer": "관람객 수 대비 매출이 낮을 때, 첫 번째로 방문자 경험을 점검하여 개선할 수 있는지 확인하는 것이 중요합니다. 두 번째로 추가적인 상품 판매나 프로모션 방안을 검토할 수 있습니다. 세 번째로 설문조사를 통해 관람객의 의견을 수집해 매출 증대 방안을 모색해야 합니다.",
+          "confidence": "high",
+          "category": "report",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "점검 일정 생성",
+              "type": "create_task",
+              "payload": {
+                "task_name": "방문자 경험 점검",
+                "department": "customer_service"
+              },
+              "requiresConfirmation": true
+            },
+            {
+              "label": "프로모션 방안 검토",
+              "type": "open_page",
+              "payload": {
+                "page": "products"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "설문조사 준비하기",
+              "type": "generate_report",
+              "payload": {
+                "report_type": "visitor_feedback"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        }
+      },
+      "consensus": "partial",
+      "similarity": 0.08333333333333333,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1206,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 465,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 765,
+          "completion_tokens": 266,
+          "total_tokens": 1031,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "sales",
+    "qtype": "fact",
+    "question": "OKPOS 매출 동기화 어디서 봐?",
+    "ms": 4924,
+    "data": {
+      "ok": true,
+      "answer": "⚠ **두 AI 의견이 갈립니다** — 사람 판단 필요\n\n▸ Claude (report, medium): 매출 동기화는 종합 보고/대시보드에서 확인 가능합니다. OKPOS 연동 상태와 매출 데이터가 표시됩니다. 정확한 메뉴 위치는 시스템에서 확인이 필요합니다.\n\n▸ GPT (help, low): OKPOS 매출 동기화는 현재 시스템 데이터베이스에 등록되어 있지 않습니다. 자세한 내용은 별도의 관리 페이지나 담당자에게 문의하세요.",
+      "confidence": "medium",
+      "category": "report",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "안전 대시보드 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:dashboard"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "보고서 페이지 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:reports"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "재고/상품 페이지 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "products"
+          },
+          "requiresConfirmation": false
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "매출 동기화는 종합 보고/대시보드에서 확인 가능합니다. OKPOS 연동 상태와 매출 데이터가 표시됩니다. 정확한 메뉴 위치는 시스템에서 확인이 필요합니다.",
+          "confidence": "medium",
+          "category": "report",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "안전 대시보드 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:dashboard"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "보고서 페이지 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:reports"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "재고/상품 페이지 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "products"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        },
+        "openai": {
+          "answer": "OKPOS 매출 동기화는 현재 시스템 데이터베이스에 등록되어 있지 않습니다. 자세한 내용은 별도의 관리 페이지나 담당자에게 문의하세요.",
+          "confidence": "low",
+          "category": "help",
+          "data_source": [
+            "manual"
+          ]
+        }
+      },
+      "consensus": "disagree",
+      "similarity": 0.0967741935483871,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1184,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 278,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 754,
+          "completion_tokens": 64,
+          "total_tokens": 818,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "iot",
+    "qtype": "analysis",
+    "question": "로보락 자동 청소 일정을 박물관 운영시간과 어떻게 조율할지 분석해줘",
+    "ms": 10976,
+    "data": {
+      "ok": true,
+      "answer": "📊 **종합 의견** (카테고리: maintenance)\n\n▸ Claude (medium): 박물관 운영시간(통상 09:00~18:00) 동안에는 관람객 안전과 동선 방해 방지를 위해 청소를 피하고, 개관 전(07:00~08:30) 또는 폐관 후(18:30~21:00) 시간대 운영을 권장합니다. 특히 개관 전 청소는 관람 시작 시점에 가장 청결한 상태를 유지할 수 있어 효과적입니다. 정확한 운영시간과 현재 로보락 스케줄 설정값은 IoT 모듈에서 확인이 필요합니다.\n\n▸ GPT (high): 로보락 청소 일정은 박물관 운영시간을 고려하여 조정할 수 있습니다. 박물관 운영시간 후나 방문객이 적은 시간을 선택하는 것이 좋습니다.\n\n→ 권장: 로보락 청소 일정은 박물관 운영시간을 고려하여 조정할 수 있습니다.",
+      "confidence": "medium",
+      "category": "maintenance",
+      "data_source": [
+        "claude+openai",
+        "facility_db",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "IoT 자동화 설정 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:iot"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "개관 전 청소 일정(평일 07:30) 생성",
+          "type": "create_task",
+          "payload": {
+            "title": "로보락 자동청소 - 개관 전",
+            "schedule": "MON-FRI 07:30",
+            "device": "roborock",
+            "note": "개관 전 청소로 관람객 동선 방해 최소화"
+          },
+          "requiresConfirmation": true
+        },
+        {
+          "label": "폐관 후 청소 일정(평일 18:30) 생성",
+          "type": "create_task",
+          "payload": {
+            "title": "로보락 자동청소 - 폐관 후",
+            "schedule": "MON-FRI 18:30",
+            "device": "roborock",
+            "note": "폐관 후 잔여 먼지 청소"
+          },
+          "requiresConfirmation": true
+        },
+        {
+          "label": "조율 분석 보고서 생성",
+          "type": "generate_report",
+          "payload": {
+            "topic": "roborock_schedule_optimization"
+          },
+          "requiresConfirmation": false
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "박물관 운영시간(통상 09:00~18:00) 동안에는 관람객 안전과 동선 방해 방지를 위해 청소를 피하고, 개관 전(07:00~08:30) 또는 폐관 후(18:30~21:00) 시간대 운영을 권장합니다. 특히 개관 전 청소는 관람 시작 시점에 가장 청결한 상태를 유지할 수 있어 효과적입니다. 정확한 운영시간과 현재 로보락 스케줄 설정값은 IoT 모듈에서 확인이 필요합니다.",
+          "confidence": "medium",
+          "category": "maintenance",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "IoT 자동화 설정 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:iot"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "개관 전 청소 일정(평일 07:30) 생성",
+              "type": "create_task",
+              "payload": {
+                "title": "로보락 자동청소 - 개관 전",
+                "schedule": "MON-FRI 07:30",
+                "device": "roborock",
+                "note": "개관 전 청소로 관람객 동선 방해 최소화"
+              },
+              "requiresConfirmation": true
+            },
+            {
+              "label": "폐관 후 청소 일정(평일 18:30) 생성",
+              "type": "create_task",
+              "payload": {
+                "title": "로보락 자동청소 - 폐관 후",
+                "schedule": "MON-FRI 18:30",
+                "device": "roborock",
+                "note": "폐관 후 잔여 먼지 청소"
+              },
+              "requiresConfirmation": true
+            },
+            {
+              "label": "조율 분석 보고서 생성",
+              "type": "generate_report",
+              "payload": {
+                "topic": "roborock_schedule_optimization"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        },
+        "openai": {
+          "answer": "로보락 청소 일정은 박물관 운영시간을 고려하여 조정할 수 있습니다. 박물관 운영시간 후나 방문객이 적은 시간을 선택하는 것이 좋습니다.",
+          "confidence": "high",
+          "category": "maintenance",
+          "data_source": [
+            "facility_db",
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "청소 일정 조정",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:iot"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        }
+      },
+      "consensus": "partial",
+      "similarity": 0.06451612903225806,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1203,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 692,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 764,
+          "completion_tokens": 127,
+          "total_tokens": 891,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "iot",
+    "qtype": "fact",
+    "question": "Tapo 카메라 등록 어디서?",
+    "ms": 4323,
+    "data": {
+      "ok": true,
+      "answer": "⚠ **두 AI 의견이 갈립니다** — 사람 판단 필요\n\n▸ Claude (help, high): IoT 관리 페이지에서 Tapo 카메라를 등록할 수 있습니다. 안전관리 > IoT 메뉴로 이동하시면 됩니다.\n\n▸ GPT (facility, high): Tapo 카메라를 등록하려면 IoT 관리 페이지에서 진행할 수 있습니다. 해당 페이지로 이동하여 새로운 장치를 추가할 수 있습니다.",
+      "confidence": "medium",
+      "category": "help",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "IoT 관리 페이지 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:iot"
+          },
+          "requiresConfirmation": false
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "IoT 관리 페이지에서 Tapo 카메라를 등록할 수 있습니다. 안전관리 > IoT 메뉴로 이동하시면 됩니다.",
+          "confidence": "high",
+          "category": "help",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "IoT 관리 페이지 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:iot"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        },
+        "openai": {
+          "answer": "Tapo 카메라를 등록하려면 IoT 관리 페이지에서 진행할 수 있습니다. 해당 페이지로 이동하여 새로운 장치를 추가할 수 있습니다.",
+          "confidence": "high",
+          "category": "facility",
+          "data_source": [
+            "facility_db"
+          ],
+          "actions": [
+            {
+              "label": "IoT 관리 페이지로 이동",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:iot"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        }
+      },
+      "consensus": "disagree",
+      "similarity": 0.35,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1180,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 154,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 751,
+          "completion_tokens": 117,
+          "total_tokens": 868,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "facility",
+    "qtype": "analysis",
+    "question": "잠사박물관 시설 중 노후도가 높은 곳을 점검 우선순위로 어떻게 정할지 분석",
+    "ms": 13465,
+    "data": {
+      "ok": true,
+      "answer": "📊 **종합 의견** (카테고리: maintenance)\n\n▸ Claude (medium): 노후도 기반 점검 우선순위는 실제 시설 DB의 준공연도/최근점검일/사고이력 데이터를 조회해야 정확히 산정됩니다. 일반 원칙으로는 ①준공 20년 이상 ②최근 점검일 6개월 초과 ③누수/균열/전기 사고 이력 ④관람객 동선 밀집도 ⑤기상 취약(목조/지붕) 순으로 가중치를 두어 점수화합니다. 정확한 리스트는 시설 DB와 안전점검 기록을 연동해 자동 산출 가능합니다.\n\n▸ GPT (medium): 잠사박물관의 시설 중 노후도가 높은 곳에 대해 우선 점검을 진행하는 것이 필요합니다. 이를 위해 시설의 노후도 데이터를 기반으로 우선순위를 정할 수 있으며, AI 위험성 평가를 통해 추가적인 분석을 진행할 수 있습니다.\n\n→ 권장: 노후도 기반 점검 우선순위는 실제 시설 DB의 준공연도/최근점검일/사고이력 데이터를 조회해야 정확히 산정됩니다.",
+      "confidence": "medium",
+      "category": "maintenance",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "안전 대시보드 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "safety:dashboard"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "통합지도에서 시설 확인",
+          "type": "open_page",
+          "payload": {
+            "page": "map"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "노후도 점검 우선순위 보고서 생성",
+          "type": "generate_report",
+          "payload": {
+            "reportType": "facility_priority",
+            "criteria": [
+              "age",
+              "last_inspection",
+              "incident_history",
+              "visitor_density",
+              "weather_vulnerability"
+            ],
+            "weights": {
+              "age": 0.3,
+              "last_inspection": 0.25,
+              "incident_history": 0.2,
+              "visitor_density": 0.15,
+              "weather_vulnerability": 0.1
+            }
+          },
+          "requiresConfirmation": true
+        },
+        {
+          "label": "우선순위 상위 시설 점검 일정 일괄 생성",
+          "type": "create_task",
+          "payload": {
+            "source": "priority_report",
+            "limit": 5
+          },
+          "requiresConfirmation": true
+        },
+        {
+          "label": "점검 일정 생성",
+          "type": "create_task",
+          "payload": {
+            "priority": "노후 시설"
+          },
+          "requiresConfirmation": true
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "노후도 기반 점검 우선순위는 실제 시설 DB의 준공연도/최근점검일/사고이력 데이터를 조회해야 정확히 산정됩니다. 일반 원칙으로는 ①준공 20년 이상 ②최근 점검일 6개월 초과 ③누수/균열/전기 사고 이력 ④관람객 동선 밀집도 ⑤기상 취약(목조/지붕) 순으로 가중치를 두어 점수화합니다. 정확한 리스트는 시설 DB와 안전점검 기록을 연동해 자동 산출 가능합니다.",
+          "confidence": "medium",
+          "category": "maintenance",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "안전 대시보드 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:dashboard"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "통합지도에서 시설 확인",
+              "type": "open_page",
+              "payload": {
+                "page": "map"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "노후도 점검 우선순위 보고서 생성",
+              "type": "generate_report",
+              "payload": {
+                "reportType": "facility_priority",
+                "criteria": [
+                  "age",
+                  "last_inspection",
+                  "incident_history",
+                  "visitor_density",
+                  "weather_vulnerability"
+                ],
+                "weights": {
+                  "age": 0.3,
+                  "last_inspection": 0.25,
+                  "incident_history": 0.2,
+                  "visitor_density": 0.15,
+                  "weather_vulnerability": 0.1
+                }
+              },
+              "requiresConfirmation": true
+            },
+            {
+              "label": "우선순위 상위 시설 점검 일정 일괄 생성",
+              "type": "create_task",
+              "payload": {
+                "source": "priority_report",
+                "limit": 5
+              },
+              "requiresConfirmation": true
+            }
+          ]
+        },
+        "openai": {
+          "answer": "잠사박물관의 시설 중 노후도가 높은 곳에 대해 우선 점검을 진행하는 것이 필요합니다. 이를 위해 시설의 노후도 데이터를 기반으로 우선순위를 정할 수 있으며, AI 위험성 평가를 통해 추가적인 분석을 진행할 수 있습니다.",
+          "confidence": "medium",
+          "category": "maintenance",
+          "data_source": [
+            "facility_db",
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "AI 위험성 평가 결과 확인",
+              "type": "open_page",
+              "payload": {
+                "page": "safety:dashboard"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "점검 일정 생성",
+              "type": "create_task",
+              "payload": {
+                "priority": "노후 시설"
+              },
+              "requiresConfirmation": true
+            }
+          ]
+        }
+      },
+      "consensus": "partial",
+      "similarity": 0.04,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1208,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 670,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 767,
+          "completion_tokens": 193,
+          "total_tokens": 960,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  },
+  {
+    "cat": "facility",
+    "qtype": "fact",
+    "question": "시설 평면도 어디서 봐?",
+    "ms": 4364,
+    "data": {
+      "ok": true,
+      "answer": "📊 **종합 의견** (카테고리: facility)\n\n▸ Claude (high): 시설 평면도와 3D 보기는 통합지도 페이지에서 확인하실 수 있습니다. 위성지도 우측 상단에서 평면도/3D 탭으로 전환 가능합니다.\n\n▸ GPT (high): 시설의 평면도를 보려면 통합지도 메뉴로 이동하시면 됩니다.\n\n→ 권장: 시설 평면도와 3D 보기는 통합지도 페이지에서 확인하실 수 있습니다.",
+      "confidence": "medium",
+      "category": "facility",
+      "data_source": [
+        "claude+openai",
+        "manual"
+      ],
+      "actions": [
+        {
+          "label": "통합지도 열기",
+          "type": "open_page",
+          "payload": {
+            "page": "map"
+          },
+          "requiresConfirmation": false
+        },
+        {
+          "label": "3D 평면도 보기",
+          "type": "open_page",
+          "payload": {
+            "page": "panoramaAddon"
+          },
+          "requiresConfirmation": false
+        }
+      ],
+      "source": "consensus",
+      "mode_used": "consensus",
+      "providers": {
+        "claude": {
+          "answer": "시설 평면도와 3D 보기는 통합지도 페이지에서 확인하실 수 있습니다. 위성지도 우측 상단에서 평면도/3D 탭으로 전환 가능합니다.",
+          "confidence": "high",
+          "category": "facility",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "통합지도 열기",
+              "type": "open_page",
+              "payload": {
+                "page": "map"
+              },
+              "requiresConfirmation": false
+            },
+            {
+              "label": "3D 평면도 보기",
+              "type": "open_page",
+              "payload": {
+                "page": "panoramaAddon"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        },
+        "openai": {
+          "answer": "시설의 평면도를 보려면 통합지도 메뉴로 이동하시면 됩니다.",
+          "confidence": "high",
+          "category": "facility",
+          "data_source": [
+            "manual"
+          ],
+          "actions": [
+            {
+              "label": "평면도 보기",
+              "type": "open_page",
+              "payload": {
+                "page": "map"
+              },
+              "requiresConfirmation": false
+            }
+          ]
+        }
+      },
+      "consensus": "partial",
+      "similarity": 0.045454545454545456,
+      "models": {
+        "claude": "claude-opus-4-7",
+        "openai": "gpt-4o"
+      },
+      "usage": {
+        "claude": {
+          "input_tokens": 1178,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 207,
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "openai": {
+          "prompt_tokens": 751,
+          "completion_tokens": 97,
+          "total_tokens": 848,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "audio_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0,
+            "audio_tokens": 0,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0
+          }
+        }
+      }
+    },
+    "error": null
+  }
+]
