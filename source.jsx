@@ -39,6 +39,7 @@ const JAMSA_PROTECTED_KEYS = [
   "jamsa_fac_actions",
   "jamsa_fac_inspections",
   "jamsa_custom_zones",
+  "jamsa_zone_customizations",
   "jamsa_zone_photos",
   "jamsa_zonePhotos",
   "jamsa_warehouse_models",
@@ -23378,7 +23379,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         if (!next[targetZoneId]) next[targetZoneId] = [];
         next[targetZoneId].push(ch);
       }
-      try { window.localStorage?.setItem("jamsa_cctv_zone_map", JSON.stringify(next)); } catch (e) {}
+      try { guardedLocalStorageSet("jamsa_cctv_zone_map", next); } catch (e) {}
       return next;
     });
   };
@@ -23410,11 +23411,11 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   // Persistence helpers
   const saveCustomZones = (newZones) => {
     setCustomZones(newZones);
-    try { window.localStorage?.setItem("jamsa_custom_zones", JSON.stringify(newZones)); } catch(e){}
+    try { guardedLocalStorageSet("jamsa_custom_zones", newZones); } catch(e){}
   };
   const saveZoneCustomizations = (newCust) => {
     setZoneCustomizations(newCust);
-    try { window.localStorage?.setItem("jamsa_zone_customizations", JSON.stringify(newCust)); } catch(e){}
+    try { guardedLocalStorageSet("jamsa_zone_customizations", newCust); } catch(e){}
   };
 
   // Edit mode state
@@ -23459,7 +23460,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           });
           if (cleaned.length > 0) next[zoneId] = cleaned;
           else delete next[zoneId];
-          try { window.localStorage?.setItem("jamsa_cctv_zone_map", JSON.stringify(next)); } catch (e) {}
+          try { guardedLocalStorageSet("jamsa_cctv_zone_map", next); } catch (e) {}
           return next;
         });
       } catch (e) { console.warn("cctvMap sync 실패:", e?.message); }
