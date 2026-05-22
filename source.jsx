@@ -15245,6 +15245,154 @@ function BatchAddModal({cats,locs,storageSections,onAdd,onClose}){
   </Modal>;
 }
 
+// ============================================================
+// 🏪 수장고 내부 인터랙티브 평면도
+// ============================================================
+function SujangoInteriorPlan({ onSelectSpot, selectedSpot, spotCounts = {}, readOnly = false }) {
+  const [hoverId, setHoverId] = React.useState(null);
+
+  const handleClick = (id) => {
+    if (readOnly) return;
+    if (onSelectSpot) onSelectSpot(id);
+  };
+
+  const shelfColor = (id) => {
+    if (id === selectedSpot) return "#e63946";
+    if (hoverId === id) return "#1971c2";
+    return "#3b5bdb";
+  };
+  const floorColor = (id) => {
+    if (id === selectedSpot) return "#e63946";
+    if (hoverId === id) return "#5b21b6";
+    return "#7c3aed";
+  };
+
+  const Zone = ({ id, x, y, w, h, label, type = "shelf" }) => {
+    const color = type === "floor" ? floorColor(id) : shelfColor(id);
+    const count = spotCounts[id] || 0;
+    return (
+      <g
+        style={{ cursor: readOnly ? "default" : "pointer" }}
+        onClick={() => handleClick(id)}
+        onMouseEnter={() => setHoverId(id)}
+        onMouseLeave={() => setHoverId(null)}
+      >
+        <rect
+          x={x} y={y} width={w} height={h}
+          fill={color}
+          rx={3}
+          stroke={id === selectedSpot ? "#dc2626" : "rgba(255,255,255,0.3)"}
+          strokeWidth={id === selectedSpot ? 2 : 1}
+          style={{ filter: hoverId === id ? "brightness(1.15)" : "none", transition: "fill 0.15s" }}
+        />
+        <text x={x + w / 2} y={y + h / 2 + 3} textAnchor="middle" fill="#fff" fontSize={9} fontWeight="700" style={{ pointerEvents: "none", userSelect: "none" }}>
+          {label}
+        </text>
+        {count > 0 && (
+          <g>
+            <circle cx={x + w - 5} cy={y + 5} r={7} fill="#f97316" stroke="#fff" strokeWidth={1} style={{ pointerEvents: "none" }} />
+            <text x={x + w - 5} y={y + 8} textAnchor="middle" fill="#fff" fontSize={7} fontWeight="900" style={{ pointerEvents: "none", userSelect: "none" }}>
+              {count > 9 ? "9+" : count}
+            </text>
+          </g>
+        )}
+      </g>
+    );
+  };
+
+  return (
+    <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: 8, overflow: "auto" }}>
+      <svg viewBox="0 0 620 420" style={{ width: "100%", maxWidth: 620, display: "block" }}>
+        {/* 배경 */}
+        <rect x={0} y={0} width={620} height={420} fill="#f1f5f9" rx={8} />
+
+        {/* A구역 방 */}
+        <rect x={10} y={10} width={130} height={360} fill="#fff" stroke="#374151" strokeWidth={2} rx={4} />
+        <text x={75} y={390} textAnchor="middle" fill="#374151" fontSize={11} fontWeight="800">A구역 (좌측)</text>
+
+        {/* 연결 통로 */}
+        <rect x={140} y={130} width={50} height={120} fill="#e2e8f0" stroke="#374151" strokeWidth={1.5} strokeDasharray="4,2" rx={2} />
+        <text x={165} y={194} textAnchor="middle" fill="#6b7280" fontSize={8} fontWeight="600">통로</text>
+
+        {/* B구역 방 */}
+        <rect x={190} y={10} width={420} height={360} fill="#fff" stroke="#374151" strokeWidth={2} rx={4} />
+        <text x={400} y={390} textAnchor="middle" fill="#374151" fontSize={11} fontWeight="800">B구역 (우측 대형창고)</text>
+
+        {/* === A구역 좌측 선반 5개 === */}
+        <Zone id="A-좌1" x={14} y={20}  w={28} h={56} label="A-좌1" type="shelf" />
+        <Zone id="A-좌2" x={14} y={82}  w={28} h={56} label="A-좌2" type="shelf" />
+        <Zone id="A-좌3" x={14} y={144} w={28} h={56} label="A-좌3" type="shelf" />
+        <Zone id="A-좌4" x={14} y={206} w={28} h={56} label="A-좌4" type="shelf" />
+        <Zone id="A-좌5" x={14} y={268} w={28} h={56} label="A-좌5" type="shelf" />
+
+        {/* === A구역 우측 선반 3개 === */}
+        <Zone id="A-우1" x={108} y={20}  w={24} h={64} label="A-우1" type="shelf" />
+        <Zone id="A-우2" x={108} y={90}  w={24} h={64} label="A-우2" type="shelf" />
+        <Zone id="A-우3" x={108} y={160} w={24} h={64} label="A-우3" type="shelf" />
+
+        {/* === A구역 바닥 2개 === */}
+        <Zone id="A-바닥1" x={46} y={20}  w={58} h={145} label="A-바닥1" type="floor" />
+        <Zone id="A-바닥2" x={46} y={172} w={58} h={145} label="A-바닥2" type="floor" />
+
+        {/* === B구역 우측 선반 유닛 3개 × 4단 === */}
+        {/* 선반유닛1 */}
+        <Zone id="B-선반1-1단" x={486} y={18}  w={44} h={80} label="B-선1-1단" type="shelf" />
+        <Zone id="B-선반1-2단" x={486} y={103} w={44} h={80} label="B-선1-2단" type="shelf" />
+        <Zone id="B-선반1-3단" x={486} y={188} w={44} h={80} label="B-선1-3단" type="shelf" />
+        <Zone id="B-선반1-4단" x={486} y={273} w={44} h={80} label="B-선1-4단" type="shelf" />
+        <text x={508} y={365} textAnchor="middle" fill="#6b7280" fontSize={8}>선반1</text>
+
+        {/* 선반유닛2 */}
+        <Zone id="B-선반2-1단" x={536} y={18}  w={44} h={80} label="B-선2-1단" type="shelf" />
+        <Zone id="B-선반2-2단" x={536} y={103} w={44} h={80} label="B-선2-2단" type="shelf" />
+        <Zone id="B-선반2-3단" x={536} y={188} w={44} h={80} label="B-선2-3단" type="shelf" />
+        <Zone id="B-선반2-4단" x={536} y={273} w={44} h={80} label="B-선2-4단" type="shelf" />
+        <text x={558} y={365} textAnchor="middle" fill="#6b7280" fontSize={8}>선반2</text>
+
+        {/* 선반유닛3 */}
+        <Zone id="B-선반3-1단" x={560} y={18}  w={44} h={80} label="B-선3-1단" type="shelf" />
+        <Zone id="B-선반3-2단" x={560} y={103} w={44} h={80} label="B-선3-2단" type="shelf" />
+        <Zone id="B-선반3-3단" x={560} y={188} w={44} h={80} label="B-선3-3단" type="shelf" />
+        <Zone id="B-선반3-4단" x={560} y={273} w={44} h={80} label="B-선3-4단" type="shelf" />
+        <text x={582} y={365} textAnchor="middle" fill="#6b7280" fontSize={8}>선반3</text>
+
+        {/* === B구역 좌측 선반 2개 === */}
+        <Zone id="B-좌선반1" x={194} y={18}  w={28} h={160} label="B-좌선반1" type="shelf" />
+        <Zone id="B-좌선반2" x={194} y={184} w={28} h={160} label="B-좌선반2" type="shelf" />
+
+        {/* === B구역 바닥 3개 === */}
+        <Zone id="B-바닥1" x={228} y={18}  w={252} h={108} label="B-바닥1" type="floor" />
+        <Zone id="B-바닥2" x={228} y={133} w={252} h={108} label="B-바닥2" type="floor" />
+        <Zone id="B-바닥3" x={228} y={248} w={252} h={106} label="B-바닥3" type="floor" />
+
+        {/* 범례 */}
+        <rect x={10} y={400} width={600} height={16} fill="none" />
+        <rect x={14} y={402} width={10} height={10} fill="#3b5bdb" rx={2} />
+        <text x={28} y={411} fill="#475569" fontSize={9}>선반 구역</text>
+        <rect x={100} y={402} width={10} height={10} fill="#7c3aed" rx={2} />
+        <text x={114} y={411} fill="#475569" fontSize={9}>바닥 구역</text>
+        <rect x={186} y={402} width={10} height={10} fill="#e63946" rx={2} />
+        <text x={200} y={411} fill="#475569" fontSize={9}>선택됨</text>
+        <text x={350} y={411} fill="#94a3b8" fontSize={9}>클릭하여 위치 선택 | 숫자 = 보관 물품 수</text>
+      </svg>
+      {selectedSpot && (
+        <div style={{ marginTop: 4, padding: "4px 10px", background: "#dbeafe", border: "1px solid #93c5fd", borderRadius: 6, fontSize: 11, color: "#1e40af", fontWeight: 700 }}>
+          선택된 위치: <strong>{selectedSpot}</strong>
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={() => onSelectSpot && onSelectSpot("")}
+              style={{ marginLeft: 8, fontSize: 10, color: "#64748b", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}
+            >
+              선택 해제
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AddMdl({onAdd,onClose,defaultLoc,zoneInfo,cats=CATS,locs=LOCS,storageSections=[]}){
   const [n,sN]=useState("");const [c,sC]=useState(cats[0] || CATS[0]);
   // When zone is provided, default the location to zone's name (which may not be in LOCS)
@@ -15274,6 +15422,18 @@ function AddMdl({onAdd,onClose,defaultLoc,zoneInfo,cats=CATS,locs=LOCS,storageSe
         <label style={{fontSize:11,fontWeight:700,color:"#64748b",marginBottom:4,display:"block"}}>📍 세부위치 <span style={{fontWeight:400,color:"#94a3b8"}}>(선택, 예: 3번 선반)</span></label>
         <input className="inp" value={sub} onChange={e=>setSub(e.target.value)} placeholder="예: 3번 선반 / 2칸"/>
       </div>
+      {(l === "수장고" || (l && l.includes("수장고"))) && (
+        <div>
+          <label style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:4,display:"block"}}>
+            🏪 수장고 위치 선택 <span style={{fontWeight:400,color:"#94a3b8"}}>(클릭하면 세부위치 자동입력)</span>
+          </label>
+          <SujangoInteriorPlan
+            onSelectSpot={(spotId) => setSub(spotId)}
+            selectedSpot={sub}
+            readOnly={false}
+          />
+        </div>
+      )}
       {storageSections.length>0&&<div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
         {storageSections.slice(0,10).map(sec=><button key={sec} type="button" onClick={()=>{sL(sec);setSub("");}} style={{fontSize:10,padding:"4px 7px",borderRadius:999,border:"1px solid #bae6fd",background:l===sec?"#0ea5e9":"#f0f9ff",color:l===sec?"#fff":"#0369a1",cursor:"pointer",fontWeight:800}}>{sec}</button>)}
       </div>}
@@ -15599,7 +15759,9 @@ function ZoneLayoutModal({zone, layout, allProds, focusProdId, onSave, onAssignP
   return (
     <Modal title={`🗺️ ${zone?.icon || "📍"} ${zone?.name || ""} — 세부위치 / 3D / 스캔`} onClose={onClose} w={900}>
       <div style={{display:"flex",gap:4,borderBottom:"2px solid #e5e7eb",marginBottom:10,flexWrap:"wrap"}}>
-        {[["plan","📐 평면도"],["pano","🌄 파노라마"],["3d","🎮 3D 모델"],["scan","📱 모바일 스캔"]].map(([k,l]) => (
+        {[["plan","📐 평면도"],["pano","🌄 파노라마"],["3d","🎮 3D 모델"],["scan","📱 모바일 스캔"],
+          ...(zone?.id==="sujango"||zone?.name==="수장고"||(zone?.name&&zone.name.includes("수장고"))?[["interior","🏪 내부도"]]:[])]
+          .map(([k,l]) => (
           <button key={k} onClick={()=>{setTab(k);setSelMarkerId(null);setPlacing(false);}}
             style={{padding:"8px 14px",border:"none",background:tab===k?"#3b5bdb":"transparent",color:tab===k?"#fff":"#475569",fontWeight:700,fontSize:12,borderRadius:"8px 8px 0 0",cursor:"pointer"}}>
             {l}
@@ -16071,6 +16233,63 @@ function ZoneLayoutModal({zone, layout, allProds, focusProdId, onSave, onAssignP
               생성된 모델은 위 <strong style={{color:"#dc2626"}}>"🎮 3D 모델"</strong> 탭에서 즉시 확인 가능합니다.
             </div>
           </div>
+        </div>
+      )}
+
+      {/* 수장고 내부도 탭 */}
+      {tab === "interior" && (
+        <div>
+          <div style={{marginBottom:10,padding:"8px 12px",background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,fontSize:11,color:"#1e40af"}}>
+            🏪 수장고 내부 배치도 — 위치를 클릭하면 마커가 생성되거나 선택됩니다
+          </div>
+          <SujangoInteriorPlan
+            onSelectSpot={(spotId) => {
+              if (!spotId) { setSelMarkerId(null); return; }
+              const existing = markers.find(m => m.label === spotId);
+              if (existing) {
+                setSelMarkerId(existing.id);
+              } else {
+                const newId = "int-" + Date.now();
+                setMarkers(prev => [...prev, { id: newId, label: spotId, x: 50, y: 50, view: "interior", productIds: [] }]);
+                setSelMarkerId(newId);
+              }
+            }}
+            selectedSpot={selMarkerId ? (markers.find(m => m.id === selMarkerId)?.label || null) : null}
+            spotCounts={(() => {
+              const counts = {};
+              markers.forEach(m => {
+                if (m.label && m.productIds?.length) counts[m.label] = (counts[m.label] || 0) + m.productIds.length;
+              });
+              return counts;
+            })()}
+            readOnly={false}
+          />
+          {selMarkerId && markers.find(m => m.id === selMarkerId) && (() => {
+            const sm = markers.find(m => m.id === selMarkerId);
+            return (
+              <div style={{marginTop:10,padding:10,background:"#fef9c3",border:"1px solid #fcd34d",borderRadius:8}}>
+                <div style={{fontSize:11,fontWeight:800,color:"#92400e",marginBottom:6}}>📍 {sm.label} 편집</div>
+                <div style={{fontSize:10,fontWeight:700,color:"#92400e",margin:"0 0 4px"}}>이 위치의 물건 ({sm.productIds?.length || 0})</div>
+                <div style={{maxHeight:180,overflowY:"auto",border:"1px solid #fde68a",borderRadius:4,background:"#fff"}}>
+                  {zoneProds.length === 0 ? (
+                    <div style={{padding:8,fontSize:10,color:"#94a3b8",textAlign:"center"}}>이 구역에 등록된 물건이 없습니다</div>
+                  ) : zoneProds.map(p => {
+                    const checked = sm.productIds?.includes(p.id);
+                    return (
+                      <label key={p.id} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 8px",borderBottom:"1px solid #fef3c7",cursor:"pointer",fontSize:11}}>
+                        <input type="checkbox" checked={!!checked} onChange={()=>toggleProductAtMarker(sm.id, p.id)}/>
+                        <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name} <span style={{color:"#94a3b8",fontSize:9}}>({p.code})</span></span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <button onClick={()=>deleteMarker(sm.id)}
+                  style={{marginTop:6,padding:"4px 8px",fontSize:10,fontWeight:700,borderRadius:4,border:"1px solid #fca5a5",cursor:"pointer",background:"#fff",color:"#b91c1c",width:"100%"}}>
+                  🗑️ 마커 삭제
+                </button>
+              </div>
+            );
+          })()}
         </div>
       )}
 
