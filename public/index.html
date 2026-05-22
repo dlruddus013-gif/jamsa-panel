@@ -135,19 +135,31 @@
         grid-template-columns: 1fr !important;
       }
 
-      /* 📍 통합지도 영역: 모바일에서 잘리지 않게 적당히 작게 */
-      [data-jamsa-map-wrapper] {
-        min-height: min(65vh, 480px) !important;
-        max-height: 85vh !important;
-        height: min(65vh, 480px) !important;
+      /* 📍 모바일에서 스크롤이 자연스럽게 — 페이지가 컨텐츠만큼 길어지게 */
+      html, body {
+        height: auto !important;
+        min-height: 100% !important;
+        overflow-x: hidden !important;
+        overflow-y: auto !important;
+        position: static !important;
       }
-      /* React 루트와 body: 세로 스크롤 명시 허용 (가로는 막음) */
-      #root { overflow-x: hidden !important; }
-      html, body { overflow-x: hidden !important; overflow-y: auto !important; }
-
-      /* 통합지도 모듈 컨테이너: 페이지 하단 padding (FAB 가려지지 않게) */
+      #root {
+        height: auto !important;
+        min-height: 100vh !important;
+        overflow: visible !important;
+      }
+      /* 통합지도 대시보드: 컨텐츠 따라 늘어남 (height:100% 제거) */
       [data-jamsa-module-wrapper="home"] {
+        height: auto !important;
+        min-height: 100vh !important;
         padding-bottom: 80px !important;
+      }
+      /* 통합지도 자체: 화면 절반 정도 크기 — 위/아래 영역 확보 */
+      [data-jamsa-map-wrapper] {
+        height: 55vh !important;
+        min-height: 360px !important;
+        max-height: none !important;
+        /* 지도 위에서 한손가락 세로 스와이프는 지도 패닝, 가장자리에서 페이지 스크롤 */
       }
 
       /* 모바일 진입 안내 배너 자동 닫기 (지도 가림) */
