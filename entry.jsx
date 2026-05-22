@@ -155,6 +155,67 @@ async function mountReactApp() {
       setTimeout(() => { if (txt) txt.textContent = '클라우드 ✓'; }, 5000);
     }
   }
+
+  // 6) 부팅 후 1회: 로컬에만 있고 클라우드에 없거나 더 최신인 jamsa_* 키를
+  //    클라우드로 푸시 (이전 fix 적용 전에 저장됐던 데이터 복구).
+  //    로그인된 세션에서만 동작.
+  if (supabase && session) {
+    setTimeout(() => bootstrapPushLocalToCloud().catch(() => {}), 1500);
+  }
+}
+
+// 부팅 1회: localStorage 의 모든 jamsa_* 키를 클라우드와 비교 후 누락된/다른 키만 푸시.
+// 이전에 권한/멤버십 문제로 클라우드 저장이 실패한 데이터가 있어도 한 번 살아남.
+async function bootstrapPushLocalToCloud() {
+  if (!supabase || !session) return;
+  if (localStorage.getItem('jamsa_bootstrap_pushed_at')) return; // 1회만
+  try {
+    // 클라우드에 있는 키 목록
+    const remoteRes = await fetch(PANEL_ORIGIN + '/api/data-bulk', { cache: 'no-store' });
+    const remote = remoteRes.ok ? (await remoteRes.json()).data || {} : {};
+    const toPush = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith(SYNC_PREFIX)) continue;
+      // 동기화 대상에서 제외할 키 (세션/임시/기기 종속)
+      if (k === 'jamsa_sb_session' || k === 'jamsa_bootstrap_pushed_at') continue;
+      if (k.endsWith('_collapsed') || k.endsWith('_dismissed')) continue;
+      const localRaw = localStorage.getItem(k);
+      if (!localRaw) continue;
+      // 큰 값(이미지 등) 건너뛰기
+      if (localRaw.length > 4 * 1024 * 1024) continue;
+      let localParsed;
+      try { localParsed = JSON.parse(localRaw); } catch { localParsed = localRaw; }
+      const remoteParsed = remote[k];
+      const remoteRaw = remoteParsed !== undefined ? JSON.stringify(remoteParsed) : null;
+      if (remoteRaw !== localRaw) {
+        toPush.push([k, localParsed]);
+      }
+    }
+    if (toPush.length === 0) {
+      _origSetItem('jamsa_bootstrap_pushed_at', String(Date.now()));
+      return;
+    }
+    setSyncStatus('syncing', `최초 동기화 ${toPush.length}건...`);
+    let ok = 0, failed = 0;
+    for (const [key, value] of toPush) {
+      try {
+        const res = await authFetch('/api/data/' + encodeURIComponent(key), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(value),
+        });
+        if (res.ok) ok++; else failed++;
+      } catch (e) { failed++; }
+    }
+    setSyncStatus(failed === 0 ? 'ok' : 'partial', `최초 동기화 ${ok}/${toPush.length}`);
+    setTimeout(() => setSyncStatus('idle', '클라우드 ✓'), 4000);
+    if (failed === 0) {
+      _origSetItem('jamsa_bootstrap_pushed_at', String(Date.now()));
+    }
+  } catch (e) {
+    console.warn('[bootstrap push] failed:', e);
+  }
 }
 
 // ════════════════════════════════════════════════
@@ -286,6 +347,29 @@ window.addEventListener('jamsa:storage-sync', (event) => {
   if (!detail.key) return;
   queueCloudSync(detail.key, detail.value);
 });
+
+// 수동 강제 푸시 — 브라우저 콘솔에서 호출 가능: window.__jamsaForcePushAll()
+// 1회 부트스트랩 플래그를 지우고 즉시 재실행.
+window.__jamsaForcePushAll = async () => {
+  try { localStorage.removeItem('jamsa_bootstrap_pushed_at'); } catch (e) {}
+  await bootstrapPushLocalToCloud();
+  alert('클라우드 강제 푸시 완료 (콘솔에서 결과 확인)');
+};
+// 빠른 진단: 클라우드 상태 + 로컬 키 수
+window.__jamsaSyncDiag = async () => {
+  const result = { localKeys: 0, cloudKeys: 0, session: !!session, supabase: !!supabase };
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(SYNC_PREFIX)) result.localKeys++;
+    }
+    const r = await fetch(PANEL_ORIGIN + '/api/data-bulk', { cache: 'no-store' });
+    if (r.ok) result.cloudKeys = Object.keys((await r.json()).data || {}).length;
+    else result.cloudError = r.status;
+  } catch (e) { result.error = e.message; }
+  console.log('[jamsa sync diag]', result);
+  return result;
+};
 
 async function flushPush() {
   if (_pendingPush.size === 0) return;
