@@ -199,13 +199,33 @@
       <span class="dot"></span>
       <span class="auth-txt">🔓 미로그인</span>
     </div>
-    <div class="status-pill" id="syncBadge" data-state="idle" title="클라우드 동기화">
+    <div class="status-pill" id="syncBadge" data-state="idle" title="클릭하여 동기화 상태 보기" style="cursor:pointer;">
       <span class="dot"></span>
       <span class="sync-txt">클라우드 ✓</span>
     </div>
     <div class="status-pill" id="backendBadge" data-state="offline" title="CCTV 5555 (옵션)" style="display:none;">
       <span class="dot"></span>
       <span id="backendStatus">CCTV 확인...</span>
+    </div>
+  </div>
+
+  <!-- 클라우드 동기화 진단/제어 모달 -->
+  <div id="syncDiagModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:11000;align-items:center;justify-content:center;padding:20px;">
+    <div style="background:#0f172a;color:#f1f5f9;border-radius:12px;width:100%;max-width:480px;max-height:85vh;overflow:auto;padding:20px;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <div style="font-size:15px;font-weight:800;">☁️ 클라우드 동기화</div>
+        <button id="syncDiagClose" style="background:transparent;border:1px solid rgba(255,255,255,0.2);color:#94a3b8;border-radius:6px;padding:4px 10px;cursor:pointer;">✕</button>
+      </div>
+      <div id="syncDiagBody" style="font-size:12px;line-height:1.7;">데이터 로딩 중...</div>
+      <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">
+        <button id="syncDiagRefresh" style="flex:1;min-width:120px;padding:10px;background:#1e40af;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">🔄 상태 새로고침</button>
+        <button id="syncDiagPush" style="flex:1;min-width:120px;padding:10px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">⬆ 로컬→클라우드 강제 푸시</button>
+        <button id="syncDiagPull" style="flex:1;min-width:120px;padding:10px;background:#059669;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">⬇ 클라우드→로컬 강제 동기화</button>
+      </div>
+      <div style="margin-top:10px;font-size:10px;color:#64748b;line-height:1.5;">
+        💡 다른 기기에서 변경한 내용이 안 보이면 <strong>⬇ 강제 동기화</strong> 후 새로고침.<br>
+        💡 이 기기 변경이 다른 기기에 안 가면 <strong>⬆ 강제 푸시</strong>.
+      </div>
     </div>
   </div>
 
@@ -767,6 +787,85 @@
       window.addEventListener('appinstalled', () => {
         window.__deferredInstallPrompt = null;
         try { window.localStorage.setItem('jamsa_pwa_installed', '1'); } catch(e) {}
+      });
+    })();
+
+    // ── 클라우드 동기화 진단/제어 모달 ──
+    (function() {
+      const modal = document.getElementById('syncDiagModal');
+      const body = document.getElementById('syncDiagBody');
+      const badge = document.getElementById('syncBadge');
+      if (!modal || !badge) return;
+      const open = () => { modal.style.display = 'flex'; refresh(); };
+      const close = () => { modal.style.display = 'none'; };
+      badge.addEventListener('click', open);
+      document.getElementById('syncDiagClose')?.addEventListener('click', close);
+      modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+      const refresh = async () => {
+        body.innerHTML = '<div style="color:#94a3b8;">진단 중...</div>';
+        try {
+          const diag = (typeof window.__jamsaSyncDiag === 'function') ? await window.__jamsaSyncDiag() : null;
+          if (!diag) {
+            body.innerHTML = '<div style="color:#fca5a5;">진단 함수를 사용할 수 없습니다 (앱이 아직 로딩 중)</div>';
+            return;
+          }
+          const lines = [];
+          lines.push(`<div>🔐 로그인: <strong style="color:${diag.session ? '#34d399' : '#f87171'}">${diag.session ? '예' : '아니오 (편집 불가)'}</strong></div>`);
+          lines.push(`<div>☁️ Supabase: <strong style="color:${diag.supabase ? '#34d399' : '#f87171'}">${diag.supabase ? '연결됨' : '미연결'}</strong></div>`);
+          lines.push(`<div>📦 이 기기 로컬 키: <strong>${diag.localKeys}</strong>개</div>`);
+          lines.push(`<div>☁️ 클라우드 키: <strong style="color:${diag.cloudKeys >= diag.localKeys ? '#34d399' : '#fbbf24'}">${diag.cloudKeys}</strong>개</div>`);
+          if (diag.cloudError) lines.push(`<div style="color:#fca5a5;">⚠ 클라우드 응답 에러: ${diag.cloudError}</div>`);
+          if (diag.error) lines.push(`<div style="color:#fca5a5;">⚠ 에러: ${diag.error}</div>`);
+          if (diag.session && diag.cloudKeys < diag.localKeys) {
+            lines.push(`<div style="margin-top:8px;padding:8px;background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.3);border-radius:6px;color:#fbbf24;">⚠ 이 기기 데이터가 클라우드보다 많습니다. <strong>⬆ 강제 푸시</strong>를 눌러주세요.</div>`);
+          }
+          if (!diag.session) {
+            lines.push(`<div style="margin-top:8px;padding:8px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;color:#fca5a5;">⚠ 로그인이 필요합니다. 편집 권한이 없으면 푸시도 불가합니다. 읽기는 가능합니다.</div>`);
+          }
+          if (diag.session && diag.cloudKeys === 0) {
+            lines.push(`<div style="margin-top:8px;padding:8px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;color:#fca5a5;">⚠ 클라우드에 데이터 0건. ⬆ 강제 푸시 실패 시 백엔드(kv_store 테이블) 문제일 수 있습니다.</div>`);
+          }
+          body.innerHTML = lines.join('');
+        } catch (e) {
+          body.innerHTML = `<div style="color:#fca5a5;">진단 실패: ${e.message}</div>`;
+        }
+      };
+      document.getElementById('syncDiagRefresh')?.addEventListener('click', refresh);
+      document.getElementById('syncDiagPush')?.addEventListener('click', async () => {
+        if (typeof window.__jamsaForcePushAll !== 'function') {
+          alert('푸시 함수를 사용할 수 없습니다');
+          return;
+        }
+        body.innerHTML = '<div style="color:#fbbf24;">⬆ 푸시 중...</div>';
+        try {
+          await window.__jamsaForcePushAll();
+          await refresh();
+        } catch (e) {
+          body.innerHTML = `<div style="color:#fca5a5;">푸시 실패: ${e.message}</div>`;
+        }
+      });
+      document.getElementById('syncDiagPull')?.addEventListener('click', async () => {
+        body.innerHTML = '<div style="color:#fbbf24;">⬇ 클라우드에서 동기화 중...</div>';
+        try {
+          const r = await fetch('/api/data-bulk', { cache: 'no-store' });
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          const result = await r.json();
+          const data = result.data || {};
+          let loaded = 0;
+          for (const [k, v] of Object.entries(data)) {
+            try {
+              const str = JSON.stringify(v);
+              if (localStorage.getItem(k) !== str) {
+                localStorage.setItem(k, str);
+                loaded++;
+              }
+            } catch (e) {}
+          }
+          body.innerHTML = `<div style="color:#34d399;">✓ ${loaded}개 키 동기화 완료. 새로고침합니다...</div>`;
+          setTimeout(() => location.reload(), 1200);
+        } catch (e) {
+          body.innerHTML = `<div style="color:#fca5a5;">동기화 실패: ${e.message}</div>`;
+        }
       });
     })();
   </script>
