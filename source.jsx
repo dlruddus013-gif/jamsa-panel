@@ -22427,6 +22427,18 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   const naverMapContainerRef = useRef(null);
   const naverMarkersRef = useRef([]);
   const naverInitialFitRef = useRef(false);
+  const mapWrapperRef = useRef(null); // for browser Fullscreen API
+
+  const toggleBrowserFullscreen = () => {
+    const el = mapWrapperRef.current;
+    if (!el) return;
+    const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    if (isFs) {
+      (document.exitFullscreen || document.webkitExitFullscreen || (() => {})).call(document);
+    } else {
+      (el.requestFullscreen || el.webkitRequestFullscreen || (() => {})).call(el);
+    }
+  };
 
   // 자동 복구 0: 첫 로딩 시 viewMode 강제 정리 (한 번만)
   useEffect(() => {
@@ -23298,13 +23310,25 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   const [channelPickerCh, setChannelPickerCh] = useState(null); // ch number or null
 
   // window 글로벌로 노출 — divIcon HTML에서 호출
+  const [spotLocked, setSpotLocked] = useState(false); // 스팟 위치 잠금 (편집모드에서도 드래그 방지)
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.__jamsaPickChannel = (ch) => {
       setChannelPickerCh(ch);
     };
-    return () => { delete window.__jamsaPickChannel; };
-  }, []);
+    window.__jamsaDeleteZone = (zoneId) => {
+      const zone = [...(typeof BASE_ZONES !== "undefined" ? BASE_ZONES : [])].find(z => z.id === zoneId);
+      const name = zone?.name || zoneId;
+      if (!confirm(`'${name}' 스팟을 삭제하시겠습니까?`)) return;
+      const isBase = (typeof BASE_ZONES !== "undefined" ? BASE_ZONES : []).find(z => z.id === zoneId);
+      if (isBase) {
+        saveZoneCustomizations({ ...zoneCustomizations, [zoneId]: { ...(zoneCustomizations[zoneId] || {}), _deleted: true } });
+      } else {
+        saveCustomZones(customZones.filter(z => z.id !== zoneId));
+      }
+    };
+    return () => { delete window.__jamsaPickChannel; delete window.__jamsaDeleteZone; };
+  }, [zoneCustomizations, customZones]);
 
   // Persistence helpers
   const saveCustomZones = (newZones) => {
@@ -23706,9 +23730,9 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         const marker = new naver.maps.Marker({
           position: new naver.maps.LatLng(_disp.lat, _disp.lng),
           map: naverMapRef.current,
-          draggable: editMode && !spreadMode, // 펼치기 모드에선 드래그 비활성 (좌표 왜곡 방지)
+          draggable: editMode && !spreadMode && !spotLocked,
           icon: {
-            content: `<div style="position:relative;width:${_markerWidth}px;height:82px;${pulseAnim}cursor:${editMode ? "move" : "pointer"};${editMode ? "outline:3px dashed #2563eb;outline-offset:2px;border-radius:8px;" : ""}"><div style="position:absolute;left:0;top:0;width:46px;height:46px;"><div style="background:${z.color};border:3px solid #fff;border-radius:50% 50% 50% 0;width:38px;height:38px;transform:rotate(-45deg);box-shadow:0 4px 12px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;margin:4px;"><div style="transform:rotate(45deg);font-size:18px;">${z.icon}</div></div>${badgeHtml}${statusLabelHtml}${crowdBadgeHtml}${_photoThumb}${_nameLabel}</div>${_cctvHtml}</div>`,
+            content: `<div style="position:relative;width:${_markerWidth}px;height:82px;${pulseAnim}cursor:${editMode && !spotLocked ? "move" : "pointer"};${editMode ? "outline:3px dashed #2563eb;outline-offset:2px;border-radius:8px;" : ""}"><div style="position:absolute;left:0;top:0;width:46px;height:46px;"><div style="background:${z.color};border:3px solid #fff;border-radius:50% 50% 50% 0;width:38px;height:38px;transform:rotate(-45deg);box-shadow:0 4px 12px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;margin:4px;"><div style="transform:rotate(45deg);font-size:18px;">${z.icon}</div></div>${badgeHtml}${statusLabelHtml}${crowdBadgeHtml}${_photoThumb}${_nameLabel}</div>${_cctvHtml}${editMode ? `<div onclick="event.stopPropagation();window.__jamsaDeleteZone&&window.__jamsaDeleteZone('${z.id}')" style="position:absolute;top:-9px;left:-9px;width:20px;height:20px;background:#dc2626;color:#fff;border-radius:50%;border:2px solid #fff;font-size:13px;font-weight:900;display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:20;box-shadow:0 2px 6px rgba(0,0,0,0.4);line-height:1;" title="${z.name} 삭제">×</div>` : ''}</div>`,
             anchor: new naver.maps.Point(23, 46),
           },
           title: editMode ? `[편집] ${z.name} (드래그로 이동)` : `${z.name} · ${s.statusLabel}${badgeNum > 0 ? ` (과제/재고부족 ${badgeNum}건)` : ""}${_firstCh ? ` · CH${_firstCh}` : ""}`,
@@ -23911,12 +23935,27 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
               🤖 AI 자동 정렬
             </button>
             <button onClick={() => setMapFullscreen(v => !v)}
-              title={mapFullscreen ? "상단 패널 다시 보이기" : "지도를 화면 전체로 크게 보기"}
+              title={mapFullscreen ? "상단 패널 다시 보이기" : "상단 패널 숨기고 지도 크게 보기"}
               style={{ padding: "6px 12px", borderRadius: 6, border: "none",
                 background: mapFullscreen ? "linear-gradient(135deg,#dc2626,#ea580c)" : "linear-gradient(135deg,#0f172a,#334155)",
                 color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 800,
                 boxShadow: mapFullscreen ? "0 0 0 3px rgba(220,38,38,0.25)" : "none" }}>
               {mapFullscreen ? "✕ 크게보기 종료" : "⛶ 지도 크게보기"}
+            </button>
+            <button onClick={toggleBrowserFullscreen}
+              title="브라우저 전체화면 (F11 대체)"
+              style={{ padding: "6px 12px", borderRadius: 6, border: "none",
+                background: "linear-gradient(135deg,#0369a1,#0891b2)",
+                color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 800 }}>
+              ⛶ 전체화면
+            </button>
+            <button onClick={() => setSpotLocked(v => !v)}
+              title={spotLocked ? "스팟 잠금 해제 (편집모드에서 드래그 가능)" : "스팟 위치 잠금 (실수 이동 방지)"}
+              style={{ padding: "6px 12px", borderRadius: 6, border: "none",
+                background: spotLocked ? "linear-gradient(135deg,#f59e0b,#d97706)" : "linear-gradient(135deg,#475569,#1e293b)",
+                color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 800,
+                boxShadow: spotLocked ? "0 0 0 3px rgba(245,158,11,0.3)" : "none" }}>
+              {spotLocked ? "🔒 잠김" : "🔓 스팟 잠금"}
             </button>
             <button onClick={() => setSpreadMode(v => !v)}
               title={spreadMode ? "스팟을 실제 좌표로 되돌리기" : "겹쳐 보이는 스팟을 화면상에서 4배 펼쳐서 보기 (실제 좌표는 보존)"}
@@ -23949,7 +23988,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
 
       {/* ─── Map view (Naver or OSM) ─── */}
       {viewMode === "map" && (
-        <div style={{ flex: 1, position: "relative", background: "#e5e7eb", minHeight: mapFullscreen ? "calc(100vh - 120px)" : "max(560px, calc(100vh - 280px))" }}>
+        <div ref={mapWrapperRef} style={{ flex: 1, position: "relative", background: "#e5e7eb", minHeight: mapFullscreen ? "calc(100vh - 120px)" : "max(560px, calc(100vh - 280px))" }}>
           {mapProvider === "naver" && naverClientId && naverLoaded && !naverLoadError ? (
             <div ref={naverMapContainerRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
           ) : mapProvider === "naver" && naverClientId && !naverLoaded && !naverLoadError ? (
