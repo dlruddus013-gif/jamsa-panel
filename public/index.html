@@ -33,7 +33,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin defer></script>
   <!-- bundle preload -->
-  <link rel="modulepreload" href="/app.bundle.js?v=019310a8" crossorigin>
+  <link rel="modulepreload" href="/app.bundle.js?v=a0f65cf5" crossorigin>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
   <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
@@ -133,6 +133,39 @@
       [style*="grid-template-columns: 1fr 320px"],
       [style*="grid-template-columns:1fr 320px"] {
         grid-template-columns: 1fr !important;
+      }
+
+      /* 📍 통합지도 영역: 모바일에서 잘리지 않게 적당히 작게 */
+      [data-jamsa-map-wrapper] {
+        min-height: min(65vh, 480px) !important;
+        max-height: 85vh !important;
+        height: min(65vh, 480px) !important;
+      }
+      /* React 루트와 body: 세로 스크롤 명시 허용 (가로는 막음) */
+      #root { overflow-x: hidden !important; }
+      html, body { overflow-x: hidden !important; overflow-y: auto !important; }
+
+      /* 통합지도 모듈 컨테이너: 페이지 하단 padding (FAB 가려지지 않게) */
+      [data-jamsa-module-wrapper="home"] {
+        padding-bottom: 80px !important;
+      }
+
+      /* 모바일 진입 안내 배너 자동 닫기 (지도 가림) */
+      #mobileGuide { font-size: 11px !important; padding: 6px 10px !important; }
+      #mobileGuide .mg-btn { padding: 4px 8px !important; font-size: 10px !important; }
+
+      /* 통합지도 상단 컨트롤 바 (지도/카드/위성/하이브리드/일반/네이버/CCTV편집 등)
+         가로 wrap + 스크롤 가능하게 */
+      [data-jamsa-map-controls] {
+        flex-wrap: wrap !important;
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+        gap: 4px !important;
+      }
+      [data-jamsa-map-controls] > button {
+        flex-shrink: 0 !important;
+        font-size: 11px !important;
+        padding: 6px 8px !important;
       }
     }
 
@@ -906,7 +939,7 @@
       });
     })();
   </script>
-  <script type="module" src="/app.bundle.js?v=019310a8"></script>
+  <script type="module" src="/app.bundle.js?v=a0f65cf5"></script>
   <script>
     // React 앱 마운트 감지 — 모바일 친화적, 다중 폴백
     (function waitForApp() {

@@ -23956,7 +23956,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#f5f5f5" }}>
+    <div data-jamsa-module-wrapper="home" style={{ display: "flex", flexDirection: "column", height: "100%", background: "#f5f5f5" }}>
       {/* CCTV 미니창 + 핀 펄스 애니메이션 (글로벌) */}
       <style>{`
         @keyframes homePinPulse { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.15);opacity:0.85} }
@@ -24127,7 +24127,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
 
       {/* ─── Map view (Naver or OSM) ─── */}
       {viewMode === "map" && (
-        <div ref={mapWrapperRef} style={{ flex: 1, position: "relative", background: "#e5e7eb", minHeight: mapFullscreen ? "calc(100vh - 120px)" : "max(560px, calc(100vh - 280px))" }}>
+        <div ref={mapWrapperRef} data-jamsa-map-wrapper="1" style={{ flex: 1, position: "relative", background: "#e5e7eb", minHeight: mapFullscreen ? "calc(100vh - 120px)" : "max(420px, calc(100vh - 200px))", width: "100%" }}>
           {mapProvider === "naver" && naverClientId && naverLoaded && !naverLoadError ? (
             <div ref={naverMapContainerRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
           ) : mapProvider === "naver" && naverClientId && !naverLoaded && !naverLoadError ? (
@@ -26984,6 +26984,139 @@ window.onload = () => {
                 </>
               )}
 
+              {/* ── 📡 비콘 감지 로그 (이 스팟에서 최근 감지된 직원) ── */}
+              {(() => {
+                let pLogs = [];
+                try { pLogs = JSON.parse(localStorage.getItem("jamsa_presence_logs") || "[]"); } catch (e) {}
+                const zoneLogs = pLogs.filter(l => l.zoneId === selectedZone.zone.id).slice(0, 5);
+                if (zoneLogs.length === 0) return null;
+                return (
+                  <>
+                    <div style={{ fontSize: 11, fontWeight: 800, color: "#7c3aed", marginBottom: 8 }}>
+                      📡 최근 비콘 감지 ({zoneLogs.length}건)
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 14 }}>
+                      {zoneLogs.map(l => (
+                        <div key={l.id} style={{ padding: 8, background: "#faf5ff", borderLeft: "3px solid #7c3aed", borderRadius: 4, fontSize: 11 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                            <span style={{ fontWeight: 800, color: "#0f172a" }}>
+                              {l.employeeName || l.beaconName || "비콘 미배정"}
+                            </span>
+                            <span style={{ fontSize: 9, color: "#64748b", fontFamily: "ui-monospace,monospace" }}>
+                              {new Date(l.at).toLocaleString("ko", { hour: "2-digit", minute: "2-digit", second: "2-digit", month: "2-digit", day: "2-digit" })}
+                            </span>
+                            {l.cctvChannel != null && (
+                              <span style={{ fontSize: 9, color: "#67e8f9", background: "rgba(8,145,178,0.2)", padding: "1px 5px", borderRadius: 3, fontWeight: 700, marginLeft: "auto" }}>CH{l.cctvChannel}</span>
+                            )}
+                            {l.rssi != null && (
+                              <span style={{ fontSize: 9, color: "#94a3b8" }}>RSSI {l.rssi}</span>
+                            )}
+                          </div>
+                          {l.aiAnalysis?.summary && (
+                            <div style={{ marginTop: 4, padding: 5, background: "#fff", borderLeft: `2px solid ${l.aiAnalysis.level === "DANGER" ? "#dc2626" : l.aiAnalysis.level === "WARNING" ? "#f59e0b" : "#10b981"}`, fontSize: 10, color: "#475569", lineHeight: 1.4 }}>
+                              <strong style={{ color: "#7c3aed" }}>🤖 AI:</strong> {l.aiAnalysis.summary}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                );
+              })()}
+
+              {/* ── 🤖 현재 CCTV AI 분석 (이 스팟의 활성 채널) ── */}
+              {(() => {
+                const z = selectedZone.zone;
+                const analyses = cctvSnapshotData?.analyses || {};
+                const channels = (cctvMap?.[z.id] || z.cctvChannels || []);
+                const found = [];
+                for (const ch of channels) {
+                  const key = String(ch);
+                  if (analyses[key]) found.push({ ch, ...analyses[key] });
+                  else if (analyses[`ch${ch}`]) found.push({ ch, ...analyses[`ch${ch}`] });
+                }
+                if (found.length === 0) return null;
+                return (
+                  <>
+                    <div style={{ fontSize: 11, fontWeight: 800, color: "#0891b2", marginBottom: 8 }}>
+                      🤖 현재 CCTV AI 분석 ({found.length}채널)
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+                      {found.slice(0, 4).map(a => {
+                        const levelColor = a.level === "DANGER" ? "#dc2626" : a.level === "WARNING" ? "#f59e0b" : "#10b981";
+                        const levelBg = a.level === "DANGER" ? "#fef2f2" : a.level === "WARNING" ? "#fffbeb" : "#f0fdf4";
+                        return (
+                          <div key={a.ch} style={{ padding: 8, background: levelBg, border: `1px solid ${levelColor}33`, borderLeft: `3px solid ${levelColor}`, borderRadius: 4, fontSize: 11 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                              <span style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: levelColor, padding: "1px 6px", borderRadius: 3 }}>{a.level || "?"}</span>
+                              <span style={{ fontSize: 10, color: "#0891b2", fontWeight: 700 }}>CH{a.ch}</span>
+                              {a.category && <span style={{ fontSize: 10, color: "#475569" }}>· {a.category}</span>}
+                              {a.score != null && <span style={{ marginLeft: "auto", fontSize: 9, color: "#64748b", fontFamily: "ui-monospace,monospace" }}>score {a.score}</span>}
+                            </div>
+                            <div style={{ fontSize: 11, color: "#0f172a", lineHeight: 1.5 }}>{a.summary || a.detail || "(요약 없음)"}</div>
+                            {a.detail && a.detail !== a.summary && (
+                              <div style={{ marginTop: 3, fontSize: 10, color: "#64748b", lineHeight: 1.4 }}>{a.detail}</div>
+                            )}
+                            {a.analyzedAt && (
+                              <div style={{ marginTop: 3, fontSize: 9, color: "#94a3b8", fontFamily: "ui-monospace,monospace" }}>
+                                분석 시각: {new Date(a.analyzedAt).toLocaleString("ko")}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                );
+              })()}
+
+              {/* ── 📥 최근 재고 입출고 (이 스팟 관련) ── */}
+              {(() => {
+                let hist = [];
+                try { hist = JSON.parse(localStorage.getItem("jamsa_inv_hist") || "[]"); } catch (e) {}
+                const zoneKey = selectedZone.zone.name;
+                // 짧은 키워드 두 개로 매칭 (구역명 첫 단어 + 전체 이름)
+                const shortKey = zoneKey.split(/\s+/)[0];
+                // 이 구역과 관련된 입출고: detail 에 구역명 포함 OR 등록 재고 product 가 이 구역
+                const zoneProdIds = new Set(selectedZone.zoneInv.map(p => p.id));
+                const zoneProdNames = new Set(selectedZone.zoneInv.map(p => p.name));
+                const zoneHist = hist.filter(h => {
+                  const d = (h.det || "");
+                  const pn = (h.pn || "");
+                  return d.includes(zoneKey) || d.includes(shortKey) || zoneProdNames.has(pn);
+                }).slice(0, 8);
+                if (zoneHist.length === 0) return null;
+                return (
+                  <>
+                    <div style={{ fontSize: 11, fontWeight: 800, color: "#059669", marginBottom: 8 }}>
+                      📥 최근 재고 입출고 ({zoneHist.length}건)
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 14 }}>
+                      {zoneHist.map(h => {
+                        const isIn = (h.act || "").includes("입고") || (h.act || "").includes("등록");
+                        const isOut = (h.act || "").includes("출고") || (h.act || "").includes("사용") || (h.act || "").includes("폐기");
+                        const actColor = isIn ? "#059669" : isOut ? "#dc2626" : "#0891b2";
+                        return (
+                          <div key={h.id} style={{ padding: 6, background: "#f0fdf4", borderLeft: `3px solid ${actColor}`, borderRadius: 3, fontSize: 11 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                              <span style={{ fontSize: 9, fontWeight: 800, padding: "1px 6px", borderRadius: 3, background: actColor, color: "#fff" }}>{h.act}</span>
+                              <span style={{ fontWeight: 700, color: "#0f172a", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{h.pn || "—"}</span>
+                              {h.q != null && h.q !== 0 && (
+                                <span style={{ fontSize: 11, fontWeight: 900, color: actColor }}>{h.q > 0 ? "+" : ""}{h.q}</span>
+                              )}
+                            </div>
+                            <div style={{ fontSize: 10, color: "#64748b" }}>{h.det}</div>
+                            <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>
+                              {h.user} · {new Date(h.date).toLocaleString("ko", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                );
+              })()}
+
               {/* Audit trail */}
               {selectedZone.zoneAudit.length > 0 && (
                 <>
@@ -26999,13 +27132,31 @@ window.onload = () => {
                 </>
               )}
 
-              {selectedZone.openActions.length === 0 && selectedZone.zoneInv.length === 0 && selectedZone.zoneAudit.length === 0 && (
-                <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>
-                  <div style={{ fontSize: 36 }}>✓</div>
-                  <div style={{ fontSize: 13, fontWeight: 700, marginTop: 10 }}>이 구역은 정상 운영 중입니다</div>
-                  <div style={{ fontSize: 11, marginTop: 4 }}>특별한 이벤트나 과제가 없습니다</div>
-                </div>
-              )}
+              {(() => {
+                if (selectedZone.openActions.length > 0) return null;
+                if (selectedZone.zoneInv.length > 0) return null;
+                if (selectedZone.zoneAudit.length > 0) return null;
+                // 새 섹션도 확인 — 있으면 empty state 표시 안 함
+                try {
+                  const pLogs = JSON.parse(localStorage.getItem("jamsa_presence_logs") || "[]");
+                  if (pLogs.some(l => l.zoneId === selectedZone.zone.id)) return null;
+                } catch (e) {}
+                try {
+                  const hist = JSON.parse(localStorage.getItem("jamsa_inv_hist") || "[]");
+                  const zk = selectedZone.zone.name;
+                  if (hist.some(h => (h.det || "").includes(zk))) return null;
+                } catch (e) {}
+                const analyses = cctvSnapshotData?.analyses || {};
+                const channels = (cctvMap?.[selectedZone.zone.id] || selectedZone.zone.cctvChannels || []);
+                if (channels.some(ch => analyses[String(ch)] || analyses[`ch${ch}`])) return null;
+                return (
+                  <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>
+                    <div style={{ fontSize: 36 }}>✓</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, marginTop: 10 }}>이 구역은 정상 운영 중입니다</div>
+                    <div style={{ fontSize: 11, marginTop: 4 }}>특별한 이벤트나 과제가 없습니다</div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>
