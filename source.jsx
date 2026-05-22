@@ -6914,7 +6914,7 @@ function InventoryModule({ userCtx, onLogout, onAddFacAction, switchToFacility, 
     const baseWithOverrides = BASE_ZONES.map(z => ({ ...z, ...(zoneOverrides[z.id] || {}) }));
     return [...baseWithOverrides, ...customZones];
   }, [customZones, zoneOverrides]);
-  const [page,setPage]=useState("map");
+  const [page,setPage]=useState("products");
   // AI 작업 도우미 → 페이지 전환 이벤트 수신
   useEffect(() => {
     const h = (e) => { if (typeof e.detail === "string") setPage(e.detail); };
