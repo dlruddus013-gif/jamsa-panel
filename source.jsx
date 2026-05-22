@@ -6182,6 +6182,12 @@ const BASE_ZONES = [
 // Dynamic custom zones are provided via InvModule state + passed to MapView as prop.
 const ZONES = BASE_ZONES;
 
+// 다른 모듈(presence-tracking 등)에서 스팟 드롭다운에 쓸 수 있게 window 노출
+if (typeof window !== "undefined") {
+  window.__jamsaBaseZones = BASE_ZONES;
+  window.__jamsaCctvAutoMap = CCTV_AUTO_MAP;
+}
+
 // ============================================================
 // 🌦️ 실시간 날씨 + 시설 안전점검 자동 알림 시스템
 // Open-Meteo (무료, API 키 불필요) — 현재 + 단기예보

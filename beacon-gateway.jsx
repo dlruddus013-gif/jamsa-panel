@@ -11,6 +11,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { BeaconAlertRulesPanel, evaluateAndTrigger } from "./beacon-alert-rules.jsx";
+import { processDetectionBatch } from "./presence-log-engine.js";
 
 const REG_KEY = "jamsa_beacons";          // 등록된 비콘 (UUID → zone)
 const HIST_KEY = "jamsa_beacon_history";  // 감지 이력 (최근 N건)
@@ -94,6 +95,16 @@ export function BeaconGatewayModal({ onClose, zones = [], curUser }) {
                 });
                 return next;
               });
+            }
+            // 📋 presence_log 생성 — 게이트웨이↔스팟 매핑이 있으면 자동 기록
+            try {
+              const gws = payload.gatewaySerial || payload.gateway || d.last.gateway;
+              processDetectionBatch({
+                gatewaySerial: gws,
+                beacons: Array.isArray(obj) ? obj : [],
+              });
+            } catch (err) {
+              console.warn("[presence-log] batch failed:", err);
             }
           }
         }

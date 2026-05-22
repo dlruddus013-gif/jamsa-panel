@@ -6,6 +6,7 @@
 //  - 일과별 로그 (ZONE_ENTER / ZONE_DWELL / ZONE_EXIT / IDLE_ALERT)
 // ════════════════════════════════════════════════════════════
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import { getPresenceLogs, analyzeLogWithCctv, buildPerEmployeeWorklog } from "./presence-log-engine.js";
 
 const COLLAPSED_KEY = "jamsa_presence_panel_collapsed";
 const GW_MAP_LOCAL_KEY = "jamsa_gateway_zone_map"; // Supabase 미연결 시 localStorage 폴백
@@ -83,6 +84,78 @@ export function PresenceTrackingPanel() {
   const [filter, setFilter]     = useState("all");  // all / ZONE_ENTER / ZONE_DWELL / IDLE_ALERT
   const [showGwEditor, setShowGwEditor] = useState(false);
   const [now, setNow] = useState(Date.now());
+  // 비콘→스팟 감지 로그 (localStorage 기반, Supabase 없어도 작동)
+  const [localLogs, setLocalLogs] = useState(() => getPresenceLogs());
+  // 새 감지 이벤트 수신 시 로그 갱신
+  useEffect(() => {
+    const onLog = () => setLocalLogs(getPresenceLogs());
+    window.addEventListener("jamsa:presence-log", onLog);
+    window.addEventListener("jamsa:presence-log-updated", onLog);
+    return () => {
+      window.removeEventListener("jamsa:presence-log", onLog);
+      window.removeEventListener("jamsa:presence-log-updated", onLog);
+    };
+  }, []);
+  const [analyzingLogId, setAnalyzingLogId] = useState(null);
+
+  // 오늘 감지 로그를 직원별 업무일지로 자동 변환 → jamsa_worklogs 에 저장
+  const generateDailyWorklogsFromPresence = (logs) => {
+    if (!logs || logs.length === 0) {
+      alert("아직 비콘 감지 로그가 없습니다.\n게이트웨이가 비콘을 감지해야 일지가 생성됩니다.");
+      return;
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const groups = buildPerEmployeeWorklog(today);
+    if (groups.length === 0) {
+      alert("오늘 감지된 직원이 없습니다.\n(비콘이 직원과 매칭돼 있어야 일지가 생성됩니다 — 직원 관리에서 beacon_id 확인)");
+      return;
+    }
+    let existing = [];
+    try { existing = JSON.parse(localStorage.getItem("jamsa_worklogs") || "[]"); } catch (e) {}
+    const newEntries = groups.map(g => ({
+      id: "wl-presence-" + today + "-" + (g.authorId || g.author).replace(/\s+/g, "_"),
+      at: new Date().toISOString(),
+      cycle: "DAILY",
+      period: today,
+      date: today,
+      author: g.author,
+      authorId: g.authorId || null,
+      dept: null,
+      items: g.items.map(it => ({ at: it.at, content: it.content })),
+      generalNote: g.generalNote,
+      signature: "",
+      aiGenerated: true,
+      aiMeta: { source: "presence-tracking", logCount: g.items.length },
+    }));
+    // id 기준 중복 제거 (덮어쓰기)
+    const byId = new Map(existing.map(e => [e.id, e]));
+    newEntries.forEach(e => byId.set(e.id, e));
+    const merged = Array.from(byId.values()).sort((a, b) => (b.at || "").localeCompare(a.at || ""));
+    try { localStorage.setItem("jamsa_worklogs", JSON.stringify(merged)); }
+    catch (e) { alert("저장 실패: " + e.message); return; }
+    alert(`✓ ${newEntries.length}명의 일지를 생성했습니다.\n근무일지 모듈에서 확인하세요.`);
+  };
+
+  // CCTV AI 분석 트리거 — 1건 log 에 대해
+  const runAnalysisForLog = async (logId) => {
+    setAnalyzingLogId(logId);
+    try {
+      const updated = await analyzeLogWithCctv(logId, (ch) => {
+        // CCTV 스냅샷 URL — 기본은 cctv 서버
+        let base = "";
+        try { base = (localStorage.getItem("jamsa_cctv_snap_server") || "").replace(/\/+$/, ""); } catch (e) {}
+        if (!base) base = location.protocol === "https:" ? "https://cctv.thejamsa.com" : "http://localhost:5556";
+        return `${base}/snapshot?channel=${ch}`;
+      });
+      if (!updated) {
+        alert("AI 분석 실패 — CCTV 서버가 꺼져있거나 채널이 없습니다.\n(CCTV 서버 가동 후 다시 시도)");
+      }
+    } catch (e) {
+      alert("분석 오류: " + e.message);
+    } finally {
+      setAnalyzingLogId(null);
+    }
+  };
 
   const supabaseRef = useRef(null);
   const channelRef  = useRef(null);
@@ -227,10 +300,15 @@ export function PresenceTrackingPanel() {
             </div>
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <button onClick={() => setShowGwEditor(true)}
             style={{ padding: "6px 12px", background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.25)", borderRadius: 6, fontSize: 11, fontWeight: 700, color: "#fff", cursor: "pointer" }}>
             ⚙ 게이트웨이 매핑 <span style={{ fontSize: 9, opacity: 0.7 }}>({gwMap.length})</span>
+          </button>
+          <button onClick={() => generateDailyWorklogsFromPresence(localLogs)}
+            title="오늘 비콘 감지 로그를 직원별 업무일지로 자동 생성"
+            style={{ padding: "6px 12px", background: "linear-gradient(135deg,#7c3aed,#0891b2)", border: "1px solid rgba(255,255,255,0.25)", borderRadius: 6, fontSize: 11, fontWeight: 700, color: "#fff", cursor: "pointer" }}>
+            📝 직원별 일지 생성
           </button>
           <button onClick={() => loadAll(supabaseRef.current)}
             title="수동 새로고침"
@@ -336,8 +414,65 @@ export function PresenceTrackingPanel() {
                 ))}
               </div>
             </div>
+            {/* ── 비콘 감지 로그 (localStorage, Supabase 없어도 작동) ── */}
+            {localLogs.length > 0 && (
+              <div style={{ marginBottom: 14, padding: 8, background: "rgba(124,58,237,0.08)", border: "1px solid rgba(124,58,237,0.2)", borderRadius: 6 }}>
+                <div style={{ fontSize: 10, fontWeight: 800, color: "#a78bfa", marginBottom: 6, display: "flex", justifyContent: "space-between" }}>
+                  <span>📡 비콘 감지 ({localLogs.length}건, 최근 20개)</span>
+                  <button onClick={() => { if (confirm("감지 로그를 모두 비우시겠습니까?")) { localStorage.removeItem("jamsa_presence_logs"); setLocalLogs([]); } }}
+                    style={{ background: "transparent", border: "1px solid rgba(167,139,250,0.3)", color: "#c4b5fd", borderRadius: 3, padding: "1px 6px", fontSize: 9, cursor: "pointer" }}>비우기</button>
+                </div>
+                {localLogs.slice(0, 20).map(log => (
+                  <div key={log.id} style={{ padding: "6px 0", borderBottom: "1px dotted rgba(255,255,255,0.05)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11 }}>
+                      <span style={{ color: "#a78bfa", fontFamily: "ui-monospace,monospace", fontSize: 10 }}>
+                        {fmtDateTime(log.at)}
+                      </span>
+                      <span style={{ color: "#f1f5f9", fontWeight: 700 }}>
+                        {log.employeeName || log.beaconName || "비콘 미배정"}
+                      </span>
+                      <span style={{ color: "#64748b" }}>→</span>
+                      <span style={{ color: "#34d399", fontWeight: 700 }}>{log.zoneName}</span>
+                      {log.cctvChannel != null && (
+                        <span style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
+                          <span style={{ fontSize: 10, color: "#67e8f9", background: "rgba(8,145,178,0.2)", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>CH{log.cctvChannel}</span>
+                          {!log.aiAnalysis && (
+                            <button onClick={() => runAnalysisForLog(log.id)}
+                              disabled={analyzingLogId === log.id}
+                              style={{ background: "linear-gradient(135deg,#7c3aed,#0891b2)", color: "#fff", border: "none", borderRadius: 3, padding: "2px 8px", fontSize: 10, fontWeight: 700, cursor: analyzingLogId === log.id ? "wait" : "pointer" }}>
+                              {analyzingLogId === log.id ? "분석 중..." : "🤖 AI 분석"}
+                            </button>
+                          )}
+                        </span>
+                      )}
+                    </div>
+                    {log.aiAnalysis && (
+                      <div style={{ marginTop: 4, padding: 6, background: "rgba(0,0,0,0.25)", borderLeft: `3px solid ${log.aiAnalysis.level === "DANGER" ? "#ef4444" : log.aiAnalysis.level === "WARNING" ? "#f59e0b" : "#10b981"}`, borderRadius: 3, fontSize: 11, lineHeight: 1.5 }}>
+                        <div style={{ fontSize: 9, color: "#a78bfa", fontWeight: 700, marginBottom: 2 }}>
+                          🤖 AI 행동 분석 · {log.aiAnalysis.level || "?"} · {log.aiAnalysis.category || ""}
+                        </div>
+                        <div style={{ color: "#e2e8f0" }}>{log.aiAnalysis.summary}</div>
+                        {log.aiAnalysis.detail && log.aiAnalysis.detail !== log.aiAnalysis.summary && (
+                          <div style={{ color: "#94a3b8", marginTop: 4, fontSize: 10 }}>{log.aiAnalysis.detail}</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
             {filteredActivity.length === 0 ? (
-              <EmptyHint>아직 로그가 없습니다 — 게이트웨이가 비콘을 감지하면 자동 기록됩니다</EmptyHint>
+              localLogs.length === 0 ? (
+                <EmptyHint>
+                  아직 로그가 없습니다 — 게이트웨이가 비콘을 감지하면 자동 기록됩니다
+                  <br/><br/>
+                  <small style={{ color: "#64748b" }}>
+                    💡 매핑은 <strong>⚙ 게이트웨이 매핑</strong>에서 추가하세요.<br/>
+                    💡 BLE 게이트웨이가 <code style={{ background: "rgba(255,255,255,0.05)", padding: "1px 4px", borderRadius: 2 }}>/api/beacon-webhook</code> 으로 비콘을 쏘면 자동 기록.
+                  </small>
+                </EmptyHint>
+              ) : null
             ) : (
               <div>
                 {filteredActivity.map(a => {
@@ -460,11 +595,57 @@ function GatewayZoneEditor({ sb, current, onClose, onSaved }) {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
 
-  // 사용자 정의 zone (jamsa_custom_zones) 도 옵션으로 보여줌
-  const customZones = useMemo(() => {
-    try { return JSON.parse(localStorage.getItem("jamsa_custom_zones") || "[]"); }
-    catch (e) { return []; }
+  // 사용자 정의 zone + BASE_ZONES 모두 합쳐서 드롭다운 옵션으로 노출
+  // (source.jsx 에서 window.__jamsaBaseZones / __jamsaCctvAutoMap 로 노출)
+  const allZones = useMemo(() => {
+    const base = (typeof window !== "undefined" && Array.isArray(window.__jamsaBaseZones))
+      ? window.__jamsaBaseZones : [];
+    let custom = [];
+    try { custom = JSON.parse(localStorage.getItem("jamsa_custom_zones") || "[]"); } catch (e) {}
+    // _deleted 필터 + 중복 제거
+    let zc = {};
+    try { zc = JSON.parse(localStorage.getItem("jamsa_zone_customizations") || "{}"); } catch (e) {}
+    const merged = [...base, ...custom].filter(z => !zc[z.id]?._deleted);
+    // 사용자 커스텀 이름 적용
+    return merged.map(z => ({
+      id: z.id,
+      name: zc[z.id]?.name || z.name,
+      icon: zc[z.id]?.icon || z.icon || "📍",
+    }));
   }, []);
+
+  // CCTV_AUTO_MAP 으로 스팟 선택 시 기본 채널 자동 추천
+  const autoCctvForZone = (zoneId) => {
+    try {
+      // 우선순위 ①: zoneCustomizations 의 cctvChannels (사용자 명시)
+      const zc = JSON.parse(localStorage.getItem("jamsa_zone_customizations") || "{}");
+      const userChs = zc[zoneId]?.cctvChannels;
+      if (Array.isArray(userChs) && userChs.length > 0) return userChs[0];
+      // ②: jamsa_cctv_zone_map (CCTV 편집에서 저장한 값)
+      const cm = JSON.parse(localStorage.getItem("jamsa_cctv_zone_map") || "{}");
+      if (Array.isArray(cm[zoneId]) && cm[zoneId].length > 0) return cm[zoneId][0];
+      // ③: CCTV_AUTO_MAP (코드 기본값)
+      const auto = (typeof window !== "undefined") ? window.__jamsaCctvAutoMap : null;
+      if (auto && Array.isArray(auto[zoneId]) && auto[zoneId].length > 0) return auto[zoneId][0];
+    } catch (e) {}
+    return "";
+  };
+
+  // 구역 선택 시 zone_id / zone_name / cctv_channel 한 번에 설정
+  const handlePickZone = (zoneId) => {
+    if (!zoneId) {
+      setNewRow({ ...newRow, zone_id: "", zone_name: "", cctv_channel: "" });
+      return;
+    }
+    const z = allZones.find(x => x.id === zoneId);
+    if (!z) return;
+    setNewRow({
+      ...newRow,
+      zone_id: z.id,
+      zone_name: z.name,
+      cctv_channel: String(autoCctvForZone(z.id) || ""),
+    });
+  };
 
   // 감지된 게이트웨이 목록 (beacon_detections 에서 distinct)
   const [knownGws, setKnownGws] = useState([]);
@@ -564,12 +745,30 @@ function GatewayZoneEditor({ sb, current, onClose, onSaved }) {
                     const next = [...rows]; next[i].gateway_serial = e.target.value; setRows(next);
                   }} placeholder="게이트웨이 시리얼"
                     style={inputStyle} />
-                  <input value={r.zone_name} onChange={(e) => {
-                    const next = [...rows]; next[i].zone_name = e.target.value;
-                    if (!next[i].zone_id) next[i].zone_id = e.target.value.replace(/\s+/g, "-").toLowerCase();
-                    setRows(next);
-                  }} placeholder="구역명"
-                    style={inputStyle} />
+                  <select value={r.zone_id || ""}
+                    onChange={(e) => {
+                      const next = [...rows];
+                      const z = allZones.find(x => x.id === e.target.value);
+                      if (z) {
+                        next[i].zone_id = z.id;
+                        next[i].zone_name = z.name;
+                        if (!next[i].cctv_channel) next[i].cctv_channel = String(autoCctvForZone(z.id) || "");
+                      } else {
+                        next[i].zone_id = "";
+                        next[i].zone_name = "";
+                      }
+                      setRows(next);
+                    }}
+                    style={{ ...inputStyle, cursor: "pointer" }}>
+                    <option value="">— 스팟 선택 —</option>
+                    {allZones.map(z => (
+                      <option key={z.id} value={z.id}>{z.icon} {z.name}</option>
+                    ))}
+                    {/* 기존에 저장된 zone_id 가 BASE/custom 에 없으면 유지 표시 */}
+                    {r.zone_id && !allZones.find(x => x.id === r.zone_id) && (
+                      <option value={r.zone_id}>⚠ {r.zone_name || r.zone_id} (구역 없음)</option>
+                    )}
+                  </select>
                   <input type="number" value={r.cctv_channel ?? ""} onChange={(e) => {
                     const next = [...rows]; next[i].cctv_channel = e.target.value; setRows(next);
                   }} placeholder="CCTV ch"
@@ -599,12 +798,14 @@ function GatewayZoneEditor({ sb, current, onClose, onSaved }) {
               </datalist>
             </div>
             <div>
-              <input list="known-zones" value={newRow.zone_name}
-                onChange={(e) => setNewRow({ ...newRow, zone_name: e.target.value })}
-                placeholder="구역명 (예: 관리부 사무실)" style={inputStyle} />
-              <datalist id="known-zones">
-                {customZones.map(z => <option key={z.id} value={z.name} />)}
-              </datalist>
+              <select value={newRow.zone_id}
+                onChange={(e) => handlePickZone(e.target.value)}
+                style={{ ...inputStyle, cursor: "pointer" }}>
+                <option value="">— 스팟 선택 —</option>
+                {allZones.map(z => (
+                  <option key={z.id} value={z.id}>{z.icon} {z.name}</option>
+                ))}
+              </select>
             </div>
             <input type="number" value={newRow.cctv_channel}
               onChange={(e) => setNewRow({ ...newRow, cctv_channel: e.target.value })}
