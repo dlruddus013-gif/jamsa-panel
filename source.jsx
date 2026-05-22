@@ -23337,22 +23337,29 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
       return;
     }
 
-    // ✨ 구역 → CCTV 채널 매핑: cctvMap(localStorage) 직접 사용 — CCTV 오버레이 OFF여도 동작
-    //    cctvSnapshotData는 라이브 분석 결과만 보조로 사용
+    // ✨ 구역 → CCTV 채널 매핑
+    //    우선순위: ① 편집패널 cctvChannels(zoneCustomizations) → ② cctvMap → ③ chToZone 역방향
     const _snaps = cctvSnapshotData?.snapshots || {};
     const _ana = cctvSnapshotData?.analyses || {};
-    // 오버레이 토글과 무관하게 spot 위 영상은 항상 표시 (매핑된 채널이 있을 때만)
     const _cctvEnabled = true;
-    // cctvMap은 부모 state — { zoneId: [ch1, ch2, ...] } 직접 구조
     const _zoneToCh = {};
+    // ① 편집 패널에서 저장한 cctvChannels (최우선)
+    zoneStatus.forEach(s => {
+      const _zChs = s.zone?.cctvChannels;
+      if (Array.isArray(_zChs) && _zChs.length > 0) {
+        _zoneToCh[s.zone.id] = _zChs.map(c => parseInt(c, 10)).filter(n => !isNaN(n)).sort((a, b) => a - b);
+      }
+    });
+    // ② cctvMap — 편집패널 채널이 없는 zone만 보완
     if (cctvMap && typeof cctvMap === "object") {
       Object.entries(cctvMap).forEach(([zid, chs]) => {
+        if (_zoneToCh[zid]) return; // 이미 cctvChannels로 설정된 zone은 건너뜀
         if (Array.isArray(chs) && chs.length > 0) {
           _zoneToCh[zid] = chs.map(c => parseInt(c, 10)).filter(n => !isNaN(n)).sort((a, b) => a - b);
         }
       });
     }
-    // CCTV 라이브 오버레이가 켜져있으면 chToZone 정보도 보강 (역방향 추론)
+    // ③ CCTV 라이브 오버레이 역방향 추론 (편집/cctvMap에 없는 경우만)
     if (cctvSnapshotData?.chToZone) {
       Object.entries(cctvSnapshotData.chToZone).forEach(([ch, zid]) => {
         const chNum = parseInt(ch, 10);
@@ -23361,17 +23368,6 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         if (!_zoneToCh[zid].includes(chNum)) _zoneToCh[zid].push(chNum);
       });
     }
-    // 🆕 스팟 편집 패널에서 저장한 cctvChannels(zoneCustomizations)도 합쳐 표시
-    zoneStatus.forEach(s => {
-      const _zChs = s.zone?.cctvChannels;
-      if (!Array.isArray(_zChs) || _zChs.length === 0) return;
-      if (!_zoneToCh[s.zone.id]) _zoneToCh[s.zone.id] = [];
-      _zChs.forEach(c => {
-        const cn = parseInt(c, 10);
-        if (!isNaN(cn) && !_zoneToCh[s.zone.id].includes(cn)) _zoneToCh[s.zone.id].push(cn);
-      });
-      _zoneToCh[s.zone.id].sort((a, b) => a - b);
-    });
 
     // 🌐 지도 펼치기: 좁은 영역에 몰린 스팟의 화면 표시 좌표를 centroid에서 방사형으로 확대
     //    실제 좌표(z.lat/z.lng)는 보존, _displayLatLng()만 변환
@@ -26768,18 +26764,29 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
     markersRef.current.forEach(m => map.removeLayer(m));
     markersRef.current = [];
 
-    // ✨ 구역 → CCTV 채널 매핑: cctvMap(localStorage) 직접 사용 — 오버레이 OFF여도 동작
+    // ✨ 구역 → CCTV 채널 매핑
+    //    우선순위: ① 편집패널 cctvChannels → ② cctvMap → ③ chToZone 역방향
     const snaps = cctvSnapshotData?.snapshots || {};
     const ana = cctvSnapshotData?.analyses || {};
-    const cctvEnabled = true; // spot 위 영상은 오버레이 토글과 무관하게 항상 시도
+    const cctvEnabled = true;
     const zoneToCh = {};
+    // ① 편집 패널에서 저장한 cctvChannels (최우선)
+    zoneStatus.forEach(s => {
+      const _zChs = s.zone?.cctvChannels;
+      if (Array.isArray(_zChs) && _zChs.length > 0) {
+        zoneToCh[s.zone.id] = _zChs.map(c => parseInt(c, 10)).filter(n => !isNaN(n)).sort((a, b) => a - b);
+      }
+    });
+    // ② cctvMap — 편집패널 채널이 없는 zone만 보완
     if (cctvMap && typeof cctvMap === "object") {
       Object.entries(cctvMap).forEach(([zid, chs]) => {
+        if (zoneToCh[zid]) return;
         if (Array.isArray(chs) && chs.length > 0) {
           zoneToCh[zid] = chs.map(c => parseInt(c, 10)).filter(n => !isNaN(n)).sort((a, b) => a - b);
         }
       });
     }
+    // ③ chToZone 역방향 (편집/cctvMap에 없는 경우만)
     if (cctvSnapshotData?.chToZone) {
       Object.entries(cctvSnapshotData.chToZone).forEach(([ch, zid]) => {
         const chNum = parseInt(ch, 10);
@@ -26788,17 +26795,6 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
         if (!zoneToCh[zid].includes(chNum)) zoneToCh[zid].push(chNum);
       });
     }
-    // 🆕 스팟 편집 패널에서 저장한 cctvChannels(zoneCustomizations)도 합쳐 표시
-    zoneStatus.forEach(s => {
-      const _zChs = s.zone?.cctvChannels;
-      if (!Array.isArray(_zChs) || _zChs.length === 0) return;
-      if (!zoneToCh[s.zone.id]) zoneToCh[s.zone.id] = [];
-      _zChs.forEach(c => {
-        const cn = parseInt(c, 10);
-        if (!isNaN(cn) && !zoneToCh[s.zone.id].includes(cn)) zoneToCh[s.zone.id].push(cn);
-      });
-      zoneToCh[s.zone.id].sort((a, b) => a - b);
-    });
 
     // 🌐 지도 펼치기: centroid에서 방사형으로 화면 표시 좌표 확대 (실제 좌표는 보존)
     const _validZ = zoneStatus.filter(s => s.zone?.lat && s.zone?.lng);
