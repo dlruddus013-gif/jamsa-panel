@@ -28631,6 +28631,489 @@ function LawyerAuditView({ userCtx }) {
   );
 }
 
+/* ══════════════════════════════════════════════════════════
+ * WorkScheduleModule — 근무일지 + 출퇴근 캘린더 + 자동알림
+ * ══════════════════════════════════════════════════════════ */
+const DEFAULT_SCHEDULE_DATA = {
+  "2026-05": {
+    employees: [
+      {
+        name: "김효진",
+        offDays: [
+          "2026-05-07","2026-05-11","2026-05-12",
+          "2026-05-20","2026-05-21","2026-05-25","2026-05-27"
+        ]
+      },
+      {
+        name: "윤찬미",
+        offDays: [
+          "2026-05-06","2026-05-11","2026-05-13","2026-05-15",
+          "2026-05-17","2026-05-18","2026-05-19","2026-05-23",
+          "2026-05-24","2026-05-25"
+        ]
+      },
+      {
+        name: "윤승수",
+        offDays: [
+          "2026-05-06","2026-05-08","2026-05-11","2026-05-14",
+          "2026-05-17","2026-05-18","2026-05-25","2026-05-26"
+        ]
+      }
+    ],
+    events: [
+      { date: "2026-05-07", text: "진흥초등학교(42+4)[단체식:45개]", highlight: true },
+      { date: "2026-05-08", text: "바움(72+11)다육이테라리움+오디주스 / 대전성남(35+42)" },
+      { date: "2026-05-09", text: "*수원 출장" },
+      { date: "2026-05-10", text: "*수원 출장" },
+      { date: "2026-05-13", text: "세종고운(29+4)" },
+      { date: "2026-05-14", text: "덕벌초(36+3)[단체식]젤캔들", highlight: true },
+      { date: "2026-05-15", text: "바움(58+5)다육이테라리움+오디주스 / 크는나무(8+3) / 색동유치원(79+10)" },
+      { date: "2026-05-19", text: "창신초(110+12)젤캔들,가이드" },
+      { date: "2026-05-20", text: "엘피스어린이집(35+7)" },
+      { date: "2026-05-22", text: "바움(75+22)다육이테라리움+오디주스 / 봉명중(30+3)오디크래커" },
+      { date: "2026-05-27", text: "한마음주간보호센터(40+15) / 늘사랑유치원(51+3)" }
+    ]
+  }
+};
+
+function WorkScheduleModule({ currentUser }) {
+  const [tab, setTab] = useState("schedule");
+  const [viewMonth, setViewMonth] = useState("2026-05");
+  const [scheduleData, setScheduleData] = useLocalStorage("jamsa_work_schedules_v1", DEFAULT_SCHEDULE_DATA);
+  const [attendanceRecords, setAttendanceRecords] = useLocalStorage("jamsa_attendance_v1", []);
+  const [alertDismissed, setAlertDismissed] = useLocalStorage("jamsa_schedule_alert_dismissed", {});
+  const [showAddEmployee, setShowAddEmployee] = useState(false);
+  const [newEmpName, setNewEmpName] = useState("");
+  const [editMode, setEditMode] = useState(false);
+  const [addClockModal, setAddClockModal] = useState(null);
+  const [clockTime, setClockTime] = useState("");
+  const [clockType, setClockType] = useState("in");
+
+  const today = new Date();
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
+  const currentMonthKey = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}`;
+
+  const monthSchedule = scheduleData[viewMonth] || { employees: [], events: [] };
+  const employees = monthSchedule.employees || [];
+  const events = monthSchedule.events || [];
+
+  const [yearStr, monthStr] = viewMonth.split("-");
+  const year = parseInt(yearStr), month = parseInt(monthStr);
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const allDays = Array.from({ length: daysInMonth }, (_, i) => {
+    const d = i + 1;
+    const dateStr = `${viewMonth}-${String(d).padStart(2,"0")}`;
+    const dow = new Date(year, month - 1, d).getDay();
+    const dowLabel = ["일","월","화","수","목","금","토"][dow];
+    return { d, dateStr, dow, dowLabel };
+  });
+
+  // 자동 미출근 알림
+  const todayMonthKey = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}`;
+  const todaySchedule = scheduleData[todayMonthKey] || { employees: [] };
+  const alertThresholdHour = 10;
+  const isPastAlertTime = today.getHours() >= alertThresholdHour;
+  const missedClockIns = isPastAlertTime ? (todaySchedule.employees || []).filter(emp => {
+    if ((emp.offDays || []).includes(todayStr)) return false;
+    return !attendanceRecords.some(r => r.date === todayStr && r.employeeName === emp.name && r.clockIn);
+  }) : [];
+  const showAlert = missedClockIns.length > 0 && !alertDismissed[todayStr];
+
+  const toggleOffDay = (empIdx, dateStr) => {
+    setScheduleData(prev => {
+      const monthData = { ...(prev[viewMonth] || { employees: [], events: [] }) };
+      const emps = [...(monthData.employees || [])];
+      const emp = { ...emps[empIdx] };
+      const offDays = [...(emp.offDays || [])];
+      const idx = offDays.indexOf(dateStr);
+      if (idx >= 0) offDays.splice(idx, 1);
+      else offDays.push(dateStr);
+      emp.offDays = offDays;
+      emps[empIdx] = emp;
+      monthData.employees = emps;
+      return { ...prev, [viewMonth]: monthData };
+    });
+  };
+
+  const addEmployee = () => {
+    if (!newEmpName.trim()) return;
+    setScheduleData(prev => {
+      const monthData = { ...(prev[viewMonth] || { employees: [], events: [] }) };
+      monthData.employees = [...(monthData.employees || []), { name: newEmpName.trim(), offDays: [] }];
+      return { ...prev, [viewMonth]: monthData };
+    });
+    setNewEmpName("");
+    setShowAddEmployee(false);
+  };
+
+  const addAttendance = () => {
+    if (!clockTime || !addClockModal) return;
+    setAttendanceRecords(prev => {
+      const existing = prev.find(r => r.date === addClockModal.date && r.employeeName === addClockModal.employeeName);
+      if (existing) {
+        return prev.map(r => r.date === addClockModal.date && r.employeeName === addClockModal.employeeName
+          ? { ...r, [clockType === "in" ? "clockIn" : "clockOut"]: clockTime }
+          : r
+        );
+      }
+      return [...prev, {
+        id: "att" + Date.now(),
+        date: addClockModal.date,
+        employeeName: addClockModal.employeeName,
+        clockIn: clockType === "in" ? clockTime : null,
+        clockOut: clockType === "out" ? clockTime : null,
+        method: "manual"
+      }];
+    });
+    setAddClockModal(null);
+    setClockTime("");
+  };
+
+  const navigateMonth = (delta) => {
+    const [y, m] = viewMonth.split("-").map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    setViewMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`);
+  };
+
+  const copyToNextMonth = () => {
+    const [y, m] = viewMonth.split("-").map(Number);
+    const next = new Date(y, m, 1);
+    const nextKey = `${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,"0")}`;
+    if (scheduleData[nextKey] && !confirm(`${nextKey} 월 일정이 이미 있습니다. 덮어쓸까요?`)) return;
+    setScheduleData(prev => ({
+      ...prev,
+      [nextKey]: { employees: (prev[viewMonth]?.employees || []).map(e => ({ ...e, offDays: [] })), events: [] }
+    }));
+    setViewMonth(nextKey);
+  };
+
+  const dowColor = (dow) => dow === 0 ? "#ef4444" : dow === 6 ? "#3b82f6" : "#374151";
+
+  return (
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "#f8fafc" }}>
+      {/* 자동 미출근 알림 배너 */}
+      {showAlert && (
+        <div style={{ background: "linear-gradient(135deg,#dc2626,#b91c1c)", color: "#fff", padding: "10px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0, gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 20 }}>🔔</span>
+            <div>
+              <div style={{ fontWeight: 800, fontSize: 14 }}>미출근 알림 — {todayStr}</div>
+              <div style={{ fontSize: 12, opacity: 0.9 }}>
+                출근 예정이지만 미출근: <strong>{missedClockIns.map(e => e.name).join(", ")}</strong>
+                <span style={{ marginLeft: 8, opacity: 0.75 }}>(오전 {alertThresholdHour}시 이후 기준)</span>
+              </div>
+            </div>
+          </div>
+          <button onClick={() => setAlertDismissed(prev => ({ ...prev, [todayStr]: true }))}
+            style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", borderRadius: 6, padding: "5px 14px", cursor: "pointer", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
+            확인
+          </button>
+        </div>
+      )}
+
+      {/* 헤더 */}
+      <div style={{ background: "#fff", borderBottom: "1px solid #e2e8f0", padding: "12px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 18, fontWeight: 800, color: "#0f172a" }}>📅 근무일지 관리</div>
+          <div style={{ display: "flex", gap: 2, background: "#f1f5f9", padding: 3, borderRadius: 8 }}>
+            {[{k:"schedule",l:"📋 근무일지"},{k:"calendar",l:"🗓 출퇴근 캘린더"},{k:"alerts",l:"🔔 알림 현황"}].map(t => (
+              <button key={t.k} onClick={() => setTab(t.k)}
+                style={{ padding: "6px 14px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
+                  background: tab === t.k ? "#0f172a" : "transparent", color: tab === t.k ? "#fff" : "#64748b" }}>
+                {t.l}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button onClick={() => navigateMonth(-1)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #e2e8f0", background: "#fff", cursor: "pointer", fontSize: 14 }}>‹</button>
+          <span style={{ fontSize: 14, fontWeight: 800, color: "#1e293b", minWidth: 80, textAlign: "center" }}>{viewMonth}</span>
+          <button onClick={() => navigateMonth(1)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #e2e8f0", background: "#fff", cursor: "pointer", fontSize: 14 }}>›</button>
+          <button onClick={() => setViewMonth(currentMonthKey)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#f8fafc", cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#475569" }}>이번달</button>
+          {tab === "schedule" && (
+            <button onClick={() => setEditMode(e => !e)}
+              style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: editMode ? "#0f172a" : "#e2e8f0", color: editMode ? "#fff" : "#475569", cursor: "pointer", fontSize: 11, fontWeight: 800 }}>
+              {editMode ? "✅ 편집 완료" : "✏️ 편집"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* 콘텐츠 */}
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 20 }}>
+
+        {/* ── 근무일지 탭 ── */}
+        {tab === "schedule" && (
+          <div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ borderCollapse: "collapse", fontSize: 12, minWidth: 900 }}>
+                <thead>
+                  <tr>
+                    <th style={{ position: "sticky", left: 0, background: "#1e293b", color: "#fff", padding: "8px 16px", textAlign: "left", zIndex: 2, minWidth: 90, fontWeight: 800 }}>직원</th>
+                    {allDays.map(({ d, dowLabel, dow }) => (
+                      <th key={d} style={{ background: dow === 0 ? "#fef2f2" : dow === 6 ? "#eff6ff" : "#f8fafc", color: dowColor(dow), padding: "6px 4px", textAlign: "center", borderLeft: "1px solid #e2e8f0", minWidth: 40, fontSize: 11, fontWeight: 700 }}>
+                        <div>{d}</div>
+                        <div style={{ fontSize: 9 }}>{dowLabel}</div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {employees.map((emp, empIdx) => (
+                    <tr key={emp.name}>
+                      <td style={{ position: "sticky", left: 0, background: "#fff", borderBottom: "1px solid #f1f5f9", padding: "8px 16px", fontWeight: 700, color: "#1e293b", zIndex: 1, whiteSpace: "nowrap" }}>{emp.name}</td>
+                      {allDays.map(({ d, dateStr, dow }) => {
+                        const isOff = (emp.offDays || []).includes(dateStr);
+                        const isToday = dateStr === todayStr;
+                        const hasRecord = attendanceRecords.find(r => r.date === dateStr && r.employeeName === emp.name);
+                        return (
+                          <td key={d} onClick={() => editMode && toggleOffDay(empIdx, dateStr)}
+                            title={editMode ? "클릭하여 근무/휴무 전환" : undefined}
+                            style={{ border: "1px solid #f1f5f9", textAlign: "center", padding: "6px 2px", cursor: editMode ? "pointer" : "default",
+                              background: isToday ? "#fef9c3" : dow === 0 ? "#fef2f2" : dow === 6 ? "#eff6ff" : isOff ? "#fafafa" : "#fff" }}>
+                            {isOff ? (
+                              <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600 }}>휴무</span>
+                            ) : (
+                              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                                <span style={{ fontSize: 10, color: "#10b981", fontWeight: 700 }}>근무</span>
+                                {hasRecord?.clockIn && <span style={{ fontSize: 8, color: "#6366f1" }}>✓</span>}
+                              </div>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                  {/* 행사/방문 행 */}
+                  <tr style={{ background: "#fffbeb" }}>
+                    <td style={{ position: "sticky", left: 0, background: "#fffbeb", padding: "8px 16px", fontWeight: 700, color: "#92400e", fontSize: 11, zIndex: 1, whiteSpace: "nowrap" }}>📌 행사/방문</td>
+                    {allDays.map(({ d, dateStr }) => {
+                      const ev = events.find(e => e.date === dateStr);
+                      return (
+                        <td key={d} style={{ border: "1px solid #f1f5f9", textAlign: "center", padding: "4px 2px", verticalAlign: "top",
+                          background: ev?.highlight ? "#fef08a" : dateStr === todayStr ? "#fef9c3" : undefined }}>
+                          {ev && (
+                            <div title={ev.text} style={{ fontSize: 8, color: "#92400e", lineHeight: 1.3, overflow: "hidden", maxWidth: 38, textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {ev.text}
+                            </div>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* 편집 모드 도구 */}
+            {editMode && (
+              <div style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <div style={{ fontSize: 12, color: "#64748b", padding: "6px 12px", background: "#f1f5f9", borderRadius: 8 }}>
+                  ✏️ 셀 클릭으로 근무↔휴무 전환
+                </div>
+                {!showAddEmployee ? (
+                  <button onClick={() => setShowAddEmployee(true)}
+                    style={{ padding: "6px 14px", borderRadius: 8, border: "1px dashed #94a3b8", background: "#fff", color: "#475569", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+                    + 직원 추가
+                  </button>
+                ) : (
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input value={newEmpName} onChange={e => setNewEmpName(e.target.value)} placeholder="직원 이름"
+                      onKeyDown={e => e.key === "Enter" && addEmployee()}
+                      style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12 }} />
+                    <button onClick={addEmployee} style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: "#0f172a", color: "#fff", cursor: "pointer", fontSize: 12 }}>추가</button>
+                    <button onClick={() => setShowAddEmployee(false)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #e2e8f0", background: "#fff", cursor: "pointer", fontSize: 12 }}>취소</button>
+                  </div>
+                )}
+                <button onClick={copyToNextMonth}
+                  style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff", color: "#475569", cursor: "pointer", fontSize: 12 }}>
+                  📋 다음달 복사
+                </button>
+              </div>
+            )}
+
+            {/* 이달 통계 */}
+            <div style={{ marginTop: 20, display: "flex", gap: 16, flexWrap: "wrap" }}>
+              {employees.map(emp => {
+                const workDays = allDays.filter(({ dateStr }) => !(emp.offDays || []).includes(dateStr)).length;
+                const offDays = (emp.offDays || []).length;
+                const clockedDays = [...new Set(attendanceRecords.filter(r => r.date.startsWith(viewMonth) && r.employeeName === emp.name && r.clockIn).map(r => r.date))].length;
+                return (
+                  <div key={emp.name} style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: "12px 18px", minWidth: 160 }}>
+                    <div style={{ fontWeight: 800, color: "#1e293b", fontSize: 14, marginBottom: 6 }}>{emp.name}</div>
+                    <div style={{ fontSize: 12, color: "#10b981", fontWeight: 700 }}>근무 예정: {workDays}일</div>
+                    <div style={{ fontSize: 12, color: "#94a3b8" }}>휴무: {offDays}일</div>
+                    <div style={{ fontSize: 12, color: "#6366f1" }}>출근 기록: {clockedDays}일</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ── 출퇴근 캘린더 탭 ── */}
+        {tab === "calendar" && (() => {
+          const firstDow = new Date(year, month - 1, 1).getDay();
+          const weeks = [];
+          let week = Array(firstDow).fill(null);
+          for (let d = 1; d <= daysInMonth; d++) {
+            const dateStr = `${viewMonth}-${String(d).padStart(2,"0")}`;
+            const dow = new Date(year, month - 1, d).getDay();
+            week.push({ d, dateStr, dow });
+            if (dow === 6 || d === daysInMonth) {
+              while (week.length < 7) week.push(null);
+              weeks.push(week);
+              week = [];
+            }
+          }
+          return (
+            <div>
+              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>날짜 클릭으로 출퇴근 기록 추가</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4, marginBottom: 6 }}>
+                {["일","월","화","수","목","금","토"].map((d, i) => (
+                  <div key={d} style={{ textAlign: "center", fontSize: 11, fontWeight: 800, color: i===0?"#ef4444":i===6?"#3b82f6":"#64748b", padding: "4px 0" }}>{d}</div>
+                ))}
+              </div>
+              {weeks.map((wk, wi) => (
+                <div key={wi} style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4, marginBottom: 4 }}>
+                  {wk.map((cell, di) => {
+                    if (!cell) return <div key={di} />;
+                    const { d, dateStr, dow } = cell;
+                    const isToday = dateStr === todayStr;
+                    const dayEv = events.find(e => e.date === dateStr);
+                    const workingEmps = employees.filter(emp => !(emp.offDays || []).includes(dateStr));
+                    return (
+                      <div key={di}
+                        style={{ background: isToday ? "#fef9c3" : "#fff", border: `1px solid ${isToday?"#f59e0b":"#e2e8f0"}`, borderRadius: 8, padding: "6px 8px", minHeight: 90, cursor: workingEmps.length > 0 ? "pointer" : "default", fontSize: 11 }}
+                        onClick={() => { if (workingEmps.length > 0) { setAddClockModal({ date: dateStr, employeeName: workingEmps[0].name }); setClockType("in"); setClockTime(""); } }}>
+                        <div style={{ fontWeight: 800, color: dow===0?"#ef4444":dow===6?"#3b82f6":"#1e293b", marginBottom: 2 }}>{d}</div>
+                        {dayEv && (
+                          <div title={dayEv.text} style={{ fontSize: 8, color: "#92400e", background: dayEv.highlight?"#fef08a":"#fffbeb", borderRadius: 3, padding: "1px 4px", marginBottom: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            📌 {dayEv.text}
+                          </div>
+                        )}
+                        {employees.map(emp => {
+                          const isOff = (emp.offDays || []).includes(dateStr);
+                          const rec = attendanceRecords.find(r => r.date === dateStr && r.employeeName === emp.name);
+                          if (isOff) return <div key={emp.name} style={{ fontSize: 9, color: "#cbd5e1" }}>{emp.name} 휴</div>;
+                          return (
+                            <div key={emp.name} style={{ fontSize: 9, fontWeight: 700, color: rec?.clockIn ? "#10b981" : "#f59e0b" }}>
+                              {emp.name}: {rec?.clockIn ? `IN ${rec.clockIn}` : "미기록"}{rec?.clockOut ? ` OUT ${rec.clockOut}` : ""}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+
+        {/* ── 알림 현황 탭 ── */}
+        {tab === "alerts" && (
+          <div style={{ maxWidth: 620 }}>
+            <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 20, marginBottom: 16 }}>
+              <div style={{ fontWeight: 800, fontSize: 15, color: "#1e293b", marginBottom: 12 }}>🔔 자동 미출근 알림</div>
+              <div style={{ fontSize: 13, color: "#475569", marginBottom: 16 }}>
+                출근 예정 직원이 오전 {alertThresholdHour}시 이후에도 출근 기록이 없으면 상단에 알림 배너를 표시합니다.
+              </div>
+              <div style={{ padding: "10px 14px", background: "#f8fafc", borderRadius: 8, fontSize: 12, color: "#64748b", marginBottom: 10 }}>
+                오늘 ({todayStr}) 출근 예정:&nbsp;
+                <strong style={{ color: "#1e293b" }}>
+                  {(todaySchedule.employees || []).filter(emp => !(emp.offDays || []).includes(todayStr)).map(e => e.name).join(", ") || "없음"}
+                </strong>
+              </div>
+              {missedClockIns.length > 0 ? (
+                <div style={{ padding: "10px 14px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#dc2626", marginBottom: 4 }}>⚠️ 현재 미출근 ({todayStr})</div>
+                  {missedClockIns.map(emp => <div key={emp.name} style={{ fontSize: 12, color: "#991b1b" }}>• {emp.name}</div>)}
+                </div>
+              ) : isPastAlertTime ? (
+                <div style={{ padding: "10px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, fontSize: 12, color: "#15803d", fontWeight: 700 }}>
+                  ✅ 오늘 출근 예정 직원 모두 출근 기록 완료
+                </div>
+              ) : (
+                <div style={{ padding: "10px 14px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, fontSize: 12, color: "#1d4ed8" }}>
+                  ⏰ 오전 {alertThresholdHour}시 이전 — 아직 알림 기준 시각이 아닙니다
+                </div>
+              )}
+            </div>
+
+            {/* 이달 출퇴근 현황 요약 */}
+            <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 20 }}>
+              <div style={{ fontWeight: 800, fontSize: 14, color: "#1e293b", marginBottom: 14 }}>📊 {viewMonth} 출퇴근 현황</div>
+              {employees.length === 0 && <div style={{ fontSize: 13, color: "#94a3b8" }}>직원 데이터 없음</div>}
+              {employees.map(emp => {
+                const empRecs = attendanceRecords.filter(r => r.date.startsWith(viewMonth) && r.employeeName === emp.name);
+                const workDays = allDays.filter(({ dateStr }) => !(emp.offDays || []).includes(dateStr));
+                const past = workDays.filter(({ dateStr }) => dateStr <= todayStr);
+                const clocked = past.filter(({ dateStr }) => empRecs.find(r => r.date === dateStr && r.clockIn));
+                const missing = past.filter(({ dateStr }) => !empRecs.find(r => r.date === dateStr && r.clockIn));
+                return (
+                  <div key={emp.name} style={{ marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid #f1f5f9" }}>
+                    <div style={{ fontWeight: 700, color: "#1e293b", marginBottom: 4 }}>{emp.name}</div>
+                    <div style={{ display: "flex", gap: 14, fontSize: 12, flexWrap: "wrap" }}>
+                      <span style={{ color: "#10b981" }}>출근 기록: {clocked.length}/{past.length}일</span>
+                      {missing.length > 0 && <span style={{ color: "#ef4444" }}>미기록 날짜: {missing.map(d => `${d.d}일`).join(", ")}</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 출퇴근 기록 추가 모달 */}
+      {addClockModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#fff", borderRadius: 16, padding: 24, width: 340, boxShadow: "0 20px 60px rgba(0,0,0,0.15)" }}>
+            <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 16, color: "#1e293b" }}>출퇴근 기록 추가</div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: "#475569", display: "block", marginBottom: 4 }}>날짜</label>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#1e293b" }}>{addClockModal.date}</div>
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: "#475569", display: "block", marginBottom: 4 }}>직원</label>
+              <select value={addClockModal.employeeName} onChange={e => setAddClockModal(m => ({ ...m, employeeName: e.target.value }))}
+                style={{ width: "100%", padding: "6px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13 }}>
+                {employees.filter(emp => !(emp.offDays || []).includes(addClockModal.date)).map(emp => (
+                  <option key={emp.name} value={emp.name}>{emp.name}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ marginBottom: 12, display: "flex", gap: 8 }}>
+              <button onClick={() => setClockType("in")} style={{ flex: 1, padding: 8, borderRadius: 8, border: `2px solid ${clockType==="in"?"#10b981":"#e2e8f0"}`, background: clockType==="in"?"#f0fdf4":"#fff", color: clockType==="in"?"#10b981":"#94a3b8", fontWeight: 700, cursor: "pointer", fontSize: 12 }}>
+                출근 IN
+              </button>
+              <button onClick={() => setClockType("out")} style={{ flex: 1, padding: 8, borderRadius: 8, border: `2px solid ${clockType==="out"?"#ef4444":"#e2e8f0"}`, background: clockType==="out"?"#fef2f2":"#fff", color: clockType==="out"?"#ef4444":"#94a3b8", fontWeight: 700, cursor: "pointer", fontSize: 12 }}>
+                퇴근 OUT
+              </button>
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: "#475569", display: "block", marginBottom: 4 }}>시각</label>
+              <input type="time" value={clockTime} onChange={e => setClockTime(e.target.value)}
+                style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 14, fontWeight: 700 }} />
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={addAttendance} disabled={!clockTime}
+                style={{ flex: 1, padding: 10, borderRadius: 8, border: "none", background: clockTime?"#0f172a":"#e2e8f0", color: clockTime?"#fff":"#94a3b8", fontWeight: 800, cursor: clockTime?"pointer":"not-allowed", fontSize: 13 }}>
+                저장
+              </button>
+              <button onClick={() => setAddClockModal(null)}
+                style={{ padding: "10px 18px", borderRadius: 8, border: "1px solid #e2e8f0", background: "#fff", color: "#64748b", cursor: "pointer", fontSize: 13 }}>
+                취소
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AppInner() {
   const [currentUser, setCurrentUser] = useState(() => {
     // localStorage에 저장된 사용자가 있으면 즉시 복원
@@ -28675,11 +29158,11 @@ function AppInner() {
   const getInitialModule = () => {
     try {
       const hashModule = window.location.hash.replace(/^#/, "");
-      if (["home", "facility", "inventory", "safety", "subagents", "clouddb"].includes(hashModule)) return hashModule;
+      if (["home", "facility", "inventory", "safety", "subagents", "clouddb", "schedule"].includes(hashModule)) return hashModule;
     } catch (e) {}
     return "home";
   };
-  const [module, setModule] = useState(getInitialModule); // "home" | "facility" | "inventory" | "safety" | "subagents" | "clouddb"
+  const [module, setModule] = useState(getInitialModule); // "home" | "facility" | "inventory" | "safety" | "subagents" | "clouddb" | "schedule"
 
   // 🤖 AI 작업 도우미 액션 디스패처 — 검색바 챗봇의 action 버튼이 jamsa-ai-action 이벤트 발행
   useEffect(() => {
@@ -28717,7 +29200,7 @@ function AppInner() {
   useEffect(() => {
     const onHashChange = () => {
       const hashModule = window.location.hash.replace(/^#/, "");
-      if (["home", "facility", "inventory", "safety", "subagents", "clouddb"].includes(hashModule)) setModule(hashModule);
+      if (["home", "facility", "inventory", "safety", "subagents", "clouddb", "schedule"].includes(hashModule)) setModule(hashModule);
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
@@ -28873,6 +29356,12 @@ function AppInner() {
                 color: "#fff", display: "flex", alignItems: "center", gap: 4 }}>
               📹 CCTV 관제 <span style={{ fontSize: 9, opacity: 0.8 }}>↗</span>
             </button>
+            <button data-jamsa-module="schedule" onClick={() => setModule("schedule")}
+              style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
+                background: module === "schedule" ? "linear-gradient(135deg,#7c3aed,#0891b2)" : "transparent",
+                color: module === "schedule" ? "#fff" : "rgba(255,255,255,0.6)" }}>
+              📅 근무일지
+            </button>
             <a href="/attendance" target="_blank" rel="noopener" title="BLE 출퇴근 시스템 (별도 탭)"
               style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
                 background: "linear-gradient(135deg,#10b981,#059669)",
@@ -28938,6 +29427,7 @@ function AppInner() {
         {module === "inventory" && <InventoryModule userCtx={invUser} onLogout={logout} onAddFacAction={addFacAction} switchToFacility={() => setModule("facility")} facActions={facActions} addAudit={addAudit} />}
         {module === "safety"    && <SafetyModule userCtx={facUser} onLogout={logout} facilities={FAC_FACILITIES} onAddFacAction={addFacAction} addAudit={addAudit} worklogs={worklogs} facActions={facActions} auditLog={auditLog} />}
         {module === "clouddb"   && <CloudDatabasePage />}
+        {module === "schedule"  && <WorkScheduleModule currentUser={currentUser} />}
         {module === "subagents" && <AutoSubAgentPage
           report={autoAgentReport}
           enabled={autoAgentEnabled}
