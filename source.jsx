@@ -23377,8 +23377,10 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           _cctvBorder = "#f59e0b";
           _cctvAnim = "animation:cctvWarnPulse 1.6s infinite;";
         }
-        // 편집 모드일 때 클릭 핸들러 (드래그 대신)
-        const _cctvClick = cctvEditMode && _firstCh ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${_firstCh})"` : '';
+        // 편집 모드일 때 클릭 핸들러 (드래그 대신) — 평상시엔 클릭으로 확대/축소 토글
+        const _cctvClick = cctvEditMode && _firstCh
+          ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${_firstCh})"`
+          : `onclick="event.stopPropagation();this.classList.toggle('expanded')"`;
         const _cctvBorderEdit = cctvEditMode ? "2px dashed #fbbf24" : `2px solid ${_cctvBorder}`;
         const _cctvBoxShadowEdit = cctvEditMode ? "0 0 0 3px rgba(251,191,36,0.4),0 4px 12px rgba(0,0,0,0.4)" : "0 4px 12px rgba(0,0,0,0.4)";
         const _cctvCursor = cctvEditMode ? "pointer" : "pointer";
@@ -23543,8 +23545,10 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         @keyframes cctvDangerPulse { 0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,0.7),0 4px 12px rgba(0,0,0,0.4)} 50%{box-shadow:0 0 0 10px rgba(220,38,38,0),0 4px 12px rgba(0,0,0,0.4)} }
         @keyframes cctvWarnPulse { 0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,0.7),0 4px 12px rgba(0,0,0,0.4)} 50%{box-shadow:0 0 0 8px rgba(245,158,11,0),0 4px 12px rgba(0,0,0,0.4)} }
         @keyframes cctvLiveBlink { 0%,100%{opacity:1} 50%{opacity:0.3} }
-        .jamsa-cctv-mini { transition:transform 0.15s; transform-origin:left center; }
+        .jamsa-cctv-mini { transition:transform 0.2s; transform-origin:left center; }
         .jamsa-cctv-mini:hover { transform:scale(1.5); z-index:1000; }
+        .jamsa-cctv-mini.expanded { transform:scale(4)!important; z-index:2500; box-shadow:0 8px 30px rgba(0,0,0,0.6)!important; }
+        .jamsa-cctv-mini.expanded:hover { transform:scale(4)!important; }
       `}</style>
       {/* ─── 실시간 출퇴근/위치/CCTV/행동로그 통합 패널 (지도 크게보기 모드에서 숨김) ─── */}
       {!mapFullscreen && <StaffAttendanceLivePanel onAddFacAction={onAddFacAction} />}
@@ -26785,16 +26789,17 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
       const editBorder = cctvEditMode ? "2px dashed #fbbf24" : `2px solid ${cctvBorderColor}`;
       const editStyle = cctvEditMode ? "outline:1px solid #fbbf24;outline-offset:2px;" : "";
       const cctvDraggableAttr = (cctvEditMode && firstCh) ? `data-cctv-ch="${firstCh}" draggable="true"` : '';
+      const cctvClickAttr = cctvEditMode ? '' : `onclick="event.stopPropagation();this.classList.toggle('expanded')"`;
 
       const cctvHtml = showCctvMini ? `
-        <div class="jamsa-cctv-mini" ${cctvDraggableAttr} style="position:absolute;left:42px;top:-6px;width:88px;height:60px;border-radius:6px;overflow:hidden;border:${editBorder};${cctvAnimation}${editStyle}box-shadow:0 4px 12px rgba(0,0,0,0.35);background:#0f172a;cursor:${cctvEditMode ? 'move' : 'pointer'};pointer-events:auto;">
+        <div class="jamsa-cctv-mini" ${cctvDraggableAttr} ${cctvClickAttr} style="position:absolute;left:42px;top:-6px;width:88px;height:60px;border-radius:6px;overflow:hidden;border:${editBorder};${cctvAnimation}${editStyle}box-shadow:0 4px 12px rgba(0,0,0,0.35);background:#0f172a;cursor:${cctvEditMode ? 'move' : 'pointer'};pointer-events:auto;">
           <img src="${snap.url}" style="width:100%;height:100%;object-fit:cover;${cctvEditMode ? 'opacity:0.7;' : ''}" onerror="this.style.display='none'"/>
           <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.6),transparent);padding:2px 4px;font-size:8px;color:#fff;font-weight:700;">CH${firstCh}${channels.length > 1 ? ` +${channels.length-1}` : ''}${cctvEditMode ? ' ↔' : ''}</div>
           ${chAna?.level === "DANGER" || chAna?.level === "WARNING" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:${chAna.level === "DANGER" ? "rgba(220,38,38,0.95)" : "rgba(245,158,11,0.95)"};padding:1px 4px;font-size:8px;color:#fff;font-weight:800;">${chAna.level === "DANGER" ? "🚨 위험" : "⚠️ 주의"} ${chAna.score || ""}%</div>` : ''}
           <div style="position:absolute;top:0;right:0;width:6px;height:6px;background:#22c55e;border-radius:50%;margin:3px;box-shadow:0 0 4px #22c55e;animation:cctvLiveBlink 1.5s infinite;"></div>
         </div>
       ` : (cctvEnabled && firstCh ? `
-        <div class="jamsa-cctv-mini" ${cctvDraggableAttr} style="position:absolute;left:42px;top:-6px;width:88px;height:60px;border-radius:6px;overflow:hidden;border:${editBorder};background:rgba(15,23,42,0.7);display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);${editStyle}cursor:${cctvEditMode ? 'move' : 'default'};pointer-events:auto;">
+        <div class="jamsa-cctv-mini" ${cctvDraggableAttr} ${cctvClickAttr} style="position:absolute;left:42px;top:-6px;width:88px;height:60px;border-radius:6px;overflow:hidden;border:${editBorder};background:rgba(15,23,42,0.7);display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);${editStyle}cursor:${cctvEditMode ? 'move' : 'pointer'};pointer-events:auto;">
           <div style="font-size:18px;">📷</div>
           <div style="font-size:8px;font-weight:700;margin-top:2px;">CH${firstCh}${cctvEditMode ? ' ↔' : ''}</div>
         </div>
@@ -26940,8 +26945,10 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
         @keyframes cctvDangerPulse { 0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,0.7),0 4px 12px rgba(0,0,0,0.35)} 50%{box-shadow:0 0 0 8px rgba(220,38,38,0),0 4px 12px rgba(0,0,0,0.35)} }
         @keyframes cctvWarnPulse { 0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,0.7),0 4px 12px rgba(0,0,0,0.35)} 50%{box-shadow:0 0 0 6px rgba(245,158,11,0),0 4px 12px rgba(0,0,0,0.35)} }
         @keyframes cctvLiveBlink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+        .jamsa-cctv-mini { transition:transform 0.2s; transform-origin:left center; }
         .jamsa-cctv-mini:hover { transform:scale(1.4); z-index:1000; }
-        .jamsa-cctv-mini { transition:transform 0.15s; transform-origin:left center; }
+        .jamsa-cctv-mini.expanded { transform:scale(4)!important; z-index:2500; box-shadow:0 8px 30px rgba(0,0,0,0.6)!important; }
+        .jamsa-cctv-mini.expanded:hover { transform:scale(4)!important; }
       `}</style>
 
       {/* Leaflet 지도 */}
