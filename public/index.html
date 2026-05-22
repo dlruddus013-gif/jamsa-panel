@@ -194,6 +194,25 @@
 
   <div id="root"></div>
 
+  <!-- ☁️ 클라우드 동기화 플로팅 버튼 (항상 잘 보이는 위치) -->
+  <button id="syncFab" type="button" title="클라우드 동기화 / 다른 기기와 데이터 맞추기" style="
+    position:fixed; bottom:64px; right:14px; z-index:9500;
+    width:54px; height:54px; border-radius:50%; border:none;
+    background:linear-gradient(135deg,#7c3aed,#0891b2); color:#fff;
+    box-shadow:0 6px 20px rgba(124,58,237,0.5), 0 0 0 0 rgba(124,58,237,0.4);
+    font-size:22px; cursor:pointer; display:flex; align-items:center; justify-content:center;
+    animation: syncFabPulse 2.5s ease-in-out infinite;
+  ">☁️</button>
+  <style>
+    @keyframes syncFabPulse { 0%, 100% { box-shadow: 0 6px 20px rgba(124,58,237,0.5), 0 0 0 0 rgba(124,58,237,0.4); } 50% { box-shadow: 0 6px 20px rgba(124,58,237,0.5), 0 0 0 12px rgba(124,58,237,0); } }
+    #syncFab:hover { transform: scale(1.08); }
+    #syncFab[data-state="error"] { background: linear-gradient(135deg,#dc2626,#ea580c); animation: syncFabPulse 1s ease-in-out infinite; }
+    #syncFab[data-state="syncing"], #syncFab[data-state="pending"] { background: linear-gradient(135deg,#fbbf24,#f59e0b); }
+    @media (max-width: 768px) {
+      #syncFab { bottom: 80px !important; right: 10px !important; width: 48px !important; height: 48px !important; font-size: 20px !important; }
+    }
+  </style>
+
   <div class="status-stack">
     <div class="status-pill" id="authBadge" data-state="offline" title="인증 상태">
       <span class="dot"></span>
@@ -799,6 +818,15 @@
       const open = () => { modal.style.display = 'flex'; refresh(); };
       const close = () => { modal.style.display = 'none'; };
       badge.addEventListener('click', open);
+      const fab = document.getElementById('syncFab');
+      if (fab) fab.addEventListener('click', open);
+      // syncBadge data-state 변경을 syncFab 로 미러링 (시각적 피드백)
+      try {
+        const observer = new MutationObserver(() => {
+          if (fab && badge) fab.dataset.state = badge.dataset.state || 'idle';
+        });
+        observer.observe(badge, { attributes: true, attributeFilter: ['data-state'] });
+      } catch (e) {}
       document.getElementById('syncDiagClose')?.addEventListener('click', close);
       modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
       const refresh = async () => {
