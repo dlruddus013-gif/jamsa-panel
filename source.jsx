@@ -22444,6 +22444,18 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   // CCTV 원본 크기 모달 (지도에서 미니창 클릭 시 열림)
   const [cctvFullView, setCctvFullView] = useState(null); // {ch, zoneId, zoneName} | null
   const [cctvFullTick, setCctvFullTick] = useState(0); // 3초마다 스냅샷 강제 갱신
+  // 외부(마커 HTML inline onclick) 에서 호출할 글로벌 헬퍼 — 인라인 문자열 이스케이핑 문제 회피
+  useEffect(() => {
+    window.__jamsaOpenCctv = (ch, zoneId) => {
+      try {
+        const z = (allZones || []).find(x => x.id === zoneId);
+        window.dispatchEvent(new CustomEvent("jamsa:cctv-open", {
+          detail: { ch: Number(ch), zoneId: zoneId || null, zoneName: z?.name || zoneId || `구역` },
+        }));
+      } catch (e) { console.warn("[__jamsaOpenCctv]", e); }
+    };
+    return () => { try { delete window.__jamsaOpenCctv; } catch (e) {} };
+  }, [allZones]);
   useEffect(() => {
     const onOpen = (e) => {
       const d = e?.detail;
@@ -23804,7 +23816,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         const _cctvClick = cctvEditMode && _firstCh
           ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${_firstCh})"`
           : (_firstCh
-              ? `onclick="event.stopPropagation();window.dispatchEvent(new CustomEvent('jamsa:cctv-open',{detail:{ch:${_firstCh},zoneId:'${z.id}',zoneName:${JSON.stringify(z.name)}}}))"`
+              ? `onclick="event.stopPropagation();window.__jamsaOpenCctv&&window.__jamsaOpenCctv(${_firstCh},'${z.id}')"`
               : ``);
 
         // 각 채널 셀 HTML 생성
@@ -23820,7 +23832,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           // 셀 클릭 → 원본 크기 CCTV 모달 열기 (다른 아이콘에 가려지지 않게)
           const _cellClick = cctvEditMode
             ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${ch})"`
-            : `onclick="event.stopPropagation();window.dispatchEvent(new CustomEvent('jamsa:cctv-open',{detail:{ch:${ch},zoneId:'${z.id}',zoneName:${JSON.stringify(z.name)}}}))"`;
+            : `onclick="event.stopPropagation();window.__jamsaOpenCctv&&window.__jamsaOpenCctv(${ch},'${z.id}')"`;
           return `<div ${_cellClick} title="CH${ch} — 클릭하면 원본 크기로 보기" style="position:relative;width:${_cellW}px;height:${_cellH}px;border-radius:3px;overflow:hidden;border:${_cellBorder};${_cellAnim}background:#0f172a;flex-shrink:0;cursor:pointer;">
             <img src="${_url}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';var fb=document.getElementById('${_fbId}');if(fb)fb.style.display='flex';"/>
             <div id="${_fbId}" style="display:none;position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);background:rgba(15,23,42,0.93);">
@@ -27484,7 +27496,7 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
       const outerAnim = hasAnyDanger ? "animation:cctvDangerPulse 1.2s infinite;" : hasAnyWarn ? "animation:cctvWarnPulse 1.6s infinite;" : "";
       // 외곽 클릭: 첫 채널을 풀스크린 모달로
       const cctvClickAttr = firstCh
-        ? `onclick="event.stopPropagation();window.dispatchEvent(new CustomEvent('jamsa:cctv-open',{detail:{ch:${firstCh},zoneId:'${z.id}',zoneName:${JSON.stringify(z.name)}}}))"`
+        ? `onclick="event.stopPropagation();window.__jamsaOpenCctv&&window.__jamsaOpenCctv(${firstCh},'${z.id}')"`
         : '';
 
       const liveTs = Math.floor(Date.now() / 5000) * 5000;
@@ -27497,7 +27509,7 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
         const fbId = `cctvFbL_${z.id}_${ch}`;
         const cellClick = cctvEditMode
           ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${ch})"`
-          : `onclick="event.stopPropagation();window.dispatchEvent(new CustomEvent('jamsa:cctv-open',{detail:{ch:${ch},zoneId:'${z.id}',zoneName:${JSON.stringify(z.name)}}}))"`;
+          : `onclick="event.stopPropagation();window.__jamsaOpenCctv&&window.__jamsaOpenCctv(${ch},'${z.id}')"`;
         return `<div ${cellClick} title="CH${ch} — 클릭하면 원본 크기로 보기" style="position:relative;width:${cellW}px;height:${cellH}px;border-radius:3px;overflow:hidden;border:1px solid ${ca?.level==="DANGER"?"#dc2626":ca?.level==="WARNING"?"#f59e0b":"rgba(255,255,255,0.2)"};background:#0f172a;flex-shrink:0;cursor:pointer;">
           <img src="${url}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';var fb=document.getElementById('${fbId}');if(fb)fb.style.display='flex';"/>
           <div id="${fbId}" style="display:none;position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);background:rgba(15,23,42,0.93);">
