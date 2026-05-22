@@ -21,27 +21,62 @@ const DEPT_CCTV_MAP_KEY = "jamsa_dept_cctv_map";   // { [dept_id]: channelNum }
 const COLLAPSED_KEY     = "jamsa_attendance_panel_collapsed";
 const WORK_SCHEDULE_KEY = "jamsa_work_schedules_v1";
 
-// 근무일지(localStorage) — 오늘 휴무/근무 예정 + 행사 가져오기
+// 휴무 사유 자동 추론
+// 우선순위:
+//  ① emp.offReasons[date] 명시값
+//  ② 일/토요일 → 정기/주말 휴무
+//  ③ 평일 연속 2일 이상 → "휴가 (N일째)"
+//  ④ 평일 단독 → "휴무"
+function inferOffReason(emp, dateStr) {
+  const explicit = (emp.offReasons || {})[dateStr];
+  if (explicit) return explicit;
+  const d = new Date(dateStr + "T00:00:00");
+  const dow = d.getDay(); // 0:일, 6:토
+  if (dow === 0) return "🗓️ 일요일 정기 휴무";
+  if (dow === 6) return "🗓️ 주말 휴무";
+  // 평일: 연속 휴무 패턴 감지
+  const offSet = new Set(emp.offDays || []);
+  const prev = new Date(d); prev.setDate(d.getDate() - 1);
+  const next = new Date(d); next.setDate(d.getDate() + 1);
+  const fmt = (x) => `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}-${String(x.getDate()).padStart(2,"0")}`;
+  const prevOff = offSet.has(fmt(prev));
+  const nextOff = offSet.has(fmt(next));
+  if (prevOff && nextOff) return "🏖️ 연차 (중간)";
+  if (prevOff) return "🏖️ 연차 (마지막날)";
+  if (nextOff) return "🏖️ 연차 (시작)";
+  // 공휴일 — 간이 추론 (1/1, 3/1, 5/5, 6/6, 8/15, 10/3, 10/9, 12/25)
+  const mmdd = `${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  const holidays = { "01-01":"신정","03-01":"삼일절","05-05":"어린이날","06-06":"현충일","08-15":"광복절","10-03":"개천절","10-09":"한글날","12-25":"크리스마스" };
+  if (holidays[mmdd]) return `🎌 ${holidays[mmdd]}`;
+  return "📋 휴무";
+}
+
+// 근무일지(localStorage) — 오늘 휴무/근무 예정 + 행사 + 사유 가져오기
 function loadTodaySchedule() {
   try {
     const raw = localStorage.getItem(WORK_SCHEDULE_KEY);
-    if (!raw) return { offByName: new Set(), scheduledByName: new Set(), event: null };
+    if (!raw) return { offByName: new Set(), scheduledByName: new Set(), event: null, offReasonByName: new Map() };
     const data = JSON.parse(raw);
     const d = new Date();
     const monthKey = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
     const todayStr = `${monthKey}-${String(d.getDate()).padStart(2,"0")}`;
     const month = data[monthKey];
-    if (!month) return { offByName: new Set(), scheduledByName: new Set(), event: null };
+    if (!month) return { offByName: new Set(), scheduledByName: new Set(), event: null, offReasonByName: new Map() };
     const offByName = new Set();
     const scheduledByName = new Set();
+    const offReasonByName = new Map();
     (month.employees || []).forEach(emp => {
-      if ((emp.offDays || []).includes(todayStr)) offByName.add(emp.name);
-      else scheduledByName.add(emp.name);
+      if ((emp.offDays || []).includes(todayStr)) {
+        offByName.add(emp.name);
+        offReasonByName.set(emp.name, inferOffReason(emp, todayStr));
+      } else {
+        scheduledByName.add(emp.name);
+      }
     });
     const event = (month.events || []).find(e => e.date === todayStr) || null;
-    return { offByName, scheduledByName, event, todayStr };
+    return { offByName, scheduledByName, event, todayStr, offReasonByName };
   } catch (e) {
-    return { offByName: new Set(), scheduledByName: new Set(), event: null };
+    return { offByName: new Set(), scheduledByName: new Set(), event: null, offReasonByName: new Map() };
   }
 }
 
@@ -307,7 +342,8 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
       const working = !!(last && !last.checked_out_at);
       const scheduledOff = schedule.offByName?.has(s.name) || false;
       const scheduledWork = schedule.scheduledByName?.has(s.name) || false;
-      return { staff: s, last, working, scheduledOff, scheduledWork };
+      const offReason = scheduledOff ? (schedule.offReasonByName?.get(s.name) || "📋 휴무") : null;
+      return { staff: s, last, working, scheduledOff, scheduledWork, offReason };
     }).sort((a, b) => {
       // 근무중 > 퇴근완료 > 미출근(근무예정) > 휴무
       const rank = (x) => x.working ? 0 : x.last ? 1 : x.scheduledOff ? 3 : 2;

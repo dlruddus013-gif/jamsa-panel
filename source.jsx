@@ -23996,9 +23996,10 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         @keyframes cctvWarnPulse { 0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,0.7),0 4px 12px rgba(0,0,0,0.4)} 50%{box-shadow:0 0 0 8px rgba(245,158,11,0),0 4px 12px rgba(0,0,0,0.4)} }
         @keyframes cctvLiveBlink { 0%,100%{opacity:1} 50%{opacity:0.3} }
         .jamsa-cctv-mini { transition:transform 0.18s ease-out; transform-origin:left top; }
-        .jamsa-cctv-mini:hover { transform:scale(3.6); z-index:1500; box-shadow:0 12px 32px rgba(0,0,0,0.65)!important; }
-        .jamsa-cctv-mini.expanded { transform:scale(5)!important; z-index:2500; box-shadow:0 14px 40px rgba(0,0,0,0.75)!important; }
-        .jamsa-cctv-mini.expanded:hover { transform:scale(5)!important; }
+        /* 호버시 약하게 강조만 — 클릭하면 풀스크린 모달이 뜨므로 큰 확대는 불필요.
+           (이전엔 hover 시 scale(3.6) 이라 다른 스팟의 CCTV / 마커에 가려졌음) */
+        .jamsa-cctv-mini:hover { transform:scale(1.08); box-shadow:0 6px 18px rgba(0,0,0,0.55)!important; }
+        .jamsa-cctv-mini > div:hover { outline:2px solid rgba(255,255,255,0.6); outline-offset:1px; }
       `}</style>
       {/* ─── 실시간 출퇴근/위치/CCTV/행동로그 통합 패널 (지도 크게보기 모드에서 숨김) ─── */}
       {!mapFullscreen && <StaffAttendanceLivePanel onAddFacAction={onAddFacAction} />}
@@ -27652,9 +27653,10 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
         @keyframes cctvWarnPulse { 0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,0.7),0 4px 12px rgba(0,0,0,0.35)} 50%{box-shadow:0 0 0 6px rgba(245,158,11,0),0 4px 12px rgba(0,0,0,0.35)} }
         @keyframes cctvLiveBlink { 0%,100%{opacity:1} 50%{opacity:0.3} }
         .jamsa-cctv-mini { transition:transform 0.18s ease-out; transform-origin:left top; }
-        .jamsa-cctv-mini:hover { transform:scale(3.6); z-index:1500; box-shadow:0 12px 32px rgba(0,0,0,0.65)!important; }
-        .jamsa-cctv-mini.expanded { transform:scale(5)!important; z-index:2500; box-shadow:0 14px 40px rgba(0,0,0,0.75)!important; }
-        .jamsa-cctv-mini.expanded:hover { transform:scale(5)!important; }
+        /* 호버시 약하게 강조만 — 클릭하면 풀스크린 모달이 뜨므로 큰 확대는 불필요.
+           (이전엔 hover 시 scale(3.6) 이라 다른 스팟의 CCTV / 마커에 가려졌음) */
+        .jamsa-cctv-mini:hover { transform:scale(1.08); box-shadow:0 6px 18px rgba(0,0,0,0.55)!important; }
+        .jamsa-cctv-mini > div:hover { outline:2px solid rgba(255,255,255,0.6); outline-offset:1px; }
       `}</style>
 
       {/* Leaflet 지도 */}
