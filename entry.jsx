@@ -94,17 +94,43 @@ async function boot() {
 // React 앱 마운트 (boot + 로그인 후 재호출 가능)
 let _reactRoot = null;
 async function mountReactApp() {
-  // 3) React 마운트 (이미 있으면 재사용)
+  // 3) Hydrate BEFORE React mount — so React 컴포넌트의 useState 초기화 시 클라우드 데이터를 본다.
+  //    이전에는 마운트 후 100ms 뒤에 hydrate 했기 때문에 새 기기/시크릿 모드에서
+  //    지도 배치·CCTV 매핑 등 모든 jamsa_* 데이터가 기본값으로 보였음.
+  //    빠른 응답을 위해 3.5초 타임아웃 — 그 안에 안 오면 일단 로컬로 마운트하고 백그라운드에서 계속.
+  let preHydratedCount = 0;
+  let preHydrateFailed = false;
+  if (supabase && session) {
+    const setMsg = (m) => {
+      const el = document.getElementById('loadingMsg');
+      if (el) el.textContent = m;
+    };
+    setMsg('클라우드 데이터 동기화 중...');
+    try {
+      preHydratedCount = await Promise.race([
+        hydrateFromBackend(),
+        new Promise((resolve) => setTimeout(() => { preHydrateFailed = true; resolve(0); }, 3500)),
+      ]) || 0;
+    } catch (e) {
+      console.warn('[boot] pre-hydrate failed:', e);
+      preHydrateFailed = true;
+    }
+  }
+
+  // 4) React 마운트 (이미 있으면 재사용)
   if (!_reactRoot) {
     _reactRoot = ReactDOM.createRoot(document.getElementById('root'));
   }
   _reactRoot.render(React.createElement(App));
 
-  // 4) 백그라운드에서 클라우드 데이터 동기화 (UI 블록 X)
-  if (supabase && session) {
+  // 5) hydrate 가 타임아웃됐으면 백그라운드에서 한 번 더 시도 후 강제 리렌더
+  if (supabase && session && preHydrateFailed) {
     setTimeout(async () => {
       const updated = await hydrateFromBackend();
       if (updated && updated > 0) {
+        // 백그라운드 hydrate 후 갱신된 데이터를 React 가 보도록 강제 리렌더
+        // (간단히 root.render 재호출 — React 가 알아서 diff/리마운트)
+        try { _reactRoot.render(React.createElement(App)); } catch (e) {}
         const syncBadge = document.getElementById('syncBadge');
         if (syncBadge) {
           const txt = syncBadge.querySelector('.sync-txt');
@@ -113,6 +139,13 @@ async function mountReactApp() {
         }
       }
     }, 100);
+  } else if (supabase && session && preHydratedCount > 0) {
+    const syncBadge = document.getElementById('syncBadge');
+    if (syncBadge) {
+      const txt = syncBadge.querySelector('.sync-txt');
+      if (txt) txt.textContent = `클라우드 ✓ (${preHydratedCount}건 동기화)`;
+      setTimeout(() => { if (txt) txt.textContent = '클라우드 ✓'; }, 5000);
+    }
   }
 }
 
