@@ -52,6 +52,9 @@ const JAMSA_PROTECTED_KEYS = [
   "jamsa_cctv_zone_map",
   "jamsa_cctv_offsets",
   "jamsa_cctv_guard_url",
+  "jamsa_gateway_zone_map",
+  "jamsa_beacons",
+  "jamsa_gateway_config",
 ];
 const JAMSA_PROTECTION_SNAPSHOTS_KEY = "jamsa_data_protection_snapshots";
 const JAMSA_PROTECTION_LAST_GOOD_KEY = "jamsa_data_protection_last_good";
@@ -24158,7 +24161,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                   <button onClick={() => {
                     if (typeof CCTV_AUTO_MAP !== "undefined") {
                       setCctvMap({ ...CCTV_AUTO_MAP });
-                      try { window.localStorage.setItem("jamsa_cctv_zone_map", JSON.stringify(CCTV_AUTO_MAP)); } catch (e) {}
+                      try { guardedLocalStorageSet("jamsa_cctv_zone_map", CCTV_AUTO_MAP); } catch (e) {}
                     }
                   }} style={{ marginTop: 8, padding: "5px 10px", background: "#fff", color: "#dc2626", border: "none", borderRadius: 5, fontSize: 10, fontWeight: 800, cursor: "pointer" }}>
                     🔄 자동 매핑으로 복구
@@ -24248,7 +24251,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                           if (added <= 0) { alert("자동 매칭으로 추가할 채널이 없습니다."); return; }
                           if (!confirm(`미할당 채널 ${_unassigned.length}개 중 ${added}개를 자동으로 매핑할까요?\n\n매칭 규칙:\n• 채널 이름 키워드 (입구→본관, 양떼→산책로 등)\n• 매칭 안 되는 채널은 기본 spot에 추가`)) return;
                           setCctvMap(next);
-                          try { window.localStorage.setItem("jamsa_cctv_zone_map", JSON.stringify(next)); } catch (e) {}
+                          try { guardedLocalStorageSet("jamsa_cctv_zone_map", next); } catch (e) {}
                           // 매핑 결과 요약
                           const summary = {};
                           Object.entries(next).forEach(([zid, chs]) => {
@@ -24270,7 +24273,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                         if (!confirm("자동 매핑 규칙(CCTV_AUTO_MAP)으로 초기화할까요?\n사용자 수동 매핑은 모두 사라집니다.")) return;
                         if (typeof CCTV_AUTO_MAP !== "undefined") {
                           setCctvMap({ ...CCTV_AUTO_MAP });
-                          try { window.localStorage.setItem("jamsa_cctv_zone_map", JSON.stringify(CCTV_AUTO_MAP)); } catch (e) {}
+                          try { guardedLocalStorageSet("jamsa_cctv_zone_map", CCTV_AUTO_MAP); } catch (e) {}
                         }
                       }} style={{ padding: "3px 8px", background: "rgba(255,255,255,0.15)", color: "#fff", border: "none", borderRadius: 4, fontSize: 9, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
                         ↻ 초기화

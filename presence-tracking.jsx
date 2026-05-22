@@ -8,6 +8,16 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 
 const COLLAPSED_KEY = "jamsa_presence_panel_collapsed";
+const GW_MAP_LOCAL_KEY = "jamsa_gateway_zone_map"; // Supabase 미연결 시 localStorage 폴백
+
+const loadGwMapLocal = () => {
+  try { return JSON.parse(localStorage.getItem(GW_MAP_LOCAL_KEY) || "[]"); }
+  catch (e) { return []; }
+};
+const saveGwMapLocal = (rows) => {
+  try { localStorage.setItem(GW_MAP_LOCAL_KEY, JSON.stringify(rows || [])); }
+  catch (e) {}
+};
 
 const pad = (n) => String(n).padStart(2, "0");
 const fmtTimeFull = (iso) => {
@@ -87,6 +97,10 @@ export function PresenceTrackingPanel() {
   useEffect(() => {
     let cancelled = false;
     let tries = 0;
+    // 즉시 localStorage 매핑 로드 (Supabase 연결 전에라도 매핑은 표시)
+    const localRows = loadGwMapLocal();
+    if (localRows.length > 0) setGwMap(localRows);
+
     const tryGetSb = () => {
       if (cancelled) return;
       const sb = (typeof window !== "undefined") ? window.__supabase : null;
@@ -97,8 +111,11 @@ export function PresenceTrackingPanel() {
       } else if (tries++ < 12) {
         setTimeout(tryGetSb, 300);
       } else {
+        // Supabase 미연결 — localStorage 매핑만 사용
         setLoading(false);
-        setErr("Supabase 미연결");
+        if (localRows.length === 0) {
+          setErr("Supabase 미연결 — 게이트웨이 매핑은 로컬에 저장됩니다");
+        }
       }
     };
     tryGetSb();
@@ -123,9 +140,19 @@ export function PresenceTrackingPanel() {
       setPresence(pres.data || []);
       setOccupancy(occ.data || []);
       setActivity(act.data || []);
-      setGwMap(gw.data || []);
+      // Supabase + localStorage 병합 — gateway_serial 기준 (Supabase 우선)
+      const localRows = loadGwMapLocal();
+      const sbRows = gw.data || [];
+      const sbSerials = new Set(sbRows.map(r => r.gateway_serial));
+      const merged = [...sbRows, ...localRows.filter(r => !sbSerials.has(r.gateway_serial))];
+      setGwMap(merged);
+      // 병합본을 localStorage 에도 미러링 (오프라인 대비)
+      saveGwMapLocal(merged);
     } catch (e) {
       setErr(e?.message || String(e));
+      // Supabase 실패 시 localStorage 만 사용
+      const localRows = loadGwMapLocal();
+      if (localRows.length > 0) setGwMap(localRows);
     } finally { setLoading(false); }
   }
 
@@ -220,16 +247,22 @@ export function PresenceTrackingPanel() {
       {/* 본문 */}
       {loading ? (
         <div style={{ padding: 30, textAlign: "center", color: "#64748b", fontSize: 12 }}>⏳ 데이터 불러오는 중...</div>
-      ) : err ? (
+      ) : (err && gwMap.length === 0) ? (
         <div style={{ padding: 16, fontSize: 12, color: "#fca5a5", background: "rgba(220,38,38,0.1)" }}>
-          ⚠ 로드 실패: {err}
+          ⚠ {err}
           <div style={{ marginTop: 6, color: "#94a3b8", fontSize: 11 }}>
-            <strong>presence_tracking_setup.sql</strong> 이 실행되지 않았을 수 있습니다.
-            Supabase SQL Editor 에서 실행하세요.
+            게이트웨이 매핑은 <strong>로컬에 저장</strong>되므로 Supabase 없이도 사용 가능합니다.
+            상단의 <strong>⚙ 게이트웨이 매핑</strong> 버튼을 눌러 추가하세요.
           </div>
         </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "280px 1fr 360px", gap: 0 }}>
+        <div>
+          {err && (
+            <div style={{ padding: "6px 16px", fontSize: 10, color: "#fbbf24", background: "rgba(245,158,11,0.08)", borderBottom: "1px solid rgba(245,158,11,0.2)" }}>
+              ⚠ {err} · 로컬 매핑 {gwMap.length}건 표시 중
+            </div>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: "280px 1fr 360px", gap: 0 }}>
           {/* ─── (1) 구역별 인원 + CCTV ─── */}
           <div style={{ padding: "12px 14px", borderRight: "1px solid rgba(255,255,255,0.06)" }}>
             <SectionTitle>🗺 구역별 현장 인원</SectionTitle>
@@ -383,6 +416,7 @@ export function PresenceTrackingPanel() {
               })
             )}
           </div>
+          </div>
         </div>
       )}
 
@@ -468,12 +502,13 @@ function GatewayZoneEditor({ sb, current, onClose, onSaved }) {
       const { error } = await sb.from("gateway_zone_map").delete().eq("gateway_serial", gateway_serial);
       if (error) { alert("삭제 실패: " + error.message); return; }
     }
-    setRows(rows.filter(r => r.gateway_serial !== gateway_serial));
+    const next = rows.filter(r => r.gateway_serial !== gateway_serial);
+    setRows(next);
+    saveGwMapLocal(next); // localStorage 동기화
     onSaved && onSaved();
   };
 
   const saveAll = async () => {
-    if (!sb) return;
     setSaving(true); setErr(null);
     try {
       const payload = rows.map(r => ({
@@ -485,11 +520,16 @@ function GatewayZoneEditor({ sb, current, onClose, onSaved }) {
         notes: r.notes || null,
         updated_at: new Date().toISOString(),
       }));
-      const { error } = await sb.from("gateway_zone_map").upsert(payload, { onConflict: "gateway_serial" });
-      if (error) throw error;
+      // localStorage 에 먼저 저장 (오프라인/Supabase 미연결 시에도 영구 유지)
+      saveGwMapLocal(payload);
+      // Supabase 가 연결돼 있으면 추가로 동기화
+      if (sb) {
+        const { error } = await sb.from("gateway_zone_map").upsert(payload, { onConflict: "gateway_serial" });
+        if (error) throw error;
+      }
       onSaved && onSaved();
     } catch (e) {
-      setErr(e?.message || String(e));
+      setErr((e?.message || String(e)) + " (localStorage 에는 저장됨)");
     } finally { setSaving(false); }
   };
 
