@@ -28689,6 +28689,11 @@ function WorkScheduleModule({ currentUser }) {
   const [clockTime, setClockTime] = useState("");
   const [clockType, setClockType] = useState("in");
 
+  // 근무일지 변경 시 실시간 출퇴근 패널이 즉시 반영하도록 브로드캐스트
+  useEffect(() => {
+    try { window.dispatchEvent(new CustomEvent("jamsa-schedule-changed")); } catch (e) {}
+  }, [scheduleData]);
+
   const today = new Date();
   const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
   const currentMonthKey = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}`;

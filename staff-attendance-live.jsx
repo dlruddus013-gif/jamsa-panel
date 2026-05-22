@@ -19,6 +19,31 @@ import { StaffManageModal } from "./staff-manage-modal.jsx";
 
 const DEPT_CCTV_MAP_KEY = "jamsa_dept_cctv_map";   // { [dept_id]: channelNum }
 const COLLAPSED_KEY     = "jamsa_attendance_panel_collapsed";
+const WORK_SCHEDULE_KEY = "jamsa_work_schedules_v1";
+
+// 근무일지(localStorage) — 오늘 휴무/근무 예정 + 행사 가져오기
+function loadTodaySchedule() {
+  try {
+    const raw = localStorage.getItem(WORK_SCHEDULE_KEY);
+    if (!raw) return { offByName: new Set(), scheduledByName: new Set(), event: null };
+    const data = JSON.parse(raw);
+    const d = new Date();
+    const monthKey = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+    const todayStr = `${monthKey}-${String(d.getDate()).padStart(2,"0")}`;
+    const month = data[monthKey];
+    if (!month) return { offByName: new Set(), scheduledByName: new Set(), event: null };
+    const offByName = new Set();
+    const scheduledByName = new Set();
+    (month.employees || []).forEach(emp => {
+      if ((emp.offDays || []).includes(todayStr)) offByName.add(emp.name);
+      else scheduledByName.add(emp.name);
+    });
+    const event = (month.events || []).find(e => e.date === todayStr) || null;
+    return { offByName, scheduledByName, event, todayStr };
+  } catch (e) {
+    return { offByName: new Set(), scheduledByName: new Set(), event: null };
+  }
+}
 
 const pad = (n) => String(n).padStart(2, "0");
 const fmtTime = (iso) => {
@@ -105,8 +130,23 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
   const [selectedDept, setSelectedDept] = useState("all");
   const [logModalStaff, setLogModalStaff] = useState(null);
   const [editCctvDept, setEditCctvDept] = useState(null);
+  const [schedule, setSchedule] = useState(loadTodaySchedule);
   const channelRef = useRef(null);
   const supabaseRef = useRef(null);
+
+  // 근무일지(localStorage) 변경 감지 — 같은 탭에서는 커스텀 이벤트, 다른 탭은 storage 이벤트
+  useEffect(() => {
+    const refresh = () => setSchedule(loadTodaySchedule());
+    const onStorage = (e) => { if (!e || e.key === WORK_SCHEDULE_KEY) refresh(); };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("jamsa-schedule-changed", refresh);
+    const t = setInterval(refresh, 60 * 1000); // 자정 통과 대비
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("jamsa-schedule-changed", refresh);
+      clearInterval(t);
+    };
+  }, []);
 
   const toggleCollapse = () => {
     setCollapsed(v => {
@@ -234,7 +274,7 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
     } catch (e) { /* ignore */ }
   }
 
-  // 통계
+  // 통계 — 근무일지의 오늘 휴무는 미출근에서 제외
   const stats = useMemo(() => {
     const checkedIn  = new Set();
     const checkedOut = new Set();
@@ -242,14 +282,18 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
       checkedIn.add(a.staff_id);
       if (a.checked_out_at) checkedOut.add(a.staff_id);
     });
+    const offCount = staffList.filter(s => schedule.offByName?.has(s.name)).length;
+    // 출근 예정인데 미출근 = 전체 - 출근기록 - 휴무
+    const absent = Math.max(0, staffList.length - checkedIn.size - offCount);
     return {
       total: staffList.length,
       in: checkedIn.size,
       working: checkedIn.size - checkedOut.size,
       out: checkedOut.size,
-      absent: Math.max(0, staffList.length - checkedIn.size),
+      off: offCount,
+      absent,
     };
-  }, [staffList, today]);
+  }, [staffList, today, schedule]);
 
   // 필터된 직원 (현재 근무중 + 출근완료 우선)
   const visibleStaff = useMemo(() => {
@@ -261,14 +305,17 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
       const att = today.filter(a => a.staff_id === s.id);
       const last = att[0]; // 정렬: checked_in_at desc
       const working = !!(last && !last.checked_out_at);
-      return { staff: s, last, working };
+      const scheduledOff = schedule.offByName?.has(s.name) || false;
+      const scheduledWork = schedule.scheduledByName?.has(s.name) || false;
+      return { staff: s, last, working, scheduledOff, scheduledWork };
     }).sort((a, b) => {
-      const rank = (x) => x.working ? 0 : (x.last ? 1 : 2);
+      // 근무중 > 퇴근완료 > 미출근(근무예정) > 휴무
+      const rank = (x) => x.working ? 0 : x.last ? 1 : x.scheduledOff ? 3 : 2;
       const ra = rank(a), rb = rank(b);
       if (ra !== rb) return ra - rb;
       return (a.staff.name || "").localeCompare(b.staff.name || "");
     });
-  }, [staffList, today, selectedDept]);
+  }, [staffList, today, selectedDept, schedule]);
 
   if (collapsed) {
     return (
@@ -352,6 +399,19 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
         </div>
       </div>
 
+      {/* 오늘 행사 배너 (근무일지 events) */}
+      {schedule.event && (
+        <div style={{
+          padding: "8px 20px", fontSize: 12, color: "#fef3c7",
+          background: schedule.event.highlight ? "linear-gradient(90deg,rgba(234,179,8,0.35),rgba(234,179,8,0.12))" : "rgba(234,179,8,0.18)",
+          borderBottom: "1px solid rgba(234,179,8,0.3)", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 14 }}>📌</span>
+          <strong style={{ color: "#fde68a" }}>오늘 행사/방문:</strong>
+          <span style={{ color: "#fef3c7" }}>{schedule.event.text}</span>
+          <span style={{ marginLeft: "auto", fontSize: 10, color: "#fbbf24", opacity: 0.8 }}>{schedule.todayStr} · 근무일지 연동</span>
+        </div>
+      )}
+
       {/* 알림 설정 모달 */}
       {alertConfigOpen && (
         <AttendanceAlertConfigModal
@@ -399,6 +459,7 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
               <Pill text={`근무중 ${stats.working}`}    color="#34d399" />
               <Pill text={`퇴근 ${stats.out}`}          color="#94a3b8" />
               <Pill text={`미출근 ${stats.absent}`}     color="#fbbf24" />
+              {stats.off > 0 && <Pill text={`휴무 ${stats.off}`} color="#a78bfa" />}
             </div>
 
             {/* 카드 */}
@@ -408,12 +469,14 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
               </div>
             ) : (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 8 }}>
-                {visibleStaff.map(({ staff, last, working }) => (
+                {visibleStaff.map(({ staff, last, working, scheduledOff, scheduledWork }) => (
                   <StaffMiniCard
                     key={staff.id}
                     staff={staff}
                     last={last}
                     working={working}
+                    scheduledOff={scheduledOff}
+                    scheduledWork={scheduledWork}
                     dept={depts.find(d => d.id === staff.dept_id)}
                     cctvCh={deptCctv[staff.dept_id]}
                     onCheckIn={async () => {
@@ -632,14 +695,29 @@ function Pill({ text, color }) {
   );
 }
 
-function StaffMiniCard({ staff, last, working, dept, cctvCh, onCheckIn, onCheckOut, onShowLog, onSetCctv }) {
+function StaffMiniCard({ staff, last, working, scheduledOff, scheduledWork, dept, cctvCh, onCheckIn, onCheckOut, onShowLog, onSetCctv }) {
   const cctvUrl = getCctvUrl(cctvCh);
-  const status = working ? "근무중"
+  // 휴무 우선 → 근무중 → 퇴근완료 → (근무 예정인데 미출근) 미출근
+  const status = scheduledOff && !working && !last ? "휴무"
+                 : working ? "근무중"
                  : last  ? "퇴근완료"
+                 : scheduledWork ? "미출근"
                  : "미출근";
+  const isOffToday = scheduledOff && !working && !last;
+  const isMissedScheduled = scheduledWork && !working && !last;
+  const statusColor = working ? "#6ee7b7"
+                      : last ? "#94a3b8"
+                      : isOffToday ? "#c4b5fd"
+                      : isMissedScheduled ? "#fca5a5"
+                      : "#fbbf24";
   const bg = working ? "linear-gradient(135deg, rgba(16,185,129,0.18), rgba(15,23,42,0.5))"
+           : isOffToday ? "linear-gradient(135deg, rgba(167,139,250,0.12), rgba(15,23,42,0.55))"
+           : isMissedScheduled ? "linear-gradient(135deg, rgba(220,38,38,0.18), rgba(15,23,42,0.55))"
            : "rgba(30,41,59,0.6)";
-  const border = working ? "1px solid rgba(52,211,153,0.4)" : "1px solid rgba(255,255,255,0.08)";
+  const border = working ? "1px solid rgba(52,211,153,0.4)"
+                : isOffToday ? "1px solid rgba(167,139,250,0.4)"
+                : isMissedScheduled ? "1px solid rgba(220,38,38,0.5)"
+                : "1px solid rgba(255,255,255,0.08)";
 
   // 식별자 연결 상태 (5종)
   const idCount = [staff.unique_uid, staff.beacon_id, staff.gps_device_id, staff.wifi_mac, staff.card_uid]
@@ -654,9 +732,14 @@ function StaffMiniCard({ staff, last, working, dept, cctvCh, onCheckIn, onCheckO
       title="클릭하면 세부 정보 + 식별자 + 평가"
     >
       {working && <div style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: 3, background: "#34d399" }} />}
+      {isOffToday && <div style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: 3, background: "#a78bfa" }} />}
+      {isMissedScheduled && <div style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: 3, background: "#ef4444" }} />}
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 3 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9", letterSpacing: "-0.01em" }}>{staff.name}</div>
-        <span style={{ fontSize: 9, fontWeight: 700, color: working ? "#6ee7b7" : last ? "#94a3b8" : "#fbbf24" }}>{status}</span>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9", letterSpacing: "-0.01em" }}>
+          {staff.name}
+          {isOffToday && <span style={{ marginLeft: 4, fontSize: 9, padding: "1px 5px", borderRadius: 3, background: "rgba(167,139,250,0.2)", color: "#c4b5fd" }}>휴무</span>}
+        </div>
+        <span style={{ fontSize: 9, fontWeight: 700, color: statusColor }}>{status}</span>
       </div>
       <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 4 }}>
         📍 {dept?.name || "미지정"}
@@ -685,6 +768,11 @@ function StaffMiniCard({ staff, last, working, dept, cctvCh, onCheckIn, onCheckO
         ) : last ? (
           <button type="button" disabled
             style={{ flex: 1, padding: "5px", borderRadius: 4, background: "rgba(15,23,42,0.4)", border: "1px solid rgba(255,255,255,0.08)", color: "#64748b", fontSize: 11, fontWeight: 700, cursor: "not-allowed" }}>완료</button>
+        ) : isOffToday ? (
+          <button type="button"
+            onClick={(e) => { e.stopPropagation(); if (confirm(`${staff.name}님은 근무일지상 오늘 휴무입니다. 그래도 출근 처리할까요?`)) onCheckIn && onCheckIn(); }}
+            title="근무일지: 오늘 휴무 — 클릭 시 확인 후 출근 처리"
+            style={{ flex: 1, padding: "5px", borderRadius: 4, background: "rgba(167,139,250,0.18)", color: "#c4b5fd", border: "1px solid rgba(167,139,250,0.4)", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>휴무 (출근?)</button>
         ) : (
           <button type="button" onClick={(e) => { e.stopPropagation(); onCheckIn && onCheckIn(); }}
             style={{ flex: 1, padding: "5px", borderRadius: 4, background: "#10b981", color: "#0f172a", border: "none", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>출근</button>
