@@ -156,19 +156,18 @@ async function mountReactApp() {
     }
   }
 
-  // 6) 부팅 후 1회: 로컬에만 있고 클라우드에 없거나 더 최신인 jamsa_* 키를
-  //    클라우드로 푸시 (이전 fix 적용 전에 저장됐던 데이터 복구).
-  //    로그인된 세션에서만 동작.
+  // 6) 부팅마다: 로컬에만 있고 클라우드에 없거나 더 최신인 jamsa_* 키를
+  //    클라우드로 푸시. 다른 디바이스에서 hydrate 받아갈 수 있게.
+  //    1회 제한을 없애서 매번 boot 마다 확인 (idempotent).
   if (supabase && session) {
     setTimeout(() => bootstrapPushLocalToCloud().catch(() => {}), 1500);
   }
 }
 
-// 부팅 1회: localStorage 의 모든 jamsa_* 키를 클라우드와 비교 후 누락된/다른 키만 푸시.
-// 이전에 권한/멤버십 문제로 클라우드 저장이 실패한 데이터가 있어도 한 번 살아남.
+// 부팅마다: localStorage 의 모든 jamsa_* 키를 클라우드와 비교 후 누락된/다른 키만 푸시.
+// 매번 실행 (idempotent: 차이 없으면 0건 푸시).  로그인 상태에서만 동작.
 async function bootstrapPushLocalToCloud() {
   if (!supabase || !session) return;
-  if (localStorage.getItem('jamsa_bootstrap_pushed_at')) return; // 1회만
   try {
     // 클라우드에 있는 키 목록
     const remoteRes = await fetch(PANEL_ORIGIN + '/api/data-bulk', { cache: 'no-store' });
@@ -180,23 +179,30 @@ async function bootstrapPushLocalToCloud() {
       // 동기화 대상에서 제외할 키 (세션/임시/기기 종속)
       if (k === 'jamsa_sb_session' || k === 'jamsa_bootstrap_pushed_at') continue;
       if (k.endsWith('_collapsed') || k.endsWith('_dismissed')) continue;
+      if (k.startsWith('jamsa_data_protection_')) continue;
       const localRaw = localStorage.getItem(k);
       if (!localRaw) continue;
       // 큰 값(이미지 등) 건너뛰기
       if (localRaw.length > 4 * 1024 * 1024) continue;
       let localParsed;
       try { localParsed = JSON.parse(localRaw); } catch { localParsed = localRaw; }
+      // 빈 값(빈 객체/배열) 푸시 안 함 (클라우드 기존 데이터 보호)
+      if (localParsed == null) continue;
+      if (Array.isArray(localParsed) && localParsed.length === 0) continue;
+      if (typeof localParsed === 'object' && Object.keys(localParsed).length === 0) continue;
       const remoteParsed = remote[k];
-      const remoteRaw = remoteParsed !== undefined ? JSON.stringify(remoteParsed) : null;
-      if (remoteRaw !== localRaw) {
-        toPush.push([k, localParsed]);
-      }
+      // 비교: 둘 다 stringify 해서 정확히 같으면 스킵
+      const remoteStr = remoteParsed !== undefined ? JSON.stringify(remoteParsed) : null;
+      const localStr2 = JSON.stringify(localParsed);
+      if (remoteStr === localStr2) continue;
+      toPush.push([k, localParsed]);
     }
     if (toPush.length === 0) {
-      _origSetItem('jamsa_bootstrap_pushed_at', String(Date.now()));
+      console.log('[bootstrap push] no differences, all synced');
       return;
     }
-    setSyncStatus('syncing', `최초 동기화 ${toPush.length}건...`);
+    console.log('[bootstrap push] pushing', toPush.length, 'keys:', toPush.map(([k]) => k));
+    setSyncStatus('syncing', `클라우드 업로드 ${toPush.length}건...`);
     let ok = 0, failed = 0;
     for (const [key, value] of toPush) {
       try {
@@ -205,14 +211,16 @@ async function bootstrapPushLocalToCloud() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(value),
         });
-        if (res.ok) ok++; else failed++;
-      } catch (e) { failed++; }
+        if (res.ok) { ok++; }
+        else {
+          failed++;
+          console.warn('[bootstrap push] PUT failed', key, res.status, await res.text().catch(() => ''));
+        }
+      } catch (e) { failed++; console.warn('[bootstrap push] err', key, e.message); }
     }
-    setSyncStatus(failed === 0 ? 'ok' : 'partial', `최초 동기화 ${ok}/${toPush.length}`);
+    setSyncStatus(failed === 0 ? 'ok' : 'partial', `클라우드 업로드 ${ok}/${toPush.length}`);
     setTimeout(() => setSyncStatus('idle', '클라우드 ✓'), 4000);
-    if (failed === 0) {
-      _origSetItem('jamsa_bootstrap_pushed_at', String(Date.now()));
-    }
+    console.log('[bootstrap push] done:', { ok, failed, total: toPush.length });
   } catch (e) {
     console.warn('[bootstrap push] failed:', e);
   }
