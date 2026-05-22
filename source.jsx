@@ -23852,22 +23852,28 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           }
         });
         if (hasAny) {
-          // 스팟이 꽉 차도록 fitBounds — 패딩 60px (마커가 잘리지 않게)
-          naverMapRef.current.fitBounds(bounds, { top: 60, right: 60, bottom: 60, left: 60 });
-          // fitBounds 완료 후 현재 zoom을 minZoom·maxBounds로 잠금
+          // 스팟 클러스터 bounds에서 캠퍼스 전체가 보이도록 지리적 패딩 추가
+          // ±0.0045° lat (~500m), ±0.0056° lng (~500m @36.6°N) → 빨간 원 영역 포함
+          const GEO_LAT = 0.0045, GEO_LNG = 0.0056;
+          const sw0 = bounds.getSW(), ne0 = bounds.getNE();
+          const campusBounds = new naver.maps.LatLngBounds(
+            new naver.maps.LatLng(sw0.lat() - GEO_LAT, sw0.lng() - GEO_LNG),
+            new naver.maps.LatLng(ne0.lat() + GEO_LAT, ne0.lng() + GEO_LNG),
+          );
+          naverMapRef.current.fitBounds(campusBounds, { top: 20, right: 20, bottom: 20, left: 20 });
+          // fitBounds 완료 후 현재 zoom을 minZoom으로 고정 — 그 이상 줄어들지 않게
           setTimeout(() => {
             try {
               const z = naverMapRef.current.getZoom();
               naverMapRef.current.setOptions({ minZoom: z, maxZoom: 21 });
-              // panning 제한: 스팟 영역에서 살짝(약 30% 외곽) 벗어나는 정도까지만 허용
-              const sw = bounds.getSW(), ne = bounds.getNE();
-              const latPad = (ne.lat() - sw.lat()) * 0.3;
-              const lngPad = (ne.lng() - sw.lng()) * 0.3;
-              const padded = new naver.maps.LatLngBounds(
-                new naver.maps.LatLng(sw.lat() - latPad, sw.lng() - lngPad),
-                new naver.maps.LatLng(ne.lat() + latPad, ne.lng() + lngPad),
-              );
-              naverMapRef.current.setOptions({ maxBounds: padded });
+              // panning 제한: 캠퍼스 bounds + 10% 여유
+              const swC = campusBounds.getSW(), neC = campusBounds.getNE();
+              const lpC = (neC.lat() - swC.lat()) * 0.1;
+              const lgC = (neC.lng() - swC.lng()) * 0.1;
+              naverMapRef.current.setOptions({ maxBounds: new naver.maps.LatLngBounds(
+                new naver.maps.LatLng(swC.lat() - lpC, swC.lng() - lgC),
+                new naver.maps.LatLng(neC.lat() + lpC, neC.lng() + lgC),
+              )});
             } catch (e) { console.warn("[NaverMap] minZoom/maxBounds set failed:", e?.message); }
           }, 250);
           naverInitialFitRef.current = true;
