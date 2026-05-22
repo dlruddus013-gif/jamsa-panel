@@ -23800,9 +23800,12 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         const _outerAnim = _hasAnyDanger ? "animation:cctvDangerPulse 1.2s infinite;" : _hasAnyWarn ? "animation:cctvWarnPulse 1.6s infinite;" : "";
         const _outerBorder = cctvEditMode ? "2px dashed #fbbf24" : `2px solid ${_outerBorderColor}`;
         const _outerShadow = cctvEditMode ? "0 0 0 3px rgba(251,191,36,0.4),0 4px 14px rgba(0,0,0,0.5)" : "0 4px 14px rgba(0,0,0,0.5)";
+        // 외곽 클릭: 편집모드면 채널 매핑 변경, 아니면 첫 채널 풀스크린 모달 오픈
         const _cctvClick = cctvEditMode && _firstCh
           ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${_firstCh})"`
-          : ``; // 각 셀이 자체 클릭 핸들러로 모달 오픈 — 외곽 toggle 비활성화
+          : (_firstCh
+              ? `onclick="event.stopPropagation();window.dispatchEvent(new CustomEvent('jamsa:cctv-open',{detail:{ch:${_firstCh},zoneId:'${z.id}',zoneName:${JSON.stringify(z.name)}}}))"`
+              : ``);
 
         // 각 채널 셀 HTML 생성
         const _cellsHtml = _n > 0 ? _dispChs.map(ch => {
@@ -26570,9 +26573,9 @@ window.onload = () => {
         const levelColor = a?.level === "DANGER" ? "#dc2626" : a?.level === "WARNING" ? "#f59e0b" : "#10b981";
         return (
           <div onClick={() => setCctvFullView(null)}
-            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.92)", zIndex: 20000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.96)", zIndex: 20000, display: "flex", alignItems: "stretch", justifyContent: "center", padding: 0 }}>
             <div onClick={e => e.stopPropagation()}
-              style={{ background: "#0b1220", borderRadius: 12, maxWidth: "min(96vw, 1200px)", maxHeight: "94vh", width: "100%", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 30px 80px rgba(0,0,0,0.7)", border: "1px solid rgba(255,255,255,0.1)" }}>
+              style={{ background: "#0b1220", width: "100vw", height: "100vh", maxWidth: "100vw", maxHeight: "100vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "none", border: "none" }}>
               {/* 헤더 */}
               <div style={{ padding: "12px 16px", background: "linear-gradient(135deg,#0891b2,#7c3aed)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -26591,11 +26594,11 @@ window.onload = () => {
                     style={{ width: 32, height: 32, background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.25)", color: "#fff", borderRadius: 6, fontSize: 18, cursor: "pointer", lineHeight: 1 }}>×</button>
                 </div>
               </div>
-              {/* 본체: 스냅샷 + (있으면) AI 분석 */}
-              <div style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column", background: "#000" }}>
-                <div style={{ position: "relative", flex: 1, minHeight: 280, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              {/* 본체: 스냅샷 + (있으면) AI 분석 — 화면을 꽉 채움 */}
+              <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", background: "#000", minHeight: 0 }}>
+                <div style={{ position: "relative", flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
                   <img src={snapUrl} alt={`CH${ch}`} referrerPolicy="no-referrer"
-                    style={{ maxWidth: "100%", maxHeight: "76vh", width: "auto", height: "auto", objectFit: "contain", display: "block" }}
+                    style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
                     onError={(e) => { e.currentTarget.style.display = "none"; const fb = e.currentTarget.nextSibling; if (fb) fb.style.display = "flex"; }} />
                   <div style={{ display: "none", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 40, color: "#94a3b8", textAlign: "center" }}>
                     <div style={{ fontSize: 48 }}>📷</div>
@@ -27479,7 +27482,10 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
       const outerBorderColor = cctvEditMode ? "#fbbf24" : hasAnyDanger ? "#dc2626" : hasAnyWarn ? "#f59e0b" : "rgba(255,255,255,0.85)";
       const outerBorderStyle = cctvEditMode ? "dashed" : "solid";
       const outerAnim = hasAnyDanger ? "animation:cctvDangerPulse 1.2s infinite;" : hasAnyWarn ? "animation:cctvWarnPulse 1.6s infinite;" : "";
-      const cctvClickAttr = ''; // 외곽 toggle 비활성 — 각 셀이 직접 모달 오픈
+      // 외곽 클릭: 첫 채널을 풀스크린 모달로
+      const cctvClickAttr = firstCh
+        ? `onclick="event.stopPropagation();window.dispatchEvent(new CustomEvent('jamsa:cctv-open',{detail:{ch:${firstCh},zoneId:'${z.id}',zoneName:${JSON.stringify(z.name)}}}))"`
+        : '';
 
       const liveTs = Math.floor(Date.now() / 5000) * 5000;
       const dirBase = (() => { try { return getEffectiveCctvServerUrl?.() || DEFAULT_CCTV_SERVER_URL; } catch (e) { return DEFAULT_CCTV_SERVER_URL; } })();
