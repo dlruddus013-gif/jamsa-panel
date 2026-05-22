@@ -6039,7 +6039,7 @@ const CCTV_AUTO_MAP = {
   farm:    [],                          // 뽕나무밭 (CCTV 없음)
   gh:      [],                          // 온실창고 (CCTV 없음)
   water:   [],                          // 물놀이장 (CCTV 없음)
-  garden:  [],                          // 양매정원 (CCTV 없음)
+  garden:  [],                          // 양떼정원 (CCTV 없음)
   storage: [9],                         // 수장고 → 창고
   bldg:    [1, 3, 4, 5, 7, 10],        // 박물관 → 입구/로비/전시실/복도/사무실
   shop:    [11, 24, 36, 37, 38, 39, 40], // 매점 → 식당/매표소
@@ -6067,7 +6067,7 @@ const ZONE_KEYWORDS = {
   farm:    ["뽕", "농경", "뽕나무밭"],
   gh:      ["온실"],
   water:   ["물놀이", "수영"],
-  garden:  ["텃밭", "정원", "화단", "양매"],
+  garden:  ["텃밭", "정원", "화단", "양떼", "양매"],
   rest:    ["썰매", "사계절"],
   basic:   ["기본", "잠사식당", "구내"],
   kidscafe:  ["키즈", "카페", "kids"],
@@ -6140,27 +6140,31 @@ function saveCctvMap(map) {
 }
 
 const BASE_ZONES = [
-  // 북쪽 라인 (박물관 입구 쪽) — 위치안내도 기준
-  { id:"farm",    name:"뽕나무밭",             color:"#6D4C41", x:7,  y:5,  w:19, h:21, icon:"🌿", desc:"뽕나무 재배·농경 체험",        lat: 36.63867, lng: 127.38245 },
-  { id:"gh",      name:"온실창고",             color:"#2E7D32", x:26, y:7,  w:9,  h:18, icon:"🏠", desc:"온실 및 하우스용품 창고",      lat: 36.63865, lng: 127.38263 },
-  { id:"water",   name:"물놀이장",             color:"#1565C0", x:34, y:4,  w:13, h:15, icon:"💧", desc:"여름 체험 물놀이 시설",        lat: 36.63870, lng: 127.38278 },
-  { id:"garden",  name:"양매정원",             color:"#558B2F", x:49, y:4,  w:17, h:24, icon:"🌱", desc:"양매(梅)·자생식물 정원",       lat: 36.63863, lng: 127.38295 },
-  { id:"storage", name:"수장고",               color:"#3949AB", x:69, y:3,  w:20, h:30, icon:"📦", desc:"수장고 A-5~C-2 등",            lat: 36.63860, lng: 127.38312 },
-  // 중앙 라인 (메인 건물군 - 박물관 중심부)
-  { id:"bldg",    name:"박물관",               color:"#00695C", x:4,  y:33, w:15, h:16, icon:"🏛️", desc:"한국잠사박물관 본관 (전시동)", lat: 36.63838, lng: 127.38258 },
-  { id:"shop",    name:"매점",                 color:"#E65100", x:19, y:32, w:11, h:13, icon:"🏪", desc:"매점 및 체험 접수처",          lat: 36.63840, lng: 127.38275 },
-  { id:"dome",    name:"누에쉼터",             color:"#6A1B9A", x:34, y:35, w:15, h:20, icon:"🔬", desc:"돔형 누에 과학·체험관",        lat: 36.63833, lng: 127.38288 },
-  { id:"field",   name:"잔디광장",             color:"#37474F", x:52, y:28, w:28, h:32, icon:"🟩", desc:"야외 잔디광장 · 단체 행사",    lat: 36.63828, lng: 127.38305 },
-  // 남쪽 라인 (휴게·주차·놀이)
-  { id:"park",    name:"주차장",               color:"#C62828", x:3,  y:55, w:13, h:20, icon:"🚌", desc:"관람버스·차량 주차",           lat: 36.63818, lng: 127.38248 },
-  { id:"forest",  name:"뽕나무숲",             color:"#1B5E20", x:17, y:52, w:21, h:28, icon:"🌳", desc:"산책로·자연학습원",            lat: 36.63815, lng: 127.38268 },
-  { id:"rest",    name:"사계절썰매장",         color:"#F57F17", x:39, y:53, w:11, h:11, icon:"🛷", desc:"사계절 썰매·놀이",             lat: 36.63817, lng: 127.38285 },
-  { id:"basic",   name:"잠사식당",             color:"#00838F", x:45, y:64, w:13, h:13, icon:"🍱", desc:"단체 식사·구내식당",           lat: 36.63808, lng: 127.38300 },
-  // 위치안내도 추가 스팟 — 좌표는 추정. 스팟 편집(✏️)으로 정확한 위치 조정 권장
-  { id:"kidscafe",name:"키즈카페",             color:"#D81B60", x:7,  y:28, w:11, h:12, icon:"🚗", desc:"실내 키즈카페·자동차 놀이",     lat: 36.63855, lng: 127.38238 },
-  { id:"snowslide",name:"눈썰매장",            color:"#0288D1", x:60, y:50, w:13, h:14, icon:"❄️", desc:"겨울 눈썰매 슬로프",            lat: 36.63823, lng: 127.38313 },
-  { id:"lawnpark",name:"잔디나무밭",           color:"#43A047", x:67, y:38, w:14, h:14, icon:"🌲", desc:"잔디·교목 산책 공간",           lat: 36.63832, lng: 127.38322 },
-  { id:"weather", name:"기상관측소",           color:"#5E35B1", x:80, y:60, w:7,  h:8,  icon:"🌡️", desc:"기상관측 장비 설치 지점",        lat: 36.63802, lng: 127.38328 },
+  // ━━ 위치안내도(공식 브로슈어) 레이아웃 ━━
+  // 박물관(돔) 중심으로 시계방향 배치
+  // 박물관 좌표: 36.63833, 127.38288 (위성지도 상 중앙 돔)
+  //
+  // ── 북쪽 라인 (안내도 상단) ──
+  { id:"dome",    name:"누에쉼터",       color:"#6A1B9A", x:5,  y:8,  w:13, h:13, icon:"🪱", desc:"누에 체험·휴게 공간",        lat: 36.63862, lng: 127.38260 },
+  { id:"snowslide",name:"눈썰매장",       color:"#0288D1", x:32, y:5,  w:13, h:13, icon:"❄️", desc:"겨울 눈썰매 슬로프",         lat: 36.63862, lng: 127.38285 },
+  { id:"garden",  name:"양떼정원",       color:"#558B2F", x:55, y:5,  w:16, h:14, icon:"🐑", desc:"양·자생식물 정원",           lat: 36.63862, lng: 127.38310 },
+  { id:"weather", name:"기상관측소",     color:"#5E35B1", x:78, y:6,  w:10, h:10, icon:"🌡️", desc:"기상관측 장비 설치 지점",     lat: 36.63858, lng: 127.38328 },
+  // ── 상중부 라인 ──
+  { id:"basic",   name:"잠사식당",       color:"#00838F", x:3,  y:22, w:13, h:11, icon:"🍱", desc:"단체 식사·구내식당",         lat: 36.63852, lng: 127.38258 },
+  { id:"gh",      name:"온실창고",       color:"#2E7D32", x:20, y:22, w:11, h:10, icon:"🏠", desc:"온실 및 하우스용품 창고",     lat: 36.63850, lng: 127.38275 },
+  { id:"field",   name:"잔디광장",       color:"#37474F", x:34, y:22, w:18, h:12, icon:"🟩", desc:"야외 잔디광장·단체 행사",     lat: 36.63848, lng: 127.38295 },
+  { id:"farm",    name:"뽕나무밭",       color:"#6D4C41", x:56, y:22, w:14, h:12, icon:"🌿", desc:"뽕나무 재배·농경 체험",       lat: 36.63848, lng: 127.38320 },
+  { id:"storage", name:"수장고",         color:"#3949AB", x:73, y:22, w:14, h:13, icon:"📦", desc:"수장고 A-5~C-2",              lat: 36.63848, lng: 127.38335 },
+  // ── 중앙 라인 (박물관 돔 중심) ──
+  { id:"kidscafe",name:"키즈카페",       color:"#D81B60", x:3,  y:40, w:13, h:13, icon:"🚗", desc:"실내 키즈카페·자동차 놀이",   lat: 36.63832, lng: 127.38255 },
+  { id:"bldg",    name:"박물관",         color:"#00695C", x:30, y:40, w:16, h:16, icon:"🏛️", desc:"한국잠사박물관 본관(돔)",     lat: 36.63833, lng: 127.38288 },
+  { id:"shop",    name:"매점",           color:"#E65100", x:48, y:42, w:11, h:11, icon:"🏪", desc:"매점·체험 접수처",            lat: 36.63830, lng: 127.38305 },
+  { id:"water",   name:"물놀이장",       color:"#1565C0", x:62, y:40, w:12, h:13, icon:"💧", desc:"여름 체험 물놀이 시설",       lat: 36.63838, lng: 127.38315 },
+  // ── 남쪽 라인 ──
+  { id:"park",    name:"1주차장",        color:"#C62828", x:3,  y:62, w:14, h:14, icon:"🚌", desc:"관람버스·차량 주차",          lat: 36.63815, lng: 127.38255 },
+  { id:"forest",  name:"뽕나무숲",       color:"#1B5E20", x:20, y:64, w:14, h:14, icon:"🌳", desc:"산책로·자연학습원",           lat: 36.63810, lng: 127.38275 },
+  { id:"rest",    name:"사계절썰매장",   color:"#F57F17", x:38, y:62, w:14, h:14, icon:"🛷", desc:"사계절 썰매·놀이",            lat: 36.63817, lng: 127.38290 },
+  { id:"lawnpark",name:"잔디나무밭",     color:"#43A047", x:56, y:64, w:13, h:13, icon:"🌲", desc:"잔디·교목 산책 공간",         lat: 36.63813, lng: 127.38315 },
 ];
 
 // Backward-compat alias — older code still references ZONES for static lookups.
@@ -6342,12 +6346,12 @@ const Z_LOCS = {
   farm:["뽕나무밭","뽕밭"],
   gh:["온실창고","온실창고 B-3","온실창고 C-4"],
   water:["물놀이장"],
-  garden:["양매정원","텃밭","정원"],
+  garden:["양떼정원","양매정원","텃밭","정원"],
   storage:["수장고","수장고 A-5","수장고 A-6","수장고 B-2","수장고 C-2","수장고 뒤쪽"],
   bldg:["박물관","본관","전시동","사무용품"],
   shop:["매점","체험접수"],
   dome:["누에쉼터","누에과학관"],
-  park:["주차장"],
+  park:["1주차장","주차장","제1주차장"],
   rest:["사계절썰매장","쉼터"],
   forest:["뽕나무숲","산책로"],
   field:["잔디광장","검정비닐천막","이동식 공구대 B-1"],
@@ -23500,12 +23504,15 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
             try {
               const _center = (typeof bounds.getCenter === "function") ? bounds.getCenter() : null;
               const _z = naverMapRef.current.getZoom();
-              const _minZ = spreadMode ? 17 : 20;
+              // 위치안내도처럼 박물관 영역 + 주변 일부를 보여주는 디폴트 줌
+              const _minZ = spreadMode ? 17 : 18;
               if (_z < _minZ) {
                 if (_center) naverMapRef.current.setCenter(_center);
                 naverMapRef.current.setZoom(_minZ);
-              } else if (_z > 21) {
-                naverMapRef.current.setZoom(21);
+              } else if (_z > 19) {
+                // 너무 확대되지 않도록 상한 19
+                if (_center) naverMapRef.current.setCenter(_center);
+                naverMapRef.current.setZoom(19);
               }
             } catch (e) {}
           }
