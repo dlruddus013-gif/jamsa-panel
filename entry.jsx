@@ -72,17 +72,27 @@ async function boot() {
       } catch (e) {}
     }
 
-    // 로그인 안 됐으면 로그인 화면 표시 (React 마운트 안 함)
+    // 로그인 안 됐어도 React 는 마운트 — 누구나 동일한 지도/CCTV 배치를 볼 수 있게.
+    // (편집은 패널 안에서 로그인 버튼으로 로그인 후 가능)
+    // 자동 로그인 정보가 있으면 시도, 없으면 그냥 비로그인 상태로 진행
     if (!session) {
-      setMsg('로그인 필요');
-      window.__hideLoading?.();
-      showAuthScreen();
-      return;
+      const remembered = loadRememberCreds && loadRememberCreds();
+      if (remembered?.email && remembered?.password) {
+        setMsg('자동 로그인 중...');
+        try {
+          const { data, error } = await supabase.auth.signInWithPassword({
+            email: remembered.email, password: remembered.password,
+          });
+          if (!error && data?.session) {
+            session = data.session;
+            window.__authToken = session.access_token || null;
+            window.__supabaseUserEmail = session.user?.email || null;
+          }
+        } catch (e) { console.warn('[auto-login]', e); }
+      }
+      // 자동 로그인 실패해도 그냥 진행 (읽기 전용 모드)
     }
-
-    // ⚡ 핵심 개선: localStorage에 캐시된 데이터로 React 즉시 마운트
-    // 백엔드 동기화는 백그라운드에서 진행 (사용자는 즉시 화면 봄)
-    setMsg('화면 준비 중...');
+    setMsg(session ? '화면 준비 중...' : '읽기 모드 (편집은 로그인 필요)');
   } else {
     setMsg('로컬 모드 (Supabase 미설정)');
   }
@@ -94,27 +104,25 @@ async function boot() {
 // React 앱 마운트 (boot + 로그인 후 재호출 가능)
 let _reactRoot = null;
 async function mountReactApp() {
-  // 3) Hydrate BEFORE React mount — so React 컴포넌트의 useState 초기화 시 클라우드 데이터를 본다.
-  //    이전에는 마운트 후 100ms 뒤에 hydrate 했기 때문에 새 기기/시크릿 모드에서
-  //    지도 배치·CCTV 매핑 등 모든 jamsa_* 데이터가 기본값으로 보였음.
+  // 3) Hydrate BEFORE React mount — 로그인 여부와 무관하게 모든 기기에서 동일한
+  //    지도/CCTV/게이트웨이 배치를 보도록 공개 GET 으로 클라우드 데이터를 가져온다.
+  //    (잠사박물관 단일 org 전용 패널이라 익명 GET 도 같은 ORG_ID 데이터를 반환)
   //    빠른 응답을 위해 3.5초 타임아웃 — 그 안에 안 오면 일단 로컬로 마운트하고 백그라운드에서 계속.
   let preHydratedCount = 0;
   let preHydrateFailed = false;
-  if (supabase && session) {
-    const setMsg = (m) => {
-      const el = document.getElementById('loadingMsg');
-      if (el) el.textContent = m;
-    };
-    setMsg('클라우드 데이터 동기화 중...');
-    try {
-      preHydratedCount = await Promise.race([
-        hydrateFromBackend(),
-        new Promise((resolve) => setTimeout(() => { preHydrateFailed = true; resolve(0); }, 3500)),
-      ]) || 0;
-    } catch (e) {
-      console.warn('[boot] pre-hydrate failed:', e);
-      preHydrateFailed = true;
-    }
+  const setMsg = (m) => {
+    const el = document.getElementById('loadingMsg');
+    if (el) el.textContent = m;
+  };
+  setMsg('클라우드 데이터 동기화 중...');
+  try {
+    preHydratedCount = await Promise.race([
+      hydrateFromBackend(),
+      new Promise((resolve) => setTimeout(() => { preHydrateFailed = true; resolve(0); }, 3500)),
+    ]) || 0;
+  } catch (e) {
+    console.warn('[boot] pre-hydrate failed:', e);
+    preHydrateFailed = true;
   }
 
   // 4) React 마운트 (이미 있으면 재사용)
@@ -169,10 +177,12 @@ window.authFetch = authFetch;
 //  Supabase 백엔드 sync (일괄 API로 1번 호출)
 // ════════════════════════════════════════════════
 async function hydrateFromBackend() {
-  if (!supabase || !session) return;
+  // /api/data-bulk 는 공개 GET — 로그인 없어도 클라우드 데이터를 가져올 수 있어
+  // 다른 IP/기기/앱에서도 같은 지도 배치가 보임.
   try {
     // 한 번의 호출로 모든 데이터 가져오기 (이전: 30-50번 → 이후: 1번)
-    const res = await authFetch('/api/data-bulk');
+    // 익명 GET 이라 authFetch 대신 그냥 fetch 사용 (토큰이 있어도 무방)
+    const res = await fetch(PANEL_ORIGIN + '/api/data-bulk', { cache: 'no-store' });
     if (!res.ok) {
       // 폴백: 기존 방식 (병렬)
       console.warn('[hydrate] bulk failed, fallback to parallel:', res.status);
@@ -197,18 +207,17 @@ async function hydrateFromBackend() {
   }
 }
 
-// 폴백: 병렬 fetch
+// 폴백: 병렬 fetch (공개 GET — 로그인 없이도 작동)
 async function hydrateFromBackendLegacy() {
-  if (!supabase || !session) return;
   try {
-    const res = await authFetch('/api/keys');
+    const res = await fetch(PANEL_ORIGIN + '/api/keys', { cache: 'no-store' });
     if (!res.ok) return 0;
     const keys = await res.json();
     const validKeys = keys.filter(meta => meta.key.startsWith(SYNC_PREFIX));
     if (validKeys.length === 0) return 0;
 
     const fetchPromises = validKeys.map(meta =>
-      authFetch('/api/data/' + encodeURIComponent(meta.key))
+      fetch(PANEL_ORIGIN + '/api/data/' + encodeURIComponent(meta.key), { cache: 'no-store' })
         .then(r => r.ok ? r.json().then(data => ({ key: meta.key, data })) : null)
         .catch(() => null)
     );

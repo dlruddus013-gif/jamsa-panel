@@ -1,8 +1,10 @@
 // api/data-bulk.js - 한 번의 호출로 모든 데이터 반환 (성능 최적화)
-import { adminClient, requireAuth } from '../lib/auth.js';
+// 잠사박물관 단일 org 전용 패널이므로 GET 은 공개 — 로그인 없이 다른 IP/기기에서도
+// 동일한 지도/CCTV/게이트웨이 배치를 볼 수 있어야 함.
+import { adminClient, publicReadContext } from '../lib/auth.js';
 
 export default async function handler(req, res) {
-  const ctx = await requireAuth(req, res);
+  const ctx = publicReadContext(req, res);
   if (!ctx) return;
 
   if (req.method !== 'GET') {
@@ -28,8 +30,8 @@ export default async function handler(req, res) {
       result[row.key] = row.value;
     }
 
-    // 30분 캐시 가능하지만 실시간성 위해 짧게
-    res.setHeader('Cache-Control', 'private, max-age=10');
+    // 짧은 캐시 — 다른 기기에서 새로고침 시 즉시 반영되도록
+    res.setHeader('Cache-Control', 'public, max-age=5');
     res.json({
       ok: true,
       count: Object.keys(result).length,

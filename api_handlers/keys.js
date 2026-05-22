@@ -1,8 +1,8 @@
-// api/keys.js - 모든 컬렉션 목록
-import { adminClient, requireAuth } from '../lib/auth.js';
+// api/keys.js - 모든 컬렉션 목록 (공개 — 잠사박물관 단일 org 전용)
+import { adminClient, publicReadContext } from '../lib/auth.js';
 
 export default async function handler(req, res) {
-  const ctx = await requireAuth(req, res);
+  const ctx = publicReadContext(req, res);
   if (!ctx) return;
 
   if (req.method !== 'GET') {

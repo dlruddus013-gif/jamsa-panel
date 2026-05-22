@@ -1,28 +1,34 @@
 // api/data/[key].js - KV store CRUD
-import { adminClient, requireAuth, hasRole, audit, validateKey, validateValueSize } from '../../lib/auth.js';
+// 잠사박물관 단일 org 전용 — GET 은 공개(누구나 같은 데이터를 봄),
+// PUT/POST/DELETE 는 로그인된 멤버만 가능.
+import { adminClient, requireAuth, publicReadContext, hasRole, audit, validateKey, validateValueSize } from '../../lib/auth.js';
 
 export default async function handler(req, res) {
-  const ctx = await requireAuth(req, res);
-  if (!ctx) return;
-
   const { key } = req.query;
   if (!validateKey(key)) {
     return res.status(400).json({ error: 'invalid_key', detail: 'must match jamsa_[a-z0-9_-]+' });
   }
 
-  // ── GET: 데이터 읽기 ──
+  // ── GET: 데이터 읽기 (공개) ──
   if (req.method === 'GET') {
+    const pub = publicReadContext(req, res);
+    if (!pub) return;
     const { data, error } = await adminClient
       .from('kv_store')
       .select('value, updated_at, updated_by')
-      .eq('org_id', ctx.orgId)
+      .eq('org_id', pub.orgId)
       .eq('key', key)
       .maybeSingle();
 
     if (error) return res.status(500).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'not_found', key });
+    res.setHeader('Cache-Control', 'public, max-age=5');
     return res.json(data.value);
   }
+
+  // 이하 쓰기/삭제는 인증 필요
+  const ctx = await requireAuth(req, res);
+  if (!ctx) return;
 
   // ── PUT/POST: 데이터 저장 (전체 교체) ──
   if (req.method === 'PUT' || req.method === 'POST') {
