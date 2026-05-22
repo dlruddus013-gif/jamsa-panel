@@ -23414,65 +23414,64 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           ? `<div style="position:absolute;top:-22px;left:50%;transform:translateX(-50%);background:${_crowdColor};color:#fff;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:900;white-space:nowrap;z-index:3;box-shadow:0 2px 6px rgba(0,0,0,0.3);">👥 ${_peopleCount}명${_crowdLabel ? ' ' + _crowdLabel : ''}</div>`
           : "";
 
-        // ━━ CCTV 미니창 HTML ━━
+        // ━━ CCTV 미니창 HTML (다중 채널 그리드) ━━
         const _channels = (_zoneToCh[z.id] || []).sort((a, b) => a - b);
         const _firstCh = _channels[0];
-        const _snap = _firstCh ? _snaps[_firstCh] : null;
-        const _chAna = _firstCh ? _ana[_firstCh] : null;
-        // ✨ snapshots에 url이 없으면 CCTV 서버 직접 URL을 fallback으로 사용 — 항상 영상이 보이도록
-        //    cctvSnapshotData 동기화 실패에 무관하게 동작 / 5초마다 같은 ts → 캐시 + 자동 갱신
         const _liveTs = Math.floor(Date.now() / 5000) * 5000;
         const _directBase = (typeof window !== "undefined")
           ? (() => { try { return getEffectiveCctvServerUrl(); } catch (e) { return DEFAULT_CCTV_SERVER_URL; } })()
           : DEFAULT_CCTV_SERVER_URL;
-        const _liveUrl = _firstCh
-          ? (_snap?.url && !_snap?.error
-              ? _snap.url
-              : `${_directBase.replace(/\/+$/, "")}/api/snap/${_firstCh}?t=${_liveTs}`)
-          : null;
-        const _showMini = _cctvEnabled && _firstCh && !!_liveUrl;
-        let _cctvBorder = "rgba(255,255,255,0.9)";
-        let _cctvAnim = "";
-        if (_chAna?.level === "DANGER") {
-          _cctvBorder = "#dc2626";
-          _cctvAnim = "animation:cctvDangerPulse 1.2s infinite;";
-        } else if (_chAna?.level === "WARNING") {
-          _cctvBorder = "#f59e0b";
-          _cctvAnim = "animation:cctvWarnPulse 1.6s infinite;";
-        }
-        // 편집 모드일 때 클릭 핸들러 (드래그 대신) — 평상시엔 클릭으로 확대/축소 토글
+
+        // 그리드 레이아웃 결정: 1개=단독, 2개=1×2, 3~4개=2×2, 5~6개=2×3 (최대 6개 표시)
+        const _dispChs = _channels.slice(0, 6);
+        const _n = _dispChs.length;
+        const _cols = _n === 1 ? 1 : 2;
+        const _cellW = _n === 1 ? 140 : 88;
+        const _cellH = _n === 1 ? 95 : 62;
+        const _gridW = _cols * _cellW + (_cols - 1) * 2; // 셀 + 갭
+        const _hasAnyDanger = _dispChs.some(ch => _ana[ch]?.level === "DANGER");
+        const _hasAnyWarn = _dispChs.some(ch => _ana[ch]?.level === "WARNING");
+        const _outerBorderColor = _hasAnyDanger ? "#dc2626" : _hasAnyWarn ? "#f59e0b" : "rgba(255,255,255,0.85)";
+        const _outerAnim = _hasAnyDanger ? "animation:cctvDangerPulse 1.2s infinite;" : _hasAnyWarn ? "animation:cctvWarnPulse 1.6s infinite;" : "";
+        const _outerBorder = cctvEditMode ? "2px dashed #fbbf24" : `2px solid ${_outerBorderColor}`;
+        const _outerShadow = cctvEditMode ? "0 0 0 3px rgba(251,191,36,0.4),0 4px 14px rgba(0,0,0,0.5)" : "0 4px 14px rgba(0,0,0,0.5)";
         const _cctvClick = cctvEditMode && _firstCh
           ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${_firstCh})"`
           : `onclick="event.stopPropagation();this.classList.toggle('expanded')"`;
-        const _cctvBorderEdit = cctvEditMode ? "2px dashed #fbbf24" : `2px solid ${_cctvBorder}`;
-        const _cctvBoxShadowEdit = cctvEditMode ? "0 0 0 3px rgba(251,191,36,0.4),0 4px 12px rgba(0,0,0,0.4)" : "0 4px 12px rgba(0,0,0,0.4)";
-        const _cctvCursor = cctvEditMode ? "pointer" : "pointer";
-        const _editLabel = cctvEditMode ? '<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(251,191,36,0.95);color:#78350f;padding:2px 4px;font-size:9px;font-weight:800;text-align:center;">📝 클릭→변경</div>' : '';
-        // 영상 실패 시 보여줄 fallback (이미지 onerror에서 활성)
-        const _fallbackId = `cctvFallback_${z.id}_${_firstCh || "x"}`;
 
-        const _cctvHtml = _showMini ? `
-          <div class="jamsa-cctv-mini" ${_cctvClick} style="position:absolute;left:50px;top:-2px;width:140px;height:95px;border-radius:8px;overflow:hidden;border:${_cctvBorderEdit};${_cctvAnim}box-shadow:${_cctvBoxShadowEdit};background:#0f172a;cursor:${_cctvCursor};z-index:3;">
-            <img src="${_liveUrl}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';var fb=document.getElementById('${_fallbackId}');if(fb)fb.style.display='flex';"/>
-            <div id="${_fallbackId}" style="display:none;position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.65);background:rgba(15,23,42,0.92);">
-              <div style="font-size:24px;">📷</div>
-              <div style="font-size:11px;font-weight:700;margin-top:3px;">CH${_firstCh}</div>
-              <div style="font-size:9px;margin-top:1px;color:rgba(255,255,255,0.45);">신호 없음</div>
+        // 각 채널 셀 HTML 생성
+        const _cellsHtml = _n > 0 ? _dispChs.map(ch => {
+          const _s = _snaps[ch];
+          const _ca = _ana[ch];
+          const _url = (_s?.url && !_s?.error) ? _s.url : `${_directBase.replace(/\/+$/, "")}/api/snap/${ch}?t=${_liveTs}`;
+          const _fbId = `cctvFb_${z.id}_${ch}`;
+          let _cellBorder = "1px solid rgba(255,255,255,0.2)";
+          let _cellAnim = "";
+          if (_ca?.level === "DANGER") { _cellBorder = "1px solid #dc2626"; _cellAnim = "animation:cctvDangerPulse 1.2s infinite;"; }
+          else if (_ca?.level === "WARNING") { _cellBorder = "1px solid #f59e0b"; }
+          return `<div style="position:relative;width:${_cellW}px;height:${_cellH}px;border-radius:4px;overflow:hidden;border:${_cellBorder};${_cellAnim}background:#0f172a;flex-shrink:0;">
+            <img src="${_url}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';var fb=document.getElementById('${_fbId}');if(fb)fb.style.display='flex';"/>
+            <div id="${_fbId}" style="display:none;position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);background:rgba(15,23,42,0.93);">
+              <div style="font-size:${_n===1?'22':'14'}px;">📷</div>
+              <div style="font-size:${_n===1?'10':'8'}px;font-weight:700;margin-top:2px;">CH${ch}</div>
+              <div style="font-size:7px;color:rgba(255,255,255,0.4);">신호 없음</div>
             </div>
-            <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.75),transparent);padding:3px 6px;font-size:10px;color:#fff;font-weight:800;">CH${_firstCh}${_channels.length > 1 ? ` +${_channels.length-1}` : ''}</div>
-            ${_chAna?.level === "DANGER" || _chAna?.level === "WARNING" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:${_chAna.level === "DANGER" ? "rgba(220,38,38,0.96)" : "rgba(245,158,11,0.96)"};padding:2px 5px;font-size:10px;color:#fff;font-weight:900;text-align:center;letter-spacing:0.3px;">${_chAna.level === "DANGER" ? "🚨 위험감지" : "⚠️ 주의"} ${_chAna.score || ""}%</div>` : _editLabel}
-            <div style="position:absolute;top:4px;right:4px;width:8px;height:8px;background:#22c55e;border-radius:50%;box-shadow:0 0 6px #22c55e;animation:cctvLiveBlink 1.5s infinite;z-index:2;"></div>
-          </div>
-        ` : (_cctvEnabled && _firstCh ? `
-          <div class="jamsa-cctv-mini" ${_cctvClick} style="position:absolute;left:50px;top:-2px;width:140px;height:95px;border-radius:8px;overflow:hidden;border:${_cctvBorderEdit};background:rgba(15,23,42,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.7);box-shadow:${_cctvBoxShadowEdit};z-index:3;cursor:${_cctvCursor};">
-            <div style="font-size:26px;">📷</div>
-            <div style="font-size:11px;font-weight:700;margin-top:3px;">CH${_firstCh}${_channels.length > 1 ? ` +${_channels.length-1}` : ''}</div>
-            <div style="font-size:9px;color:${cctvEditMode ? '#fbbf24' : 'rgba(255,255,255,0.5)'};margin-top:2px;font-weight:${cctvEditMode ? '800' : '400'};">${cctvEditMode ? '📝 클릭→변경' : '서버 미가동'}</div>
-          </div>
-        ` : '');
+            <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.72),transparent);padding:2px 4px;font-size:${_n===1?'10':'8'}px;color:#fff;font-weight:800;">CH${ch}</div>
+            ${_ca?.level==="DANGER" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(220,38,38,0.96);padding:1px 3px;font-size:9px;color:#fff;font-weight:900;text-align:center;">🚨위험</div>` : _ca?.level==="WARNING" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(245,158,11,0.96);padding:1px 3px;font-size:9px;color:#fff;font-weight:900;text-align:center;">⚠️주의</div>` : ''}
+            <div style="position:absolute;top:3px;right:3px;width:6px;height:6px;background:#22c55e;border-radius:50%;box-shadow:0 0 4px #22c55e;animation:cctvLiveBlink 1.5s infinite;z-index:2;"></div>
+          </div>`;
+        }).join("") : "";
 
-        // 마커 컨테이너 너비 — CCTV 미니창 있으면 더 넓게
-        const _markerWidth = (_cctvEnabled && _firstCh) ? 195 : 46;
+        const _cctvHtml = _n > 0 ? `
+          <div class="jamsa-cctv-mini" ${_cctvClick} style="position:absolute;left:50px;top:-2px;border-radius:8px;border:${_outerBorder};${_outerAnim}box-shadow:${_outerShadow};background:rgba(10,15,30,0.95);cursor:pointer;z-index:3;padding:3px;">
+            ${_n > 1 ? `<div style="color:#cbd5e1;font-size:9px;font-weight:800;padding:1px 3px 3px;white-space:nowrap;">📹 ${_channels.length}대 연결${_channels.length>6?' (6대 표시)':''}</div>` : ''}
+            <div style="display:flex;flex-wrap:wrap;gap:2px;width:${_gridW}px;">${_cellsHtml}</div>
+            ${cctvEditMode ? `<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(251,191,36,0.95);color:#78350f;padding:2px 4px;font-size:9px;font-weight:800;text-align:center;border-radius:0 0 6px 6px;">📝 클릭→변경</div>` : ''}
+          </div>
+        ` : '';
+
+        // 마커 컨테이너 너비 — CCTV 그리드 포함
+        const _markerWidth = _n > 0 ? (50 + _gridW + 6 + 6) : 46;
 
         // 🆕 zonePhotos 로컬스토리지 직접 조회 (구역별 최신 사진 1장)
         let _photoThumb = "";
@@ -26815,44 +26814,50 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
       const badgeNum = s.openActions.length + (s.lowStock > 0 ? s.lowStock : 0);
       const isPulse = s.status === "urgent";
 
-      // 이 구역에 매핑된 첫 번째 채널 (CCTV 미니창용)
+      // 이 구역에 매핑된 채널 목록 (다중 CCTV 그리드)
       const channels = (zoneToCh[z.id] || []).sort((a, b) => a - b);
       const firstCh = channels[0];
-      const snap = firstCh ? snaps[firstCh] : null;
-      const chAna = firstCh ? ana[firstCh] : null;
-      const showCctvMini = cctvEnabled && firstCh && snap?.url && !snap?.error;
-
-      // 위험도별 테두리 색상
-      let cctvBorderColor = "rgba(255,255,255,0.9)";
-      let cctvAnimation = "";
-      if (chAna?.level === "DANGER") {
-        cctvBorderColor = "#dc2626";
-        cctvAnimation = "animation:cctvDangerPulse 1.2s infinite;";
-      } else if (chAna?.level === "WARNING") {
-        cctvBorderColor = "#f59e0b";
-        cctvAnimation = "animation:cctvWarnPulse 1.6s infinite;";
-      }
-
-      // CCTV 미니창 HTML (있으면 핀 오른쪽에)
-      // 편집 모드면 노란 점선 + 드래그 가능 표시
-      const editBorder = cctvEditMode ? "2px dashed #fbbf24" : `2px solid ${cctvBorderColor}`;
-      const editStyle = cctvEditMode ? "outline:1px solid #fbbf24;outline-offset:2px;" : "";
-      const cctvDraggableAttr = (cctvEditMode && firstCh) ? `data-cctv-ch="${firstCh}" draggable="true"` : '';
+      const dispChs = channels.slice(0, 6); // 최대 6대 표시
+      const nCh = dispChs.length;
+      const cols = nCh === 1 ? 1 : 2;
+      const cellW = nCh === 1 ? 140 : 88;
+      const cellH = nCh === 1 ? 95 : 62;
+      const gridW = cols * cellW + (cols - 1) * 2;
+      const hasAnyDanger = dispChs.some(ch => ana[ch]?.level === "DANGER");
+      const hasAnyWarn = dispChs.some(ch => ana[ch]?.level === "WARNING");
+      const outerBorderColor = cctvEditMode ? "#fbbf24" : hasAnyDanger ? "#dc2626" : hasAnyWarn ? "#f59e0b" : "rgba(255,255,255,0.85)";
+      const outerBorderStyle = cctvEditMode ? "dashed" : "solid";
+      const outerAnim = hasAnyDanger ? "animation:cctvDangerPulse 1.2s infinite;" : hasAnyWarn ? "animation:cctvWarnPulse 1.6s infinite;" : "";
       const cctvClickAttr = cctvEditMode ? '' : `onclick="event.stopPropagation();this.classList.toggle('expanded')"`;
 
-      const cctvHtml = showCctvMini ? `
-        <div class="jamsa-cctv-mini" ${cctvDraggableAttr} ${cctvClickAttr} style="position:absolute;left:42px;top:-6px;width:140px;height:95px;border-radius:8px;overflow:hidden;border:${editBorder};${cctvAnimation}${editStyle}box-shadow:0 4px 12px rgba(0,0,0,0.35);background:#0f172a;cursor:${cctvEditMode ? 'move' : 'pointer'};pointer-events:auto;">
-          <img src="${snap.url}" style="width:100%;height:100%;object-fit:cover;${cctvEditMode ? 'opacity:0.7;' : ''}" onerror="this.style.display='none'"/>
-          <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.75),transparent);padding:3px 6px;font-size:10px;color:#fff;font-weight:800;">CH${firstCh}${channels.length > 1 ? ` +${channels.length-1}` : ''}${cctvEditMode ? ' ↔' : ''}</div>
-          ${chAna?.level === "DANGER" || chAna?.level === "WARNING" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:${chAna.level === "DANGER" ? "rgba(220,38,38,0.96)" : "rgba(245,158,11,0.96)"};padding:2px 5px;font-size:10px;color:#fff;font-weight:900;text-align:center;letter-spacing:0.3px;">${chAna.level === "DANGER" ? "🚨 위험감지" : "⚠️ 주의"} ${chAna.score || ""}%</div>` : ''}
-          <div style="position:absolute;top:4px;right:4px;width:8px;height:8px;background:#22c55e;border-radius:50%;box-shadow:0 0 5px #22c55e;animation:cctvLiveBlink 1.5s infinite;"></div>
+      const liveTs = Math.floor(Date.now() / 5000) * 5000;
+      const dirBase = (() => { try { return getEffectiveCctvServerUrl?.() || DEFAULT_CCTV_SERVER_URL; } catch (e) { return DEFAULT_CCTV_SERVER_URL; } })();
+
+      const cellsHtml = dispChs.map(ch => {
+        const s2 = snaps[ch];
+        const ca = ana[ch];
+        const url = (s2?.url && !s2?.error) ? s2.url : `${dirBase.replace(/\/+$/,"")}/api/snap/${ch}?t=${liveTs}`;
+        const fbId = `cctvFbL_${z.id}_${ch}`;
+        return `<div style="position:relative;width:${cellW}px;height:${cellH}px;border-radius:4px;overflow:hidden;border:1px solid ${ca?.level==="DANGER"?"#dc2626":ca?.level==="WARNING"?"#f59e0b":"rgba(255,255,255,0.2)"};background:#0f172a;flex-shrink:0;">
+          <img src="${url}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';var fb=document.getElementById('${fbId}');if(fb)fb.style.display='flex';"/>
+          <div id="${fbId}" style="display:none;position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);background:rgba(15,23,42,0.93);">
+            <div style="font-size:${nCh===1?'20':'13'}px;">📷</div>
+            <div style="font-size:${nCh===1?'10':'8'}px;font-weight:700;margin-top:2px;">CH${ch}</div>
+            <div style="font-size:7px;color:rgba(255,255,255,0.4);">신호 없음</div>
+          </div>
+          <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.72),transparent);padding:2px 4px;font-size:${nCh===1?'10':'8'}px;color:#fff;font-weight:800;">CH${ch}</div>
+          ${ca?.level==="DANGER"?`<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(220,38,38,0.96);padding:1px 3px;font-size:9px;color:#fff;font-weight:900;text-align:center;">🚨위험</div>`:ca?.level==="WARNING"?`<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(245,158,11,0.96);padding:1px 3px;font-size:9px;color:#fff;font-weight:900;text-align:center;">⚠️주의</div>`:''}
+          <div style="position:absolute;top:3px;right:3px;width:6px;height:6px;background:#22c55e;border-radius:50%;box-shadow:0 0 4px #22c55e;animation:cctvLiveBlink 1.5s infinite;"></div>
+        </div>`;
+      }).join("");
+
+      const cctvHtml = nCh > 0 ? `
+        <div class="jamsa-cctv-mini" ${cctvClickAttr} style="position:absolute;left:42px;top:-6px;border-radius:8px;border:2px ${outerBorderStyle} ${outerBorderColor};${outerAnim}box-shadow:0 4px 14px rgba(0,0,0,0.45);background:rgba(10,15,30,0.95);cursor:pointer;pointer-events:auto;padding:3px;">
+          ${nCh>1?`<div style="color:#cbd5e1;font-size:9px;font-weight:800;padding:1px 3px 3px;white-space:nowrap;">📹 ${channels.length}대${channels.length>6?' (6대 표시)':''}</div>`:''}
+          <div style="display:flex;flex-wrap:wrap;gap:2px;width:${gridW}px;">${cellsHtml}</div>
+          ${cctvEditMode?`<div style="color:#78350f;background:rgba(251,191,36,0.95);padding:2px 4px;font-size:9px;font-weight:800;text-align:center;border-radius:0 0 6px 6px;">📝 클릭→변경</div>`:''}
         </div>
-      ` : (cctvEnabled && firstCh ? `
-        <div class="jamsa-cctv-mini" ${cctvDraggableAttr} ${cctvClickAttr} style="position:absolute;left:42px;top:-6px;width:140px;height:95px;border-radius:8px;overflow:hidden;border:${editBorder};background:rgba(15,23,42,0.75);display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.7);${editStyle}cursor:${cctvEditMode ? 'move' : 'pointer'};pointer-events:auto;">
-          <div style="font-size:26px;">📷</div>
-          <div style="font-size:11px;font-weight:700;margin-top:3px;">CH${firstCh}${channels.length > 1 ? ` +${channels.length-1}` : ''}${cctvEditMode ? ' ↔' : ''}</div>
-        </div>
-      ` : '');
+      ` : '';
 
       // 핀 자체에 데이터 속성 (드롭 타깃)
       const zoneDataAttr = cctvEditMode ? `data-zone-id="${z.id}"` : '';
@@ -26868,13 +26873,13 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
         </div>
       `;
 
-      // 아이콘 사이즈 — CCTV 미니창 있으면 더 넓게
-      const iconWidth = showCctvMini || (cctvEnabled && firstCh) ? 186 : 44;
+      // 아이콘 사이즈 — CCTV 그리드 포함
+      const iconWidth = nCh > 0 ? (42 + gridW + 6 + 6) : 44;
 
       const icon = L.divIcon({
         html,
         className: "jamsa-zone-marker",
-        iconSize: [iconWidth, 95],
+        iconSize: [iconWidth, nCh > 2 ? (cellH * Math.ceil(nCh / 2) + 30) : 95],
         iconAnchor: [22, 36],
       });
 
