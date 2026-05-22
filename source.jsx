@@ -22506,6 +22506,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   const naverMarkersRef = useRef([]);
   const naverInitialFitRef = useRef(false);
   const mapWrapperRef = useRef(null); // for browser Fullscreen API
+  const naverRightclickListenerRef = useRef(null); // track rightclick listener to avoid accumulation
 
   const toggleBrowserFullscreen = () => {
     const el = mapWrapperRef.current;
@@ -23481,17 +23482,23 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
     setEditingZone(null);
   };
 
-  // Add new zone
+  // Add new zone — use a ref so the Naver rightclick handler always calls the latest version
+  const addNewZoneRef = useRef(null);
   const addNewZone = (lat, lng) => {
     const id = "z" + Date.now();
     const newZone = {
       id, name: "새 스팟", color: "#0891b2", icon: "📍", desc: "",
       lat, lng, cctvChannels: [],
-      x: 50, y: 50, w: 10, h: 10,  // legacy floor plan coords (default center)
+      x: 50, y: 50, w: 10, h: 10,
     };
-    saveCustomZones([...customZones, newZone]);
+    setCustomZones(prev => {
+      const next = [...prev, newZone];
+      try { guardedLocalStorageSet("jamsa_custom_zones", next); } catch(e){}
+      return next;
+    });
     setEditingZone(newZone);
   };
+  addNewZoneRef.current = addNewZone;
 
   // Compute aggregate status per zone
   const zoneStatus = useMemo(() => {
@@ -23744,11 +23751,11 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           : DEFAULT_CCTV_SERVER_URL;
 
         // 그리드 레이아웃 결정: 작게 표시, 호버 시 확대
-        const _dispChs = _channels.slice(0, 6);
+        const _dispChs = _channels; // 채널 수 제한 없이 전부 표시
         const _n = _dispChs.length;
-        const _cols = _n === 1 ? 1 : 2;
-        const _cellW = _n === 1 ? 78 : 50;
-        const _cellH = _n === 1 ? 52 : 34;
+        const _cols = _n === 1 ? 1 : _n <= 4 ? 2 : 3;
+        const _cellW = _n === 1 ? 78 : _n <= 4 ? 50 : 44;
+        const _cellH = _n === 1 ? 52 : _n <= 4 ? 34 : 30;
         const _gridW = _cols * _cellW + (_cols - 1) * 2;
         const _hasAnyDanger = _dispChs.some(ch => _ana[ch]?.level === "DANGER");
         const _hasAnyWarn = _dispChs.some(ch => _ana[ch]?.level === "WARNING");
@@ -23784,7 +23791,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
 
         const _cctvHtml = _n > 0 ? `
           <div class="jamsa-cctv-mini" ${_cctvClick} style="position:absolute;left:48px;top:-2px;border-radius:5px;border:${_outerBorder};${_outerAnim}box-shadow:${_outerShadow};background:rgba(10,15,30,0.92);cursor:pointer;z-index:3;pointer-events:auto;padding:2px;">
-            ${_n > 1 ? `<div style="color:#cbd5e1;font-size:7px;font-weight:800;padding:0 2px 1px;white-space:nowrap;line-height:1.1;">📹 ${_channels.length}대${_channels.length>6?' (6)':''}</div>` : ''}
+            ${_n > 1 ? `<div style="color:#cbd5e1;font-size:7px;font-weight:800;padding:0 2px 1px;white-space:nowrap;line-height:1.1;">📹 ${_channels.length}대</div>` : ''}
             <div style="display:flex;flex-wrap:wrap;gap:1px;width:${_gridW}px;">${_cellsHtml}</div>
             ${cctvEditMode ? `<div style="background:rgba(251,191,36,0.95);color:#78350f;padding:1px 3px;font-size:7px;font-weight:800;text-align:center;border-radius:0 0 4px 4px;margin-top:1px;">📝</div>` : ''}
           </div>
@@ -23885,14 +23892,19 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
       }
     }
 
-    // In edit mode, allow click on empty map area to add new zone
-    if (editMode && naverMapRef.current && naver.maps.Event) {
-      // Remove old map click listener (use a ref to track it)
-      naver.maps.Event.addListener(naverMapRef.current, "rightclick", (e) => {
-        if (!editMode) return;
-        if (!confirm(`이 위치에 새 스팟을 추가하시겠습니까?\n좌표: ${e.coord.lat().toFixed(6)}, ${e.coord.lng().toFixed(6)}`)) return;
-        addNewZone(e.coord.lat(), e.coord.lng());
-      });
+    // In edit mode, allow rightclick on empty map to add a new zone.
+    // Remove any previously registered listener first to prevent accumulation.
+    if (naverMapRef.current && naver.maps.Event) {
+      if (naverRightclickListenerRef.current) {
+        try { naver.maps.Event.removeListener(naverRightclickListenerRef.current); } catch(e) {}
+        naverRightclickListenerRef.current = null;
+      }
+      if (editMode) {
+        naverRightclickListenerRef.current = naver.maps.Event.addListener(naverMapRef.current, "rightclick", (e) => {
+          if (!confirm(`이 위치에 새 스팟을 추가하시겠습니까?\n좌표: ${e.coord.lat().toFixed(6)}, ${e.coord.lng().toFixed(6)}`)) return;
+          if (addNewZoneRef.current) addNewZoneRef.current(e.coord.lat(), e.coord.lng());
+        });
+      }
     }
 
     // ✨ ZoneEditPanel의 "🗺️ 지도 클릭으로 위치 선택" 모드 — 활성화되어 있으면 클릭 시 좌표를 콜백
@@ -27192,11 +27204,11 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
       // 이 구역에 매핑된 채널 목록 (다중 CCTV 그리드 — 작게, 호버 시 확대)
       const channels = (zoneToCh[z.id] || []).sort((a, b) => a - b);
       const firstCh = channels[0];
-      const dispChs = channels.slice(0, 6);
+      const dispChs = channels; // 채널 수 제한 없이 전부 표시
       const nCh = dispChs.length;
-      const cols = nCh === 1 ? 1 : 2;
-      const cellW = nCh === 1 ? 78 : 50;
-      const cellH = nCh === 1 ? 52 : 34;
+      const cols = nCh === 1 ? 1 : nCh <= 4 ? 2 : 3;
+      const cellW = nCh === 1 ? 78 : nCh <= 4 ? 50 : 44;
+      const cellH = nCh === 1 ? 52 : nCh <= 4 ? 34 : 30;
       const gridW = cols * cellW + (cols - 1) * 2;
       const hasAnyDanger = dispChs.some(ch => ana[ch]?.level === "DANGER");
       const hasAnyWarn = dispChs.some(ch => ana[ch]?.level === "WARNING");
@@ -27227,7 +27239,7 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
 
       const cctvHtml = nCh > 0 ? `
         <div class="jamsa-cctv-mini" ${cctvClickAttr} style="position:absolute;left:42px;top:-6px;border-radius:5px;border:2px ${outerBorderStyle} ${outerBorderColor};${outerAnim}box-shadow:0 4px 14px rgba(0,0,0,0.45);background:rgba(10,15,30,0.92);cursor:pointer;pointer-events:auto;padding:2px;">
-          ${nCh>1?`<div style="color:#cbd5e1;font-size:7px;font-weight:800;padding:0 2px 1px;white-space:nowrap;line-height:1.1;">📹 ${channels.length}대${channels.length>6?' (6)':''}</div>`:''}
+          ${nCh>1?`<div style="color:#cbd5e1;font-size:7px;font-weight:800;padding:0 2px 1px;white-space:nowrap;line-height:1.1;">📹 ${channels.length}대</div>`:''}
           <div style="display:flex;flex-wrap:wrap;gap:1px;width:${gridW}px;">${cellsHtml}</div>
           ${cctvEditMode?`<div style="color:#78350f;background:rgba(251,191,36,0.95);padding:1px 3px;font-size:7px;font-weight:800;text-align:center;border-radius:0 0 4px 4px;margin-top:1px;">📝</div>`:''}
         </div>
