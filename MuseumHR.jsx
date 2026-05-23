@@ -49,6 +49,7 @@ const CONTRACT_TYPES = [
 const TABS = [
   { id:"dashboard", icon:"📊", label:"대시보드" },
   { id:"employees", icon:"👥", label:"직원관리" },
+  { id:"parttime",  icon:"🕒", label:"알바관리" },
   { id:"attendance",icon:"🕐", label:"출퇴근" },
   { id:"location",  icon:"📍", label:"위치추적" },
   { id:"cctv",      icon:"📹", label:"CCTV" },
@@ -285,6 +286,7 @@ export default function MuseumHR({ onClose, userCtx = null } = {}) {
   const moduleComponents = {
     dashboard:  <DashboardModule employees={employees}/>,
     employees:  <EmployeesModule employees={employees} updateEmployee={updateEmployee} selectedId={selectedEmpId} setSelectedId={setSelectedEmpId}/>,
+    parttime:   <PartTimeModule employees={employees}/>,
     attendance: <AttendanceModule employees={employees}/>,
     location:   <LocationModule employees={employees}/>,
     cctv:       <CCTVModule/>,
@@ -1323,6 +1325,342 @@ function PayrollModule({employees}) {
           </tbody>
         </table>
       </Card>
+    </div>
+  );
+}
+
+/* ============================================================
+   모듈 6.5) 알바관리 (단시간·초단시간·호출형 전용)
+   ─────────────────────────────────────────────────────────────
+   - 정규직과 분리된 별도 화면: 알바 특화 KPI + 시급/주휴 계산
+   - hr_employees 의 employment_type 기준 필터
+   - hr_attendance / hr_schedules 와 통합 (있으면 실제 출근시간, 없으면 시드)
+   ============================================================ */
+function PartTimeModule({ employees }) {
+  // 정규직 제외 — 단시간/초단시간/호출형/일용직 모두 포함
+  const partTimers = useMemo(
+    () => (employees || []).filter(e => e.empType && e.empType !== "정규직"),
+    [employees]
+  );
+
+  const [weekStart, setWeekStart] = useState(() => {
+    const d = new Date();
+    const day = d.getDay(); // 0=일
+    const diff = day === 0 ? -6 : 1 - day; // 월요일로 정렬
+    d.setDate(d.getDate() + diff);
+    return d.toISOString().slice(0, 10);
+  });
+  const [selectedId, setSelectedId] = useState(null);
+  const [attendance, setAttendance] = useState({}); // { [empId]: { mon:hrs, tue:hrs, ... } }
+  const [loadingAtt, setLoadingAtt] = useState(false);
+  const [showShiftEditor, setShowShiftEditor] = useState(false);
+
+  // 주 7일 라벨
+  const weekDays = useMemo(() => {
+    const start = new Date(weekStart);
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      return {
+        iso: d.toISOString().slice(0, 10),
+        label: ["월","화","수","목","금","토","일"][i],
+        dateStr: `${d.getMonth() + 1}/${d.getDate()}`,
+        isWeekend: i >= 5,
+      };
+    });
+  }, [weekStart]);
+
+  // Supabase에서 이번 주 hr_attendance / hr_schedules 가져오기 (있으면)
+  useEffect(() => {
+    if (!supabase || partTimers.length === 0) return;
+    let mounted = true;
+    (async () => {
+      setLoadingAtt(true);
+      try {
+        const ids = partTimers.map(e => e.id);
+        const weekEnd = weekDays[6].iso;
+        // 1) 실제 출근 데이터 (있으면)
+        const { data: attData } = await supabase
+          .from("hr_attendance")
+          .select("employee_id, check_in, check_out, work_date")
+          .in("employee_id", ids)
+          .gte("work_date", weekStart)
+          .lte("work_date", weekEnd);
+        // 2) 예정 스케줄 (실제 출근 없을 때 fallback)
+        const { data: schData } = await supabase
+          .from("hr_schedules")
+          .select("employee_id, work_date, start_time, end_time")
+          .in("employee_id", ids)
+          .gte("work_date", weekStart)
+          .lte("work_date", weekEnd);
+        if (!mounted) return;
+        const map = {}; // {empId: {dateIso: hours, ...}}
+        (attData || []).forEach(r => {
+          if (!r.check_in || !r.check_out) return;
+          const hrs = (new Date(r.check_out) - new Date(r.check_in)) / 3600000;
+          if (hrs > 0 && hrs < 24) {
+            if (!map[r.employee_id]) map[r.employee_id] = {};
+            map[r.employee_id][r.work_date] = (map[r.employee_id][r.work_date] || 0) + hrs;
+          }
+        });
+        (schData || []).forEach(r => {
+          if (!r.start_time || !r.end_time) return;
+          const [sh, sm] = r.start_time.split(":").map(Number);
+          const [eh, em] = r.end_time.split(":").map(Number);
+          const hrs = (eh * 60 + em - sh * 60 - sm) / 60;
+          if (hrs > 0 && hrs < 24) {
+            if (!map[r.employee_id]) map[r.employee_id] = {};
+            // 실제 출근 데이터가 없는 날만 스케줄로 채움
+            if (!map[r.employee_id][r.work_date]) {
+              map[r.employee_id][r.work_date] = hrs;
+            }
+          }
+        });
+        setAttendance(map);
+      } catch (e) {
+        console.warn("[PartTime] attendance load failed:", e?.message);
+      } finally {
+        if (mounted) setLoadingAtt(false);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [partTimers.map(e => e.id).join(","), weekStart, weekDays]);
+
+  // 직원별 주간 분석
+  const weeklyStats = useMemo(() => {
+    return partTimers.map(e => {
+      const dayHours = weekDays.map(d => attendance[e.id]?.[d.iso] || 0);
+      const totalHours = dayHours.reduce((a, b) => a + b, 0);
+      const workedDays = dayHours.filter(h => h > 0).length;
+      const hourlyWage = e.wageType === "시급" ? e.wage : Math.round((e.wage || 0) / 209); // 월급 → 시급 환산
+      const basePay = Math.round(totalHours * hourlyWage);
+      // 주휴수당: 주 15시간 이상 + 1일 이상 근무 시 (1주 평균 1일분 추가)
+      const weeklyHolidayEligible = totalHours >= 15 && workedDays >= 1;
+      const weeklyHolidayPay = weeklyHolidayEligible
+        ? Math.round((totalHours / 40) * 8 * hourlyWage)
+        : 0;
+      // 4대보험: 단시간(주15h+)만, 초단시간은 산재만
+      const isShortPart = (e.empType || "").includes("초단시간") || totalHours < 15;
+      const insuranceLabel = isShortPart ? "산재만" : "4대";
+      return {
+        emp: e,
+        dayHours, totalHours, workedDays,
+        hourlyWage, basePay, weeklyHolidayPay,
+        totalPay: basePay + weeklyHolidayPay,
+        weeklyHolidayEligible, insuranceLabel,
+        isOverWeekly: totalHours > 40, // 단시간이 40h 초과면 정규직 전환 의무 검토
+      };
+    });
+  }, [partTimers, weekDays, attendance]);
+
+  // 전체 통계
+  const summary = useMemo(() => {
+    const totalHrs = weeklyStats.reduce((s, r) => s + r.totalHours, 0);
+    const totalPay = weeklyStats.reduce((s, r) => s + r.totalPay, 0);
+    const eligibleHoliday = weeklyStats.filter(r => r.weeklyHolidayEligible).length;
+    const byType = {};
+    partTimers.forEach(e => { byType[e.empType] = (byType[e.empType] || 0) + 1; });
+    return { totalHrs, totalPay, eligibleHoliday, byType };
+  }, [weeklyStats, partTimers]);
+
+  const goPrevWeek = () => {
+    const d = new Date(weekStart); d.setDate(d.getDate() - 7);
+    setWeekStart(d.toISOString().slice(0, 10));
+  };
+  const goNextWeek = () => {
+    const d = new Date(weekStart); d.setDate(d.getDate() + 7);
+    setWeekStart(d.toISOString().slice(0, 10));
+  };
+  const goThisWeek = () => {
+    const d = new Date();
+    const diff = d.getDay() === 0 ? -6 : 1 - d.getDay();
+    d.setDate(d.getDate() + diff);
+    setWeekStart(d.toISOString().slice(0, 10));
+  };
+
+  const selectedRow = selectedId ? weeklyStats.find(r => r.emp.id === selectedId) : null;
+
+  if (partTimers.length === 0) {
+    return (
+      <Card style={{ textAlign: "center", padding: 50 }}>
+        <div style={{ fontSize: 36, marginBottom: 10 }}>🕐</div>
+        <h3 style={{ fontFamily: fontFamily, color: T.silkL, marginBottom: 8 }}>등록된 알바 없음</h3>
+        <p style={{ color: T.muted, fontSize: 13, marginBottom: 16 }}>
+          직원관리 탭에서 새 직원 추가 → 고용형태를 "단시간 / 초단시간 / 호출형"으로 지정하면 여기 표시됩니다.
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {/* ─── 헤더 + 주간 네비게이션 ─── */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Btn kind="secondary" size="sm" onClick={goPrevWeek}>◂ 이전 주</Btn>
+          <Btn kind="secondary" size="sm" onClick={goThisWeek}>이번 주</Btn>
+          <Btn kind="secondary" size="sm" onClick={goNextWeek}>다음 주 ▸</Btn>
+          <span style={{ marginLeft: 8, fontSize: 13, fontWeight: 700, color: T.silkL, fontFamily: fontFamily }}>
+            {weekDays[0].dateStr} ~ {weekDays[6].dateStr}
+          </span>
+          {loadingAtt && <span style={{ fontSize: 10, color: T.muted }}>(불러오는 중...)</span>}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn kind="secondary" size="sm" onClick={() => setShowShiftEditor(v => !v)}>
+            {showShiftEditor ? "✕ 편집 종료" : "📅 시프트 편집"}
+          </Btn>
+          <Btn kind="primary" size="sm">📑 주간 명세서 PDF</Btn>
+        </div>
+      </div>
+
+      {/* ─── 전체 KPI ─── */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
+        <Stat label="알바 인원" value={`${partTimers.length}명`} sub={Object.entries(summary.byType).map(([k,v])=>`${k}:${v}`).join(" · ")} icon="👥" color={T.silkD} />
+        <Stat label="이번 주 총 근무시간" value={`${summary.totalHrs.toFixed(1)}h`} sub={`평균 ${(summary.totalHrs/Math.max(partTimers.length,1)).toFixed(1)}h/인`} icon="🕐" color={T.info} />
+        <Stat label="주휴수당 대상" value={`${summary.eligibleHoliday}명`} sub="주 15시간 이상" icon="💰" color={T.gold} />
+        <Stat label="이번 주 예상 인건비" value={fmtKRW(summary.totalPay)} sub="주휴수당 포함" icon="💸" color={T.ok} />
+      </div>
+
+      {/* ─── 주간 근무표 테이블 ─── */}
+      <Card style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ padding: 14, borderBottom: `1px solid ${T.line}` }}>
+          <strong style={{ fontFamily: fontFamily, fontSize: 14 }}>🗓️ 주간 근무표 + 자동 계산</strong>
+          <div style={{ fontSize: 10, color: T.muted, marginTop: 2 }}>
+            셀의 숫자 = 그날 근무시간(h). 빨강 = 주 40h 초과 (정규직 전환 검토)
+          </div>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse", minWidth: 800 }}>
+            <thead>
+              <tr style={{ background: T.cream, color: T.muted, fontSize: 11 }}>
+                <th style={{ padding: "10px 12px", textAlign: "left", position: "sticky", left: 0, background: T.cream }}>직원</th>
+                <th style={{ padding: "10px 8px", textAlign: "center" }}>고용형태</th>
+                <th style={{ padding: "10px 8px", textAlign: "right" }}>시급</th>
+                {weekDays.map(d => (
+                  <th key={d.iso} style={{ padding: "10px 6px", textAlign: "center", color: d.isWeekend ? T.warn : T.muted }}>
+                    {d.label}<br/><span style={{ fontSize: 9 }}>{d.dateStr}</span>
+                  </th>
+                ))}
+                <th style={{ padding: "10px 8px", textAlign: "right", color: T.silkL }}>합계</th>
+                <th style={{ padding: "10px 8px", textAlign: "center" }}>주휴</th>
+                <th style={{ padding: "10px 8px", textAlign: "right", color: T.silkL }}>예상급여</th>
+              </tr>
+            </thead>
+            <tbody>
+              {weeklyStats.map(row => {
+                const isSel = selectedId === row.emp.id;
+                return (
+                  <tr key={row.emp.id}
+                    onClick={() => setSelectedId(isSel ? null : row.emp.id)}
+                    style={{ borderBottom: `1px solid ${T.line}`, cursor: "pointer", background: isSel ? T.cream : "transparent" }}>
+                    <td style={{ padding: "8px 12px", fontWeight: 600, position: "sticky", left: 0, background: isSel ? T.cream : T.paper }}>
+                      <div>{row.emp.name}</div>
+                      <div style={{ fontSize: 10, color: T.muted, fontWeight: 400 }}>{row.emp.dept} · {row.emp.role}</div>
+                    </td>
+                    <td style={{ padding: "8px", textAlign: "center" }}>
+                      <Badge color={row.emp.empType === "초단시간" ? T.warn : row.emp.empType === "호출형" ? T.info : T.leaf}>
+                        {row.emp.empType}
+                      </Badge>
+                    </td>
+                    <td style={{ padding: "8px", textAlign: "right", color: T.silkL, fontWeight: 600 }}>
+                      ₩{fmt(row.hourlyWage)}
+                    </td>
+                    {row.dayHours.map((h, i) => (
+                      <td key={i} style={{ padding: "8px 4px", textAlign: "center", color: h > 0 ? T.ink : T.muted }}>
+                        {h > 0 ? h.toFixed(1) : "—"}
+                      </td>
+                    ))}
+                    <td style={{ padding: "8px", textAlign: "right", fontWeight: 700, color: row.isOverWeekly ? T.err : T.silkL }}>
+                      {row.totalHours.toFixed(1)}h
+                      {row.isOverWeekly && <div style={{ fontSize: 9, color: T.err }}>⚠ 40h 초과</div>}
+                    </td>
+                    <td style={{ padding: "8px", textAlign: "center" }}>
+                      {row.weeklyHolidayEligible ? (
+                        <Badge color={T.gold}>+₩{fmt(row.weeklyHolidayPay)}</Badge>
+                      ) : (
+                        <span style={{ fontSize: 10, color: T.muted }}>해당 없음</span>
+                      )}
+                    </td>
+                    <td style={{ padding: "8px", textAlign: "right", fontWeight: 700, color: T.silkD }}>
+                      ₩{fmt(row.totalPay)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* ─── 선택 직원 상세 ─── */}
+      {selectedRow && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <Card>
+            <h4 style={{ margin: "0 0 12px", fontFamily: fontFamily, color: T.silkL, fontSize: 14 }}>
+              📋 {selectedRow.emp.name} — 근로 조건 요약
+            </h4>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12 }}>
+              <DetailRow label="고용형태" value={selectedRow.emp.empType} />
+              <DetailRow label="임금 유형" value={selectedRow.emp.wageType} />
+              <DetailRow label="시급 환산" value={`₩${fmt(selectedRow.hourlyWage)}`} color={T.silkL} />
+              <DetailRow label="입사일" value={selectedRow.emp.startDate || "—"} />
+              <DetailRow label="이번 주 근무일" value={`${selectedRow.workedDays}일`} />
+              <DetailRow label="이번 주 시간" value={`${selectedRow.totalHours.toFixed(1)}h`} color={selectedRow.isOverWeekly ? T.err : T.ink} />
+              <DetailRow label="주휴수당 대상" value={selectedRow.weeklyHolidayEligible ? "✓ 해당" : "✗ 미해당 (15h 미만)"} color={selectedRow.weeklyHolidayEligible ? T.ok : T.muted} />
+              <DetailRow label="보험 가입" value={selectedRow.insuranceLabel} color={T.info} />
+            </div>
+          </Card>
+          <Card>
+            <h4 style={{ margin: "0 0 12px", fontFamily: fontFamily, color: T.silkL, fontSize: 14 }}>
+              💸 이번 주 급여 분해
+            </h4>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
+              <PayRow label="기본 (시급 × 근무시간)" value={selectedRow.basePay} note={`${selectedRow.totalHours.toFixed(1)}h × ₩${fmt(selectedRow.hourlyWage)}`} />
+              <PayRow label="주휴수당" value={selectedRow.weeklyHolidayPay} color={selectedRow.weeklyHolidayEligible ? T.gold : T.muted} note={selectedRow.weeklyHolidayEligible ? "주 15h+ 자동 가산" : "주 15h 미만"} />
+              <div style={{ height: 1, background: T.line, margin: "6px 0" }} />
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 10px", background: T.cream, borderRadius: 6 }}>
+                <span style={{ fontWeight: 700, color: T.silkL }}>주간 합계</span>
+                <span style={{ fontWeight: 900, color: T.silkD, fontFamily: fontFamily, fontSize: 17 }}>₩{fmt(selectedRow.totalPay)}</span>
+              </div>
+              <div style={{ fontSize: 10, color: T.muted, marginTop: 4 }}>
+                * 4대보험 공제는 실제 임금명세서에서 차감됨 (이 화면은 총지급 기준)
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ─── 가이드 ─── */}
+      <Card style={{ background: T.cream, borderColor: T.silkD }}>
+        <div style={{ fontSize: 11, color: T.muted, lineHeight: 1.8 }}>
+          <strong style={{ color: T.silkL }}>💡 알바 관리 규정 요약</strong><br/>
+          • <strong>초단시간</strong> (주 15h 미만): 주휴수당·연차 미적용, 산재만 가입 의무<br/>
+          • <strong>단시간</strong> (주 15h 이상): 주휴수당 지급(주 1일분), 비례 연차, 4대보험 가입<br/>
+          • <strong>호출형</strong>: 월 최소보장 시간 명시, 시급제 + 호출 단가 별도<br/>
+          • 주 40시간 초과 시 정규직 전환 의무 검토 (빨강 표시)<br/>
+          • 데이터 소스: <code>hr_attendance</code> (실제 출근) → 없으면 <code>hr_schedules</code> (예정) → 둘 다 없으면 0
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function DetailRow({ label, value, color }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: `1px dotted ${T.line}` }}>
+      <span style={{ color: T.muted, fontSize: 11 }}>{label}</span>
+      <span style={{ color: color || T.ink, fontWeight: 600 }}>{value}</span>
+    </div>
+  );
+}
+function PayRow({ label, value, color, note }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0" }}>
+      <div>
+        <div style={{ color: T.ink }}>{label}</div>
+        {note && <div style={{ fontSize: 10, color: T.muted, marginTop: 2 }}>{note}</div>}
+      </div>
+      <span style={{ fontWeight: 700, color: color || T.silkL }}>₩{fmt(value)}</span>
     </div>
   );
 }
