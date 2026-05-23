@@ -22444,18 +22444,8 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   // CCTV 원본 크기 모달 (지도에서 미니창 클릭 시 열림)
   const [cctvFullView, setCctvFullView] = useState(null); // {ch, zoneId, zoneName} | null
   const [cctvFullTick, setCctvFullTick] = useState(0); // 3초마다 스냅샷 강제 갱신
-  // 외부(마커 HTML inline onclick) 에서 호출할 글로벌 헬퍼 — 인라인 문자열 이스케이핑 문제 회피
-  useEffect(() => {
-    window.__jamsaOpenCctv = (ch, zoneId) => {
-      try {
-        const z = (allZones || []).find(x => x.id === zoneId);
-        window.dispatchEvent(new CustomEvent("jamsa:cctv-open", {
-          detail: { ch: Number(ch), zoneId: zoneId || null, zoneName: z?.name || zoneId || `구역` },
-        }));
-      } catch (e) { console.warn("[__jamsaOpenCctv]", e); }
-    };
-    return () => { try { delete window.__jamsaOpenCctv; } catch (e) {} };
-  }, [allZones]);
+  // 글로벌 헬퍼 등록은 `allZones`가 선언된 뒤(아래 useMemo 다음)에서 수행한다.
+  // 여기서 `[allZones]` dep array를 평가하면 const TDZ 에러 발생.
   useEffect(() => {
     const onOpen = (e) => {
       const d = e?.detail;
@@ -23491,6 +23481,20 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
       };
     });
   }, [customZones, zoneCustomizations]);
+
+  // 외부(마커 HTML inline onclick) 에서 호출할 글로벌 헬퍼 — 인라인 문자열 이스케이핑 문제 회피
+  // ⚠️ 반드시 `allZones` 선언 뒤에 와야 함 — 그렇지 않으면 const TDZ ReferenceError("Cannot access ... before initialization")
+  useEffect(() => {
+    window.__jamsaOpenCctv = (ch, zoneId) => {
+      try {
+        const z = (allZones || []).find(x => x.id === zoneId);
+        window.dispatchEvent(new CustomEvent("jamsa:cctv-open", {
+          detail: { ch: Number(ch), zoneId: zoneId || null, zoneName: z?.name || zoneId || `구역` },
+        }));
+      } catch (e) { console.warn("[__jamsaOpenCctv]", e); }
+    };
+    return () => { try { delete window.__jamsaOpenCctv; } catch (e) {} };
+  }, [allZones]);
 
   // Update a single field for a zone (immediate persist)
   const updateZoneField = (zoneId, patch) => {
