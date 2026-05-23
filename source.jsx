@@ -22511,6 +22511,51 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   // 🌐 지도 펼치기 모드 — 좁은 영역(60~70m)에 몰린 스팟을 시각적으로 펼쳐서 표시
   //    실제 좌표는 그대로, 화면 표시용 위치만 centroid에서 방사형으로 확대
   const [spreadMode, setSpreadMode] = useState(false);
+  // 📱 모바일/앱 뷰 자동 감지 — 화면이 좁으면 thumbnail 축소·패널 자동 접힘
+  const [isMobile, setIsMobile] = useState(() => {
+    try { return window.innerWidth <= 768; } catch (e) { return false; }
+  });
+  useEffect(() => {
+    const onResize = () => {
+      try { setIsMobile(window.innerWidth <= 768); } catch (e) {}
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  // 📹 마커 위 CCTV 미니창 표시 토글 — 모바일에서 화면이 복잡하면 OFF 권장
+  //    기본값: 모바일은 OFF, 데스크탑은 ON. 사용자가 토글하면 localStorage에 저장.
+  const [mapCctvOn, setMapCctvOn] = useState(() => {
+    try {
+      const saved = window.localStorage?.getItem("jamsa_map_cctv_mini_on");
+      if (saved === "0") return false;
+      if (saved === "1") return true;
+      // 저장값 없음 → 화면 크기에 따라 기본값
+      return window.innerWidth > 768;
+    } catch (e) { return true; }
+  });
+  const toggleMapCctv = () => {
+    setMapCctvOn(v => {
+      const next = !v;
+      try { window.localStorage?.setItem("jamsa_map_cctv_mini_on", next ? "1" : "0"); } catch (e) {}
+      return next;
+    });
+  };
+  // 📍 "실시간 위치" 좌상단 패널 접힘 상태 — 모바일은 기본 접힘
+  const [posPanelCollapsed, setPosPanelCollapsed] = useState(() => {
+    try {
+      const saved = window.localStorage?.getItem("jamsa_pos_panel_collapsed");
+      if (saved === "1") return true;
+      if (saved === "0") return false;
+      return window.innerWidth <= 768;
+    } catch (e) { return false; }
+  });
+  const togglePosPanel = () => {
+    setPosPanelCollapsed(v => {
+      const next = !v;
+      try { window.localStorage?.setItem("jamsa_pos_panel_collapsed", next ? "1" : "0"); } catch (e) {}
+      return next;
+    });
+  };
   const [viewMode, setViewMode] = useState(() => {
     // 사용자 마지막 뷰 모드 기억 (단, 'map'이 아닌 값이면 일단 map으로 시작)
     try {
@@ -23865,19 +23910,24 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           : "";
 
         // ━━ CCTV 미니창 HTML (다중 채널 그리드) ━━
-        const _channels = (_zoneToCh[z.id] || []).sort((a, b) => a - b);
+        // 📱 mapCctvOn=false 이면 마커 위 미니창 생략 (지도 깔끔하게)
+        const _channels = mapCctvOn ? (_zoneToCh[z.id] || []).sort((a, b) => a - b) : [];
         const _firstCh = _channels[0];
         const _liveTs = Math.floor(Date.now() / 5000) * 5000;
         const _directBase = (typeof window !== "undefined")
           ? (() => { try { return getEffectiveCctvServerUrl(); } catch (e) { return DEFAULT_CCTV_SERVER_URL; } })()
           : DEFAULT_CCTV_SERVER_URL;
 
-        // 그리드 레이아웃 결정: 작게 표시, 호버 시 확대
+        // 그리드 레이아웃 결정: 모바일은 더 작게, 데스크탑은 기존 크기
         const _dispChs = _channels; // 채널 수 제한 없이 전부 표시
         const _n = _dispChs.length;
         const _cols = _n === 1 ? 1 : _n <= 4 ? 2 : 3;
-        const _cellW = _n === 1 ? 78 : _n <= 4 ? 50 : 44;
-        const _cellH = _n === 1 ? 52 : _n <= 4 ? 34 : 30;
+        const _cellW = isMobile
+          ? (_n === 1 ? 56 : _n <= 4 ? 36 : 30)
+          : (_n === 1 ? 78 : _n <= 4 ? 50 : 44);
+        const _cellH = isMobile
+          ? (_n === 1 ? 38 : _n <= 4 ? 24 : 22)
+          : (_n === 1 ? 52 : _n <= 4 ? 34 : 30);
         const _gridW = _cols * _cellW + (_cols - 1) * 2;
         const _hasAnyDanger = _dispChs.some(ch => _ana[ch]?.level === "DANGER");
         const _hasAnyWarn = _dispChs.some(ch => _ana[ch]?.level === "WARNING");
@@ -23897,21 +23947,27 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         const _cellsHtml = _n > 0 ? _dispChs.map(ch => {
           const _s = _snaps[ch];
           const _ca = _ana[ch];
+          const _isOffline = !!_s?.error; // 폴러가 마지막 fetch에서 실패한 경우
           const _url = (_s?.url && !_s?.error) ? _s.url : `${_directBase.replace(/\/+$/, "")}/api/snap/${ch}?t=${_liveTs}`;
           const _fbId = `cctvFb_${z.id}_${ch}`;
           let _cellBorder = "1px solid rgba(255,255,255,0.2)";
           let _cellAnim = "";
-          if (_ca?.level === "DANGER") { _cellBorder = "1px solid #dc2626"; _cellAnim = "animation:cctvDangerPulse 1.2s infinite;"; }
+          if (_isOffline) { _cellBorder = "1px solid #dc2626"; }
+          else if (_ca?.level === "DANGER") { _cellBorder = "1px solid #dc2626"; _cellAnim = "animation:cctvDangerPulse 1.2s infinite;"; }
           else if (_ca?.level === "WARNING") { _cellBorder = "1px solid #f59e0b"; }
           // 셀 클릭 → 해당 스팟의 전체 CCTV 그리드 모달 (사용자 요청: "지도에서 CCTV 클릭 → 그 스팟 전체화면")
           const _cellClick = cctvEditMode
             ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${ch})"`
             : `onclick="event.stopPropagation();window.__jamsaOpenCctvGrid&&window.__jamsaOpenCctvGrid('${z.id}','${_chCsv}')"`;
-          return `<div ${_cellClick} title="CH${ch} — 클릭하면 스팟 전체 CCTV를 크게 보기" style="position:relative;width:${_cellW}px;height:${_cellH}px;border-radius:3px;overflow:hidden;border:${_cellBorder};${_cellAnim}background:#0f172a;flex-shrink:0;cursor:pointer;">
-            <img data-cctv-marker-ch="${ch}" src="${_url}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';var fb=document.getElementById('${_fbId}');if(fb)fb.style.display='flex';"/>
-            <div id="${_fbId}" style="display:none;position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);background:rgba(15,23,42,0.93);">
-              <div style="font-size:${_n===1?'16':'11'}px;">📷</div>
+          // 폴러가 error 상태면 폴백 표시(📷)를 즉시 보여줘 사용자가 오프라인 채널을 한눈에 인지
+          const _imgDisplay = _isOffline ? 'none' : '';
+          const _fbDisplay = _isOffline ? 'flex' : 'none';
+          return `<div ${_cellClick} title="CH${ch}${_isOffline ? ' · 🔴 오프라인 (스냅샷 실패)' : ' — 클릭하면 스팟 전체 CCTV를 크게 보기'}" style="position:relative;width:${_cellW}px;height:${_cellH}px;border-radius:3px;overflow:hidden;border:${_cellBorder};${_cellAnim}background:#0f172a;flex-shrink:0;cursor:pointer;">
+            <img data-cctv-marker-ch="${ch}" src="${_url}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover;display:${_imgDisplay};" onerror="this.style.display='none';var fb=document.getElementById('${_fbId}');if(fb)fb.style.display='flex';"/>
+            <div id="${_fbId}" style="display:${_fbDisplay};position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:${_isOffline ? '#fca5a5' : 'rgba(255,255,255,0.6)'};background:${_isOffline ? 'rgba(60,10,10,0.93)' : 'rgba(15,23,42,0.93)'};">
+              <div style="font-size:${_n===1?'16':'11'}px;">${_isOffline ? '🔴' : '📷'}</div>
               <div style="font-size:${_n===1?'8':'7'}px;font-weight:700;margin-top:1px;">CH${ch}</div>
+              ${_isOffline ? `<div style="font-size:${_n===1?'7':'6'}px;color:#fca5a5;font-weight:800;margin-top:1px;letter-spacing:0.3px;">OFFLINE</div>` : ''}
             </div>
             <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.72),transparent);padding:1px 3px;font-size:${_n===1?'8':'7'}px;color:#fff;font-weight:800;">CH${ch}</div>
             ${_ca?.level==="DANGER" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(220,38,38,0.96);padding:1px 2px;font-size:7px;color:#fff;font-weight:900;text-align:center;">🚨</div>` : _ca?.level==="WARNING" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(245,158,11,0.96);padding:1px 2px;font-size:7px;color:#fff;font-weight:900;text-align:center;">⚠️</div>` : ''}
@@ -24051,14 +24107,13 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
     //    재생성되면서 Naver 마커 객체/DOM이 통째로 destroyed→recreated 되어
     //    Vercel 환경에서 CCTV 영상이 끊겨 보였음. 아래 별도 effect에서
     //    data-cctv-marker-ch 속성을 가진 img들의 src만 surgical 패치한다.
-  }, [zoneStatus, naverLoaded, mapProvider, bgMode, viewMode, editMode, zoneCrowdStats, cctvMap, cctvEditMode, spreadMode]);
+  }, [zoneStatus, naverLoaded, mapProvider, bgMode, viewMode, editMode, zoneCrowdStats, cctvMap, cctvEditMode, spreadMode, isMobile, mapCctvOn]);
 
   // ⚡ PERF: 스냅샷 폴링 갱신을 마커 재생성 없이 처리 — 기존 img 노드의 src만 교체
   //    마커 자체는 zoneStatus/cctvMap 변경 시에만 재생성됨. 5초마다의 snapshot
-  //    blob URL은 여기서만 반영된다.
+  //    blob URL은 여기서만 반영된다. 오프라인 상태 전환도 함께 처리.
   useEffect(() => {
     const snaps = cctvSnapshotData?.snapshots || {};
-    // requestAnimationFrame 으로 한 프레임에 묶어서 reflow 비용 최소화
     const raf = requestAnimationFrame(() => {
       try {
         const imgs = document.querySelectorAll("img[data-cctv-marker-ch]");
@@ -24066,11 +24121,25 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           const ch = parseInt(img.getAttribute("data-cctv-marker-ch"), 10);
           if (isNaN(ch)) return;
           const s = snaps[ch];
-          if (!s || s.error || !s.url) return;
-          if (img.src !== s.url) {
-            img.src = s.url;
-            // 폴백 div가 표시중이었으면 다시 숨기고 img 노출
+          const parent = img.parentElement; // 셀 컨테이너
+          if (!parent) return;
+          const fb = parent.querySelector(`div[id^="cctvFb_"]`) || parent.querySelector('div[id^="cctvFbL_"]');
+          if (s && !s.error && s.url) {
+            // 온라인: src 교체 + img 노출, 폴백 숨김
+            if (img.src !== s.url) img.src = s.url;
             if (img.style.display === "none") img.style.display = "";
+            if (fb && fb.style.display !== "none") fb.style.display = "none";
+            // 컨테이너 빨강 보더 복구 (기존 보더 색이 #dc2626이면 데이터 손상이 아닌 오프라인이었다고 가정)
+            // 자세한 색은 다음 풀-리빌드에서 정확히 반영됨.
+          } else if (s && s.error) {
+            // 오프라인: 폴백 노출 + img 숨김
+            img.style.display = "none";
+            if (fb) {
+              fb.style.display = "flex";
+              fb.style.background = "rgba(60,10,10,0.93)";
+              fb.style.color = "#fca5a5";
+              const icon = fb.firstElementChild; if (icon) icon.textContent = "🔴";
+            }
           }
         });
       } catch (e) { /* DOM 없는 SSR/초기렌더 무시 */ }
@@ -24210,6 +24279,15 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                 boxShadow: cctvEditMode ? "0 0 0 3px rgba(245,158,11,0.3)" : "none" }}>
               {cctvEditMode ? "✓ CCTV 편집 종료" : "📹 CCTV 편집"}
             </button>
+            {/* 📱 지도 위 CCTV 미니창 ON/OFF — 모바일/앱에서 화면 깔끔하게 */}
+            <button onClick={toggleMapCctv}
+              title={mapCctvOn ? "지도 위 CCTV 미니창 끄기 (지도 깔끔하게)" : "지도 위 CCTV 미니창 켜기"}
+              style={{ padding: "6px 12px", borderRadius: 6, border: "none",
+                background: mapCctvOn ? "linear-gradient(135deg,#0891b2,#0e7490)" : "linear-gradient(135deg,#475569,#1e293b)",
+                color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 800,
+                boxShadow: mapCctvOn ? "0 0 0 3px rgba(8,145,178,0.25)" : "none" }}>
+              {mapCctvOn ? "📺 CCTV 미니 ON" : "📺 CCTV 미니 OFF"}
+            </button>
             <button onClick={() => {
               const target = zoneStatus.find(s => isWarehouseZone(s.zone)) || zoneStatus[0];
               if (target) setWarehouseModelZone(target);
@@ -24298,6 +24376,8 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
               cctvEditMode={cctvEditMode}
               cctvMap={cctvMap}
               spreadMode={spreadMode}
+              isMobile={isMobile}
+              mapCctvOn={mapCctvOn}
               onMoveCctv={moveChannelToZone} />
           )}
 
@@ -24650,11 +24730,30 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
             </div>
           )}
 
-          {/* ━━━ 위치 공유 토글 + 통계 (좌상단) ━━━ */}
-          <div style={{ position: "absolute", top: 60, left: 12, background: "rgba(255,255,255,0.97)", border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 12px", boxShadow: "0 4px 12px rgba(0,0,0,0.1)", zIndex: 600, minWidth: 200 }}>
+          {/* ━━━ 위치 공유 토글 + 통계 (좌상단) — 모바일에선 기본 접힘, 탭으로 펼침 ━━━ */}
+          {posPanelCollapsed ? (
+            <button onClick={togglePosPanel}
+              title="실시간 위치 패널 펼치기"
+              style={{ position: "absolute", top: 60, left: 12, background: "rgba(255,255,255,0.97)",
+                border: "1px solid #e5e7eb", borderRadius: 999, padding: "6px 12px",
+                boxShadow: "0 4px 12px rgba(0,0,0,0.15)", zIndex: 600, cursor: "pointer",
+                fontSize: 12, fontWeight: 800, color: "#0f172a",
+                display: "flex", alignItems: "center", gap: 6 }}>
+              📍 위치 <span style={{ fontSize: 10, color: "#10b981", fontWeight: 700 }}>● {userLocations.length}</span>
+              <span style={{ fontSize: 10, color: "#94a3b8" }}>▸</span>
+            </button>
+          ) : (
+          <div style={{ position: "absolute", top: 60, left: 12, background: "rgba(255,255,255,0.97)", border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 12px", boxShadow: "0 4px 12px rgba(0,0,0,0.1)", zIndex: 600, minWidth: isMobile ? 160 : 200, maxWidth: isMobile ? "calc(100vw - 24px)" : 280, maxHeight: isMobile ? "60vh" : "auto", overflowY: isMobile ? "auto" : "visible" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
               <span style={{ fontSize: 12, fontWeight: 800, color: "#0f172a" }}>📍 실시간 위치</span>
-              <span style={{ fontSize: 10, color: "#10b981", fontWeight: 700 }}>● {userLocations.length}명</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 10, color: "#10b981", fontWeight: 700 }}>● {userLocations.length}명</span>
+                <button onClick={togglePosPanel}
+                  title="패널 접기"
+                  style={{ width: 18, height: 18, padding: 0, border: "none", background: "#f1f5f9",
+                    color: "#64748b", borderRadius: 4, cursor: "pointer", fontSize: 11, fontWeight: 800,
+                    lineHeight: 1 }}>×</button>
+              </div>
             </div>
             <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
               {[
@@ -24884,6 +24983,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
               </div>
             )}
           </div>
+          )}
 
           {/* ━━━ Tapo 기기 핀 (지도 오버레이) ━━━ */}
           {tapoVisible && tapoDevices.length > 0 && (
@@ -27524,7 +27624,7 @@ window.onload = () => {
 }
 
 /* ─── OSM FALLBACK MAP (네이버 API 키 없거나 오류 시) ─── */
-function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, errorMsg, bgMode = "satellite", onChangeBgMode, cctvSnapshotData = null, cctvEditMode = false, onMoveCctv = null, cctvMap = {}, spreadMode = false }) {
+function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, errorMsg, bgMode = "satellite", onChangeBgMode, cctvSnapshotData = null, cctvEditMode = false, onMoveCctv = null, cctvMap = {}, spreadMode = false, isMobile = false, mapCctvOn = true }) {
   // 박물관 영역 경계 (한국잠사박물관 청주 - 정확한 좌표)
   const LAT_MIN = 36.6378, LAT_MAX = 36.6395, LNG_MIN = 127.4880, LNG_MAX = 127.4905;
   const LAT_CENTER = (LAT_MIN + LAT_MAX) / 2;
@@ -27716,13 +27816,19 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
       const isPulse = s.status === "urgent";
 
       // 이 구역에 매핑된 채널 목록 (다중 CCTV 그리드 — 작게, 호버 시 확대)
-      const channels = (zoneToCh[z.id] || []).sort((a, b) => a - b);
+      // 📱 mapCctvOn=false 면 미니창 생략 (모바일/앱 화면 깔끔하게)
+      const channels = mapCctvOn ? (zoneToCh[z.id] || []).sort((a, b) => a - b) : [];
       const firstCh = channels[0];
       const dispChs = channels; // 채널 수 제한 없이 전부 표시
       const nCh = dispChs.length;
       const cols = nCh === 1 ? 1 : nCh <= 4 ? 2 : 3;
-      const cellW = nCh === 1 ? 78 : nCh <= 4 ? 50 : 44;
-      const cellH = nCh === 1 ? 52 : nCh <= 4 ? 34 : 30;
+      // 모바일은 더 작게
+      const cellW = isMobile
+        ? (nCh === 1 ? 56 : nCh <= 4 ? 36 : 30)
+        : (nCh === 1 ? 78 : nCh <= 4 ? 50 : 44);
+      const cellH = isMobile
+        ? (nCh === 1 ? 38 : nCh <= 4 ? 24 : 22)
+        : (nCh === 1 ? 52 : nCh <= 4 ? 34 : 30);
       const gridW = cols * cellW + (cols - 1) * 2;
       const hasAnyDanger = dispChs.some(ch => ana[ch]?.level === "DANGER");
       const hasAnyWarn = dispChs.some(ch => ana[ch]?.level === "WARNING");
@@ -27741,17 +27847,22 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
       const cellsHtml = dispChs.map(ch => {
         const s2 = snaps[ch];
         const ca = ana[ch];
+        const isOffline = !!s2?.error;
         const url = (s2?.url && !s2?.error) ? s2.url : `${dirBase.replace(/\/+$/,"")}/api/snap/${ch}?t=${liveTs}`;
         const fbId = `cctvFbL_${z.id}_${ch}`;
+        const borderColor = isOffline ? "#dc2626" : ca?.level==="DANGER"?"#dc2626":ca?.level==="WARNING"?"#f59e0b":"rgba(255,255,255,0.2)";
         // 셀 클릭도 그리드로 — 사용자 요청: 지도 CCTV 클릭하면 전체 CCTV가 큰 화면으로
         const cellClick = cctvEditMode
           ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${ch})"`
           : `onclick="event.stopPropagation();window.__jamsaOpenCctvGrid&&window.__jamsaOpenCctvGrid('${z.id}','${chCsv}')"`;
-        return `<div ${cellClick} title="CH${ch} — 클릭하면 스팟 전체 CCTV를 크게 보기" style="position:relative;width:${cellW}px;height:${cellH}px;border-radius:3px;overflow:hidden;border:1px solid ${ca?.level==="DANGER"?"#dc2626":ca?.level==="WARNING"?"#f59e0b":"rgba(255,255,255,0.2)"};background:#0f172a;flex-shrink:0;cursor:pointer;">
-          <img data-cctv-marker-ch="${ch}" src="${url}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';var fb=document.getElementById('${fbId}');if(fb)fb.style.display='flex';"/>
-          <div id="${fbId}" style="display:none;position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);background:rgba(15,23,42,0.93);">
-            <div style="font-size:${nCh===1?'16':'11'}px;">📷</div>
+        const imgDisp = isOffline ? 'none' : '';
+        const fbDisp = isOffline ? 'flex' : 'none';
+        return `<div ${cellClick} title="CH${ch}${isOffline ? ' · 🔴 오프라인' : ' — 클릭하면 스팟 전체 CCTV를 크게 보기'}" style="position:relative;width:${cellW}px;height:${cellH}px;border-radius:3px;overflow:hidden;border:1px solid ${borderColor};background:#0f172a;flex-shrink:0;cursor:pointer;">
+          <img data-cctv-marker-ch="${ch}" src="${url}" style="width:100%;height:100%;object-fit:cover;display:${imgDisp};" onerror="this.style.display='none';var fb=document.getElementById('${fbId}');if(fb)fb.style.display='flex';"/>
+          <div id="${fbId}" style="display:${fbDisp};position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:${isOffline?'#fca5a5':'rgba(255,255,255,0.6)'};background:${isOffline?'rgba(60,10,10,0.93)':'rgba(15,23,42,0.93)'};">
+            <div style="font-size:${nCh===1?'16':'11'}px;">${isOffline?'🔴':'📷'}</div>
             <div style="font-size:${nCh===1?'8':'7'}px;font-weight:700;margin-top:1px;">CH${ch}</div>
+            ${isOffline ? `<div style="font-size:${nCh===1?'7':'6'}px;color:#fca5a5;font-weight:800;margin-top:1px;letter-spacing:0.3px;">OFFLINE</div>` : ''}
           </div>
           <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.72),transparent);padding:1px 3px;font-size:${nCh===1?'8':'7'}px;color:#fff;font-weight:800;">CH${ch}</div>
           ${ca?.level==="DANGER"?`<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(220,38,38,0.96);padding:1px 2px;font-size:7px;color:#fff;font-weight:900;text-align:center;">🚨</div>`:ca?.level==="WARNING"?`<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(245,158,11,0.96);padding:1px 2px;font-size:7px;color:#fff;font-weight:900;text-align:center;">⚠️</div>`:''}
@@ -27813,7 +27924,7 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
     }
     // ⚡ PERF: cctvSnapshotData는 deps에서 제외 — 5초마다 마커 통째 재생성 방지.
     //    스냅샷 갱신은 아래 별도 effect에서 img.src만 surgical 패치.
-  }, [zoneStatus, leafletLoaded, cctvEditMode, cctvMap, spreadMode]);
+  }, [zoneStatus, leafletLoaded, cctvEditMode, cctvMap, spreadMode, isMobile, mapCctvOn]);
 
   // ⚡ PERF: 스냅샷 폴링을 마커 재생성 없이 img 노드 src만 갱신 (Leaflet)
   React.useEffect(() => {
