@@ -9892,16 +9892,24 @@ function CctvLiveOverlay({ zones, cctvMap, onAlert, onOpenChannel, snapServerUrl
       }
     };
 
-    // 초기 1회 + 인터벌
-    activeChannels.forEach(ch => {
-      fetchSnapshot(ch);
-      const t = setInterval(() => fetchSnapshot(ch), snapInterval);
-      timers.push(t);
+    // ⚡ PERF: 채널별 fetch 시작을 인터벌 창 전체에 균등 분산
+    //    이전엔 N개 채널이 같은 순간에 모두 fetch → CCTV 서버 동시 부하 + 패널측
+    //    네트워크 큐 폭주로 인한 느림. 이제 snapInterval/N 간격으로 staggered.
+    const stagger = activeChannels.length > 1 ? Math.max(40, Math.floor(snapInterval / activeChannels.length)) : 0;
+    activeChannels.forEach((ch, idx) => {
+      const startDelay = stagger * idx;
+      const startTimer = setTimeout(() => {
+        if (stopped) return;
+        fetchSnapshot(ch);
+        const t = setInterval(() => fetchSnapshot(ch), snapInterval);
+        timers.push(t);
+      }, startDelay);
+      timers.push(startTimer);
     });
 
     return () => {
       stopped = true;
-      timers.forEach(clearInterval);
+      timers.forEach(t => { clearTimeout(t); clearInterval(t); });
     };
   }, [enabled, activeChannels.join(","), snapInterval, snapServerUrl]);
 
@@ -23900,7 +23908,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
             ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${ch})"`
             : `onclick="event.stopPropagation();window.__jamsaOpenCctvGrid&&window.__jamsaOpenCctvGrid('${z.id}','${_chCsv}')"`;
           return `<div ${_cellClick} title="CH${ch} — 클릭하면 스팟 전체 CCTV를 크게 보기" style="position:relative;width:${_cellW}px;height:${_cellH}px;border-radius:3px;overflow:hidden;border:${_cellBorder};${_cellAnim}background:#0f172a;flex-shrink:0;cursor:pointer;">
-            <img src="${_url}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';var fb=document.getElementById('${_fbId}');if(fb)fb.style.display='flex';"/>
+            <img data-cctv-marker-ch="${ch}" src="${_url}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';var fb=document.getElementById('${_fbId}');if(fb)fb.style.display='flex';"/>
             <div id="${_fbId}" style="display:none;position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);background:rgba(15,23,42,0.93);">
               <div style="font-size:${_n===1?'16':'11'}px;">📷</div>
               <div style="font-size:${_n===1?'8':'7'}px;font-weight:700;margin-top:1px;">CH${ch}</div>
@@ -24039,7 +24047,36 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         }
       });
     }
-  }, [zoneStatus, naverLoaded, mapProvider, bgMode, viewMode, editMode, cctvSnapshotData, zoneCrowdStats, cctvMap, cctvEditMode, spreadMode]);
+    // ⚡ PERF: cctvSnapshotData는 deps에서 의도적으로 제외. 5초마다 모든 마커가
+    //    재생성되면서 Naver 마커 객체/DOM이 통째로 destroyed→recreated 되어
+    //    Vercel 환경에서 CCTV 영상이 끊겨 보였음. 아래 별도 effect에서
+    //    data-cctv-marker-ch 속성을 가진 img들의 src만 surgical 패치한다.
+  }, [zoneStatus, naverLoaded, mapProvider, bgMode, viewMode, editMode, zoneCrowdStats, cctvMap, cctvEditMode, spreadMode]);
+
+  // ⚡ PERF: 스냅샷 폴링 갱신을 마커 재생성 없이 처리 — 기존 img 노드의 src만 교체
+  //    마커 자체는 zoneStatus/cctvMap 변경 시에만 재생성됨. 5초마다의 snapshot
+  //    blob URL은 여기서만 반영된다.
+  useEffect(() => {
+    const snaps = cctvSnapshotData?.snapshots || {};
+    // requestAnimationFrame 으로 한 프레임에 묶어서 reflow 비용 최소화
+    const raf = requestAnimationFrame(() => {
+      try {
+        const imgs = document.querySelectorAll("img[data-cctv-marker-ch]");
+        imgs.forEach(img => {
+          const ch = parseInt(img.getAttribute("data-cctv-marker-ch"), 10);
+          if (isNaN(ch)) return;
+          const s = snaps[ch];
+          if (!s || s.error || !s.url) return;
+          if (img.src !== s.url) {
+            img.src = s.url;
+            // 폴백 div가 표시중이었으면 다시 숨기고 img 노출
+            if (img.style.display === "none") img.style.display = "";
+          }
+        });
+      } catch (e) { /* DOM 없는 SSR/초기렌더 무시 */ }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [cctvSnapshotData]);
 
   // 🌐 펼치기 모드 토글 시 fit-bounds 재실행을 위해 플래그 리셋
   useEffect(() => { naverInitialFitRef.current = false; }, [spreadMode]);
@@ -27711,7 +27748,7 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
           ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${ch})"`
           : `onclick="event.stopPropagation();window.__jamsaOpenCctvGrid&&window.__jamsaOpenCctvGrid('${z.id}','${chCsv}')"`;
         return `<div ${cellClick} title="CH${ch} — 클릭하면 스팟 전체 CCTV를 크게 보기" style="position:relative;width:${cellW}px;height:${cellH}px;border-radius:3px;overflow:hidden;border:1px solid ${ca?.level==="DANGER"?"#dc2626":ca?.level==="WARNING"?"#f59e0b":"rgba(255,255,255,0.2)"};background:#0f172a;flex-shrink:0;cursor:pointer;">
-          <img src="${url}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';var fb=document.getElementById('${fbId}');if(fb)fb.style.display='flex';"/>
+          <img data-cctv-marker-ch="${ch}" src="${url}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';var fb=document.getElementById('${fbId}');if(fb)fb.style.display='flex';"/>
           <div id="${fbId}" style="display:none;position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);background:rgba(15,23,42,0.93);">
             <div style="font-size:${nCh===1?'16':'11'}px;">📷</div>
             <div style="font-size:${nCh===1?'8':'7'}px;font-weight:700;margin-top:1px;">CH${ch}</div>
@@ -27774,7 +27811,29 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
         initialFitRef.current = true;
       } catch (e) { console.warn("[OsmFallbackMap] fitBounds 실패:", e?.message); }
     }
-  }, [zoneStatus, leafletLoaded, cctvSnapshotData, cctvEditMode, cctvMap, spreadMode]);
+    // ⚡ PERF: cctvSnapshotData는 deps에서 제외 — 5초마다 마커 통째 재생성 방지.
+    //    스냅샷 갱신은 아래 별도 effect에서 img.src만 surgical 패치.
+  }, [zoneStatus, leafletLoaded, cctvEditMode, cctvMap, spreadMode]);
+
+  // ⚡ PERF: 스냅샷 폴링을 마커 재생성 없이 img 노드 src만 갱신 (Leaflet)
+  React.useEffect(() => {
+    const snaps = cctvSnapshotData?.snapshots || {};
+    const raf = requestAnimationFrame(() => {
+      try {
+        document.querySelectorAll("img[data-cctv-marker-ch]").forEach(img => {
+          const ch = parseInt(img.getAttribute("data-cctv-marker-ch"), 10);
+          if (isNaN(ch)) return;
+          const s = snaps[ch];
+          if (!s || s.error || !s.url) return;
+          if (img.src !== s.url) {
+            img.src = s.url;
+            if (img.style.display === "none") img.style.display = "";
+          }
+        });
+      } catch (e) {}
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [cctvSnapshotData]);
 
   // 🌐 펼치기 모드 토글 시 fit-bounds 재실행을 위해 플래그 리셋
   React.useEffect(() => { initialFitRef.current = false; }, [spreadMode]);
