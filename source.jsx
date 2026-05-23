@@ -23757,6 +23757,26 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
     });
   }, [allZones, facActions, inventoryProds, worklogs, auditLog]);
 
+  // 🌉 MuseumHR LocationModule 등 다른 모듈에서 "통합지도에서 특정 구역 보기" 요청
+  //    jamsa:focus-zone 이벤트 → 해당 zone의 detail 모달을 열고 naver 지도 panTo
+  //    ⚠️ zoneStatus가 선언된 뒤에 와야 함 (TDZ 회피)
+  useEffect(() => {
+    const onFocus = (e) => {
+      const d = e?.detail;
+      if (!d) return;
+      const z = zoneStatus.find(s => s.zone?.id === d.zoneId || s.zone?.name === d.zoneName);
+      if (z) setSelectedZone(z);
+      try {
+        if (naverMapRef.current && z?.zone?.lat && z?.zone?.lng && window.naver?.maps?.LatLng) {
+          const ll = new window.naver.maps.LatLng(z.zone.lat, z.zone.lng);
+          naverMapRef.current.panTo(ll);
+        }
+      } catch (err) {}
+    };
+    window.addEventListener("jamsa:focus-zone", onFocus);
+    return () => window.removeEventListener("jamsa:focus-zone", onFocus);
+  }, [zoneStatus]);
+
   // Filter based on current filter mode
   const filteredStatus = useMemo(() => {
     if (filterMode === "all") return zoneStatus;

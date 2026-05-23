@@ -770,91 +770,414 @@ function AttendanceModule({employees}) {
 /* ============================================================
    모듈 4) 위치추적
    ============================================================ */
-function LocationModule({employees}) {
-  const [selected, setSelected] = useState(employees[0].id);
-  const colors = ["#ef4444","#3b82f6","#22c55e","#f59e0b","#8b5cf6","#06b6d4","#ec4899"];
+/* ===== presence-log-engine 헬퍼 — localStorage 직접 접근 ===== */
+function _hrGetPresenceLogs() {
+  try { return JSON.parse(localStorage.getItem("jamsa_presence_logs") || "[]"); }
+  catch (e) { return []; }
+}
+function _hrGetGatewayMap() {
+  try { return JSON.parse(localStorage.getItem("jamsa_gateway_zone_map") || "[]"); }
+  catch (e) { return []; }
+}
+function _hrGetBaseZones() {
+  return (typeof window !== "undefined" && window.__jamsaBaseZones) || [];
+}
+function _hrTimeHM(iso) {
+  if (!iso) return "—";
+  try { const d = new Date(iso); return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; }
+  catch (e) { return "—"; }
+}
+function _hrDurationLabel(ms) {
+  if (!ms || ms < 0) return "0분";
+  const min = Math.floor(ms / 60000);
+  if (min < 60) return `${min}분`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m === 0 ? `${h}시간` : `${h}시간 ${m}분`;
+}
+function _hrEmpColors(n) {
+  // 안정적인 직원별 색상
+  const palette = ["#ef4444","#3b82f6","#22c55e","#f59e0b","#8b5cf6","#06b6d4","#ec4899","#10b981","#f97316"];
+  return palette[n % palette.length];
+}
 
-  // 직원별 동선 (시뮬레이션)
-  const trails = employees.map((e,i)=>({
-    id:e.id, name:e.name, color:colors[i%colors.length],
-    points: [
-      { x:20, y:80, t:"08:42", label:"출근" },
-      { x:48, y:25, t:"09:30", label:"상설1관" },
-      { x:75, y:25, t:"10:45", label:"누에쉘터" },
-      { x:75, y:55, t:"12:00", label:"양떼정원" },
-      { x:20, y:80, t:"13:30", label:"점심" },
-    ]
-  }));
+function LocationModule({ employees }) {
+  // ─── 라이브 데이터: presence logs + 게이트웨이 매핑 ───
+  const [logs, setLogs] = useState(() => _hrGetPresenceLogs());
+  const [baseZones, setBaseZones] = useState(() => _hrGetBaseZones());
+  const [selectedEmpKey, setSelectedEmpKey] = useState(null);
+  const [tick, setTick] = useState(0); // 강제 리렌더 (현재시각 변경)
+  const refreshLogs = useCallback(() => setLogs(_hrGetPresenceLogs()), []);
+
+  useEffect(() => {
+    // 비콘이 새로 감지되거나 AI 분석 결과가 갱신되면 즉시 반영
+    const onPresence = () => refreshLogs();
+    window.addEventListener("jamsa:presence-log", onPresence);
+    window.addEventListener("jamsa:presence-log-updated", onPresence);
+    // baseZones는 source.jsx가 mount 후 늦게 세팅할 수 있으므로 한 번 더 체크
+    const zt = setTimeout(() => setBaseZones(_hrGetBaseZones()), 300);
+    // 10초마다 폴링 (이벤트 누락 백업) + 60초마다 현재시각 기준 dwell 재계산
+    const lt = setInterval(refreshLogs, 10000);
+    const tt = setInterval(() => setTick(t => t + 1), 60000);
+    return () => {
+      window.removeEventListener("jamsa:presence-log", onPresence);
+      window.removeEventListener("jamsa:presence-log-updated", onPresence);
+      clearTimeout(zt); clearInterval(lt); clearInterval(tt);
+    };
+  }, [refreshLogs]);
+
+  // ─── 오늘 날짜 로그만 ───
+  const todayPrefix = new Date().toISOString().slice(0, 10);
+  const todayLogs = useMemo(
+    () => logs.filter(l => l.at && l.at.startsWith(todayPrefix)),
+    [logs, todayPrefix]
+  );
+
+  // ─── 직원별 동선 집계 (시간순) ───
+  // key = employeeId || beaconId (등록 안 된 비콘도 보여줌)
+  const trajectories = useMemo(() => {
+    const m = {};
+    // todayLogs는 최신순으로 들어있으므로 reverse로 시간순
+    for (const log of [...todayLogs].reverse()) {
+      const key = log.employeeId || `beacon:${log.beaconId}`;
+      const name = log.employeeName || log.beaconName || `비콘-${String(log.beaconId).slice(-4)}`;
+      if (!m[key]) m[key] = { key, name, employeeId: log.employeeId, beaconId: log.beaconId, points: [] };
+      m[key].points.push({
+        at: log.at,
+        zoneId: log.zoneId,
+        zoneName: log.zoneName,
+        cctvChannel: log.cctvChannel,
+        rssi: log.rssi,
+        aiAnalysis: log.aiAnalysis,
+      });
+    }
+    return m;
+  }, [todayLogs]);
+  const trajList = useMemo(() => Object.values(trajectories), [trajectories]);
+
+  // 선택 직원 자동 — 첫 진입 시 가장 최근 활동
+  useEffect(() => {
+    if (selectedEmpKey || trajList.length === 0) return;
+    const mostRecent = trajList
+      .map(tr => ({ tr, last: tr.points[tr.points.length - 1] }))
+      .sort((a, b) => new Date(b.last.at) - new Date(a.last.at))[0];
+    if (mostRecent) setSelectedEmpKey(mostRecent.tr.key);
+  }, [trajList, selectedEmpKey]);
+
+  // ─── 현재 구역별 인원 (각 직원의 가장 최근 로그) ───
+  const occupancy = useMemo(() => {
+    const m = {};
+    trajList.forEach(tr => {
+      const last = tr.points[tr.points.length - 1];
+      if (!last || !last.zoneId) return;
+      // 30분 이상 신호 없으면 "퇴장"으로 간주
+      const ageMin = (Date.now() - new Date(last.at).getTime()) / 60000;
+      if (ageMin > 30) return;
+      const zid = last.zoneId;
+      if (!m[zid]) m[zid] = { zoneId: zid, zoneName: last.zoneName, employees: [] };
+      m[zid].employees.push({ key: tr.key, name: tr.name });
+    });
+    return m;
+  }, [trajList, tick]);
+
+  // ─── 선택 직원 분석 (체류시간/이동거리/패턴) ───
+  const analysis = useMemo(() => {
+    if (!selectedEmpKey) return null;
+    const tr = trajectories[selectedEmpKey];
+    if (!tr || tr.points.length === 0) return null;
+    const dwell = {}; // zoneName -> ms
+    for (let i = 0; i < tr.points.length; i++) {
+      const cur = tr.points[i];
+      const next = tr.points[i + 1];
+      const startMs = new Date(cur.at).getTime();
+      const endMs = next ? new Date(next.at).getTime() : Date.now();
+      const span = Math.max(0, endMs - startMs);
+      dwell[cur.zoneName] = (dwell[cur.zoneName] || 0) + span;
+    }
+    const totalMs = Object.values(dwell).reduce((a, b) => a + b, 0);
+    const transitions = Math.max(0, tr.points.length - 1);
+    const dwellSorted = Object.entries(dwell).sort((a, b) => b[1] - a[1]);
+    const dangers = tr.points.filter(p => p.aiAnalysis?.level === "DANGER").length;
+    const warnings = tr.points.filter(p => p.aiAnalysis?.level === "WARNING").length;
+    return {
+      first: tr.points[0],
+      last: tr.points[tr.points.length - 1],
+      totalMs, transitions,
+      zonesVisited: Object.keys(dwell).length,
+      dwellSorted, // [[zoneName, ms], ...]
+      dangers, warnings,
+    };
+  }, [selectedEmpKey, trajectories, tick]);
+
+  // ─── SVG 좌표 변환 — BASE_ZONES의 lat/lng를 0-100% 로 정규화 ───
+  const projection = useMemo(() => {
+    if (!baseZones || baseZones.length === 0) return null;
+    const lats = baseZones.map(z => z.lat).filter(v => typeof v === "number");
+    const lngs = baseZones.map(z => z.lng).filter(v => typeof v === "number");
+    if (lats.length === 0) return null;
+    const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+    const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
+    const padLat = (maxLat - minLat) * 0.12 || 0.0005;
+    const padLng = (maxLng - minLng) * 0.12 || 0.0005;
+    const sw = { lat: minLat - padLat, lng: minLng - padLng };
+    const ne = { lat: maxLat + padLat, lng: maxLng + padLng };
+    return {
+      project: (lat, lng) => ({
+        x: ((lng - sw.lng) / (ne.lng - sw.lng)) * 100,
+        y: 100 - ((lat - sw.lat) / (ne.lat - sw.lat)) * 100, // y 뒤집기
+      }),
+      zoneByName: (name) => baseZones.find(z => z.name === name || z.id === name),
+      zoneById: (id) => baseZones.find(z => z.id === id),
+    };
+  }, [baseZones]);
+
+  // 통합지도로 포커스 이벤트 dispatch
+  const focusOnMainMap = (zoneId, zoneName) => {
+    try {
+      window.dispatchEvent(new CustomEvent("jamsa:focus-zone", { detail: { zoneId, zoneName } }));
+      // 사용자가 #home 으로 갈 수 있도록 살짝 힌트
+      if (!window.confirm(`통합지도에서 "${zoneName || zoneId}" 위치로 이동할까요?`)) return;
+      window.location.hash = "home";
+    } catch (e) {}
+  };
+
+  const selectedTraj = selectedEmpKey ? trajectories[selectedEmpKey] : null;
+  const selectedColor = selectedEmpKey ? _hrEmpColors(trajList.findIndex(t => t.key === selectedEmpKey)) : T.silk;
 
   return (
-    <div style={{display:"grid", gridTemplateColumns:"1fr 280px", gap:16}}>
-      <Card style={{padding:0, overflow:"hidden", background:T.paper}}>
-        <div style={{padding:14, borderBottom:`1px solid ${T.line}`, display:"flex", justifyContent:"space-between"}}>
-          <strong style={{fontFamily:fontFamily}}>🗺️ 박물관 실시간 동선 맵</strong>
-          <span style={{fontSize:11, color:T.muted}}>BLE 삼변측량 (±2m)</span>
-        </div>
-        <div style={{position:"relative", height:480, background:T.cream}}>
-          <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{position:"absolute", inset:0, width:"100%", height:"100%"}}>
-            {/* 구역 */}
-            {ZONES.map(z=>(
-              <g key={z.id}>
-                <rect x={z.x} y={z.y} width={z.w} height={z.h}
-                  fill={z.color+"15"} stroke={z.color+"80"} strokeWidth="0.3" rx="1"/>
-                <text x={z.x+z.w/2} y={z.y+z.h/2} fontSize="2" fill={z.color}
-                  textAnchor="middle" dominantBaseline="middle" fontWeight="600">{z.name}</text>
-              </g>
-            ))}
-            {/* 동선 */}
-            {trails.filter(t=>t.id===selected).map(t=>(
-              <g key={t.id}>
-                <polyline
-                  points={t.points.map(p=>`${p.x},${p.y}`).join(" ")}
-                  fill="none" stroke={t.color} strokeWidth="0.6"
-                  strokeDasharray="1.5,0.8" strokeLinecap="round" strokeLinejoin="round"
-                />
-                {t.points.map((p,i)=>(
-                  <g key={i}>
-                    <circle cx={p.x} cy={p.y} r="1.4" fill={t.color} stroke="#fff" strokeWidth="0.3"/>
-                    <text x={p.x} y={p.y-2.2} fontSize="1.6" fill={t.color} textAnchor="middle" fontWeight="600">{p.t}</text>
-                  </g>
-                ))}
-                {/* 현재 위치 */}
-                <circle cx={t.points[t.points.length-1].x} cy={t.points[t.points.length-1].y} r="2.4"
-                  fill={t.color} opacity="0.4">
-                  <animate attributeName="r" values="2.4;4;2.4" dur="2s" repeatCount="indefinite"/>
-                </circle>
-              </g>
-            ))}
-          </svg>
-        </div>
-      </Card>
-
-      <div style={{display:"flex", flexDirection:"column", gap:10}}>
-        <Card>
-          <h4 style={{margin:"0 0 10px", fontSize:13, fontFamily:fontFamily}}>👥 직원 동선 선택</h4>
-          {trails.map(t=>(
-            <button key={t.id} onClick={()=>setSelected(t.id)} style={{
-              width:"100%", display:"flex", alignItems:"center", gap:10,
-              padding:"8px 10px", border:"none", cursor:"pointer",
-              background:selected===t.id?T.cream:"transparent", borderRadius:6,
-              marginBottom:3, fontFamily:sansFamily, fontSize:12,
-            }}>
-              <span style={{width:10, height:10, borderRadius:"50%", background:t.color}}/>
-              <span style={{flex:1, textAlign:"left"}}>{t.name}</span>
-              {selected===t.id && <Badge color={t.color}>활성</Badge>}
-            </button>
-          ))}
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 16 }}>
+      {/* ─── 왼쪽: 실시간 동선 맵 + 분석 카드 ─── */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <Card style={{ padding: 0, overflow: "hidden", background: T.paper }}>
+          <div style={{ padding: 14, borderBottom: `1px solid ${T.line}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+            <div>
+              <strong style={{ fontFamily: fontFamily, fontSize: 14 }}>🗺️ 박물관 실시간 동선 맵</strong>
+              <div style={{ fontSize: 10, color: T.muted, marginTop: 2 }}>
+                BLE 게이트웨이 + presence-log 엔진 · 통합지도와 동일 좌표계
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ fontSize: 11, color: T.muted }}>오늘 로그 {todayLogs.length}건 · 활성 {Object.keys(occupancy).length}구역</span>
+              <button onClick={refreshLogs}
+                style={{ padding: "4px 10px", fontSize: 11, fontWeight: 700, background: T.cream, color: T.silkL, border: `1px solid ${T.line}`, borderRadius: 6, cursor: "pointer" }}>
+                ↻ 새로고침
+              </button>
+              <a href="#home"
+                style={{ padding: "4px 10px", fontSize: 11, fontWeight: 700, background: T.silkD, color: "#fff", borderRadius: 6, textDecoration: "none" }}>
+                통합지도 열기 →
+              </a>
+            </div>
+          </div>
+          <div style={{ position: "relative", height: 460, background: T.cream }}>
+            {(!projection || trajList.length === 0) ? (
+              <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: T.muted, textAlign: "center", padding: 24 }}>
+                <div style={{ fontSize: 40, marginBottom: 8 }}>📡</div>
+                {!projection ? (
+                  <>
+                    <div style={{ fontSize: 13, fontWeight: 700 }}>통합지도 데이터 로딩 중...</div>
+                    <div style={{ fontSize: 11, marginTop: 6 }}>통합지도 한 번 열고 다시 와주세요 (BASE_ZONES 초기화 후 연동됩니다)</div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 13, fontWeight: 700 }}>오늘 감지된 BLE 신호 없음</div>
+                    <div style={{ fontSize: 11, marginTop: 6, lineHeight: 1.6 }}>
+                      통합지도 → BLE 게이트웨이 매핑이 설정되어 있고<br/>
+                      비콘이 감지되면 자동으로 여기 표시됩니다.
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : (
+              <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}>
+                {/* 1. 모든 스팟 마커 */}
+                {baseZones.map(z => {
+                  const p = projection.project(z.lat, z.lng);
+                  const occ = occupancy[z.id];
+                  const cnt = occ?.employees?.length || 0;
+                  return (
+                    <g key={z.id} onClick={() => focusOnMainMap(z.id, z.name)} style={{ cursor: "pointer" }}>
+                      <circle cx={p.x} cy={p.y} r={cnt > 0 ? 2.4 : 1.6}
+                        fill={cnt > 0 ? (z.color || T.silk) : "transparent"}
+                        stroke={z.color || T.silk} strokeWidth="0.5" opacity={cnt > 0 ? 1 : 0.45} />
+                      <text x={p.x} y={p.y - 3} fontSize="2" fill={T.ink} textAnchor="middle" opacity="0.8">
+                        {z.icon || ""} {z.name}
+                      </text>
+                      {cnt > 0 && (
+                        <text x={p.x} y={p.y + 0.7} fontSize="1.8" fill="#fff" textAnchor="middle" fontWeight="900">{cnt}</text>
+                      )}
+                    </g>
+                  );
+                })}
+                {/* 2. 선택 직원 동선 (시간순 polyline + 노드) */}
+                {selectedTraj && selectedTraj.points.length > 0 && (() => {
+                  const pts = selectedTraj.points
+                    .map(p => {
+                      const z = projection.zoneById(p.zoneId) || projection.zoneByName(p.zoneName);
+                      if (!z || typeof z.lat !== "number") return null;
+                      const proj = projection.project(z.lat, z.lng);
+                      return { ...p, x: proj.x, y: proj.y };
+                    })
+                    .filter(Boolean);
+                  if (pts.length === 0) return null;
+                  return (
+                    <g>
+                      <polyline
+                        points={pts.map(p => `${p.x},${p.y}`).join(" ")}
+                        fill="none" stroke={selectedColor} strokeWidth="0.7"
+                        strokeDasharray="1.6,0.9" strokeLinecap="round" strokeLinejoin="round" />
+                      {pts.map((p, i) => (
+                        <g key={i}>
+                          <circle cx={p.x} cy={p.y} r="1.5" fill={selectedColor} stroke="#fff" strokeWidth="0.35" />
+                          <text x={p.x} y={p.y - 2.3} fontSize="1.6" fill={selectedColor} textAnchor="middle" fontWeight="700">
+                            {_hrTimeHM(p.at)}
+                          </text>
+                        </g>
+                      ))}
+                      {/* 현재 위치 펄스 */}
+                      {(() => {
+                        const last = pts[pts.length - 1];
+                        return (
+                          <circle cx={last.x} cy={last.y} r="2.6" fill={selectedColor} opacity="0.5">
+                            <animate attributeName="r" values="2.6;5;2.6" dur="2s" repeatCount="indefinite" />
+                            <animate attributeName="opacity" values="0.5;0.1;0.5" dur="2s" repeatCount="indefinite" />
+                          </circle>
+                        );
+                      })()}
+                    </g>
+                  );
+                })()}
+              </svg>
+            )}
+          </div>
         </Card>
+
+        {/* ─── 선택 직원 평가/분석 카드 ─── */}
+        {selectedTraj && analysis && (
+          <Card>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <h4 style={{ margin: 0, fontSize: 13, fontFamily: fontFamily, color: T.silkL }}>
+                📊 {selectedTraj.name} — 오늘 활동 분석
+              </h4>
+              <span style={{ fontSize: 10, color: T.muted }}>{todayPrefix}</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8, marginBottom: 12 }}>
+              <HrLocStat label="총 체류" value={_hrDurationLabel(analysis.totalMs)} color={T.silk} />
+              <HrLocStat label="이동 횟수" value={`${analysis.transitions}회`} color={T.info} />
+              <HrLocStat label="방문 구역" value={`${analysis.zonesVisited}곳`} color={T.leaf} />
+              <HrLocStat label="첫 감지" value={_hrTimeHM(analysis.first.at)} color={T.gold} />
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 11, color: T.muted, marginBottom: 4 }}>구역별 체류시간 (Top 5)</div>
+              {analysis.dwellSorted.slice(0, 5).map(([zone, ms]) => {
+                const pct = analysis.totalMs > 0 ? (ms / analysis.totalMs) * 100 : 0;
+                return (
+                  <div key={zone} style={{ marginBottom: 4 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 2 }}>
+                      <span style={{ color: T.ink }}>{zone}</span>
+                      <span style={{ color: T.muted }}>{_hrDurationLabel(ms)} · {pct.toFixed(0)}%</span>
+                    </div>
+                    <div style={{ height: 4, background: T.cream, borderRadius: 2, overflow: "hidden" }}>
+                      <div style={{ width: `${pct}%`, height: "100%", background: selectedColor }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {(analysis.dangers > 0 || analysis.warnings > 0) && (
+              <div style={{ padding: 8, background: analysis.dangers > 0 ? "#7f1d1d" : "#78350f", borderRadius: 6, fontSize: 11, color: "#fff" }}>
+                ⚠️ CCTV AI 알림 — 위험 {analysis.dangers}건 · 경고 {analysis.warnings}건 (오늘)
+              </div>
+            )}
+            <div style={{ fontSize: 10, color: T.muted, marginTop: 8, lineHeight: 1.7 }}>
+              마지막 감지 <strong>{_hrTimeHM(analysis.last.at)}</strong> @ <strong>{analysis.last.zoneName}</strong>
+              {analysis.last.cctvChannel != null && ` (CH${analysis.last.cctvChannel})`}
+              {analysis.last.rssi != null && ` · RSSI ${analysis.last.rssi}`}
+            </div>
+          </Card>
+        )}
+      </div>
+
+      {/* ─── 오른쪽: 직원 선택 + 구역별 인원 + 최근 이벤트 ─── */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <Card>
-          <h4 style={{margin:"0 0 10px", fontSize:13, fontFamily:fontFamily}}>📍 구역별 현재 인원</h4>
-          {ZONES.slice(0,5).map(z=>(
-            <div key={z.id} style={{display:"flex", justifyContent:"space-between", padding:"6px 0", fontSize:12, borderBottom:`1px dotted ${T.line}`}}>
-              <span><span style={{color:z.color}}>●</span> {z.name}</span>
-              <span style={{color:T.muted}}>{Math.floor(Math.random()*3)+1}명</span>
+          <h4 style={{ margin: "0 0 10px", fontSize: 13, fontFamily: fontFamily }}>
+            👥 직원 동선 선택 <span style={{ fontSize: 10, color: T.muted, fontWeight: 400 }}>({trajList.length}명)</span>
+          </h4>
+          {trajList.length === 0 ? (
+            <div style={{ fontSize: 11, color: T.muted, padding: "16px 0", textAlign: "center" }}>오늘 감지된 직원 없음</div>
+          ) : trajList.map((tr, i) => {
+            const color = _hrEmpColors(i);
+            const last = tr.points[tr.points.length - 1];
+            const ageMin = (Date.now() - new Date(last.at).getTime()) / 60000;
+            const isLive = ageMin < 30;
+            return (
+              <button key={tr.key} onClick={() => setSelectedEmpKey(tr.key)} style={{
+                width: "100%", display: "flex", alignItems: "center", gap: 10,
+                padding: "8px 10px", border: "none", cursor: "pointer",
+                background: selectedEmpKey === tr.key ? T.cream : "transparent", borderRadius: 6,
+                marginBottom: 3, fontFamily: sansFamily, fontSize: 12,
+              }}>
+                <span style={{ width: 10, height: 10, borderRadius: "50%", background: color, boxShadow: isLive ? `0 0 6px ${color}` : "none" }} />
+                <div style={{ flex: 1, textAlign: "left", minWidth: 0 }}>
+                  <div style={{ color: T.ink, fontWeight: 600 }}>{tr.name}</div>
+                  <div style={{ color: T.muted, fontSize: 10 }}>
+                    {_hrTimeHM(last.at)} · {last.zoneName}
+                  </div>
+                </div>
+                {isLive && <Badge color={T.ok}>활성</Badge>}
+                {selectedEmpKey === tr.key && <span style={{ color: color, fontSize: 14 }}>▸</span>}
+              </button>
+            );
+          })}
+        </Card>
+
+        <Card>
+          <h4 style={{ margin: "0 0 10px", fontSize: 13, fontFamily: fontFamily }}>
+            📍 구역별 현재 인원 <span style={{ fontSize: 10, color: T.muted, fontWeight: 400 }}>(30분 이내)</span>
+          </h4>
+          {baseZones.length === 0 ? (
+            <div style={{ fontSize: 11, color: T.muted }}>BASE_ZONES 로딩 중...</div>
+          ) : baseZones.map(z => {
+            const occ = occupancy[z.id];
+            const cnt = occ?.employees?.length || 0;
+            return (
+              <div key={z.id}
+                onClick={() => focusOnMainMap(z.id, z.name)}
+                style={{ display: "flex", justifyContent: "space-between", padding: "6px 4px", fontSize: 12, borderBottom: `1px dotted ${T.line}`, cursor: "pointer", opacity: cnt > 0 ? 1 : 0.5 }}>
+                <span><span style={{ color: z.color || T.silk }}>●</span> {z.icon || ""} {z.name}</span>
+                <span style={{ color: cnt > 0 ? T.silkL : T.muted, fontWeight: cnt > 0 ? 700 : 400 }}>
+                  {cnt > 0 ? `${cnt}명` : "—"}
+                </span>
+              </div>
+            );
+          })}
+        </Card>
+
+        <Card>
+          <h4 style={{ margin: "0 0 8px", fontSize: 13, fontFamily: fontFamily }}>🕐 최근 이벤트</h4>
+          {todayLogs.slice(0, 8).map(log => (
+            <div key={log.id} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 11, borderBottom: `1px dotted ${T.line}` }}>
+              <span style={{ color: T.muted }}>{_hrTimeHM(log.at)}</span>
+              <span style={{ color: T.ink, flex: 1, marginLeft: 8, textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {log.employeeName || log.beaconName} → {log.zoneName}
+              </span>
             </div>
           ))}
+          {todayLogs.length === 0 && (
+            <div style={{ fontSize: 11, color: T.muted, padding: "8px 0", textAlign: "center" }}>아직 감지된 이벤트 없음</div>
+          )}
         </Card>
       </div>
+    </div>
+  );
+}
+
+/* 작은 통계 카드 (LocationModule 전용 — 기존 Stat 와 분리) */
+function HrLocStat({ label, value, color }) {
+  return (
+    <div style={{ padding: 8, background: T.cream, borderRadius: 6, border: `1px solid ${T.line}` }}>
+      <div style={{ fontSize: 9, color: T.muted, marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 800, color: color || T.ink, fontFamily: fontFamily }}>{value}</div>
     </div>
   );
 }
