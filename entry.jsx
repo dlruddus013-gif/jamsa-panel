@@ -61,6 +61,9 @@ async function boot() {
     window.__authToken = session?.access_token || null;
     window.__supabaseUserEmail = session?.user?.email || null;
     window.__supabase = supabase;
+    // MuseumHR.jsx 등 별도 모듈이 자체 client 생성하려고 할 때 쓸 수 있도록 노출
+    window.__SUPABASE_URL = supabaseConfig.supabase_url || "";
+    window.__SUPABASE_KEY = supabaseConfig.supabase_anon_key || "";
 
     // CCTV 백엔드 URL
     if (supabaseConfig.backend_cctv_url) {

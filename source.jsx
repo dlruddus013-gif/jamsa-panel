@@ -10,6 +10,7 @@ import { BackupHistoryPanel, logFileEvent, maybeAutoBackup } from "./inventory-b
 import { BeaconGatewayModal } from "./beacon-gateway.jsx";
 import { StaffAttendanceLivePanel } from "./staff-attendance-live.jsx";
 import { PresenceTrackingPanel } from "./presence-tracking.jsx";
+import MuseumHR from "./MuseumHR.jsx"; // 👥 직원관리 (#hr) 모듈
 
 // 메인 패널을 LAN(박물관 PC 자체 또는 같은 네트워크)에서 보고 있으면
 // cloudflared 터널이 끊겨도 localhost:5556 으로 직접 접근하여 CCTV가 끊기지 않게 함
@@ -30374,7 +30375,7 @@ function AppInner() {
   useEffect(() => {
     const onHashChange = () => {
       const hashModule = window.location.hash.replace(/^#/, "");
-      if (["home", "facility", "inventory", "safety", "subagents", "clouddb", "schedule"].includes(hashModule)) setModule(hashModule);
+      if (["home", "facility", "inventory", "safety", "subagents", "clouddb", "schedule", "hr"].includes(hashModule)) setModule(hashModule);
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
@@ -30536,6 +30537,13 @@ function AppInner() {
                 color: module === "schedule" ? "#fff" : "rgba(255,255,255,0.6)" }}>
               📅 근무일지
             </button>
+            <button data-jamsa-module="hr" onClick={() => { window.location.hash = "hr"; setModule("hr"); }}
+              title="직원관리 — 출퇴근·급여·근로계약서·체크리스트·업무일지"
+              style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
+                background: module === "hr" ? "linear-gradient(135deg,#c9a96e,#a8864a)" : "transparent",
+                color: module === "hr" ? "#fff" : "rgba(255,255,255,0.6)" }}>
+              👥 직원관리
+            </button>
             <a href="/attendance" target="_blank" rel="noopener" title="BLE 출퇴근 시스템 (별도 탭)"
               style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
                 background: "linear-gradient(135deg,#10b981,#059669)",
@@ -30602,6 +30610,7 @@ function AppInner() {
         {module === "safety"    && <SafetyModule userCtx={facUser} onLogout={logout} facilities={FAC_FACILITIES} onAddFacAction={addFacAction} addAudit={addAudit} worklogs={worklogs} facActions={facActions} auditLog={auditLog} />}
         {module === "clouddb"   && <CloudDatabasePage />}
         {module === "schedule"  && <WorkScheduleModule currentUser={currentUser} />}
+        {module === "hr"        && <MuseumHR onClose={() => { window.location.hash = "home"; setModule("home"); }} />}
         {module === "subagents" && <AutoSubAgentPage
           report={autoAgentReport}
           enabled={autoAgentEnabled}
