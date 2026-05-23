@@ -9842,27 +9842,64 @@ function CctvLiveOverlay({ zones, cctvMap, onAlert, onOpenChannel, snapServerUrl
     return map;
   }, [cctvMap]);
 
-  // 스냅샷 폴링
+  // 스냅샷 폴링 — 동시 요청 제한 + per-채널 빠른 재시도
   useEffect(() => {
     if (!enabled || activeChannels.length === 0) return;
     let stopped = false;
     let timers = [];
+    // ⚡ 동시 in-flight 제한: 브라우저는 origin당 6개. 4로 캡해서 다른 요청 여유 확보
+    const MAX_INFLIGHT = 4;
+    let inflight = 0;
+    const queue = []; // [ch, ...]
+    // 채널별 연속 실패 카운트 — 임계치 넘으면 다음 정상 폴링까지 OFFLINE 유지
+    const failCount = {}; // { [ch]: number }
+
+    const runQueue = () => {
+      if (stopped) return;
+      while (inflight < MAX_INFLIGHT && queue.length > 0) {
+        const ch = queue.shift();
+        inflight++;
+        fetchSnapshot(ch).finally(() => {
+          inflight--;
+          // 큐에 남아있으면 다음 처리
+          if (!stopped) runQueue();
+        });
+      }
+    };
+    const enqueue = (ch) => {
+      // 같은 채널이 큐에 이미 있으면 중복 등록 안 함 (in-flight도 체크해야 완벽하지만
+      // in-flight는 자주 끝나므로 큐 dedup만으로 충분)
+      if (queue.includes(ch)) return;
+      queue.push(ch);
+      runQueue();
+    };
 
     const fetchSnapshot = async (ch) => {
       try {
         let res = null;
         let activeBase = "";
-        for (const base of getCctvServerCandidates(snapServerUrl)) {
-          const url = `${base}/api/snap/${ch}?t=${Date.now()}`;
-          res = await fetch(url, { method: "GET", mode: "cors", cache: "no-store" }).catch(() => null);
-          if (res?.ok) { activeBase = base; break; }
+        // AbortController 로 8초 타임아웃 — 응답 없는 채널이 큐 막지 않도록
+        const ctrl = new AbortController();
+        const timeoutId = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 8000);
+        try {
+          for (const base of getCctvServerCandidates(snapServerUrl)) {
+            const url = `${base}/api/snap/${ch}?t=${Date.now()}`;
+            res = await fetch(url, { method: "GET", mode: "cors", cache: "no-store", signal: ctrl.signal }).catch(() => null);
+            if (res?.ok) { activeBase = base; break; }
+          }
+        } finally {
+          clearTimeout(timeoutId);
         }
         if (!res || !res.ok) {
-          // 백엔드 미가동 시 placeholder 유지
-          if (!snapshots[ch]) {
-            setSnapshots(s => ({ ...s, [ch]: { url: null, ts: Date.now(), error: true } }));
+          failCount[ch] = (failCount[ch] || 0) + 1;
+          // 첫 실패부터 placeholder + error 표시 (이전엔 snapshots[ch]가 없을 때만)
+          setSnapshots(s => ({ ...s, [ch]: { url: s[ch]?.url || null, ts: Date.now(), error: true, fails: failCount[ch] } }));
+          // 짧은 backoff 후 재시도 (1~5회: 빠르게, 그 이상: 다음 정상 폴링까지 대기)
+          if (failCount[ch] <= 3) {
+            const retryDelay = 800 * failCount[ch]; // 800ms, 1.6s, 2.4s
+            const rt = setTimeout(() => { if (!stopped) enqueue(ch); }, retryDelay);
+            timers.push(rt);
           }
-          // 🔴 항시작동: 에러 카운트 증가, exponential backoff (최대 30초)
           if (alwaysOn) {
             reconnectRef.current.errorCount++;
             reconnectRef.current.backoffMs = Math.min(30000, 5000 * Math.pow(1.5, Math.min(reconnectRef.current.errorCount, 5)));
@@ -9872,7 +9909,6 @@ function CctvLiveOverlay({ zones, cctvMap, onAlert, onOpenChannel, snapServerUrl
         if (activeBase && activeBase !== normalizeCctvServerUrl(snapServerUrl)) {
           try { window.localStorage?.setItem("jamsa_cctv_snap_server", activeBase); } catch (e) {}
         }
-        // 🔴 항시작동: 성공 시 reconnect 상태 초기화
         if (alwaysOn) {
           reconnectRef.current.errorCount = 0;
           reconnectRef.current.lastOkAt = Date.now();
@@ -9881,27 +9917,31 @@ function CctvLiveOverlay({ zones, cctvMap, onAlert, onOpenChannel, snapServerUrl
         const blob = await res.blob();
         if (stopped) return;
         const objUrl = URL.createObjectURL(blob);
+        failCount[ch] = 0; // 성공 → 실패 카운트 리셋
         setSnapshots(s => {
-          // 이전 URL 정리
           if (s[ch]?.url) try { URL.revokeObjectURL(s[ch].url); } catch (e) {}
           return { ...s, [ch]: { url: objUrl, ts: Date.now(), error: false } };
         });
       } catch (e) {
-        // 네트워크 에러는 placeholder
+        failCount[ch] = (failCount[ch] || 0) + 1;
+        setSnapshots(s => ({ ...s, [ch]: { url: s[ch]?.url || null, ts: Date.now(), error: true, fails: failCount[ch] } }));
+        if (failCount[ch] <= 3) {
+          const retryDelay = 800 * failCount[ch];
+          const rt = setTimeout(() => { if (!stopped) enqueue(ch); }, retryDelay);
+          timers.push(rt);
+        }
         if (alwaysOn) reconnectRef.current.errorCount++;
       }
     };
 
-    // ⚡ PERF: 채널별 fetch 시작을 인터벌 창 전체에 균등 분산
-    //    이전엔 N개 채널이 같은 순간에 모두 fetch → CCTV 서버 동시 부하 + 패널측
-    //    네트워크 큐 폭주로 인한 느림. 이제 snapInterval/N 간격으로 staggered.
+    // 채널별 fetch 시작을 인터벌 창 전체에 균등 분산 + 큐 기반 동시성 제한
     const stagger = activeChannels.length > 1 ? Math.max(40, Math.floor(snapInterval / activeChannels.length)) : 0;
     activeChannels.forEach((ch, idx) => {
       const startDelay = stagger * idx;
       const startTimer = setTimeout(() => {
         if (stopped) return;
-        fetchSnapshot(ch);
-        const t = setInterval(() => fetchSnapshot(ch), snapInterval);
+        enqueue(ch);
+        const t = setInterval(() => enqueue(ch), snapInterval);
         timers.push(t);
       }, startDelay);
       timers.push(startTimer);
@@ -22512,25 +22552,31 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   //    실제 좌표는 그대로, 화면 표시용 위치만 centroid에서 방사형으로 확대
   const [spreadMode, setSpreadMode] = useState(false);
   // 📱 모바일/앱 뷰 자동 감지 — 화면이 좁으면 thumbnail 축소·패널 자동 접힘
-  const [isMobile, setIsMobile] = useState(() => {
-    try { return window.innerWidth <= 768; } catch (e) { return false; }
-  });
+  //   ⚠️ innerWidth가 0/undefined인 경우(headless, 임베디드 webview 초기 mount)는
+  //      모바일 아님으로 간주 — 그렇지 않으면 데스크탑에서도 잘못 모바일로 인식.
+  const _detectMobile = () => {
+    try {
+      const w = window.innerWidth;
+      if (!w || w <= 0) return false; // unknown → desktop
+      return w <= 768;
+    } catch (e) { return false; }
+  };
+  const [isMobile, setIsMobile] = useState(_detectMobile);
   useEffect(() => {
-    const onResize = () => {
-      try { setIsMobile(window.innerWidth <= 768); } catch (e) {}
-    };
+    const onResize = () => { try { setIsMobile(_detectMobile()); } catch (e) {} };
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    // 첫 mount 시 innerWidth가 아직 0이면 한 tick 뒤 재확인
+    const recheck = setTimeout(() => { try { setIsMobile(_detectMobile()); } catch (e) {} }, 60);
+    return () => { window.removeEventListener("resize", onResize); clearTimeout(recheck); };
   }, []);
   // 📹 마커 위 CCTV 미니창 표시 토글 — 모바일에서 화면이 복잡하면 OFF 권장
-  //    기본값: 모바일은 OFF, 데스크탑은 ON. 사용자가 토글하면 localStorage에 저장.
+  //    기본값: 사용자가 명시 저장 안 했으면 ON (모바일이라도). 명시 OFF는 유지.
   const [mapCctvOn, setMapCctvOn] = useState(() => {
     try {
       const saved = window.localStorage?.getItem("jamsa_map_cctv_mini_on");
       if (saved === "0") return false;
-      if (saved === "1") return true;
-      // 저장값 없음 → 화면 크기에 따라 기본값
-      return window.innerWidth > 768;
+      // saved === "1" 또는 미지정 → 켜기 (데스크탑/모바일 무관)
+      return true;
     } catch (e) { return true; }
   });
   const toggleMapCctv = () => {
@@ -22541,12 +22587,13 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
     });
   };
   // 📍 "실시간 위치" 좌상단 패널 접힘 상태 — 모바일은 기본 접힘
+  //   innerWidth 0/undefined 케이스에서 잘못 접히지 않도록 _detectMobile 사용
   const [posPanelCollapsed, setPosPanelCollapsed] = useState(() => {
     try {
       const saved = window.localStorage?.getItem("jamsa_pos_panel_collapsed");
       if (saved === "1") return true;
       if (saved === "0") return false;
-      return window.innerWidth <= 768;
+      return _detectMobile();
     } catch (e) { return false; }
   });
   const togglePosPanel = () => {
@@ -24462,7 +24509,26 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
 
           <CctvLiveOverlay
             zones={allZones.filter(z => !zoneCustomizations[z.id]?._deleted)}
-            cctvMap={cctvMap}
+            cctvMap={(() => {
+              // 🔧 FIX: 마커가 참조하는 모든 채널을 폴러에도 등록.
+              // 기존엔 cctvMap만 폴링 → zone.cctvChannels 로만 등록된 채널은
+              // 폴러가 모르고, 마커는 fallback 직접 URL로 시도 → 브라우저 동시
+              // 요청 제한(6/origin)으로 일부만 표시되는 "됫다안됫다" 증상.
+              const merged = { ...(cctvMap || {}) };
+              try {
+                allZones
+                  .filter(z => !zoneCustomizations[z.id]?._deleted)
+                  .forEach(z => {
+                    const chs = Array.isArray(z.cctvChannels) ? z.cctvChannels : [];
+                    if (chs.length === 0) return;
+                    const cleaned = chs.map(c => parseInt(c, 10)).filter(n => !isNaN(n));
+                    const existing = merged[z.id] || [];
+                    const union = Array.from(new Set([...existing, ...cleaned]));
+                    if (union.length > 0) merged[z.id] = union;
+                  });
+              } catch (e) { console.warn("merged cctvMap build 실패:", e?.message); }
+              return merged;
+            })()}
             onSnapshotsChange={setCctvSnapshotData}
             onAlert={(alert) => {
               setCctvAlerts(prev => [alert, ...prev].slice(0, 50));
