@@ -22442,15 +22442,38 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   const [warehouseModelZone, setWarehouseModelZone] = useState(null);
   const [spotAiModalOpen, setSpotAiModalOpen] = useState(false);
   // CCTV 원본 크기 모달 (지도에서 미니창 클릭 시 열림)
-  const [cctvFullView, setCctvFullView] = useState(null); // {ch, zoneId, zoneName} | null
+  //   mode: "grid"   → 해당 스팟의 모든 채널을 큰 그리드로 표시
+  //   mode: "single" → 단일 채널만 전체화면. channels가 있으면 ← 그리드로 돌아가기 버튼 표시
+  // shape: { mode, ch?, zoneId, zoneName, channels?: number[] } | null
+  const [cctvFullView, setCctvFullView] = useState(null);
   const [cctvFullTick, setCctvFullTick] = useState(0); // 3초마다 스냅샷 강제 갱신
+  // 워커 재시작 결과 토스트 (관리자 전용 버튼) — 3초 후 자동 소멸
+  const [bridgeResetMsg, setBridgeResetMsg] = useState(null); // { ok, text } | null
+  const [bridgeResetBusy, setBridgeResetBusy] = useState(false);
   // 글로벌 헬퍼 등록은 `allZones`가 선언된 뒤(아래 useMemo 다음)에서 수행한다.
   // 여기서 `[allZones]` dep array를 평가하면 const TDZ 에러 발생.
   useEffect(() => {
     const onOpen = (e) => {
       const d = e?.detail;
-      if (!d || d.ch == null) return;
-      setCctvFullView({ ch: d.ch, zoneId: d.zoneId, zoneName: d.zoneName });
+      if (!d) return;
+      // 새 페이로드: { mode, ch?, zoneId, zoneName, channels? }
+      // 구 페이로드(하위호환): { ch, zoneId, zoneName }  → 단일 채널 전체화면
+      if (d.mode === "grid") {
+        if (!Array.isArray(d.channels) || d.channels.length === 0) return;
+        setCctvFullView({ mode: "grid", zoneId: d.zoneId, zoneName: d.zoneName, channels: d.channels });
+      } else if (d.mode === "single") {
+        if (d.ch == null) return;
+        setCctvFullView({
+          mode: "single",
+          ch: Number(d.ch),
+          zoneId: d.zoneId,
+          zoneName: d.zoneName,
+          channels: Array.isArray(d.channels) ? d.channels : undefined,
+        });
+      } else {
+        if (d.ch == null) return;
+        setCctvFullView({ mode: "single", ch: Number(d.ch), zoneId: d.zoneId, zoneName: d.zoneName });
+      }
     };
     window.addEventListener("jamsa:cctv-open", onOpen);
     return () => window.removeEventListener("jamsa:cctv-open", onOpen);
@@ -22460,10 +22483,17 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
     const id = setInterval(() => setCctvFullTick(t => t + 1), 3000);
     return () => clearInterval(id);
   }, [cctvFullView]);
-  // ESC 키로 닫기
+  // ESC 키: single에 channels(돌아갈 그리드)가 있으면 그리드로, 아니면 닫기
   useEffect(() => {
     if (!cctvFullView) return;
-    const onKey = (e) => { if (e.key === "Escape") setCctvFullView(null); };
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      if (cctvFullView.mode === "single" && Array.isArray(cctvFullView.channels) && cctvFullView.channels.length > 1) {
+        setCctvFullView({ mode: "grid", zoneId: cctvFullView.zoneId, zoneName: cctvFullView.zoneName, channels: cctvFullView.channels });
+      } else {
+        setCctvFullView(null);
+      }
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [cctvFullView]);
@@ -23485,15 +23515,46 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   // 외부(마커 HTML inline onclick) 에서 호출할 글로벌 헬퍼 — 인라인 문자열 이스케이핑 문제 회피
   // ⚠️ 반드시 `allZones` 선언 뒤에 와야 함 — 그렇지 않으면 const TDZ ReferenceError("Cannot access ... before initialization")
   useEffect(() => {
-    window.__jamsaOpenCctv = (ch, zoneId) => {
+    // 지도 마커의 외곽 박스 클릭 → 해당 스팟의 전체 CCTV를 그리드로 큰 화면에 표시
+    // 채널이 1개뿐이면 그리드 대신 바로 단일 풀스크린을 연다 (그리드가 의미 없음)
+    window.__jamsaOpenCctvGrid = (zoneId, channelsCsv) => {
       try {
         const z = (allZones || []).find(x => x.id === zoneId);
+        const channels = String(channelsCsv || "").split(",").map(s => parseInt(s, 10)).filter(n => !isNaN(n));
+        if (channels.length === 0) return;
+        if (channels.length === 1) {
+          window.dispatchEvent(new CustomEvent("jamsa:cctv-open", {
+            detail: { mode: "single", ch: channels[0], zoneId: zoneId || null, zoneName: z?.name || zoneId || `구역` },
+          }));
+          return;
+        }
         window.dispatchEvent(new CustomEvent("jamsa:cctv-open", {
-          detail: { ch: Number(ch), zoneId: zoneId || null, zoneName: z?.name || zoneId || `구역` },
+          detail: { mode: "grid", zoneId: zoneId || null, zoneName: z?.name || zoneId || `구역`, channels },
+        }));
+      } catch (e) { console.warn("[__jamsaOpenCctvGrid]", e); }
+    };
+    // 개별 셀 클릭 → 단일 풀스크린. channels가 함께 오면 ← 그리드로 돌아가기 버튼이 활성화됨
+    window.__jamsaOpenCctv = (ch, zoneId, channelsCsv) => {
+      try {
+        const z = (allZones || []).find(x => x.id === zoneId);
+        const channels = channelsCsv != null
+          ? String(channelsCsv).split(",").map(s => parseInt(s, 10)).filter(n => !isNaN(n))
+          : undefined;
+        window.dispatchEvent(new CustomEvent("jamsa:cctv-open", {
+          detail: {
+            mode: "single",
+            ch: Number(ch),
+            zoneId: zoneId || null,
+            zoneName: z?.name || zoneId || `구역`,
+            channels,
+          },
         }));
       } catch (e) { console.warn("[__jamsaOpenCctv]", e); }
     };
-    return () => { try { delete window.__jamsaOpenCctv; } catch (e) {} };
+    return () => {
+      try { delete window.__jamsaOpenCctv; } catch (e) {}
+      try { delete window.__jamsaOpenCctvGrid; } catch (e) {}
+    };
   }, [allZones]);
 
   // Update a single field for a zone (immediate persist)
@@ -23816,11 +23877,12 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         const _outerAnim = _hasAnyDanger ? "animation:cctvDangerPulse 1.2s infinite;" : _hasAnyWarn ? "animation:cctvWarnPulse 1.6s infinite;" : "";
         const _outerBorder = cctvEditMode ? "2px dashed #fbbf24" : `2px solid ${_outerBorderColor}`;
         const _outerShadow = cctvEditMode ? "0 0 0 3px rgba(251,191,36,0.4),0 4px 14px rgba(0,0,0,0.5)" : "0 4px 14px rgba(0,0,0,0.5)";
-        // 외곽 클릭: 편집모드면 채널 매핑 변경, 아니면 첫 채널 풀스크린 모달 오픈
+        // 외곽 클릭: 편집모드면 채널 매핑 변경, 아니면 해당 스팟 전체 CCTV를 그리드로 표시
+        const _chCsv = _dispChs.join(",");
         const _cctvClick = cctvEditMode && _firstCh
           ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${_firstCh})"`
           : (_firstCh
-              ? `onclick="event.stopPropagation();window.__jamsaOpenCctv&&window.__jamsaOpenCctv(${_firstCh},'${z.id}')"`
+              ? `onclick="event.stopPropagation();window.__jamsaOpenCctvGrid&&window.__jamsaOpenCctvGrid('${z.id}','${_chCsv}')"`
               : ``);
 
         // 각 채널 셀 HTML 생성
@@ -23833,11 +23895,11 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           let _cellAnim = "";
           if (_ca?.level === "DANGER") { _cellBorder = "1px solid #dc2626"; _cellAnim = "animation:cctvDangerPulse 1.2s infinite;"; }
           else if (_ca?.level === "WARNING") { _cellBorder = "1px solid #f59e0b"; }
-          // 셀 클릭 → 원본 크기 CCTV 모달 열기 (다른 아이콘에 가려지지 않게)
+          // 셀 클릭 → 해당 스팟의 전체 CCTV 그리드 모달 (사용자 요청: "지도에서 CCTV 클릭 → 그 스팟 전체화면")
           const _cellClick = cctvEditMode
             ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${ch})"`
-            : `onclick="event.stopPropagation();window.__jamsaOpenCctv&&window.__jamsaOpenCctv(${ch},'${z.id}')"`;
-          return `<div ${_cellClick} title="CH${ch} — 클릭하면 원본 크기로 보기" style="position:relative;width:${_cellW}px;height:${_cellH}px;border-radius:3px;overflow:hidden;border:${_cellBorder};${_cellAnim}background:#0f172a;flex-shrink:0;cursor:pointer;">
+            : `onclick="event.stopPropagation();window.__jamsaOpenCctvGrid&&window.__jamsaOpenCctvGrid('${z.id}','${_chCsv}')"`;
+          return `<div ${_cellClick} title="CH${ch} — 클릭하면 스팟 전체 CCTV를 크게 보기" style="position:relative;width:${_cellW}px;height:${_cellH}px;border-radius:3px;overflow:hidden;border:${_cellBorder};${_cellAnim}background:#0f172a;flex-shrink:0;cursor:pointer;">
             <img src="${_url}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';var fb=document.getElementById('${_fbId}');if(fb)fb.style.display='flex';"/>
             <div id="${_fbId}" style="display:none;position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);background:rgba(15,23,42,0.93);">
               <div style="font-size:${_n===1?'16':'11'}px;">📷</div>
@@ -24241,7 +24303,40 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                     }} style={{ padding: "5px 8px", background: "#fff7ed", color: "#78350f", border: "1px solid #fed7aa", borderRadius: 5, fontSize: 10, fontWeight: 800, cursor: "pointer" }}>
                       기본 CCTV로 재연결
                     </button>
+                    {userCtx?.role === "ADMIN" && (
+                      <button
+                        disabled={bridgeResetBusy}
+                        onClick={async () => {
+                          setBridgeResetBusy(true);
+                          setBridgeResetMsg(null);
+                          try {
+                            const fetcher = window.authFetch || ((p, o) => fetch(p, o));
+                            const r = await fetcher("/api/bridge/reset", { method: "POST", headers: { "Content-Type": "application/json" } });
+                            const data = await r.json().catch(() => ({}));
+                            if (r.ok && data?.ok) {
+                              const prev = data.previousRetryCount != null ? ` · 이전 재시도 ${data.previousRetryCount}회` : "";
+                              setBridgeResetMsg({ ok: true, text: `✅ 워커 재시작 완료${prev}` });
+                            } else {
+                              setBridgeResetMsg({ ok: false, text: `⚠ 실패: ${data?.error || r.status}` });
+                            }
+                          } catch (e) {
+                            setBridgeResetMsg({ ok: false, text: `⚠ 호출 오류: ${e?.message || e}` });
+                          } finally {
+                            setBridgeResetBusy(false);
+                            setTimeout(() => setBridgeResetMsg(null), 3000);
+                          }
+                        }}
+                        style={{ padding: "5px 8px", background: bridgeResetBusy ? "#e5e7eb" : "#1e293b", color: bridgeResetBusy ? "#94a3b8" : "#fff", border: "1px solid #0f172a", borderRadius: 5, fontSize: 10, fontWeight: 800, cursor: bridgeResetBusy ? "wait" : "pointer" }}
+                      >
+                        {bridgeResetBusy ? "재시작 중..." : "🔄 워커 재시작"}
+                      </button>
+                    )}
                   </div>
+                  {bridgeResetMsg && (
+                    <div style={{ marginTop: 6, padding: "4px 8px", borderRadius: 5, fontSize: 10, fontWeight: 700, background: bridgeResetMsg.ok ? "#dcfce7" : "#fee2e2", color: bridgeResetMsg.ok ? "#166534" : "#991b1b" }}>
+                      {bridgeResetMsg.text}
+                    </div>
+                  )}
                 </div>
               );
             }
@@ -26575,26 +26670,125 @@ window.onload = () => {
           onClose={() => setSpotAiModalOpen(false)} />
       )}
 
-      {/* ─── 📹 CCTV 원본 크기 보기 모달 (지도 미니창 셀 클릭 시) ─── */}
+      {/* ─── 📹 CCTV 전체화면 모달 (지도 미니창 클릭 시) ───
+          mode==="grid"  → 해당 스팟의 모든 채널을 큰 그리드로 표시. 셀 클릭하면 단일 풀스크린으로 전환.
+          mode==="single"→ 단일 채널 전체화면. channels가 있으면 ← 그리드로 돌아가기 버튼이 보임. */}
       {cctvFullView && (() => {
-        const { ch, zoneId, zoneName } = cctvFullView;
         // eslint-disable-next-line no-unused-vars
         const _tick = cctvFullTick; // 갱신 트리거 (URL 재계산)
         const directBase = (() => { try { return getEffectiveCctvServerUrl(); } catch (e) { return DEFAULT_CCTV_SERVER_URL; } })();
         const liveTs = Date.now();
+        const analyses = cctvSnapshotData?.analyses || {};
+        const snaps = cctvSnapshotData?.snapshots || {};
+        const closeAll = () => setCctvFullView(null);
+        const goSingle = (ch) => setCctvFullView({
+          mode: "single", ch: Number(ch),
+          zoneId: cctvFullView.zoneId, zoneName: cctvFullView.zoneName,
+          channels: cctvFullView.channels,
+        });
+        const goGrid = () => {
+          if (!Array.isArray(cctvFullView.channels) || cctvFullView.channels.length === 0) { closeAll(); return; }
+          setCctvFullView({
+            mode: "grid",
+            zoneId: cctvFullView.zoneId, zoneName: cctvFullView.zoneName,
+            channels: cctvFullView.channels,
+          });
+        };
+
+        // ─── 그리드 모드 ───────────────────────────────────────────
+        if (cctvFullView.mode === "grid") {
+          const { zoneId, zoneName, channels } = cctvFullView;
+          const n = channels.length;
+          // 4채널 이하 = 2열, 9 이하 = 3열, 16 이하 = 4열, 그 이상 = 5열
+          const cols = n <= 4 ? 2 : n <= 9 ? 3 : n <= 16 ? 4 : 5;
+          return (
+            <div onClick={closeAll}
+              style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.96)", zIndex: 20000, display: "flex", alignItems: "stretch", justifyContent: "center" }}>
+              <div onClick={e => e.stopPropagation()}
+                style={{ background: "#0b1220", width: "100vw", height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                {/* 헤더 */}
+                <div style={{ padding: "12px 16px", background: "linear-gradient(135deg,#0891b2,#7c3aed)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, flexShrink: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ fontSize: 18, fontWeight: 900 }}>📹 {zoneName || zoneId || "스팟"}</div>
+                    <div style={{ fontSize: 12, opacity: 0.95, background: "rgba(255,255,255,0.18)", padding: "3px 10px", borderRadius: 999, fontWeight: 700 }}>{n}대</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <div style={{ fontSize: 11, opacity: 0.9, marginRight: 6 }}>채널 클릭 → 단일 전체화면</div>
+                    <button onClick={closeAll}
+                      style={{ width: 32, height: 32, background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.25)", color: "#fff", borderRadius: 6, fontSize: 18, cursor: "pointer", lineHeight: 1 }}>×</button>
+                  </div>
+                </div>
+                {/* 그리드 본체 */}
+                <div style={{ flex: 1, minHeight: 0, padding: 8, background: "#000",
+                  display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`,
+                  gridAutoRows: "1fr", gap: 6 }}>
+                  {channels.map(ch => {
+                    const s2 = snaps[ch];
+                    const ca = analyses[String(ch)] || analyses[`ch${ch}`] || null;
+                    const url = (s2?.url && !s2?.error) ? s2.url : `${directBase.replace(/\/+$/, "")}/api/snap/${ch}?t=${liveTs}`;
+                    const lc = ca?.level === "DANGER" ? "#dc2626" : ca?.level === "WARNING" ? "#f59e0b" : "rgba(255,255,255,0.18)";
+                    return (
+                      <div key={ch} onClick={() => goSingle(ch)}
+                        title={`CH${ch} — 클릭하면 단일 전체화면`}
+                        style={{ position: "relative", background: "#0f172a", borderRadius: 6, overflow: "hidden",
+                          border: `2px solid ${lc}`, cursor: "pointer", minHeight: 0, minWidth: 0,
+                          transition: "transform 0.12s ease-out, box-shadow 0.12s ease-out" }}
+                        onMouseEnter={e => { e.currentTarget.style.transform = "scale(1.015)"; e.currentTarget.style.boxShadow = "0 6px 22px rgba(56,189,248,0.45)"; }}
+                        onMouseLeave={e => { e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "none"; }}>
+                        <img src={url} alt={`CH${ch}`} referrerPolicy="no-referrer"
+                          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                          onError={(e) => { e.currentTarget.style.display = "none"; const fb = e.currentTarget.nextSibling; if (fb) fb.style.display = "flex"; }} />
+                        <div style={{ display: "none", position: "absolute", inset: 0, flexDirection: "column", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.55)", background: "rgba(15,23,42,0.93)" }}>
+                          <div style={{ fontSize: 32 }}>📷</div>
+                          <div style={{ fontSize: 12, fontWeight: 700, marginTop: 4 }}>CH{ch}</div>
+                          <div style={{ fontSize: 9, color: "#64748b", marginTop: 2 }}>스냅샷 없음</div>
+                        </div>
+                        <div style={{ position: "absolute", top: 0, left: 0, right: 0, padding: "4px 8px",
+                          background: "linear-gradient(180deg,rgba(0,0,0,0.78),transparent)",
+                          color: "#fff", fontSize: 13, fontWeight: 800, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span>CH{ch}</span>
+                          {ca?.level && (
+                            <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 4,
+                              background: ca.level === "DANGER" ? "#dc2626" : ca.level === "WARNING" ? "#f59e0b" : "#10b981",
+                              color: ca.level === "DANGER" || ca.level === "WARNING" ? "#fff" : "#0b1220" }}>{ca.level}</span>
+                          )}
+                        </div>
+                        <div style={{ position: "absolute", top: 6, right: 6, width: 8, height: 8, borderRadius: "50%",
+                          background: "#22c55e", boxShadow: "0 0 6px #22c55e", animation: "cctvLiveBlink 1.5s infinite" }} />
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ padding: "8px 14px", background: "#0b1220", borderTop: "1px solid rgba(255,255,255,0.08)", fontSize: 10, color: "#64748b", textAlign: "center", flexShrink: 0 }}>
+                  3초마다 자동 갱신 · ESC 또는 바깥 클릭으로 닫기 · 채널 클릭 → 단일 전체화면
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        // ─── 단일 채널 풀스크린 모드 ───────────────────────────────
+        const { ch, zoneId, zoneName, channels } = cctvFullView;
         const snapUrl = `${directBase.replace(/\/+$/, "")}/api/snap/${ch}?t=${liveTs}`;
         const liveUrl = `${directBase.replace(/\/+$/, "")}/api/stream/${ch}`;
-        const analyses = cctvSnapshotData?.analyses || {};
         const a = analyses[String(ch)] || analyses[`ch${ch}`] || null;
         const levelColor = a?.level === "DANGER" ? "#dc2626" : a?.level === "WARNING" ? "#f59e0b" : "#10b981";
+        const hasGridToReturnTo = Array.isArray(channels) && channels.length > 1;
         return (
-          <div onClick={() => setCctvFullView(null)}
+          <div onClick={() => hasGridToReturnTo ? goGrid() : closeAll()}
             style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.96)", zIndex: 20000, display: "flex", alignItems: "stretch", justifyContent: "center", padding: 0 }}>
             <div onClick={e => e.stopPropagation()}
               style={{ background: "#0b1220", width: "100vw", height: "100vh", maxWidth: "100vw", maxHeight: "100vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "none", border: "none" }}>
               {/* 헤더 */}
               <div style={{ padding: "12px 16px", background: "linear-gradient(135deg,#0891b2,#7c3aed)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  {hasGridToReturnTo && (
+                    <button onClick={goGrid}
+                      title="스팟 전체 CCTV로 돌아가기"
+                      style={{ padding: "6px 10px", background: "rgba(0,0,0,0.35)", border: "1px solid rgba(255,255,255,0.3)", color: "#fff", borderRadius: 6, fontSize: 12, fontWeight: 800, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+                      ← 전체보기 ({channels.length})
+                    </button>
+                  )}
                   <div style={{ fontSize: 18, fontWeight: 900 }}>📹 CH{ch}</div>
                   {zoneName && <div style={{ fontSize: 12, opacity: 0.95, background: "rgba(255,255,255,0.15)", padding: "3px 8px", borderRadius: 4 }}>{zoneName}</div>}
                   {a?.level && (
@@ -26606,7 +26800,7 @@ window.onload = () => {
                     style={{ padding: "6px 12px", background: "rgba(255,255,255,0.2)", border: "1px solid rgba(255,255,255,0.3)", color: "#fff", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
                     🔗 라이브 스트림
                   </button>
-                  <button onClick={() => setCctvFullView(null)}
+                  <button onClick={closeAll}
                     style={{ width: 32, height: 32, background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.25)", color: "#fff", borderRadius: 6, fontSize: 18, cursor: "pointer", lineHeight: 1 }}>×</button>
                 </div>
               </div>
@@ -26639,7 +26833,7 @@ window.onload = () => {
                 )}
               </div>
               <div style={{ padding: "8px 14px", background: "#0b1220", borderTop: "1px solid rgba(255,255,255,0.08)", fontSize: 10, color: "#64748b", textAlign: "center" }}>
-                3초마다 자동 갱신 · 클릭으로 닫기 · 라이브 스트림은 새 탭에서 열림
+                3초마다 자동 갱신 · {hasGridToReturnTo ? "ESC/바깥 클릭 → 전체보기로 돌아가기" : "ESC/바깥 클릭 → 닫기"} · 라이브 스트림은 새 탭에서 열림
               </div>
             </div>
           </div>
@@ -27498,9 +27692,10 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
       const outerBorderColor = cctvEditMode ? "#fbbf24" : hasAnyDanger ? "#dc2626" : hasAnyWarn ? "#f59e0b" : "rgba(255,255,255,0.85)";
       const outerBorderStyle = cctvEditMode ? "dashed" : "solid";
       const outerAnim = hasAnyDanger ? "animation:cctvDangerPulse 1.2s infinite;" : hasAnyWarn ? "animation:cctvWarnPulse 1.6s infinite;" : "";
-      // 외곽 클릭: 첫 채널을 풀스크린 모달로
+      // 외곽 클릭: 해당 스팟의 전체 CCTV를 그리드로 큰 화면에 표시
+      const chCsv = dispChs.join(",");
       const cctvClickAttr = firstCh
-        ? `onclick="event.stopPropagation();window.__jamsaOpenCctv&&window.__jamsaOpenCctv(${firstCh},'${z.id}')"`
+        ? `onclick="event.stopPropagation();window.__jamsaOpenCctvGrid&&window.__jamsaOpenCctvGrid('${z.id}','${chCsv}')"`
         : '';
 
       const liveTs = Math.floor(Date.now() / 5000) * 5000;
@@ -27511,10 +27706,11 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
         const ca = ana[ch];
         const url = (s2?.url && !s2?.error) ? s2.url : `${dirBase.replace(/\/+$/,"")}/api/snap/${ch}?t=${liveTs}`;
         const fbId = `cctvFbL_${z.id}_${ch}`;
+        // 셀 클릭도 그리드로 — 사용자 요청: 지도 CCTV 클릭하면 전체 CCTV가 큰 화면으로
         const cellClick = cctvEditMode
           ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${ch})"`
-          : `onclick="event.stopPropagation();window.__jamsaOpenCctv&&window.__jamsaOpenCctv(${ch},'${z.id}')"`;
-        return `<div ${cellClick} title="CH${ch} — 클릭하면 원본 크기로 보기" style="position:relative;width:${cellW}px;height:${cellH}px;border-radius:3px;overflow:hidden;border:1px solid ${ca?.level==="DANGER"?"#dc2626":ca?.level==="WARNING"?"#f59e0b":"rgba(255,255,255,0.2)"};background:#0f172a;flex-shrink:0;cursor:pointer;">
+          : `onclick="event.stopPropagation();window.__jamsaOpenCctvGrid&&window.__jamsaOpenCctvGrid('${z.id}','${chCsv}')"`;
+        return `<div ${cellClick} title="CH${ch} — 클릭하면 스팟 전체 CCTV를 크게 보기" style="position:relative;width:${cellW}px;height:${cellH}px;border-radius:3px;overflow:hidden;border:1px solid ${ca?.level==="DANGER"?"#dc2626":ca?.level==="WARNING"?"#f59e0b":"rgba(255,255,255,0.2)"};background:#0f172a;flex-shrink:0;cursor:pointer;">
           <img src="${url}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';var fb=document.getElementById('${fbId}');if(fb)fb.style.display='flex';"/>
           <div id="${fbId}" style="display:none;position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.6);background:rgba(15,23,42,0.93);">
             <div style="font-size:${nCh===1?'16':'11'}px;">📷</div>
