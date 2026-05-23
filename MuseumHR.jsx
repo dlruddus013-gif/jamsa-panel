@@ -231,15 +231,28 @@ const Stat = ({label, value, sub, color=T.ink, icon}) => (
 /* ============================================================
    메인 컴포넌트 — jamsa-panel 통합 버전
    ============================================================ */
-export default function MuseumHR({ onClose } = {}) {
+export default function MuseumHR({ onClose, userCtx = null } = {}) {
   // entry.jsx의 boot()가 window.__supabase 를 셋업한 뒤에 첫 render가 일어남.
   // 모듈 import 시점엔 비어있던 supabase let을 여기서 채워준다.
   _ensureSupabase();
   const [tab, setTab] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const { employees, updateEmployee, loading, error } = useEmployees();
-  const { session, role: userRole, loading: authLoading } = useAuth();
+  const { session: sbSession, role: sbRole, loading: authLoading } = useAuth();
   const [selectedEmpId, setSelectedEmpId] = useState(null);
+
+  // 🌉 패널의 로컬 currentUser 와 Supabase Auth 세션을 통합한 단일 인증 상태.
+  //   - Supabase 세션이 있으면 그걸 1순위 (RLS-protected 쿼리 가능)
+  //   - 없으면 패널 currentUser 를 가짜 세션으로 승격 (시드 데이터 fallback)
+  //   - 둘 다 없으면 진짜로 비로그인 → 로그인 안내
+  const session = sbSession || (userCtx ? {
+    user: {
+      email: userCtx.email || `${userCtx.login || "user"}@local`,
+      user_metadata: { role: userCtx.role === "ADMIN" || userCtx.role === "admin" ? "admin" : (userCtx.role || "staff").toLowerCase() },
+    },
+    _isPanelLocalSession: true, // 표식 — 실제 Supabase 세션 아님
+  } : null);
+  const userRole = sbRole || (userCtx?.role === "ADMIN" || userCtx?.role === "admin" ? "admin" : null);
 
   const today = new Date();
   const todayStr = `${today.getFullYear()}년 ${today.getMonth()+1}월 ${today.getDate()}일 ${["일","월","화","수","목","금","토"][today.getDay()]}요일`;
@@ -254,7 +267,8 @@ export default function MuseumHR({ onClose } = {}) {
     );
   }
 
-  if (!session && supabase) {
+  // 진짜로 어떤 세션도 없을 때만 로그인 안내 (패널 currentUser 도 없는 경우)
+  if (!session) {
     return (
       <div style={{padding:60, textAlign:"center", color:T.ink, fontFamily:sansFamily, background:T.cream, minHeight:"100vh"}}>
         <div style={{fontSize:48, marginBottom:14}}>🔐</div>

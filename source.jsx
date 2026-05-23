@@ -30610,7 +30610,7 @@ function AppInner() {
         {module === "safety"    && <SafetyModule userCtx={facUser} onLogout={logout} facilities={FAC_FACILITIES} onAddFacAction={addFacAction} addAudit={addAudit} worklogs={worklogs} facActions={facActions} auditLog={auditLog} />}
         {module === "clouddb"   && <CloudDatabasePage />}
         {module === "schedule"  && <WorkScheduleModule currentUser={currentUser} />}
-        {module === "hr"        && <MuseumHR onClose={() => { window.location.hash = "home"; setModule("home"); }} />}
+        {module === "hr"        && <MuseumHR userCtx={facUser} onClose={() => { window.location.hash = "home"; setModule("home"); }} />}
         {module === "subagents" && <AutoSubAgentPage
           report={autoAgentReport}
           enabled={autoAgentEnabled}
