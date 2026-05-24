@@ -2000,13 +2000,17 @@ const LEGAL_SUBAGENTS = [
 function LegalAnalyzerModule() {
   const [src, setSrc] = useState("/legal-analyzer.html");
   const [showGuide, setShowGuide] = useState(false);
-  const [localPort, setLocalPort] = useState("8401");
+  const [localUrl, setLocalUrl] = useState("http://localhost:8401");
   const [mode, setMode] = useState("dispute"); // dispute | create | review | report
   const [showSubagents, setShowSubagents] = useState(true);
   const [expandedAgent, setExpandedAgent] = useState("labor");
 
   const useLocal = () => {
-    const url = `http://localhost:${localPort.replace(/\D/g, "") || 8401}/`;
+    // URL 정규화: 프로토콜 없으면 http://, 끝에 / 보장
+    let url = (localUrl || "").trim();
+    if (!url) url = "http://localhost:8401";
+    if (!/^https?:\/\//i.test(url)) url = "http://" + url;
+    if (!url.endsWith("/")) url += "/";
     setSrc(url);
   };
   const useHosted = () => setSrc("/legal-analyzer.html");
@@ -2097,17 +2101,18 @@ function LegalAnalyzerModule() {
                 opacity: !usingLocal ? 1 : 0.7 }}>
               🟡 정적 모드 (현재 사이트)
             </button>
-            <button onClick={useLocal} disabled={usingLocal}
-              style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer",
-                background: usingLocal ? "#16a34a" : T.paper, color: "#fff",
-                border: `1px solid ${T.line}`, borderRadius: 5,
-                opacity: usingLocal ? 1 : 0.7 }}>
-              🟢 로컬 백엔드 (localhost:
-              <input type="text" value={localPort} onChange={e => setLocalPort(e.target.value)}
-                onClick={e => e.stopPropagation()}
-                style={{ width: 36, padding: "2px 4px", marginLeft: 4, fontSize: 11,
-                  background: "rgba(255,255,255,0.2)", color: "#fff", border: "none", borderRadius: 3 }} />)
-            </button>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input type="text" value={localUrl} onChange={e => setLocalUrl(e.target.value)}
+                placeholder="http://localhost:8401 또는 https://xxx.ngrok.io"
+                style={{ width: 280, padding: "6px 8px", fontSize: 11,
+                  background: T.paper, color: T.ink, border: `1px solid ${T.line}`, borderRadius: 5 }} />
+              <button onClick={useLocal}
+                style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer",
+                  background: usingLocal ? "#16a34a" : T.silkD, color: "#fff",
+                  border: "none", borderRadius: 5 }}>
+                🟢 백엔드 연결
+              </button>
+            </div>
           </div>
           <div style={{ background: T.paper, padding: 10, borderRadius: 6, border: `1px solid ${T.line}` }}>
             <strong style={{ color: T.silkL }}>🔧 AI 기능 활성화 (Claude + 엘박스 판례)</strong>
@@ -2115,7 +2120,7 @@ function LegalAnalyzerModule() {
               <li>위 <a href="/legal-analyzer-proxy.py" download style={{ color: T.silkL, fontWeight: 700 }}>legal-analyzer-proxy.py</a> 다운로드 (또는 레포에서 클론)</li>
               <li>Python 3.10+, <code>pip install fastapi uvicorn httpx</code> 설치되어 있어야 함</li>
               <li>터미널에서 <code>python legal-analyzer-proxy.py --key sk-ant-...</code> 실행</li>
-              <li>자동으로 <code>http://localhost:{localPort}</code> 열림 + 위 🟢 버튼 클릭하면 여기서 iframe으로 표시</li>
+              <li>자동으로 <code>http://localhost:8401</code> 열림 + 위 🟢 버튼 클릭하면 여기서 iframe으로 표시 (HTTPS 패널은 mixed-content 차단 → 새 탭으로 열림)</li>
             </ol>
             <div style={{ marginTop: 8, padding: 8, background: "#1a1729", borderRadius: 4, fontSize: 10, color: "#c4b5fd" }}>
               💡 <strong>왜 로컬 백엔드?</strong> Anthropic API는 CORS 정책상 브라우저 직접 호출 불가.
@@ -2135,18 +2140,78 @@ function LegalAnalyzerModule() {
         gridTemplateColumns: showSubagents ? "1fr 320px" : "1fr",
         gap: 0, minHeight: 0,
       }}>
-        <iframe
-          key={src}
-          src={src}
-          title="AI 법률 종합 플랫폼"
-          style={{
-            width: "100%", height: "100%", minHeight: 600,
-            border: `1px solid ${T.line}`,
-            borderRadius: showSubagents ? "0 0 0 8px" : "0 0 8px 8px",
-            background: "#f4f3ef",
-          }}
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals allow-popups-to-escape-sandbox"
-        />
+        {(() => {
+          // 🚧 Mixed-content 감지: HTTPS 페이지에서 http://localhost iframe은 브라우저가 차단함
+          //    이 경우 iframe 대신 안내 카드 + 새 탭 버튼 표시 (서브에이전트 패널은 그대로 작동)
+          const isHttpsParent = typeof window !== "undefined" && window.location.protocol === "https:";
+          const isHttpIframe = src.startsWith("http://");
+          const mixedBlocked = isHttpsParent && isHttpIframe;
+          if (mixedBlocked) {
+            return (
+              <div style={{
+                width: "100%", height: "100%", minHeight: 600,
+                border: `1px solid ${T.line}`,
+                borderRadius: showSubagents ? "0 0 0 8px" : "0 0 8px 8px",
+                background: T.cream, padding: 24,
+                display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14,
+                textAlign: "center", color: T.ink,
+              }}>
+                <div style={{ fontSize: 48 }}>🚫</div>
+                <div style={{ fontSize: 16, fontWeight: 800, fontFamily: fontFamily, color: T.silkL }}>
+                  HTTPS 페이지에선 localhost iframe 불가
+                </div>
+                <div style={{ fontSize: 12, color: T.muted, lineHeight: 1.8, maxWidth: 520 }}>
+                  현재 패널은 <code style={{ background: T.paper, padding: "1px 6px", borderRadius: 3 }}>https://jamsa-panel.vercel.app</code> 에서 로드됐고,
+                  로컬 백엔드는 <code style={{ background: T.paper, padding: "1px 6px", borderRadius: 3 }}>{src}</code> (HTTP) 입니다.
+                  <br/>크롬·엣지·사파리는 보안 정책상 HTTPS 페이지 안에서 HTTP iframe을 허용하지 않습니다 (mixed-content 차단).
+                </div>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center", marginTop: 8 }}>
+                  <a href={src} target="_blank" rel="noopener"
+                    style={{
+                      padding: "10px 18px", background: "#16a34a", color: "#fff", textDecoration: "none",
+                      borderRadius: 6, fontSize: 13, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 6,
+                    }}>
+                    ↗ 새 탭에서 로컬 백엔드 열기
+                  </a>
+                  <button onClick={useHosted}
+                    style={{
+                      padding: "10px 18px", background: T.paper, color: T.silkL, border: `1px solid ${T.line}`,
+                      borderRadius: 6, fontSize: 13, fontWeight: 800, cursor: "pointer",
+                    }}>
+                    🟡 정적 모드로 돌아가기 (iframe OK)
+                  </button>
+                </div>
+                <div style={{ marginTop: 14, padding: 12, background: T.paper, borderRadius: 6, border: `1px solid ${T.line}`,
+                  fontSize: 10, color: T.muted, lineHeight: 1.7, maxWidth: 560, textAlign: "left" }}>
+                  <strong style={{ color: T.silkL }}>💡 해결 옵션 (둘 중 하나):</strong>
+                  <ol style={{ marginLeft: 18, marginTop: 4 }}>
+                    <li><strong>새 탭으로 사용</strong> — 위 초록 버튼 → 로컬 백엔드 풀 화면으로. 우측 서브에이전트 코멘트는 여기 탭에서 계속 보기</li>
+                    <li><strong>HTTP로 패널 열기</strong> — <code>http://jamsa-panel.vercel.app</code> 로 접속 (Vercel은 HTTPS 강제 리다이렉트 → 사실상 불가)</li>
+                    <li><strong>ngrok·cloudflared 등으로 localhost를 HTTPS 터널링</strong> — 고급. <code>ngrok http 8401</code> 후 발급된 <code>https://...ngrok.io</code>를 위 입력란에 넣으면 iframe 가능</li>
+                  </ol>
+                  <div style={{ marginTop: 6, color: T.muted }}>
+                    ※ 로컬 개발 환경(`http://localhost:5173`)에서 패널 열면 mixed-content 없이 iframe 정상 작동합니다.
+                  </div>
+                </div>
+              </div>
+            );
+          }
+          // 정상 iframe
+          return (
+            <iframe
+              key={src}
+              src={src}
+              title="AI 법률 종합 플랫폼"
+              style={{
+                width: "100%", height: "100%", minHeight: 600,
+                border: `1px solid ${T.line}`,
+                borderRadius: showSubagents ? "0 0 0 8px" : "0 0 8px 8px",
+                background: "#f4f3ef",
+              }}
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals allow-popups-to-escape-sandbox"
+            />
+          );
+        })()}
         {showSubagents && (
           <div style={{
             background: T.paper, border: `1px solid ${T.line}`, borderLeft: "none",
