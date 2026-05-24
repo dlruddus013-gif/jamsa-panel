@@ -60,6 +60,7 @@ const TABS = [
   { id:"worklog",   icon:"📝", label:"업무일지" },
   { id:"contract",  icon:"📜", label:"근로계약서" },
   { id:"advisor",   icon:"⚖️", label:"노무관리" },
+  { id:"legal",     icon:"📚", label:"법률분석" },
 ];
 
 /* ─── 디자인 토큰 (jamsa-panel 다크 테마 + 실크 골드 액센트) ─── */
@@ -298,6 +299,7 @@ export default function MuseumHR({ onClose, userCtx = null } = {}) {
     worklog:    <WorklogModule employees={employees}/>,
     contract:   <ContractModule employees={employees} session={session} userRole={userRole}/>,
     advisor:    <LaborAdvisorModule T={T} fontFamily={fontFamily} sansFamily={sansFamily}/>,
+    legal:      <LegalAnalyzerModule T={T} fontFamily={fontFamily} sansFamily={sansFamily}/>,
   };
 
   return (
@@ -1851,6 +1853,126 @@ function WorklogModule({employees}) {
           </Card>
         ))}
       </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   모듈 11) 법률분석 — legal-analyzer.html iframe 래퍼
+   ─────────────────────────────────────────────────────────────
+   3,896줄짜리 standalone HTML(분쟁분석/계약서작성/계약서검토/최종보고서
+   4-mode 도구)을 React로 포팅하면 너무 무거우니 그대로 iframe.
+   AI 호출은 로컬 백엔드 필요 → legal-analyzer-proxy.py 다운로드 안내.
+   ============================================================ */
+function LegalAnalyzerModule() {
+  const [src, setSrc] = useState("/legal-analyzer.html");
+  const [showGuide, setShowGuide] = useState(false);
+  const [localPort, setLocalPort] = useState("8401");
+
+  const useLocal = () => {
+    const url = `http://localhost:${localPort.replace(/\D/g, "") || 8401}/`;
+    setSrc(url);
+  };
+  const useHosted = () => setSrc("/legal-analyzer.html");
+  const usingLocal = src.startsWith("http");
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 100px)", gap: 0 }}>
+      {/* 헤더 + 모드 토글 */}
+      <div style={{
+        padding: "8px 12px", background: T.paper, borderRadius: "8px 8px 0 0",
+        border: `1px solid ${T.line}`, borderBottom: "none",
+        display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap"
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <strong style={{ fontFamily: fontFamily, fontSize: 13, color: T.silkL }}>📚 AI 법률 종합 플랫폼</strong>
+          <span style={{ fontSize: 9, color: T.muted }}>
+            분쟁 분석 · 계약서 자동작성/검토 · 판례 검색 · 최종 보고서
+          </span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{
+            fontSize: 10, padding: "3px 8px", borderRadius: 999, fontWeight: 700,
+            background: usingLocal ? "#16a34a" : "#92400e", color: "#fff",
+          }}>
+            {usingLocal ? "🟢 로컬 백엔드" : "🟡 정적 (AI 비활성)"}
+          </span>
+          <button onClick={() => setShowGuide(v => !v)}
+            style={{
+              padding: "4px 10px", fontSize: 10, fontWeight: 700, cursor: "pointer",
+              background: T.cream, color: T.silkL, border: `1px solid ${T.line}`, borderRadius: 5,
+            }}>
+            {showGuide ? "✕ 설정 닫기" : "⚙️ 설정"}
+          </button>
+          <a href={src} target="_blank" rel="noopener"
+            style={{
+              padding: "4px 10px", fontSize: 10, fontWeight: 700, cursor: "pointer", textDecoration: "none",
+              background: T.silkD, color: "#fff", borderRadius: 5,
+            }}>
+            ↗ 새 탭
+          </a>
+        </div>
+      </div>
+
+      {/* 설정 패널 (토글) */}
+      {showGuide && (
+        <div style={{
+          padding: 14, background: T.cream, border: `1px solid ${T.line}`, borderBottom: "none",
+          fontSize: 11, lineHeight: 1.7, color: T.ink,
+        }}>
+          <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+            <button onClick={useHosted} disabled={!usingLocal}
+              style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer",
+                background: !usingLocal ? T.silkD : T.paper, color: "#fff",
+                border: `1px solid ${T.line}`, borderRadius: 5,
+                opacity: !usingLocal ? 1 : 0.7 }}>
+              🟡 정적 모드 (현재 사이트)
+            </button>
+            <button onClick={useLocal} disabled={usingLocal}
+              style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer",
+                background: usingLocal ? "#16a34a" : T.paper, color: "#fff",
+                border: `1px solid ${T.line}`, borderRadius: 5,
+                opacity: usingLocal ? 1 : 0.7 }}>
+              🟢 로컬 백엔드 (localhost:
+              <input type="text" value={localPort} onChange={e => setLocalPort(e.target.value)}
+                onClick={e => e.stopPropagation()}
+                style={{ width: 36, padding: "2px 4px", marginLeft: 4, fontSize: 11,
+                  background: "rgba(255,255,255,0.2)", color: "#fff", border: "none", borderRadius: 3 }} />)
+            </button>
+          </div>
+          <div style={{ background: T.paper, padding: 10, borderRadius: 6, border: `1px solid ${T.line}` }}>
+            <strong style={{ color: T.silkL }}>🔧 AI 기능 활성화 (Claude + 엘박스 판례)</strong>
+            <ol style={{ marginLeft: 18, marginTop: 6, color: T.muted, fontSize: 10 }}>
+              <li>위 <a href="/legal-analyzer-proxy.py" download style={{ color: T.silkL, fontWeight: 700 }}>legal-analyzer-proxy.py</a> 다운로드 (또는 레포에서 클론)</li>
+              <li>Python 3.10+, <code>pip install fastapi uvicorn httpx</code> 설치되어 있어야 함</li>
+              <li>터미널에서 <code>python legal-analyzer-proxy.py --key sk-ant-...</code> 실행</li>
+              <li>자동으로 <code>http://localhost:{localPort}</code> 열림 + 위 🟢 버튼 클릭하면 여기서 iframe으로 표시</li>
+            </ol>
+            <div style={{ marginTop: 8, padding: 8, background: "#1a1729", borderRadius: 4, fontSize: 10, color: "#c4b5fd" }}>
+              💡 <strong>왜 로컬 백엔드?</strong> Anthropic API는 CORS 정책상 브라우저 직접 호출 불가.
+              그리고 엘박스 판례 검색은 사용자 본인 계정 쿠키가 필요해서 Playwright 브라우저 자동화로 로그인합니다.
+              두 가지 모두 Vercel 서버리스로 옮기기엔 무리 (Playwright 가능 시간 초과 + 세션 영속성 없음).
+            </div>
+            <div style={{ marginTop: 6, fontSize: 10, color: T.muted }}>
+              정적 모드에서도: PDF/Word/ZIP 파싱, OCR, 위험 발언 휴리스틱 등 브라우저 처리 기능은 그대로 작동
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* iframe — 전체 영역 */}
+      <iframe
+        key={src}
+        src={src}
+        title="AI 법률 종합 플랫폼"
+        style={{
+          flex: 1, width: "100%", minHeight: 600,
+          border: `1px solid ${T.line}`,
+          borderRadius: "0 0 8px 8px",
+          background: "#f4f3ef",
+        }}
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals allow-popups-to-escape-sandbox"
+      />
     </div>
   );
 }
