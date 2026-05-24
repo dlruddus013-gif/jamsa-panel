@@ -262,19 +262,20 @@ export function PresenceTrackingPanel() {
   if (collapsed) {
     return (
       <div onClick={toggleCollapse}
+        data-jamsa-collapsed-banner
         style={{ cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between",
                  padding: "10px 20px", background: "linear-gradient(90deg, #1e1b4b 0%, #7c3aed 100%)", color: "#fff", borderBottom: "1px solid rgba(0,0,0,0.2)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 22 }}>📡</div>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 800 }}>
+            <div data-banner-title style={{ fontSize: 13, fontWeight: 800 }}>
               실시간 위치 추적 · 행동 분석
               <span style={{ marginLeft: 8, fontSize: 10, padding: "2px 7px", borderRadius: 4, background: "rgba(255,255,255,0.18)" }}>
                 현장 {stats.presentNow}명 · 오늘 이벤트 {stats.eventsToday}건
                 {stats.idleAlerts > 0 && <> · ⚠ {stats.idleAlerts}</>}
               </span>
             </div>
-            <div style={{ fontSize: 10, opacity: 0.85, marginTop: 2 }}>클릭하면 펼쳐집니다 ▾</div>
+            <div data-banner-sub style={{ fontSize: 10, opacity: 0.85, marginTop: 2 }}>클릭하면 펼쳐집니다 ▾</div>
           </div>
         </div>
       </div>

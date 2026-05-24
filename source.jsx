@@ -22548,7 +22548,24 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
   }, [cctvFullView]);
   const [filterMode, setFilterMode] = useState("all"); // all | urgent | stock | facility
   // 🗺️ 지도 크게 보기 모드 — 상단 패널/헤더를 숨기고 지도가 화면 전체를 차지
-  const [mapFullscreen, setMapFullscreen] = useState(false);
+  //    📱 모바일 기본값 = true (지도 칸이 너무 좁다는 사용자 피드백 반영)
+  const [mapFullscreen, setMapFullscreen] = useState(() => {
+    try {
+      const saved = window.localStorage?.getItem("jamsa_map_fullscreen");
+      if (saved === "1") return true;
+      if (saved === "0") return false;
+      // 미저장 + 모바일 → true, 데스크탑 → false
+      const w = window.innerWidth || 0;
+      return w > 0 && w <= 768;
+    } catch (e) { return false; }
+  });
+  const toggleMapFullscreen = () => {
+    setMapFullscreen(v => {
+      const next = !v;
+      try { window.localStorage?.setItem("jamsa_map_fullscreen", next ? "1" : "0"); } catch (e) {}
+      return next;
+    });
+  };
   // 🌐 지도 펼치기 모드 — 좁은 영역(60~70m)에 몰린 스팟을 시각적으로 펼쳐서 표시
   //    실제 좌표는 그대로, 화면 표시용 위치만 centroid에서 방사형으로 확대
   const [spreadMode, setSpreadMode] = useState(false);
@@ -24251,18 +24268,74 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
         @keyframes cctvWarnPulse { 0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,0.7),0 4px 12px rgba(0,0,0,0.4)} 50%{box-shadow:0 0 0 8px rgba(245,158,11,0),0 4px 12px rgba(0,0,0,0.4)} }
         @keyframes cctvLiveBlink { 0%,100%{opacity:1} 50%{opacity:0.3} }
         .jamsa-cctv-mini { transition:transform 0.18s ease-out; transform-origin:left top; }
-        /* 호버시 약하게 강조만 — 클릭하면 풀스크린 모달이 뜨므로 큰 확대는 불필요.
-           (이전엔 hover 시 scale(3.6) 이라 다른 스팟의 CCTV / 마커에 가려졌음) */
         .jamsa-cctv-mini:hover { transform:scale(1.08); box-shadow:0 6px 18px rgba(0,0,0,0.55)!important; }
         .jamsa-cctv-mini > div:hover { outline:2px solid rgba(255,255,255,0.6); outline-offset:1px; }
+
+        /* 📱 모바일에서 상단 패널들을 공격적으로 축소 — 지도 칸 최대화 */
+        @media (max-width: 768px) {
+          /* 통합 상황판 KPI 바 — 패딩 ↓, 폰트 ↓, 한 줄 가로 스크롤 */
+          [data-jamsa-kpi-bar] {
+            padding: 6px 10px !important;
+            gap: 6px !important;
+            overflow-x: auto;
+            flex-wrap: nowrap !important;
+            scrollbar-width: none;
+          }
+          [data-jamsa-kpi-bar]::-webkit-scrollbar { display: none; }
+          [data-jamsa-kpi-bar] > div:first-child { font-size: 11px !important; flex-shrink: 0; }
+          [data-jamsa-kpi-bar] > div > div {
+            padding: 2px 7px !important; font-size: 9px !important; gap: 3px !important; flex-shrink: 0;
+          }
+          [data-jamsa-kpi-bar] strong { font-size: 11px !important; }
+          /* Filter bar — 한 줄 가로 스크롤로 변환 */
+          [data-jamsa-filter-bar] {
+            padding: 6px 10px !important;
+            gap: 4px !important;
+            flex-wrap: nowrap !important;
+            overflow-x: auto;
+            scrollbar-width: none;
+          }
+          [data-jamsa-filter-bar]::-webkit-scrollbar { display: none; }
+          [data-jamsa-filter-bar] button {
+            padding: 5px 9px !important;
+            font-size: 10px !important;
+            flex-shrink: 0;
+          }
+          /* StaffAttendanceLivePanel / PresenceTrackingPanel 의 접힌 헤더 — 패딩 축소 */
+          [data-jamsa-collapsed-banner] {
+            padding: 6px 12px !important;
+            min-height: 36px !important;
+          }
+          [data-jamsa-collapsed-banner] [data-banner-title] { font-size: 11px !important; }
+          [data-jamsa-collapsed-banner] [data-banner-sub]   { font-size: 9px !important; }
+        }
       `}</style>
+
+      {/* 📱 모바일: 지도 위에 떠 있는 ▾/▴ 패널 토글 — 항상 접근 가능
+          좌하단에 배치 (상단 알림배너/검색바 안 가림, CCTV 서버 배지와도 겹치지 않게) */}
+      {isMobile && (
+        <button onClick={toggleMapFullscreen}
+          title={mapFullscreen ? "상단 패널 다시 보이기" : "상단 패널 숨기고 지도 크게 보기"}
+          style={{
+            position: "fixed", bottom: 56, left: 10, zIndex: 10080,
+            padding: "8px 14px", borderRadius: 999,
+            background: mapFullscreen ? "rgba(15,23,42,0.92)" : "rgba(220,38,38,0.92)",
+            color: "#fff", border: "1px solid rgba(255,255,255,0.25)",
+            fontSize: 12, fontWeight: 800, cursor: "pointer",
+            boxShadow: "0 3px 10px rgba(0,0,0,0.4)",
+            backdropFilter: "blur(8px)",
+            display: "flex", alignItems: "center", gap: 5,
+          }}>
+          {mapFullscreen ? "▾ 패널 보기" : "▴ 패널 숨김"}
+        </button>
+      )}
       {/* ─── 실시간 출퇴근/위치/CCTV/행동로그 통합 패널 (지도 크게보기 모드에서 숨김) ─── */}
       {!mapFullscreen && <StaffAttendanceLivePanel onAddFacAction={onAddFacAction} />}
 
       {/* ─── BLE 게이트웨이 → 구역 → CCTV → 행동 로그 (지도 크게보기 모드에서 숨김) ─── */}
       {!mapFullscreen && <PresenceTrackingPanel />}
 
-      {!mapFullscreen && <div style={{ background: "#0f172a", color: "#fff", padding: "14px 20px", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
+      {!mapFullscreen && <div data-jamsa-kpi-bar style={{ background: "#0f172a", color: "#fff", padding: "14px 20px", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
         <div style={{ fontSize: 13, fontWeight: 800 }}>🗺️ 통합 상황판</div>
         <div style={{ flex: 1, display: "flex", gap: 10, flexWrap: "wrap" }}>
           <div style={{ padding: "4px 10px", background: kpis.totalUrgent > 0 ? "rgba(220,38,38,0.25)" : "rgba(255,255,255,0.06)", border: `1px solid ${kpis.totalUrgent > 0 ? "rgba(220,38,38,0.5)" : "rgba(255,255,255,0.1)"}`, borderRadius: 6, fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
@@ -24289,7 +24362,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
       </div>}
 
       {/* ─── Filter bar + View toggle ─── */}
-      <div style={{ background: "#fff", padding: "10px 20px", display: "flex", gap: 8, borderBottom: "1px solid #e5e7eb", flexWrap: "wrap", alignItems: "center" }}>
+      <div data-jamsa-filter-bar style={{ background: "#fff", padding: "10px 20px", display: "flex", gap: 8, borderBottom: "1px solid #e5e7eb", flexWrap: "wrap", alignItems: "center" }}>
         {/* 뷰 전환 */}
         <div style={{ display: "flex", gap: 2, padding: 2, background: "#f1f5f9", borderRadius: 8 }}>
           <button onClick={() => changeViewMode("map")}
@@ -24370,7 +24443,7 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
                 fontSize: 11, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 4 }}>
               🤖 AI 자동 정렬
             </button>
-            <button onClick={() => setMapFullscreen(v => !v)}
+            <button onClick={toggleMapFullscreen}
               title={mapFullscreen ? "상단 패널 다시 보이기" : "상단 패널 숨기고 지도 크게 보기"}
               style={{ padding: "6px 12px", borderRadius: 6, border: "none",
                 background: mapFullscreen ? "linear-gradient(135deg,#dc2626,#ea580c)" : "linear-gradient(135deg,#0f172a,#334155)",

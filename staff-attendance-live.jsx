@@ -356,6 +356,7 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
   if (collapsed) {
     return (
       <div onClick={toggleCollapse}
+        data-jamsa-collapsed-banner
         style={{
           cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between",
           gap: 14, padding: "10px 20px",
@@ -366,13 +367,13 @@ export function StaffAttendanceLivePanel({ onAddFacAction }) {
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 22 }}>👥</div>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 800 }}>
+            <div data-banner-title style={{ fontSize: 13, fontWeight: 800 }}>
               실시간 출퇴근 · 위치 · CCTV · 행동로그
               <span style={{ marginLeft: 8, fontSize: 10, padding: "2px 7px", borderRadius: 4, background: "rgba(255,255,255,0.18)" }}>
                 근무중 {stats.working} · 미출근 {stats.absent}
               </span>
             </div>
-            <div style={{ fontSize: 10, opacity: 0.85, marginTop: 2 }}>클릭하면 펼쳐집니다 ▾</div>
+            <div data-banner-sub style={{ fontSize: 10, opacity: 0.85, marginTop: 2 }}>클릭하면 펼쳐집니다 ▾</div>
           </div>
         </div>
         <a href="/attendance" target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()}
