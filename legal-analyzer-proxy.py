@@ -555,34 +555,65 @@ async def lbox_search(request:Request):
     
     results=[]
     try:
+        # 🔧 FIX: 진짜 엘박스 API 엔드포인트 — /api/case/search POST
+        # (이전: /api/v2/search, /api/search → 둘 다 404. 익명 검색도 안 됐던 원인)
+        # 응답: {"caseList":[{id,title,sub_title,result,content,...}], "count":N, "correctedQuery", ...}
+        # 익명도 검색 가능 (로그인 시 더 많은 필드 노출됨)
         async with httpx.AsyncClient(timeout=30,follow_redirects=True,cookies=lbox_cookies) as c:
-            search_urls=[
-                ("https://www.lbox.kr/api/v2/search",{"q":query,"type":"case","page":1,"size":max_results}),
-                ("https://www.lbox.kr/api/search",{"query":query,"type":"precedent","page":1,"pageSize":max_results}),
-            ]
-            for url,params in search_urls:
-                if case_codes: params['caseCode']=','.join(case_codes)
-                if category: params['mainCategory']=category
-                try:
-                    r=await c.get(url,params=params,headers=lbox_headers)
-                    if r.status_code==200:
-                        data=r.json()
-                        items=data
-                        for key in ['hits','items','results','data','list','content']:
-                            if isinstance(items,dict) and key in items: items=items[key]
-                        if isinstance(items,dict) and 'hits' in items: items=items['hits']
-                        if not isinstance(items,list): items=[]
-                        for item in items[:max_results]:
-                            parsed=parse_lbox_result(item.get('_source',item),item)
-                            parsed['searchQuery']=query
-                            if parsed['caseId'] or parsed['title']:
-                                save_precedent(parsed)  # DB 캐시 저장
-                                results.append(parsed)
-                        if results:
-                            print(f"[LBox] Search '{query}' -> {len(results)}")
-                            break
-                except Exception as se:
-                    print(f"[LBox] Search {url}: {se}")
+            search_body={"query":query,"page":1,"size":max_results,"sort":"relevance"}
+            if case_codes: search_body["caseCode"]=case_codes
+            if category: search_body["mainCategory"]=category
+            try:
+                r=await c.post("https://www.lbox.kr/api/case/search",json=search_body,headers=lbox_headers)
+                if r.status_code==200:
+                    data=r.json()
+                    items=data.get("caseList",[]) or data.get("results",[]) or []
+                    total=data.get("count",len(items))
+                    if not isinstance(items,list): items=[]
+                    for item in items[:max_results]:
+                        # 엘박스 응답 필드 → 표준 포맷 매핑
+                        case_id=item.get("id","")
+                        title=item.get("title","") or item.get("sub_title","")
+                        # 사건부호 추출 (id에서)
+                        case_code=""
+                        m=re.search(r'\d{4}([가-힣]{1,3})\d+',case_id+' '+title)
+                        if m: case_code=m.group(1)
+                        # 메인 카테고리 분류
+                        main_cat=""
+                        for cat,cdata in TAXONOMY.items():
+                            all_codes=[]
+                            for sub in cdata["sub"].values():
+                                for codes in sub.get("codes",{}).values(): all_codes.extend(codes)
+                            if case_code in all_codes: main_cat=cat; break
+                        # 법원/날짜 추출 (title 파싱)
+                        court_m=re.match(r'(.+?(?:법원|지원))',title)
+                        date_m=re.search(r'(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})',title)
+                        parsed={
+                            "caseId":case_id,
+                            "title":title,
+                            "court":(court_m.group(1) if court_m else "").strip(),
+                            "date":(f"{date_m.group(1)}-{int(date_m.group(2)):02d}-{int(date_m.group(3)):02d}" if date_m else ""),
+                            "caseCode":case_code,
+                            "mainCategory":main_cat,
+                            "facts":(item.get("content","") or "")[:2000],
+                            "holding":(item.get("title","") or "")[:500],
+                            "dispositive":(item.get("result","") or "")[:500],
+                            "summary":(item.get("sub_title","") or item.get("content",""))[:1500],
+                            "reasoning":(item.get("content","") or "")[:3000],
+                            "url":f"https://www.lbox.kr/case/{case_id}" if case_id else "",
+                            "id":case_id,
+                            "source":"lbox",
+                            "searchQuery":query,
+                        }
+                        if parsed["caseId"] or parsed["title"]:
+                            save_precedent(parsed)
+                            results.append(parsed)
+                    if results:
+                        print(f"[LBox] Search '{query}' -> {len(results)}/{total} results")
+                else:
+                    print(f"[LBox] Search HTTP {r.status_code}: {r.text[:200]}")
+            except Exception as se:
+                print(f"[LBox] Search exception: {se}")
     except Exception as e:
         print(f"[LBox] ERR: {e}")
     
