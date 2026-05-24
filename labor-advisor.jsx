@@ -300,11 +300,23 @@ const ROUTER_COLORS = { CLAUDE: "#ff7849", GPT: "#10a37f", DUAL: "#6c5ce7" };
 /* ─── 인포그래픽 요약 파서 ───
    LLM 답변(마크다운)에서 핵심 정보를 추출해 카드용 데이터로 변환.
    상정한 섹션 마커: ## 📌 결론 / ## 📖 법령 근거 / ## ✅ 권장 조치 /
-                     ## 📂 필요 서식 / ## ⚠️ 주의사항 / ## 🧮 계산 / ## 🔍 사안 분석 */
+                     ## 📂 필요 서식 / ## ⚠️ 주의사항 / ## 🧮 계산 / ## 🔍 사안 분석
+   ⚠️ **마크다운 마커(`**`)는 처리 전에 항상 strip — 이전 버그: `**단기 (오늘)**:` 패턴
+      에서 `[:\s]+`가 `**:`를 못 매치해서 액션 추출 실패했음. */
+function _stripMd(s) { return (s || "").replace(/\*+/g, "").replace(/`/g, "").trim(); }
+
 function extractInfographic(text, category) {
-  if (!text || typeof text !== "string") return null;
+  if (!text || typeof text !== "string") {
+    // 답변 없어도 카테고리 정보만으로 최소 카드 반환
+    return category ? {
+      category, headline: `${category.n} 관련 분석 — 답변 대기 중`,
+      laws: [], actions: { 단기: "", 중기: "", 장기: "" },
+      money: "", limit: "", deadline: "",
+      riskLevel: "보통", riskColor: "#10a37f", claimable: null,
+      hasContent: true, isPending: true,
+    } : null;
+  }
   const sections = {};
-  // ## 헤더(이모지 포함)로 split
   const lines = text.split(/\n/);
   let currentKey = null;
   let buf = [];
@@ -327,72 +339,94 @@ function extractInfographic(text, category) {
     }
   }
   flush();
-  // 결론 한 줄 — 첫 비어있지 않은 줄
-  const conclusionLine = (sections.conclusion || "").split(/\n/).map(s => s.trim()).filter(Boolean)[0] || "";
-  // 법령 → 굵게 표시된 조문 추출
+
+  // 결론 — 첫 비어있지 않은 줄 (마크다운 마커 제거)
+  const conclusionRaw = (sections.conclusion || "").split(/\n/).map(_stripMd).filter(Boolean);
+  const conclusionLine = conclusionRaw[0] || "";
+
+  // 법령 — 굵게 표시 우선, 없으면 모든 줄에서 "○○법 제N조" 패턴 추출
   const laws = [];
   const lawText = sections.laws || "";
   const lawMatches = [...lawText.matchAll(/\*\*([^*]+법[^*]*제\s*\d+조[^*]*)\*\*/g)];
   for (const m of lawMatches) laws.push(m[1].replace(/\s+/g, " ").trim());
   if (laws.length === 0) {
-    // 굵은표기 없으면 - 로 시작하는 줄에서 법률명 추출
     for (const line of lawText.split(/\n/)) {
-      const lm = line.match(/(?:^|\s)([가-힣\w]+법[^:,\n]*제\s*\d+조[^:,\n]*)/);
+      const cleanLine = _stripMd(line);
+      const lm = cleanLine.match(/([가-힣\w]+법[가-힣\w]*\s*제\s*\d+조(?:\s*제\s*\d+호)?)/);
       if (lm) laws.push(lm[1].trim());
       if (laws.length >= 3) break;
     }
   }
-  // 권장 조치 — 단기/중기/장기 키워드로 분리
+  // 본문 전체에서도 폴백 (sections.laws 가 비었어도)
+  if (laws.length === 0) {
+    const clean = _stripMd(text);
+    const allLawMatches = [...clean.matchAll(/([가-힣\w]+법[가-힣\w]*\s*제\s*\d+조(?:\s*제\s*\d+호)?)/g)];
+    const seen = new Set();
+    for (const m of allLawMatches) {
+      const law = m[1].trim();
+      if (!seen.has(law)) { seen.add(law); laws.push(law); }
+      if (laws.length >= 3) break;
+    }
+  }
+
+  // 권장 조치 — 항상 _stripMd 후 매치 (이전 버그: ** 마커 때문에 추출 실패)
   const actions = { 단기: "", 중기: "", 장기: "" };
   const actText = sections.actions || "";
   for (const line of actText.split(/\n/)) {
-    const sm = line.match(/단기[^)]*\)?[:\s]+(.+)$/);
-    const mm = line.match(/중기[^)]*\)?[:\s]+(.+)$/);
-    const lm = line.match(/장기[^)]*\)?[:\s]+(.+)$/);
-    if (sm && !actions.단기) actions.단기 = sm[1].replace(/\*+/g, "").trim().slice(0, 80);
-    if (mm && !actions.중기) actions.중기 = mm[1].replace(/\*+/g, "").trim().slice(0, 80);
-    if (lm && !actions.장기) actions.장기 = lm[1].replace(/\*+/g, "").trim().slice(0, 80);
+    const cleanLine = _stripMd(line);
+    // "단기 (오늘)**: ..." 같은 패턴도 OK 하도록 ()? 패턴 + : 매치
+    const sm = cleanLine.match(/단기[^:]{0,30}:\s*(.+?)$/);
+    const mm = cleanLine.match(/중기[^:]{0,30}:\s*(.+?)$/);
+    const lm = cleanLine.match(/장기[^:]{0,30}:\s*(.+?)$/);
+    if (sm && !actions.단기) actions.단기 = sm[1].trim().slice(0, 100);
+    if (mm && !actions.중기) actions.중기 = mm[1].trim().slice(0, 100);
+    if (lm && !actions.장기) actions.장기 = lm[1].trim().slice(0, 100);
   }
-  // 단기/중기/장기 라벨 없으면 번호 매긴 1./2./3. 으로 폴백
+  // 단기/중기/장기 라벨 없으면 번호 1./2./3. 으로 폴백
   if (!actions.단기 && !actions.중기 && !actions.장기) {
-    const nums = [...actText.matchAll(/^\s*(\d)\.\s*\*?\*?([^*\n]+)\*?\*?/gm)];
+    const cleanAct = _stripMd(actText);
+    const nums = [...cleanAct.matchAll(/^\s*(\d)\.\s*(.+?)(?:\n|$)/gm)];
     if (nums.length > 0) {
       const slots = ["단기", "중기", "장기"];
-      nums.slice(0, 3).forEach((m, i) => { actions[slots[i]] = m[2].trim().slice(0, 80); });
+      nums.slice(0, 3).forEach((m, i) => { actions[slots[i]] = m[2].trim().slice(0, 100); });
     }
   }
-  // 금액 추출 — 첫 등장한 ₩/만원/억원 단위 숫자
-  const allText = text;
-  const moneyMatch = allText.match(/(\d{1,3}(?:,\d{3})*만원|\d+(?:\.\d+)?\s*억원|약\s*\d+(?:,\d+)*\s*원|\d{1,3}(?:,\d{3})+\s*원)/);
-  const money = moneyMatch ? moneyMatch[1] : "";
-  // 시효 추출
-  const limitMatch = allText.match(/시효[^.]{0,40}?(\d+\s*년)/);
-  const limit = limitMatch ? limitMatch[1] : "";
-  // 기한 추출 (제척기간/구제신청 기한)
-  const deadlineMatch = allText.match(/(?:제척기간|구제신청|기한)[^.]{0,30}?(\d+\s*[개월년일])/);
-  const deadline = deadlineMatch ? deadlineMatch[1] : "";
-  // 위험도/긴급도 추정
+
+  // 금액 — ₩/만원/억원/원 단위 숫자
+  const moneyMatch = text.match(/(\d{1,3}(?:,\d{3})*만원|\d+(?:\.\d+)?\s*억원|약\s*\d{1,3}(?:,\d{3})*\s*원|\d{1,3}(?:,\d{3})+\s*원)/);
+  const money = moneyMatch ? moneyMatch[1].replace(/\s+/g, " ") : "";
+
+  // 시효 (3년/1년/5년 등)
+  const limitMatch = text.match(/(?:시효|소멸시효|채권\s*시효)[^.\n]{0,40}?(\d+\s*년)/);
+  const limit = limitMatch ? limitMatch[1].replace(/\s+/g, "") : "";
+
+  // 기한 (제척기간/구제신청/예고)
+  const deadlineMatch = text.match(/(?:제척기간|구제신청|기한|예고)[^.\n]{0,30}?(\d+\s*(?:개월|년|일|주))/);
+  const deadline = deadlineMatch ? deadlineMatch[1].replace(/\s+/g, "") : "";
+
+  // 위험도
   let riskLevel = "보통", riskColor = "#10a37f";
-  if (/긴급|급박|즉시|당장|3개월|14일|제척기간/.test(text)) { riskLevel = "긴급"; riskColor = "#dc2626"; }
-  else if (/주의|위험|중요|반드시/.test(text)) { riskLevel = "주의"; riskColor = "#f59e0b"; }
-  // 청구 가능 여부 추정
+  if (/긴급|급박|즉시|당장|3개월|14일|제척기간|시급/.test(text)) { riskLevel = "긴급"; riskColor = "#dc2626"; }
+  else if (/주의|위험|중요|반드시|유의/.test(text)) { riskLevel = "주의"; riskColor = "#f59e0b"; }
+
+  // 청구 가능 여부
   let claimable = null;
-  if (/청구권\s*(없음|발생하지)/.test(text) || /수급권\s*없음/.test(text)) claimable = "불가";
-  else if (/청구\s*가능|받을\s*수\s*있/.test(text)) claimable = "가능";
-  // 헤드라인 — 카테고리 + 결론 첫 문장
-  const headline = conclusionLine.replace(/[*#]/g, "").trim();
+  if (/청구권\s*(없음|발생하지\s*않)/.test(text) || /수급권\s*없음/.test(text) || /받을\s*수\s*없/.test(text)) claimable = "불가";
+  else if (/청구\s*가능|받을\s*수\s*있|지급\s*받/.test(text)) claimable = "가능";
+
+  // 헤드라인
+  const headline = conclusionLine || `${category.n} 관련 분석`;
 
   return {
     category,
-    headline: headline || `${category.n} 관련 분석`,
+    headline,
     laws: laws.slice(0, 3),
     actions,
-    money,
-    limit,
-    deadline,
+    money, limit, deadline,
     riskLevel, riskColor,
     claimable,
-    hasContent: !!(headline || laws.length || actions.단기 || money),
+    // 무엇이든 1개라도 추출되면 노출. 카테고리 이름이 헤드라인 폴백이라 항상 true.
+    hasContent: true,
   };
 }
 
