@@ -244,39 +244,51 @@ ${cat.n} 관련 ${cat.r} 엔진 응답입니다.
 
 // ─── 자문 호출 ───
 //   1) Vercel 서버리스 /api/labor-advice (실제 Claude/GPT) 시도
+//      - 사용자 본인 키(localStorage)가 있으면 X-Anthropic-Key/X-OpenAI-Key 헤더로 전달
+//      - 본인 키 없으면 백엔드가 ENV 사용 (Vercel ANTHROPIC_API_KEY 등)
 //   2) 실패하면 MOCK_ANSWERS 로 폴백 (로컬 데모용)
 async function fetchAdvice({ category, router, question }) {
   const rag = RAG_SAMPLES[category.k] || [];
+  // localStorage에서 사용자 키 읽기
+  let userAnthropic = "", userOpenai = "";
+  try {
+    userAnthropic = localStorage.getItem("jamsa_user_anthropic_key") || "";
+    userOpenai = localStorage.getItem("jamsa_user_openai_key") || "";
+  } catch (e) {}
   // 1순위: 진짜 백엔드
   try {
+    const headers = { "Content-Type": "application/json" };
+    if (userAnthropic) headers["X-Anthropic-Key"] = userAnthropic;
+    if (userOpenai) headers["X-OpenAI-Key"] = userOpenai;
     const r = await fetch("/api/labor-advice", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({
         category: category.k,
         router,
         question,
-        ragSamples: rag, // 프롬프트에 주입되도록 전달
+        ragSamples: rag,
       }),
     });
     if (r.ok) {
       const data = await r.json();
       if (data.ok && data.mock) {
-        return { mock: data.mock, rag, real: true, model: data.model, elapsedMs: data.elapsedMs };
+        return {
+          mock: data.mock, rag, real: true,
+          model: data.model, elapsedMs: data.elapsedMs,
+          keySource: data.keySource,
+        };
       }
     }
-    // 백엔드 에러 (env 미설정 등) — 응답 본문 확인
     const errBody = await r.json().catch(() => ({}));
     console.warn("[labor-advice] backend failed:", r.status, errBody);
-    // 폴백 표시용으로 에러 메시지 mock에 추가
     const fallback = MOCK_ANSWERS[category.k] || _genericAnswer(category);
     return {
       mock: { ...fallback, _fallbackReason: errBody.message || `HTTP ${r.status}` },
-      rag, real: false,
+      rag, real: false, keySource: errBody.keySource,
     };
   } catch (e) {
     console.warn("[labor-advice] network error → falling back to mock:", e?.message);
-    // 네트워크 실패 (오프라인 등) — 모의 응답으로 폴백
     await new Promise(r => setTimeout(r, router === "DUAL" ? 1500 : 1000));
     const mock = MOCK_ANSWERS[category.k] || _genericAnswer(category);
     return { mock: { ...mock, _fallbackReason: e?.message || "network error" }, rag, real: false };
@@ -512,6 +524,60 @@ export default function LaborAdvisorModule({ T, fontFamily, sansFamily }) {
   const [result, setResult] = useState(null);
   const [activeTab, setActiveTab] = useState("");
 
+  // ─── 사용자 API 키 (브라우저 localStorage) ───
+  const [showKeyPanel, setShowKeyPanel] = useState(false);
+  const [userAnthropicKey, setUserAnthropicKey] = useState(() => {
+    try { return localStorage.getItem("jamsa_user_anthropic_key") || ""; } catch (e) { return ""; }
+  });
+  const [userOpenaiKey, setUserOpenaiKey] = useState(() => {
+    try { return localStorage.getItem("jamsa_user_openai_key") || ""; } catch (e) { return ""; }
+  });
+  const [keyTestStatus, setKeyTestStatus] = useState(""); // "", "testing", "ok", "fail"
+  const [keyTestMsg, setKeyTestMsg] = useState("");
+
+  const saveKey = (which, value) => {
+    try {
+      const trimmed = value.trim();
+      if (which === "anthropic") {
+        setUserAnthropicKey(trimmed);
+        if (trimmed) localStorage.setItem("jamsa_user_anthropic_key", trimmed);
+        else localStorage.removeItem("jamsa_user_anthropic_key");
+      } else {
+        setUserOpenaiKey(trimmed);
+        if (trimmed) localStorage.setItem("jamsa_user_openai_key", trimmed);
+        else localStorage.removeItem("jamsa_user_openai_key");
+      }
+      setKeyTestStatus(""); setKeyTestMsg("");
+    } catch (e) {}
+  };
+  const testKeys = async () => {
+    setKeyTestStatus("testing"); setKeyTestMsg("간단한 질문으로 테스트 중...");
+    try {
+      const headers = { "Content-Type": "application/json" };
+      if (userAnthropicKey) headers["X-Anthropic-Key"] = userAnthropicKey;
+      if (userOpenaiKey) headers["X-OpenAI-Key"] = userOpenaiKey;
+      const r = await fetch("/api/labor-advice", {
+        method: "POST", headers,
+        body: JSON.stringify({
+          category: "annual_leave",
+          router: userAnthropicKey ? "CLAUDE" : "GPT", // 어떤 키 있는지에 따라
+          question: "테스트입니다. '연결 정상'이라고만 답해주세요.",
+        }),
+      });
+      const data = await r.json();
+      if (r.ok && data.ok) {
+        setKeyTestStatus("ok");
+        setKeyTestMsg(`✓ 정상 (${data.model || "?"} · ${data.elapsedMs}ms · 키 출처: ${JSON.stringify(data.keySource)})`);
+      } else {
+        setKeyTestStatus("fail");
+        setKeyTestMsg(`✗ ${data.message || data.error || "알 수 없는 에러"}`);
+      }
+    } catch (e) {
+      setKeyTestStatus("fail");
+      setKeyTestMsg(`✗ ${e.message}`);
+    }
+  };
+
   const effectiveRouter = routerOverride || current.r;
 
   const run = async () => {
@@ -553,8 +619,131 @@ export default function LaborAdvisorModule({ T, fontFamily, sansFamily }) {
     return arr;
   }, [result]);
 
+  const hasAnyUserKey = !!(userAnthropicKey || userOpenaiKey);
+
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "240px 1fr", gap: 14 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {/* ─── 🔑 API 키 입력 패널 (상단, 토글) ─── */}
+      <div style={{
+        background: T.paper, borderRadius: 8, border: `1px solid ${T.line}`, overflow: "hidden",
+      }}>
+        <div onClick={() => setShowKeyPanel(v => !v)}
+          style={{
+            padding: "10px 14px", cursor: "pointer", display: "flex",
+            justifyContent: "space-between", alignItems: "center",
+            background: hasAnyUserKey ? "linear-gradient(135deg,#16a34a22,#16a34a11)" : T.paper,
+            borderBottom: showKeyPanel ? `1px solid ${T.line}` : "none",
+          }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 14 }}>🔑</span>
+            <strong style={{ fontSize: 12, fontFamily: fontFamily, color: T.silkL }}>
+              본인 API 키 입력 (선택)
+            </strong>
+            <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 999, fontWeight: 700,
+              background: userAnthropicKey ? "#ff7849" : T.line,
+              color: userAnthropicKey ? "#fff" : T.muted }}>
+              Claude {userAnthropicKey ? `✓ ${userAnthropicKey.slice(0,10)}...` : "미설정"}
+            </span>
+            <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 999, fontWeight: 700,
+              background: userOpenaiKey ? "#10a37f" : T.line,
+              color: userOpenaiKey ? "#fff" : T.muted }}>
+              GPT {userOpenaiKey ? `✓ ${userOpenaiKey.slice(0,10)}...` : "미설정"}
+            </span>
+            {!hasAnyUserKey && (
+              <span style={{ fontSize: 9, color: T.muted, marginLeft: 4 }}>
+                → 서버 환경변수 사용 (없으면 데모 응답)
+              </span>
+            )}
+          </div>
+          <span style={{ fontSize: 11, color: T.muted }}>{showKeyPanel ? "▾ 닫기" : "▸ 키 입력/수정"}</span>
+        </div>
+        {showKeyPanel && (
+          <div style={{ padding: 14, background: T.cream }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 10 }}>
+              {/* Anthropic */}
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: T.ink, display: "block", marginBottom: 4 }}>
+                  <span style={{ color: "#ff7849" }}>🟠 Anthropic Claude API Key</span>
+                  <span style={{ fontSize: 9, color: T.muted, marginLeft: 6 }}>
+                    해고·계약·괴롭힘 등 CLAUDE 라우팅 카테고리에 사용
+                  </span>
+                </label>
+                <input type="password" value={userAnthropicKey}
+                  onChange={e => saveKey("anthropic", e.target.value)}
+                  placeholder="sk-ant-api03-..."
+                  style={{
+                    width: "100%", padding: "7px 10px", fontSize: 11, fontFamily: "ui-monospace,monospace",
+                    background: T.paper, color: T.ink, border: `1px solid ${T.line}`, borderRadius: 5,
+                  }} />
+                <div style={{ fontSize: 9, color: T.muted, marginTop: 3 }}>
+                  발급: <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" style={{ color: T.silkL }}>console.anthropic.com</a>
+                </div>
+              </div>
+              {/* OpenAI */}
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: T.ink, display: "block", marginBottom: 4 }}>
+                  <span style={{ color: "#10a37f" }}>🟢 OpenAI GPT API Key</span>
+                  <span style={{ fontSize: 9, color: T.muted, marginLeft: 6 }}>
+                    연차·실업급여·세무 등 GPT 라우팅 카테고리에 사용
+                  </span>
+                </label>
+                <input type="password" value={userOpenaiKey}
+                  onChange={e => saveKey("openai", e.target.value)}
+                  placeholder="sk-proj-... 또는 sk-..."
+                  style={{
+                    width: "100%", padding: "7px 10px", fontSize: 11, fontFamily: "ui-monospace,monospace",
+                    background: T.paper, color: T.ink, border: `1px solid ${T.line}`, borderRadius: 5,
+                  }} />
+                <div style={{ fontSize: 9, color: T.muted, marginTop: 3 }}>
+                  발급: <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener" style={{ color: T.silkL }}>platform.openai.com</a>
+                </div>
+              </div>
+            </div>
+            {/* 테스트 + 안내 */}
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button onClick={testKeys} disabled={!hasAnyUserKey || keyTestStatus === "testing"}
+                style={{
+                  padding: "6px 14px", fontSize: 11, fontWeight: 700, cursor: hasAnyUserKey ? "pointer" : "not-allowed",
+                  background: !hasAnyUserKey ? T.muted : keyTestStatus === "ok" ? "#16a34a" : keyTestStatus === "fail" ? "#dc2626" : T.silkD,
+                  color: "#fff", border: "none", borderRadius: 5,
+                }}>
+                {keyTestStatus === "testing" ? "⏳ 테스트 중..." :
+                 keyTestStatus === "ok" ? "✓ 연결 정상" :
+                 keyTestStatus === "fail" ? "✗ 연결 실패" :
+                 "🔌 키 연결 테스트"}
+              </button>
+              <button onClick={() => { saveKey("anthropic", ""); saveKey("openai", ""); setKeyTestStatus(""); setKeyTestMsg(""); }}
+                style={{
+                  padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer",
+                  background: T.paper, color: T.err, border: `1px solid ${T.err}55`, borderRadius: 5,
+                }}>
+                🗑️ 모두 지우기
+              </button>
+              {keyTestMsg && (
+                <span style={{ fontSize: 10, color: keyTestStatus === "ok" ? T.ok : keyTestStatus === "fail" ? T.err : T.muted, marginLeft: 4, fontFamily: "ui-monospace,monospace" }}>
+                  {keyTestMsg}
+                </span>
+              )}
+            </div>
+            {/* 보안 안내 */}
+            <div style={{
+              marginTop: 10, padding: 10, background: "#fef3c722", borderLeft: "3px solid #f59e0b",
+              borderRadius: 4, fontSize: 10, color: T.ink, lineHeight: 1.7,
+            }}>
+              <strong style={{ color: "#fbbf24" }}>🛡️ 보안 안내</strong>
+              <ul style={{ marginLeft: 16, marginTop: 4, color: T.muted }}>
+                <li>키는 <strong>이 브라우저 localStorage에만 저장</strong> — 서버에 보관 안 됨, 다른 사용자도 접근 못 함</li>
+                <li>매 요청마다 <code>X-Anthropic-Key</code> / <code>X-OpenAI-Key</code> 헤더로만 전달 (HTTPS 암호화)</li>
+                <li>Vercel 서버는 키를 받아 LLM API 호출 후 즉시 폐기 — 로그·DB 기록 안 함</li>
+                <li>본인 키 우선 사용, 없는 항목만 Vercel 환경변수 fallback</li>
+                <li>키 노출 우려 시 <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" style={{ color: T.silkL }}>Anthropic 콘솔</a>/<a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener" style={{ color: T.silkL }}>OpenAI 콘솔</a>에서 즉시 revoke</li>
+              </ul>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "240px 1fr", gap: 14 }}>
       {/* ─── 좌측: 11개 카테고리 ─── */}
       <div style={{ background: T.paper, borderRadius: 8, padding: 12, border: `1px solid ${T.line}`, alignSelf: "start" }}>
         <h3 style={{ fontSize: 12, color: T.silkL, marginBottom: 10, fontFamily: fontFamily, paddingBottom: 6, borderBottom: `1px solid ${T.line}` }}>
@@ -767,6 +956,7 @@ export default function LaborAdvisorModule({ T, fontFamily, sansFamily }) {
             실제 LLM 연동시 <code>fetchAdvice()</code> 를 백엔드(<code>/api/consult</code>)로 교체하면 동일 UI에 진짜 Claude/GPT 응답이 들어옵니다.
           </div>
         )}
+      </div>
       </div>
     </div>
   );

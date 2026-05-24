@@ -72,9 +72,11 @@ const ROUTING = {
 };
 
 // ─── Claude API 호출 ───
-async function callClaude({ systemPrompt, userMessage, ragContext, maxTokens = 2000 }) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return { ok: false, error: "anthropic_key_missing", message: "ANTHROPIC_API_KEY 환경변수 미설정" };
+//   userKey 가 있으면 그것을 우선 사용 (사용자 본인 키), 없으면 ENV
+async function callClaude({ systemPrompt, userMessage, ragContext, maxTokens = 2000, userKey = "" }) {
+  const apiKey = (userKey && userKey.startsWith("sk-ant-")) ? userKey : process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return { ok: false, error: "anthropic_key_missing",
+    message: "Anthropic API 키 없음 — 본인 키 입력하시거나 Vercel 환경변수 ANTHROPIC_API_KEY 설정 필요" };
 
   const sysWithRag = ragContext
     ? `${systemPrompt}\n\n[참고: 카톡 상담방 실제 노무사 답변 사례]\n${ragContext}\n\n위 사례의 실무 톤과 노하우를 참고하여 답변하되, 직접 인용은 피하세요.`
@@ -109,9 +111,10 @@ async function callClaude({ systemPrompt, userMessage, ragContext, maxTokens = 2
 }
 
 // ─── OpenAI GPT 호출 ───
-async function callGPT({ systemPrompt, userMessage, ragContext, maxTokens = 2000 }) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return { ok: false, error: "openai_key_missing", message: "OPENAI_API_KEY 환경변수 미설정" };
+async function callGPT({ systemPrompt, userMessage, ragContext, maxTokens = 2000, userKey = "" }) {
+  const apiKey = (userKey && userKey.startsWith("sk-")) ? userKey : process.env.OPENAI_API_KEY;
+  if (!apiKey) return { ok: false, error: "openai_key_missing",
+    message: "OpenAI API 키 없음 — 본인 키 입력하시거나 Vercel 환경변수 OPENAI_API_KEY 설정 필요" };
 
   const sysWithRag = ragContext
     ? `${systemPrompt}\n\n[참고: 카톡 상담방 실제 노무사 답변 사례]\n${ragContext}\n\n위 사례의 실무 톤과 노하우를 참고하여 답변하되, 직접 인용은 피하세요.`
@@ -164,6 +167,14 @@ export default async function handler(req, res) {
 
   const effectiveRouter = router || ROUTING[category] || "CLAUDE";
 
+  // 사용자 키 (헤더로 전달, 본인 키 우선 사용) — 로그에 기록하지 않음
+  const userAnthropicKey = req.headers["x-anthropic-key"] || "";
+  const userOpenaiKey = req.headers["x-openai-key"] || "";
+  const keySource = {
+    anthropic: userAnthropicKey ? "user" : (process.env.ANTHROPIC_API_KEY ? "server" : "none"),
+    openai: userOpenaiKey ? "user" : (process.env.OPENAI_API_KEY ? "server" : "none"),
+  };
+
   // RAG 컨텍스트 생성
   const ragContext = Array.isArray(ragSamples) && ragSamples.length > 0
     ? ragSamples.map((s, i) => `[사례 ${i + 1}] ${s.expert || "전문가"}\nQ: ${s.q}\nA: ${s.a}`).join("\n\n")
@@ -174,31 +185,31 @@ export default async function handler(req, res) {
   try {
     // ─── CLAUDE 단독 ───
     if (effectiveRouter === "CLAUDE") {
-      const r = await callClaude({ systemPrompt, userMessage: question, ragContext });
-      if (!r.ok) return res.status(r.status === 429 ? 429 : 502).json(r);
+      const r = await callClaude({ systemPrompt, userMessage: question, ragContext, userKey: userAnthropicKey });
+      if (!r.ok) return res.status(r.status === 429 ? 429 : 502).json({ ...r, keySource });
       return res.json({
         ok: true, router: "CLAUDE",
         mock: { claude: r.text, tokens: r.tokens },
-        model: r.model, elapsedMs: Date.now() - t0,
+        model: r.model, elapsedMs: Date.now() - t0, keySource,
       });
     }
 
     // ─── GPT 단독 ───
     if (effectiveRouter === "GPT") {
-      const r = await callGPT({ systemPrompt, userMessage: question, ragContext });
-      if (!r.ok) return res.status(r.status === 429 ? 429 : 502).json(r);
+      const r = await callGPT({ systemPrompt, userMessage: question, ragContext, userKey: userOpenaiKey });
+      if (!r.ok) return res.status(r.status === 429 ? 429 : 502).json({ ...r, keySource });
       return res.json({
         ok: true, router: "GPT",
         mock: { gpt: r.text, tokens: r.tokens },
-        model: r.model, elapsedMs: Date.now() - t0,
+        model: r.model, elapsedMs: Date.now() - t0, keySource,
       });
     }
 
     // ─── DUAL (Claude + GPT 동시 호출 → Claude로 통합) ───
     if (effectiveRouter === "DUAL") {
       const [cR, gR] = await Promise.all([
-        callClaude({ systemPrompt, userMessage: question, ragContext, maxTokens: 1500 }),
-        callGPT({ systemPrompt, userMessage: question, ragContext, maxTokens: 1500 }),
+        callClaude({ systemPrompt, userMessage: question, ragContext, maxTokens: 1500, userKey: userAnthropicKey }),
+        callGPT({ systemPrompt, userMessage: question, ragContext, maxTokens: 1500, userKey: userOpenaiKey }),
       ]);
       const claudeOK = cR.ok ? cR.text : `(Claude 응답 실패: ${cR.message})`;
       const gptOK = gR.ok ? gR.text : `(GPT 응답 실패: ${gR.message})`;
@@ -213,6 +224,7 @@ export default async function handler(req, res) {
 모순되는 부분은 둘 중 더 정확하거나 보수적인 쪽 채택.`,
           userMessage: `[원 질문]\n${question}\n\n[Claude 답변]\n${claudeOK}\n\n[GPT 답변]\n${gptOK}\n\n위 두 답변을 통합하여 최종 답변을 작성해주세요.`,
           maxTokens: 2500,
+          userKey: userAnthropicKey,
         });
         if (integrate.ok) {
           finalText = integrate.text;
@@ -226,7 +238,7 @@ export default async function handler(req, res) {
         finalText = gptOK;
       } else {
         return res.status(502).json({ ok: false, error: "dual_both_failed",
-          message: `Claude+GPT 모두 실패`, claude: cR, gpt: gR });
+          message: `Claude+GPT 모두 실패`, claude: cR, gpt: gR, keySource });
       }
       return res.json({
         ok: true, router: "DUAL",
@@ -236,7 +248,7 @@ export default async function handler(req, res) {
           final: finalText,
           tokens: finalTokens,
         },
-        elapsedMs: Date.now() - t0,
+        elapsedMs: Date.now() - t0, keySource,
       });
     }
 
