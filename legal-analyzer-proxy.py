@@ -229,9 +229,20 @@ lbox_headers={"content-type":"application/json","origin":"https://www.lbox.kr","
 # ── HTML 서빙 ──
 @app.get("/")
 def serve_html():
-    hp=HERE/"legal-analyzer.html"
-    if hp.exists(): return HTMLResponse(hp.read_text(encoding='utf-8'))
-    return HTMLResponse("<h1>legal-analyzer.html not found</h1>")
+    # legal-analyzer.html을 여러 경로에서 찾음 — jamsa-panel 통합 시 public/ 에 있음
+    candidates=[
+        HERE/"legal-analyzer.html",        # 백엔드와 같은 폴더 (원본 구조)
+        HERE/"public"/"legal-analyzer.html",  # jamsa-panel 통합 시
+        HERE/"static"/"legal-analyzer.html",  # 일반적인 static 폴더
+        HERE.parent/"public"/"legal-analyzer.html",  # 부모/public
+    ]
+    for hp in candidates:
+        if hp.exists():
+            return HTMLResponse(hp.read_text(encoding='utf-8'))
+    return HTMLResponse(f"<h1>legal-analyzer.html not found</h1><p>찾아본 경로:</p><ul>" +
+        "".join(f"<li><code>{p}</code></li>" for p in candidates) +
+        "</ul><p>해결: legal-analyzer.html을 위 경로 중 하나에 두거나, " +
+        "legal-analyzer-proxy.py를 legal-analyzer.html 옆에 두세요.</p>")
 
 @app.get("/status")
 def proxy_status():

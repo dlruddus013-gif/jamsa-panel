@@ -1858,16 +1858,152 @@ function WorklogModule({employees}) {
 }
 
 /* ============================================================
-   모듈 11) 법률분석 — legal-analyzer.html iframe 래퍼
+   모듈 11) 법률분석 — legal-analyzer.html iframe 래퍼 + 서브에이전트
    ─────────────────────────────────────────────────────────────
    3,896줄짜리 standalone HTML(분쟁분석/계약서작성/계약서검토/최종보고서
    4-mode 도구)을 React로 포팅하면 너무 무거우니 그대로 iframe.
    AI 호출은 로컬 백엔드 필요 → legal-analyzer-proxy.py 다운로드 안내.
+   👇 NEW: 우측 서브에이전트 패널 — 5명 전문가가 모드별 코멘트 자동 노출
    ============================================================ */
+
+// 5명 전문가 서브에이전트 정의 + 모드별 코멘트
+const LEGAL_SUBAGENTS = [
+  {
+    k: "labor",  i: "👔", n: "노무사",      c: "#0891b2",
+    role: "공인노무사 · 노동법·근로기준법·산재 전문",
+    comments: {
+      dispute: [
+        "분쟁 상황에 임금/근로시간/해고가 포함되면 노동위원회 구제신청(3개월 제척기간)도 검토하세요",
+        "근로계약서·임금명세서·출퇴근기록은 1순위 증거. 회사가 안 주면 정보공개청구 가능합니다",
+        "5인 미만 사업장은 부당해고 구제신청 불가 — 해고예고수당(30일분)은 청구 가능",
+      ],
+      create: [
+        "근로계약 카테고리 선택 시 — 수습기간 90% 감액은 1년 이상 계약직에만 합법 (단시간/일용직 불가)",
+        "포괄임금제 조항은 분쟁 1순위 — 연장근로시간 명시 + 가산수당 별도 산정 권장",
+        "수습/시용 기간 명시 시 본채용 거부 사유도 객관적 기준으로 적어두세요 (소송 대비)",
+      ],
+      review: [
+        "계약서에 ⚠️ 4대보험 미가입·소득세 원천징수 없음 조항 있으면 위장도급 위험 — 강력 경고",
+        "지체상금 / 위약금 조항 — 1일당 0.1% 초과는 무효 (민법 398조 2항 감액 가능)",
+        "연차/주휴수당 별도 정산 명시 안 되어 있으면 미사용 수당 청구 가능 → 사전 명시 권장",
+      ],
+      report: [
+        "최종 보고서에 노동청 진정 가능성·시효(3년)·대지급금 신청 자격 포함했는지 확인",
+        "근로감독관 출석 요구서·시정명령 받았던 이력 있으면 첨부 (재판에서 가중 사유)",
+      ],
+    },
+  },
+  {
+    k: "lawyer", i: "⚖️", n: "변호사",      c: "#7c3aed",
+    role: "민사·형사·계약법 일반 자문",
+    comments: {
+      dispute: [
+        "분쟁금액 3,000만원 이하 → 소액사건심판(가소). 1심 1회기로 끝나고 비용도 1/3",
+        "민사 1심 → 항소(2주) → 상고(2주) 각 제척기간 엄수. 송달일부터 카운트, 휴일 제외",
+        "내용증명은 시효중단·이행지체 입증의 증거 — 송부 전 변호사 검토 강력 권장 (자칫 자백)",
+      ],
+      create: [
+        "계약 당사자 — 법인이면 대표이사 + 사업자등록번호 명시. 개인사업자면 본명+주민번호 뒷자리 제외",
+        "관할 합의 조항 — 단순히 '서울중앙지법'보다 '갑의 주소지 관할 법원' 식이 분쟁 대비 유리",
+        "분쟁 발생 시 조정 → 중재 → 소송 순차 조항 추가하면 1차 비용 절감 (조정성공률 35%)",
+      ],
+      review: [
+        "🔴 위험조항 1순위 — 일방적 계약해지권/변경권 (특히 '갑이 필요하다고 인정할 때' 같은 모호 표현)",
+        "🟡 자동연장 조항 — '이의 없으면 자동 갱신'은 적법, 다만 갱신 거절 통지 시한 명시 필수",
+        "지식재산권 귀속 — 디폴트는 작성자(을)인데 갑에게 양도 시 추가 보상 조항 권장 (특허법 35조)",
+      ],
+      report: [
+        "보고서 첨부물에 — 사실관계 시간순 정리표 + 증거 리스트(원본/사본 표시) 필수",
+        "변호사 선임 시 — 위임장은 '특정 사건' 한정, '포괄' 표현은 추가 비용 청구 명분",
+      ],
+    },
+  },
+  {
+    k: "tax",    i: "💼", n: "세무사",      c: "#16a34a",
+    role: "회계·세무·자금계산 검증",
+    comments: {
+      dispute: [
+        "분쟁금액 산정 — 부가가치세 별도/포함 명시. 세금계산서 발행 여부가 채권 입증 핵심",
+        "지연이자 — 상사법정이율 연 6% (2020년 이전 6%/이후 변경 없음), 일반 민사 5%",
+        "법인 상대 채권 — 신용평가서 + 등기부등본 + 재무제표 (DART 무료) 확보 권장",
+      ],
+      create: [
+        "계약금액 표시 — VAT 별도/포함 명확히. 추후 세금계산서 분쟁 1순위 원인",
+        "선금/중도금/잔금 비율 — 30/40/30 또는 40/30/30 권장 (검수 거절 시 잔금만 보류)",
+        "지체상금 한도 — 계약금액의 10% 권장 (이론상 무한이지만 법원 30% 이상은 감액)",
+      ],
+      review: [
+        "🔴 \"별도 비용 발생 시 갑이 부담\" 같은 모호 조항 — 한도 명시 안 되면 무제한 청구 가능",
+        "용역대금에 부가세 미명시 시 → 청구 시 부가세 별도 청구 못 함 (총액 기준)",
+        "검수 기간 명시 — 30일 무응답 시 자동 검수 완료 조항 강력 권장",
+      ],
+      report: [
+        "손해액 계산 — 직접손해 + 간접손해(영업이익) + 위자료 분리 정리",
+        "세금계산서·계좌이체 내역 모두 첨부 (5년 보관 의무 + 채권 시효 3년 입증)",
+      ],
+    },
+  },
+  {
+    k: "risk",   i: "🛡️", n: "리스크관리",  c: "#dc2626",
+    role: "분쟁 예방·위험 사전 차단·증거 보전",
+    comments: {
+      dispute: [
+        "🚨 카톡/문자/이메일 → 즉시 클라우드 백업 (휴대폰 분실/사망/포렌식 압수 대비)",
+        "통화 녹음 → 한국은 본인 통화는 합법. 녹음 후 즉시 클라우드 + USB 이중 백업",
+        "상대방 자산 — 등기부등본/사업자등록증/카드결제내역 확보. 가압류 빠를수록 회수율↑",
+      ],
+      create: [
+        "🚨 계약 체결 전 상대방 신용조회 — 법인등기부에서 자본금·임원·해산여부 확인",
+        "선금 입금 전 상대방 사업장 실사 — 주소지에 실제 사업체 있는지 (페이퍼컴퍼니 방지)",
+        "전자서명·날인 — 종이 계약은 원본 2부, 전자는 인증서 기반 (모두싸인/도큐사인 등) 권장",
+      ],
+      review: [
+        "🚨 위약금/해지권 비대칭 조항 — 일방에게만 유리하면 무효 가능 (약관규제법)",
+        "비밀유지·경업금지 — 기간/지역/대상 한정 안 되면 영업의 자유 침해로 무효 위험",
+        "면책 조항 — 고의·중과실까지 면책시키는 조항은 모두 무효 (민법 103조)",
+      ],
+      report: [
+        "🚨 보고서 작성 시 — 증거 원본은 절대 첨부 금지. 사본만, 원본은 변호사 직접 전달",
+        "타임라인 작성 — 시간/장소/참석자/대화내용 표 형식 (재판부가 가장 좋아하는 포맷)",
+        "상대방 변호사 선임 정보 — 가능하면 조회 (대한변협 사이트). 같은 법무법인 충돌 방지",
+      ],
+    },
+  },
+  {
+    k: "case",   i: "📚", n: "판례전문가",  c: "#d97706",
+    role: "L-Box·대법원 종합법률정보·유사 판례 추천",
+    comments: {
+      dispute: [
+        "검색 키워드 — \"이행지체\" + \"손해배상\" + 사건부호(가합/가단) 조합이 정확도 높음",
+        "최신 대법원 판례(상고심 부호 다/도/므/두) 우선 — 하급심은 변경 가능성 있음",
+        "유사 판례 5건 이상 + 동일 사실관계 1건은 사실상 승소 보장 신호",
+      ],
+      create: [
+        "계약 유형별 표준 약관 — 공정거래위원회 표준약관/법무부 표준계약서 (무료) 1차 참고",
+        "분쟁 빈발 조항 → L-Box에서 해당 조항으로 검색 → 변경 권고 사항 확인",
+        "유명 로펌 표준 계약서 — 김장/세종/광장 무료 공개분 일부 활용 가능",
+      ],
+      review: [
+        "조항별 위험도 — \"위약금\" \"지체상금\" \"비밀유지\" 키워드로 무효 판례 검색 후 비교",
+        "감액 가능성 — 손해 입증 어려울 때 법원이 직권 감액한 판례 다수",
+        "약관규제법 적용 — 정형 계약서 조항이 무효된 판례 (특히 B2C, 임대차)",
+      ],
+      report: [
+        "참고 판례 — 최근 5년 + 동급 법원(지법/고법) + 유사 사실관계 우선 5건",
+        "판례 인용 형식 — \"대법원 2023. 5. 23. 선고 2023다12345 판결\" 표준 표기",
+        "재판부 성향 — 사건부호로 담당 재판부 추정 후 해당 판사 판례 history 확인 (L-Box 기능)",
+      ],
+    },
+  },
+];
+
 function LegalAnalyzerModule() {
   const [src, setSrc] = useState("/legal-analyzer.html");
   const [showGuide, setShowGuide] = useState(false);
   const [localPort, setLocalPort] = useState("8401");
+  const [mode, setMode] = useState("dispute"); // dispute | create | review | report
+  const [showSubagents, setShowSubagents] = useState(true);
+  const [expandedAgent, setExpandedAgent] = useState("labor");
 
   const useLocal = () => {
     const url = `http://localhost:${localPort.replace(/\D/g, "") || 8401}/`;
@@ -1876,9 +2012,30 @@ function LegalAnalyzerModule() {
   const useHosted = () => setSrc("/legal-analyzer.html");
   const usingLocal = src.startsWith("http");
 
+  // iframe 모드 변경 감지 — 사용자가 상단 nav 클릭할 때 코멘트도 자동 전환
+  // iframe의 #modeXxx 활성화 상태를 폴링 (postMessage 없이도 same-origin 이라 접근 가능)
+  useEffect(() => {
+    if (usingLocal) return; // 로컬 백엔드는 cross-origin 이라 접근 불가
+    const iv = setInterval(() => {
+      try {
+        const iframe = document.querySelector('iframe[title="AI 법률 종합 플랫폼"]');
+        const doc = iframe?.contentDocument;
+        if (!doc) return;
+        // 어느 mode가 보이는지 확인
+        const visibleMode = ["dispute", "create", "review", "report"].find(m => {
+          const el = doc.getElementById(`mode${m.charAt(0).toUpperCase() + m.slice(1)}`);
+          if (!el) return false;
+          return !el.classList.contains("hidden");
+        });
+        if (visibleMode && visibleMode !== mode) setMode(visibleMode);
+      } catch (e) { /* cross-origin */ }
+    }, 1200);
+    return () => clearInterval(iv);
+  }, [mode, src, usingLocal]);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 100px)", gap: 0 }}>
-      {/* 헤더 + 모드 토글 */}
+      {/* 헤더 + 모드 토글 + 서브에이전트 토글 */}
       <div style={{
         padding: "8px 12px", background: T.paper, borderRadius: "8px 8px 0 0",
         border: `1px solid ${T.line}`, borderBottom: "none",
@@ -1889,8 +2046,20 @@ function LegalAnalyzerModule() {
           <span style={{ fontSize: 9, color: T.muted }}>
             분쟁 분석 · 계약서 자동작성/검토 · 판례 검색 · 최종 보고서
           </span>
+          <span style={{ fontSize: 10, padding: "2px 8px", background: T.cream, color: T.silkL, borderRadius: 999, fontWeight: 700 }}>
+            현재: {{dispute:"⚖️ 분쟁분석", create:"📝 계약서작성", review:"🔍 계약서검토", report:"📄 보고서"}[mode]}
+          </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <button onClick={() => setShowSubagents(v => !v)}
+            title="서브에이전트 코멘트 패널 토글"
+            style={{
+              padding: "4px 10px", fontSize: 10, fontWeight: 700, cursor: "pointer",
+              background: showSubagents ? "#7c3aed" : T.cream,
+              color: showSubagents ? "#fff" : T.silkL, border: `1px solid ${T.line}`, borderRadius: 5,
+            }}>
+            🤖 서브에이전트 {showSubagents ? "ON" : "OFF"}
+          </button>
           <span style={{
             fontSize: 10, padding: "3px 8px", borderRadius: 999, fontWeight: 700,
             background: usingLocal ? "#16a34a" : "#92400e", color: "#fff",
@@ -1960,19 +2129,120 @@ function LegalAnalyzerModule() {
         </div>
       )}
 
-      {/* iframe — 전체 영역 */}
-      <iframe
-        key={src}
-        src={src}
-        title="AI 법률 종합 플랫폼"
-        style={{
-          flex: 1, width: "100%", minHeight: 600,
-          border: `1px solid ${T.line}`,
-          borderRadius: "0 0 8px 8px",
-          background: "#f4f3ef",
-        }}
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals allow-popups-to-escape-sandbox"
-      />
+      {/* iframe + 서브에이전트 패널 — 2-column grid (sidebar 토글 시 1 col) */}
+      <div style={{
+        flex: 1, display: "grid",
+        gridTemplateColumns: showSubagents ? "1fr 320px" : "1fr",
+        gap: 0, minHeight: 0,
+      }}>
+        <iframe
+          key={src}
+          src={src}
+          title="AI 법률 종합 플랫폼"
+          style={{
+            width: "100%", height: "100%", minHeight: 600,
+            border: `1px solid ${T.line}`,
+            borderRadius: showSubagents ? "0 0 0 8px" : "0 0 8px 8px",
+            background: "#f4f3ef",
+          }}
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals allow-popups-to-escape-sandbox"
+        />
+        {showSubagents && (
+          <div style={{
+            background: T.paper, border: `1px solid ${T.line}`, borderLeft: "none",
+            borderRadius: "0 0 8px 0", overflow: "hidden",
+            display: "flex", flexDirection: "column", minHeight: 0,
+          }}>
+            <div style={{
+              padding: "10px 12px", background: "linear-gradient(135deg,#1e1b4b,#7c3aed)",
+              color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center",
+            }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 800, fontFamily: fontFamily }}>🤖 서브에이전트 코멘트</div>
+                <div style={{ fontSize: 9, opacity: 0.85 }}>{LEGAL_SUBAGENTS.length}명 전문가 · 모드별 맞춤 조언</div>
+              </div>
+              <div style={{ fontSize: 9, padding: "2px 7px", background: "rgba(255,255,255,0.18)", borderRadius: 4, fontWeight: 700 }}>
+                현재 모드: {mode}
+              </div>
+            </div>
+
+            <div style={{ flex: 1, overflowY: "auto", padding: 8 }}>
+              {LEGAL_SUBAGENTS.map(agent => {
+                const tips = (agent.comments && agent.comments[mode]) || [];
+                const isOpen = expandedAgent === agent.k;
+                return (
+                  <div key={agent.k} style={{
+                    marginBottom: 8, borderRadius: 6, overflow: "hidden",
+                    border: `1px solid ${isOpen ? agent.c : T.line}`,
+                    background: isOpen ? T.cream : T.paper,
+                  }}>
+                    <div onClick={() => setExpandedAgent(isOpen ? null : agent.k)}
+                      style={{
+                        padding: "8px 10px", cursor: "pointer", display: "flex",
+                        alignItems: "center", gap: 8,
+                        background: isOpen ? `${agent.c}22` : "transparent",
+                        borderLeft: `3px solid ${agent.c}`,
+                      }}>
+                      <div style={{ fontSize: 18 }}>{agent.i}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: T.ink, fontFamily: fontFamily }}>
+                          {agent.n}
+                          <span style={{ fontSize: 8, padding: "1px 5px", marginLeft: 5, background: agent.c, color: "#fff", borderRadius: 4, fontWeight: 700 }}>
+                            {tips.length}건
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 9, color: T.muted, marginTop: 2 }}>{agent.role}</div>
+                      </div>
+                      <span style={{ fontSize: 11, color: T.muted }}>{isOpen ? "▾" : "▸"}</span>
+                    </div>
+                    {isOpen && (
+                      <div style={{ padding: "8px 12px 10px", borderTop: `1px dashed ${agent.c}55` }}>
+                        {tips.length === 0 ? (
+                          <div style={{ fontSize: 10, color: T.muted, textAlign: "center", padding: 8 }}>
+                            이 모드에서는 별도 코멘트 없음
+                          </div>
+                        ) : tips.map((tip, i) => (
+                          <div key={i} style={{
+                            fontSize: 11, lineHeight: 1.6, marginBottom: 6,
+                            padding: "6px 8px", background: T.paper, borderRadius: 4,
+                            borderLeft: `2px solid ${agent.c}88`, color: T.ink,
+                          }}>
+                            <span style={{ color: agent.c, fontWeight: 700, marginRight: 4 }}>#{i + 1}</span>
+                            {tip}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ padding: "8px 12px", background: T.cream, borderTop: `1px solid ${T.line}`, fontSize: 9, color: T.muted, lineHeight: 1.6 }}>
+              💡 좌측 iframe에서 4개 모드(분쟁분석/계약서작성/검토/보고서) 전환하면 코멘트가 자동 갱신됩니다.
+              로컬 백엔드 모드(🟢)에서는 cross-origin 이라 모드 자동 감지 불가 — 수동 전환:
+              <div style={{ display: "flex", gap: 3, marginTop: 4, flexWrap: "wrap" }}>
+                {[
+                  { k: "dispute", l: "⚖️ 분쟁" },
+                  { k: "create", l: "📝 작성" },
+                  { k: "review", l: "🔍 검토" },
+                  { k: "report", l: "📄 보고" },
+                ].map(m => (
+                  <button key={m.k} onClick={() => setMode(m.k)}
+                    style={{
+                      padding: "3px 7px", fontSize: 9, fontWeight: 700, cursor: "pointer",
+                      background: mode === m.k ? T.silkD : T.paper,
+                      color: mode === m.k ? "#fff" : T.silkL,
+                      border: `1px solid ${T.line}`, borderRadius: 4,
+                    }}>
+                    {m.l}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
