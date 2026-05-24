@@ -242,14 +242,45 @@ ${cat.n} 관련 ${cat.r} 엔진 응답입니다.
   return { claude: text, gpt: text, final: text, tokens: 1200 };
 };
 
-// ─── 자문 호출. 실제 백엔드 연동시 fetch(server/api/consult) 로 교체. ───
+// ─── 자문 호출 ───
+//   1) Vercel 서버리스 /api/labor-advice (실제 Claude/GPT) 시도
+//   2) 실패하면 MOCK_ANSWERS 로 폴백 (로컬 데모용)
 async function fetchAdvice({ category, router, question }) {
-  // 시뮬: DUAL은 약간 더 길게
-  const delay = router === "DUAL" ? 2200 : 1500;
-  await new Promise(r => setTimeout(r, delay));
-  const mock = MOCK_ANSWERS[category.k] || _genericAnswer(category);
   const rag = RAG_SAMPLES[category.k] || [];
-  return { mock, rag };
+  // 1순위: 진짜 백엔드
+  try {
+    const r = await fetch("/api/labor-advice", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category: category.k,
+        router,
+        question,
+        ragSamples: rag, // 프롬프트에 주입되도록 전달
+      }),
+    });
+    if (r.ok) {
+      const data = await r.json();
+      if (data.ok && data.mock) {
+        return { mock: data.mock, rag, real: true, model: data.model, elapsedMs: data.elapsedMs };
+      }
+    }
+    // 백엔드 에러 (env 미설정 등) — 응답 본문 확인
+    const errBody = await r.json().catch(() => ({}));
+    console.warn("[labor-advice] backend failed:", r.status, errBody);
+    // 폴백 표시용으로 에러 메시지 mock에 추가
+    const fallback = MOCK_ANSWERS[category.k] || _genericAnswer(category);
+    return {
+      mock: { ...fallback, _fallbackReason: errBody.message || `HTTP ${r.status}` },
+      rag, real: false,
+    };
+  } catch (e) {
+    console.warn("[labor-advice] network error → falling back to mock:", e?.message);
+    // 네트워크 실패 (오프라인 등) — 모의 응답으로 폴백
+    await new Promise(r => setTimeout(r, router === "DUAL" ? 1500 : 1000));
+    const mock = MOCK_ANSWERS[category.k] || _genericAnswer(category);
+    return { mock: { ...mock, _fallbackReason: e?.message || "network error" }, rag, real: false };
+  }
 }
 
 const ROUTER_COLORS = { CLAUDE: "#ff7849", GPT: "#10a37f", DUAL: "#6c5ce7" };
@@ -490,7 +521,11 @@ export default function LaborAdvisorModule({ T, fontFamily, sansFamily }) {
     setResult(null);
     try {
       const res = await fetchAdvice({ category: current, router: effectiveRouter, question: q });
-      const r = { cat: current, router: effectiveRouter, question: q, mock: res.mock, rag: res.rag };
+      const r = {
+        cat: current, router: effectiveRouter, question: q,
+        mock: res.mock, rag: res.rag,
+        real: res.real, model: res.model, elapsedMs: res.elapsedMs,
+      };
       setResult(r);
       // 기본 활성 탭 선택
       if (effectiveRouter === "DUAL") setActiveTab(res.mock.final ? "fn" : (res.mock.claude ? "cl" : "gp"));
@@ -637,13 +672,25 @@ export default function LaborAdvisorModule({ T, fontFamily, sansFamily }) {
             {/* ⭐ 신문 헤드라인 스타일 인포그래픽 — 모든 분석 결과 최상단 */}
             {infoData && <InfographicSummary data={infoData} />}
 
-            <div style={{ display: "flex", gap: 5, marginBottom: 10, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 5, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
               <span style={{ padding: "3px 8px", borderRadius: 10, background: T.cream, fontSize: 10, fontWeight: 600, color: T.ink }}>
                 {result.cat.i} {result.cat.n}
               </span>
               <span style={{ padding: "3px 8px", borderRadius: 10, background: ROUTER_COLORS[result.router], color: "#fff", fontSize: 10, fontWeight: 700 }}>
                 {result.router}
               </span>
+              {/* 실제 vs 데모 배지 */}
+              {result.real ? (
+                <span style={{ padding: "3px 8px", borderRadius: 10, background: "#16a34a", color: "#fff", fontSize: 10, fontWeight: 800, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  ✓ 실제 응답 {result.model ? `· ${result.model.split("-").slice(0,3).join("-")}` : ""}
+                  {result.elapsedMs ? ` · ${(result.elapsedMs/1000).toFixed(1)}s` : ""}
+                </span>
+              ) : (
+                <span title={result.mock._fallbackReason || ""}
+                  style={{ padding: "3px 8px", borderRadius: 10, background: "#92400e", color: "#fff", fontSize: 10, fontWeight: 800 }}>
+                  🎬 데모 (백엔드 미연결)
+                </span>
+              )}
               <span style={{ padding: "3px 8px", borderRadius: 10, background: T.cream, fontSize: 10, fontWeight: 600, color: T.ink }}>
                 🪙 {(result.mock.tokens || 0).toLocaleString()} tokens
               </span>
@@ -653,6 +700,13 @@ export default function LaborAdvisorModule({ T, fontFamily, sansFamily }) {
                 </span>
               )}
             </div>
+            {/* 백엔드 미연결 시 환경변수 안내 */}
+            {!result.real && result.mock._fallbackReason && (
+              <div style={{ padding: "8px 10px", marginBottom: 8, background: "#fef3c7", borderLeft: "4px solid #f59e0b", borderRadius: 5, fontSize: 10, color: "#78350f" }}>
+                ⚠️ 실제 Claude/GPT API 연결 실패 ({result.mock._fallbackReason}) — 데모 응답을 표시합니다.
+                <br/>Vercel Dashboard → 환경변수에 <code>ANTHROPIC_API_KEY</code>{result.router !== "CLAUDE" && <> + <code>OPENAI_API_KEY</code></>} 추가 후 재배포하면 실제 응답으로 전환됩니다.
+              </div>
+            )}
 
             {tabs.length > 1 && (
               <div style={{ display: "flex", gap: 2, borderBottom: `2px solid ${T.line}`, marginBottom: 10, flexWrap: "wrap" }}>

@@ -1,6 +1,7 @@
 import agentRealtimeAnalysis from '../api_handlers/agent-realtime-analysis.js';
 import autoAlerts from '../api_handlers/auto-alerts.js';
 import bankWebhook from '../api_handlers/bank-webhook.js';
+import bridgeReset from '../api_handlers/bridge-reset.js';
 import beaconWebhook from '../api_handlers/beacon-webhook.js';
 import cctvAiAnalyze from '../api_handlers/cctv-ai-analyze.js';
 import spotLayoutVision from '../api_handlers/spot-layout-vision.js';
@@ -13,6 +14,7 @@ import dataKey from '../api_handlers/data/[key].js';
 import forecastKpi from '../api_handlers/forecast-kpi.js';
 import inventoryAiAnalyze from '../api_handlers/inventory-ai-analyze.js';
 import keys from '../api_handlers/keys.js';
+import laborAdvice from '../api_handlers/labor-advice.js';
 import notifySend from '../api_handlers/notify-send.js';
 import openbankingSync from '../api_handlers/openbanking-sync.js';
 import operationStats from '../api_handlers/operation-stats.js';
@@ -43,6 +45,7 @@ const routes = {
   'agent-realtime-analysis': agentRealtimeAnalysis,
   'auto-alerts': autoAlerts,
   'bank-webhook': bankWebhook,
+  'bridge/reset': bridgeReset,
   'beacon-webhook': beaconWebhook,
   'cctv-ai-analyze': cctvAiAnalyze,
   'spot-layout-vision': spotLayoutVision,
@@ -54,6 +57,7 @@ const routes = {
   'forecast-kpi': forecastKpi,
   'inventory-ai-analyze': inventoryAiAnalyze,
   'keys': keys,
+  'labor-advice': laborAdvice,
   'notify-send': notifySend,
   'openbanking-sync': openbankingSync,
   'operation-stats': operationStats,
