@@ -30382,6 +30382,74 @@ function WorkScheduleModule({ currentUser }) {
   );
 }
 
+/* ============================================================
+   🎫 단체예약관리 — public/group-reservation.html iframe 래퍼
+   ─────────────────────────────────────────────────────────────
+   13,213줄짜리 standalone HTML(단체관광/교육 예약 + 입금/배차/통계)
+   을 React 포팅하지 않고 그대로 iframe. 모든 state는 HTML 안의
+   localStorage 가 처리. 새 탭 열기 / 풀스크린 토글 지원.
+   ============================================================ */
+function GroupReservationModule() {
+  const [fullscreen, setFullscreen] = useState(false);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 100px)", background: "#faf6eb" }}>
+      <div style={{
+        padding: "8px 14px", background: "linear-gradient(135deg,#5D3A6B,#7B5290)",
+        color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center",
+        gap: 8, flexWrap: "wrap", flexShrink: 0,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <strong style={{ fontSize: 13, fontWeight: 800 }}>🎫 단체예약관리 v2.6.1</strong>
+          <span style={{ fontSize: 10, opacity: 0.9 }}>
+            단체관광·교육 프로그램 · 예약/입금/배차/통계 · 1,502건 시드
+          </span>
+        </div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <button onClick={() => setFullscreen(v => !v)}
+            style={{
+              padding: "4px 10px", fontSize: 10, fontWeight: 700, cursor: "pointer",
+              background: "rgba(0,0,0,0.25)", color: "#fff",
+              border: "1px solid rgba(255,255,255,0.3)", borderRadius: 5,
+            }}>
+            {fullscreen ? "✕ 화면 복귀" : "⛶ 전체화면"}
+          </button>
+          <a href="/group-reservation.html" target="_blank" rel="noopener"
+            style={{
+              padding: "4px 10px", fontSize: 10, fontWeight: 700, cursor: "pointer", textDecoration: "none",
+              background: "rgba(0,0,0,0.25)", color: "#fff",
+              border: "1px solid rgba(255,255,255,0.3)", borderRadius: 5,
+            }}>
+            ↗ 새 탭
+          </a>
+        </div>
+      </div>
+      <iframe
+        src="/group-reservation.html"
+        title="단체예약관리"
+        style={{
+          flex: 1, width: "100%", minHeight: 600, border: "none", background: "#faf6eb",
+          ...(fullscreen ? {
+            position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+            width: "100vw", height: "100vh", zIndex: 9999, minHeight: "100vh",
+          } : {}),
+        }}
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals allow-popups-to-escape-sandbox allow-presentation"
+      />
+      {fullscreen && (
+        <button onClick={() => setFullscreen(false)}
+          style={{
+            position: "fixed", top: 12, right: 12, zIndex: 10000,
+            padding: "8px 16px", background: "rgba(0,0,0,0.85)", color: "#fff",
+            border: "none", borderRadius: 999, fontSize: 12, fontWeight: 800, cursor: "pointer",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+          }}>
+          ✕ 전체화면 종료
+        </button>
+      )}
+    </div>
+  );
+}
+
 function AppInner() {
   const [currentUser, setCurrentUser] = useState(() => {
     // localStorage에 저장된 사용자가 있으면 즉시 복원
@@ -30468,7 +30536,7 @@ function AppInner() {
   useEffect(() => {
     const onHashChange = () => {
       const hashModule = window.location.hash.replace(/^#/, "");
-      if (["home", "facility", "inventory", "safety", "subagents", "clouddb", "schedule", "hr"].includes(hashModule)) setModule(hashModule);
+      if (["home", "facility", "inventory", "safety", "subagents", "clouddb", "schedule", "hr", "reservation"].includes(hashModule)) setModule(hashModule);
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
@@ -30637,6 +30705,13 @@ function AppInner() {
                 color: module === "hr" ? "#fff" : "rgba(255,255,255,0.6)" }}>
               👥 직원관리
             </button>
+            <button data-jamsa-module="reservation" onClick={() => { window.location.hash = "reservation"; setModule("reservation"); }}
+              title="단체예약관리 — 단체관광·교육 프로그램 예약/입금/배차/통계"
+              style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
+                background: module === "reservation" ? "linear-gradient(135deg,#5D3A6B,#7B5290)" : "transparent",
+                color: module === "reservation" ? "#fff" : "rgba(255,255,255,0.6)" }}>
+              🎫 단체예약
+            </button>
             <a href="/attendance" target="_blank" rel="noopener" title="BLE 출퇴근 시스템 (별도 탭)"
               style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
                 background: "linear-gradient(135deg,#10b981,#059669)",
@@ -30704,6 +30779,7 @@ function AppInner() {
         {module === "clouddb"   && <CloudDatabasePage />}
         {module === "schedule"  && <WorkScheduleModule currentUser={currentUser} />}
         {module === "hr"        && <MuseumHR userCtx={facUser} onClose={() => { window.location.hash = "home"; setModule("home"); }} />}
+        {module === "reservation" && <GroupReservationModule />}
         {module === "subagents" && <AutoSubAgentPage
           report={autoAgentReport}
           enabled={autoAgentEnabled}
