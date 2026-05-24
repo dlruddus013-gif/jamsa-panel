@@ -40,8 +40,8 @@ CREATE TABLE IF NOT EXISTS res_bookings (
   -- 코스/메모
   course TEXT,
   memo TEXT,
-  -- 대행사
-  agency_code TEXT REFERENCES res_agencies(code) ON DELETE SET NULL,
+  -- 대행사 (FK는 res_agencies 테이블 생성 후 ALTER 로 추가 — forward reference 회피)
+  agency_code TEXT,
   -- 결제
   total_amount INTEGER DEFAULT 0,   -- 예상 금액 (원)
   paid_amount INTEGER DEFAULT 0,    -- 실제 입금 (원)
@@ -79,6 +79,14 @@ CREATE TABLE IF NOT EXISTS res_agencies (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   notes TEXT
 );
+
+-- res_bookings 의 agency_code FK 를 이제 추가 (res_agencies 정의 후)
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'res_bookings_agency_code_fkey') THEN
+    ALTER TABLE res_bookings ADD CONSTRAINT res_bookings_agency_code_fkey
+      FOREIGN KEY (agency_code) REFERENCES res_agencies(code) ON DELETE SET NULL;
+  END IF;
+END $$;
 
 -- ─── 4. 코스 정보 (FP+'courseInfo') ───
 CREATE TABLE IF NOT EXISTS res_courses (
@@ -252,6 +260,7 @@ ALTER TABLE res_activity_log    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE res_admins          ENABLE ROW LEVEL SECURITY;
 
 -- 모든 hr_* 처럼: anon 차단 / authenticated 읽기 / admin 전체
+-- PG17 은 CREATE POLICY IF NOT EXISTS 미지원 → DROP+CREATE 패턴
 DO $$
 DECLARE t TEXT;
 BEGIN
@@ -260,13 +269,16 @@ BEGIN
     'res_day_limits','res_schedule_rules','res_payments','res_settlements',
     'res_chats','res_chat_faq','res_activity_log','res_admins'
   ] LOOP
-    EXECUTE format('CREATE POLICY IF NOT EXISTS authenticated_read_%I ON %I FOR SELECT TO authenticated USING (true)', t, t);
-    EXECUTE format('CREATE POLICY IF NOT EXISTS admin_full_%I ON %I FOR ALL TO authenticated USING ((auth.jwt() -> ''user_metadata'' ->> ''role'') = ''admin'')', t, t);
+    EXECUTE format('DROP POLICY IF EXISTS authenticated_read_%I ON %I', t, t);
+    EXECUTE format('CREATE POLICY authenticated_read_%I ON %I FOR SELECT TO authenticated USING (true)', t, t);
+    EXECUTE format('DROP POLICY IF EXISTS admin_full_%I ON %I', t, t);
+    EXECUTE format('CREATE POLICY admin_full_%I ON %I FOR ALL TO authenticated USING ((auth.jwt() -> ''user_metadata'' ->> ''role'') = ''admin'')', t, t);
   END LOOP;
 END $$;
 
 -- 챗봇 FAQ는 anon 도 읽기 가능 (예약 페이지에서 비로그인 고객도 조회)
-CREATE POLICY IF NOT EXISTS anon_read_chat_faq ON res_chat_faq FOR SELECT TO anon USING (active = TRUE);
+DROP POLICY IF EXISTS anon_read_chat_faq ON res_chat_faq;
+CREATE POLICY anon_read_chat_faq ON res_chat_faq FOR SELECT TO anon USING (active = TRUE);
 
 -- ─── Realtime publication ───
 DO $$
