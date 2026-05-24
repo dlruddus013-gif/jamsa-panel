@@ -254,6 +254,225 @@ async function fetchAdvice({ category, router, question }) {
 
 const ROUTER_COLORS = { CLAUDE: "#ff7849", GPT: "#10a37f", DUAL: "#6c5ce7" };
 
+/* ─── 인포그래픽 요약 파서 ───
+   LLM 답변(마크다운)에서 핵심 정보를 추출해 카드용 데이터로 변환.
+   상정한 섹션 마커: ## 📌 결론 / ## 📖 법령 근거 / ## ✅ 권장 조치 /
+                     ## 📂 필요 서식 / ## ⚠️ 주의사항 / ## 🧮 계산 / ## 🔍 사안 분석 */
+function extractInfographic(text, category) {
+  if (!text || typeof text !== "string") return null;
+  const sections = {};
+  // ## 헤더(이모지 포함)로 split
+  const lines = text.split(/\n/);
+  let currentKey = null;
+  let buf = [];
+  const flush = () => { if (currentKey) sections[currentKey] = (sections[currentKey] || "") + buf.join("\n").trim(); buf = []; };
+  for (const line of lines) {
+    const m = line.match(/^##\s*(.+)$/);
+    if (m) {
+      flush();
+      const h = m[1].trim();
+      if (/결론/.test(h)) currentKey = "conclusion";
+      else if (/법령|근거/.test(h)) currentKey = "laws";
+      else if (/사안|분석/.test(h) && !/계산/.test(h)) currentKey = "analysis";
+      else if (/계산|시뮬레이션|금액/.test(h)) currentKey = "calc";
+      else if (/권장|조치|단기|중기|장기/.test(h)) currentKey = "actions";
+      else if (/필요|서식|증거/.test(h)) currentKey = "evidence";
+      else if (/주의|시효|기한/.test(h)) currentKey = "caution";
+      else currentKey = "other";
+    } else {
+      buf.push(line);
+    }
+  }
+  flush();
+  // 결론 한 줄 — 첫 비어있지 않은 줄
+  const conclusionLine = (sections.conclusion || "").split(/\n/).map(s => s.trim()).filter(Boolean)[0] || "";
+  // 법령 → 굵게 표시된 조문 추출
+  const laws = [];
+  const lawText = sections.laws || "";
+  const lawMatches = [...lawText.matchAll(/\*\*([^*]+법[^*]*제\s*\d+조[^*]*)\*\*/g)];
+  for (const m of lawMatches) laws.push(m[1].replace(/\s+/g, " ").trim());
+  if (laws.length === 0) {
+    // 굵은표기 없으면 - 로 시작하는 줄에서 법률명 추출
+    for (const line of lawText.split(/\n/)) {
+      const lm = line.match(/(?:^|\s)([가-힣\w]+법[^:,\n]*제\s*\d+조[^:,\n]*)/);
+      if (lm) laws.push(lm[1].trim());
+      if (laws.length >= 3) break;
+    }
+  }
+  // 권장 조치 — 단기/중기/장기 키워드로 분리
+  const actions = { 단기: "", 중기: "", 장기: "" };
+  const actText = sections.actions || "";
+  for (const line of actText.split(/\n/)) {
+    const sm = line.match(/단기[^)]*\)?[:\s]+(.+)$/);
+    const mm = line.match(/중기[^)]*\)?[:\s]+(.+)$/);
+    const lm = line.match(/장기[^)]*\)?[:\s]+(.+)$/);
+    if (sm && !actions.단기) actions.단기 = sm[1].replace(/\*+/g, "").trim().slice(0, 80);
+    if (mm && !actions.중기) actions.중기 = mm[1].replace(/\*+/g, "").trim().slice(0, 80);
+    if (lm && !actions.장기) actions.장기 = lm[1].replace(/\*+/g, "").trim().slice(0, 80);
+  }
+  // 단기/중기/장기 라벨 없으면 번호 매긴 1./2./3. 으로 폴백
+  if (!actions.단기 && !actions.중기 && !actions.장기) {
+    const nums = [...actText.matchAll(/^\s*(\d)\.\s*\*?\*?([^*\n]+)\*?\*?/gm)];
+    if (nums.length > 0) {
+      const slots = ["단기", "중기", "장기"];
+      nums.slice(0, 3).forEach((m, i) => { actions[slots[i]] = m[2].trim().slice(0, 80); });
+    }
+  }
+  // 금액 추출 — 첫 등장한 ₩/만원/억원 단위 숫자
+  const allText = text;
+  const moneyMatch = allText.match(/(\d{1,3}(?:,\d{3})*만원|\d+(?:\.\d+)?\s*억원|약\s*\d+(?:,\d+)*\s*원|\d{1,3}(?:,\d{3})+\s*원)/);
+  const money = moneyMatch ? moneyMatch[1] : "";
+  // 시효 추출
+  const limitMatch = allText.match(/시효[^.]{0,40}?(\d+\s*년)/);
+  const limit = limitMatch ? limitMatch[1] : "";
+  // 기한 추출 (제척기간/구제신청 기한)
+  const deadlineMatch = allText.match(/(?:제척기간|구제신청|기한)[^.]{0,30}?(\d+\s*[개월년일])/);
+  const deadline = deadlineMatch ? deadlineMatch[1] : "";
+  // 위험도/긴급도 추정
+  let riskLevel = "보통", riskColor = "#10a37f";
+  if (/긴급|급박|즉시|당장|3개월|14일|제척기간/.test(text)) { riskLevel = "긴급"; riskColor = "#dc2626"; }
+  else if (/주의|위험|중요|반드시/.test(text)) { riskLevel = "주의"; riskColor = "#f59e0b"; }
+  // 청구 가능 여부 추정
+  let claimable = null;
+  if (/청구권\s*(없음|발생하지)/.test(text) || /수급권\s*없음/.test(text)) claimable = "불가";
+  else if (/청구\s*가능|받을\s*수\s*있/.test(text)) claimable = "가능";
+  // 헤드라인 — 카테고리 + 결론 첫 문장
+  const headline = conclusionLine.replace(/[*#]/g, "").trim();
+
+  return {
+    category,
+    headline: headline || `${category.n} 관련 분석`,
+    laws: laws.slice(0, 3),
+    actions,
+    money,
+    limit,
+    deadline,
+    riskLevel, riskColor,
+    claimable,
+    hasContent: !!(headline || laws.length || actions.단기 || money),
+  };
+}
+
+function InfographicSummary({ data }) {
+  if (!data || !data.hasContent) return null;
+  const { category, headline, laws, actions, money, limit, deadline, riskLevel, riskColor, claimable } = data;
+  const T = {
+    cream:"#0f172a", paper:"#1e293b", line:"#334155", ink:"#f1f5f9",
+    silk:"#c9a96e", silkD:"#a8864a", silkL:"#e8d5a3",
+    leaf:"#86efac", muted:"#94a3b8",
+  };
+  const claimColor = claimable === "가능" ? "#10b981" : claimable === "불가" ? "#dc2626" : "#94a3b8";
+  return (
+    <div style={{
+      marginBottom: 14, borderRadius: 10, overflow: "hidden",
+      border: `2px solid ${category.c}`,
+      background: `linear-gradient(135deg, ${category.c}15, ${category.c}05)`,
+      boxShadow: `0 4px 14px ${category.c}30`,
+    }}>
+      {/* 신문 헤드라인 — 카테고리 배지 + 위험도 */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 8, padding: "10px 14px 8px",
+        borderBottom: `1px dashed ${category.c}66`,
+        background: `linear-gradient(90deg, ${category.c}25, transparent)`,
+      }}>
+        <div style={{ fontSize: 22 }}>{category.i}</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1.5, color: category.c, textTransform: "uppercase" }}>
+            {category.n} · 한눈에 보기
+          </div>
+          <div style={{ fontSize: 14, fontWeight: 900, color: T.ink, lineHeight: 1.35, marginTop: 2, fontFamily: '"Noto Serif KR","Nanum Myeongjo",serif' }}>
+            {headline}
+          </div>
+        </div>
+        <div style={{
+          padding: "4px 10px", borderRadius: 6, background: riskColor, color: "#fff",
+          fontSize: 10, fontWeight: 900, letterSpacing: 1, textAlign: "center", minWidth: 50,
+        }}>
+          {riskLevel}
+        </div>
+      </div>
+
+      {/* 인포그래픽 그리드 — 4 칸 */}
+      <div style={{
+        display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 1,
+        background: T.line,
+      }}>
+        {/* 청구 가능 여부 / 핵심 금액 */}
+        <InfoCell label="청구 가능" value={claimable || "검토 필요"} valueColor={claimColor} icon="⚖️" />
+        <InfoCell label="핵심 금액" value={money || "—"} valueColor={money ? T.silkL : T.muted} icon="💰" />
+        <InfoCell label="시효" value={limit || "—"} valueColor={limit ? "#fbbf24" : T.muted} icon="⏳" />
+        <InfoCell label="기한" value={deadline || "—"} valueColor={deadline ? "#fca5a5" : T.muted} icon="📅" />
+      </div>
+
+      {/* 핵심 법령 (3개 한 줄) */}
+      {laws.length > 0 && (
+        <div style={{ padding: "10px 14px", borderBottom: `1px dashed ${category.c}33`, background: T.paper }}>
+          <div style={{ fontSize: 9, fontWeight: 700, color: category.c, marginBottom: 5, letterSpacing: 1 }}>📖 핵심 법령</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {laws.map((law, i) => (
+              <span key={i} style={{
+                fontSize: 11, padding: "3px 9px", background: `${category.c}22`, color: T.ink,
+                borderRadius: 4, fontWeight: 600, border: `1px solid ${category.c}55`,
+              }}>
+                {law}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 권장 조치 — 단기/중기/장기 타임라인 */}
+      {(actions.단기 || actions.중기 || actions.장기) && (
+        <div style={{ padding: "10px 14px", background: T.paper }}>
+          <div style={{ fontSize: 9, fontWeight: 700, color: category.c, marginBottom: 7, letterSpacing: 1 }}>✅ 권장 조치 타임라인</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+            {[
+              { k: "단기", emoji: "🔥", color: "#dc2626", label: "단기 (오늘~)" },
+              { k: "중기", emoji: "📋", color: "#f59e0b", label: "중기 (1~2주)" },
+              { k: "장기", emoji: "🏛️", color: "#3b82f6", label: "장기 (1개월+)" },
+            ].map(step => (
+              <div key={step.k} style={{
+                padding: 8, background: T.cream, borderRadius: 5,
+                borderTop: `3px solid ${actions[step.k] ? step.color : T.line}`,
+                opacity: actions[step.k] ? 1 : 0.4,
+              }}>
+                <div style={{ fontSize: 9, color: step.color, fontWeight: 700, marginBottom: 3 }}>
+                  {step.emoji} {step.label}
+                </div>
+                <div style={{ fontSize: 10, color: T.ink, lineHeight: 1.5 }}>
+                  {actions[step.k] || "(없음)"}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 신문 푸터 — 작성 timestamp */}
+      <div style={{
+        padding: "5px 14px", background: T.cream, fontSize: 8, color: T.muted, textAlign: "right",
+        fontFamily: '"Noto Serif KR",serif', letterSpacing: 1,
+      }}>
+        AI 자동 분석 · {new Date().toLocaleString("ko-KR", { hour12: false })}
+      </div>
+    </div>
+  );
+}
+
+function InfoCell({ label, value, valueColor, icon }) {
+  return (
+    <div style={{
+      padding: "10px 8px", background: "#1e293b", textAlign: "center",
+    }}>
+      <div style={{ fontSize: 13, marginBottom: 2 }}>{icon}</div>
+      <div style={{ fontSize: 8, color: "#94a3b8", marginBottom: 3, fontWeight: 700, letterSpacing: 0.5 }}>{label}</div>
+      <div style={{ fontSize: 12, fontWeight: 900, color: valueColor || "#f1f5f9", lineHeight: 1.2, fontFamily: '"Noto Serif KR",serif' }}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
 export default function LaborAdvisorModule({ T, fontFamily, sansFamily }) {
   const [current, setCurrent] = useState(LABOR_CATEGORIES[0]);
   const [question, setQuestion] = useState("");
@@ -409,8 +628,15 @@ export default function LaborAdvisorModule({ T, fontFamily, sansFamily }) {
             <style>{`@keyframes labor-spin { to { transform: rotate(360deg); } }`}</style>
           </div>
         )}
-        {result && !loading && (
+        {result && !loading && (() => {
+          // 인포그래픽용 답변 텍스트 선택 — DUAL이면 final, CLAUDE면 claude, GPT면 gpt
+          const fullText = result.mock.final || result.mock.claude || result.mock.gpt || "";
+          const infoData = extractInfographic(fullText, result.cat);
+          return (
           <div style={{ marginTop: 14 }}>
+            {/* ⭐ 신문 헤드라인 스타일 인포그래픽 — 모든 분석 결과 최상단 */}
+            {infoData && <InfographicSummary data={infoData} />}
+
             <div style={{ display: "flex", gap: 5, marginBottom: 10, flexWrap: "wrap" }}>
               <span style={{ padding: "3px 8px", borderRadius: 10, background: T.cream, fontSize: 10, fontWeight: 600, color: T.ink }}>
                 {result.cat.i} {result.cat.n}
@@ -475,7 +701,8 @@ export default function LaborAdvisorModule({ T, fontFamily, sansFamily }) {
               </div>
             )}
           </div>
-        )}
+          );
+        })()}
 
         {!loading && !result && (
           <div style={{
