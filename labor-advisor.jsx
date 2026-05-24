@@ -925,22 +925,70 @@ export default function LaborAdvisorModule({ T, fontFamily, sansFamily }) {
             ))}
 
             {result.rag.length > 0 && (
-              <div style={{ background: "#1a1729", borderRadius: 6, padding: 12, marginTop: 10, border: `1px solid ${T.line}` }}>
-                <h3 style={{ fontSize: 12, color: ROUTER_COLORS.DUAL, marginBottom: 7, fontFamily: fontFamily }}>
-                  📚 LLM이 참고한 카톡 상담방 실제 사례 ({result.rag.length}건)
-                </h3>
+              <div style={{
+                background: "linear-gradient(135deg,#1a1729,#1e1b4b)", borderRadius: 8,
+                padding: 14, marginTop: 12, border: `2px solid ${ROUTER_COLORS.DUAL}66`,
+                boxShadow: `0 4px 14px ${ROUTER_COLORS.DUAL}22`,
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10, paddingBottom: 8, borderBottom: `1px dashed ${ROUTER_COLORS.DUAL}55` }}>
+                  <h3 style={{ fontSize: 13, color: ROUTER_COLORS.DUAL, fontFamily: fontFamily, fontWeight: 800 }}>
+                    📎 별첨 사례 — LLM이 참고한 실제 노무사 답변 ({result.rag.length}건)
+                  </h3>
+                  <span style={{ fontSize: 9, color: T.muted, fontStyle: "italic" }}>
+                    출처: 카카오톡 노무·세무 무료상담방 실제 대화 추출 · 원문 그대로
+                  </span>
+                </div>
                 {result.rag.map((c, i) => (
                   <div key={i} style={{
-                    background: T.paper, padding: "7px 10px", borderRadius: 4, marginBottom: 5,
-                    fontSize: 10, lineHeight: 1.6,
+                    background: "#0f0a1e", padding: "12px 14px", borderRadius: 6,
+                    marginBottom: 8, fontSize: 11, lineHeight: 1.7,
+                    borderLeft: `4px solid ${ROUTER_COLORS.DUAL}`,
+                    position: "relative",
                   }}>
-                    <div style={{ color: ROUTER_COLORS.DUAL, fontWeight: 700 }}>
-                      사례 {i + 1} · {c.expert}
+                    {/* 별첨 사례 라벨 (좌상단) */}
+                    <div style={{
+                      position: "absolute", top: -10, left: 8,
+                      background: ROUTER_COLORS.DUAL, color: "#fff",
+                      padding: "2px 10px", borderRadius: 999,
+                      fontSize: 9, fontWeight: 800, letterSpacing: 1,
+                    }}>
+                      별첨 사례 {i + 1}
                     </div>
-                    <div style={{ color: T.ink, margin: "2px 0" }}>Q. {c.q}</div>
-                    <div style={{ color: T.muted }}>A. {c.a}</div>
+                    {/* 출처 + 날짜 (메타) */}
+                    <div style={{ fontSize: 9, color: T.muted, fontStyle: "italic", marginBottom: 6, marginTop: 4 }}>
+                      📤 출처: <strong style={{ color: ROUTER_COLORS.DUAL, fontStyle: "normal" }}>{c.expert}</strong> · 카카오톡 무료상담방
+                    </div>
+                    {/* 질문 (인용 블록 스타일) */}
+                    <div style={{
+                      padding: "8px 12px", background: "rgba(0,0,0,0.3)",
+                      borderLeft: `3px solid ${T.silkD}`, borderRadius: "0 4px 4px 0",
+                      marginBottom: 6,
+                    }}>
+                      <div style={{ fontSize: 8, color: T.silkD, fontWeight: 800, marginBottom: 3, letterSpacing: 1 }}>
+                        ❓ 상담자 질문 (원문)
+                      </div>
+                      <div style={{ color: T.ink, fontStyle: "italic" }}>
+                        "{c.q}"
+                      </div>
+                    </div>
+                    {/* 답변 (인용 블록 스타일) */}
+                    <div style={{
+                      padding: "8px 12px", background: "rgba(108,92,231,0.12)",
+                      borderLeft: `3px solid ${ROUTER_COLORS.DUAL}`, borderRadius: "0 4px 4px 0",
+                    }}>
+                      <div style={{ fontSize: 8, color: ROUTER_COLORS.DUAL, fontWeight: 800, marginBottom: 3, letterSpacing: 1 }}>
+                        ⚖️ 노무사 답변 (원문)
+                      </div>
+                      <div style={{ color: T.ink, fontWeight: 500 }}>
+                        {c.a}
+                      </div>
+                    </div>
                   </div>
                 ))}
+                <div style={{ marginTop: 8, padding: "6px 10px", background: "rgba(108,92,231,0.08)", borderRadius: 4, fontSize: 9, color: T.muted, lineHeight: 1.7 }}>
+                  💡 이 별첨 사례들은 위 LLM 답변의 system prompt 에 컨텍스트로 주입되어 답변 톤·법령 적용 방식에 직접 영향을 주었습니다.
+                  실제 분쟁 시 노무사·변호사 자문 시 본 사례를 참고 자료로 함께 첨부하시면 유사 케이스 대응에 도움됩니다.
+                </div>
               </div>
             )}
           </div>

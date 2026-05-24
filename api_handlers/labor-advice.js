@@ -79,7 +79,7 @@ async function callClaude({ systemPrompt, userMessage, ragContext, maxTokens = 2
     message: "Anthropic API 키 없음 — 본인 키 입력하시거나 Vercel 환경변수 ANTHROPIC_API_KEY 설정 필요" };
 
   const sysWithRag = ragContext
-    ? `${systemPrompt}\n\n[참고: 카톡 상담방 실제 노무사 답변 사례]\n${ragContext}\n\n위 사례의 실무 톤과 노하우를 참고하여 답변하되, 직접 인용은 피하세요.`
+    ? `${systemPrompt}\n\n[참고 자료 — 카톡 상담방 실제 노무사 답변]\n${ragContext}\n\n위 별첨 사례의 노무사 답변 톤·접근 방식·법령 적용을 따라하세요. 답변 본문에 "(별첨 사례 1 참조)" 같은 형태로 인용 가능합니다. 원문을 그대로 베끼지는 마세요.`
     : systemPrompt;
 
   try {
@@ -117,7 +117,7 @@ async function callGPT({ systemPrompt, userMessage, ragContext, maxTokens = 2000
     message: "OpenAI API 키 없음 — 본인 키 입력하시거나 Vercel 환경변수 OPENAI_API_KEY 설정 필요" };
 
   const sysWithRag = ragContext
-    ? `${systemPrompt}\n\n[참고: 카톡 상담방 실제 노무사 답변 사례]\n${ragContext}\n\n위 사례의 실무 톤과 노하우를 참고하여 답변하되, 직접 인용은 피하세요.`
+    ? `${systemPrompt}\n\n[참고 자료 — 카톡 상담방 실제 노무사 답변]\n${ragContext}\n\n위 별첨 사례의 노무사 답변 톤·접근 방식·법령 적용을 따라하세요. 답변 본문에 "(별첨 사례 1 참조)" 같은 형태로 인용 가능합니다. 원문을 그대로 베끼지는 마세요.`
     : systemPrompt;
 
   try {
@@ -149,15 +149,52 @@ async function callGPT({ systemPrompt, userMessage, ragContext, maxTokens = 2000
   }
 }
 
+// 안전한 body 파싱 — Vercel은 보통 자동이지만 일부 케이스에서 미파싱
+async function safeParseBody(req) {
+  if (req.body && typeof req.body === "object") return req.body;
+  if (typeof req.body === "string") {
+    try { return JSON.parse(req.body); } catch (e) { return {}; }
+  }
+  // stream으로 직접 읽기 (fallback)
+  return new Promise((resolve) => {
+    const chunks = [];
+    req.on("data", c => chunks.push(c));
+    req.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf-8");
+      try { resolve(JSON.parse(raw)); } catch (e) { resolve({}); }
+    });
+    req.on("error", () => resolve({}));
+  });
+}
+
 // ─── 핸들러 ───
 export default async function handler(req, res) {
+  // GET → status 체크 (키 설정 여부)
+  if (req.method === "GET") {
+    const userA = req.headers["x-anthropic-key"] || "";
+    const userO = req.headers["x-openai-key"] || "";
+    return res.json({
+      ok: true,
+      keys: {
+        anthropic: userA ? "user" : (process.env.ANTHROPIC_API_KEY ? "server" : "none"),
+        openai: userO ? "user" : (process.env.OPENAI_API_KEY ? "server" : "none"),
+      },
+      message: "POST 로 { category, question, router?, ragSamples? } 보내세요",
+    });
+  }
+
   if (req.method !== "POST") {
     return res.status(405).json({ error: "method_not_allowed" });
   }
 
-  const { category, question, router, ragSamples } = req.body || {};
+  const body = await safeParseBody(req).catch(e => ({ _parseError: e.message }));
+  if (body._parseError) {
+    return res.status(400).json({ error: "body_parse_failed", message: body._parseError });
+  }
+  const { category, question, router, ragSamples } = body || {};
   if (!category || !question) {
-    return res.status(400).json({ error: "missing_fields", message: "category, question 필수" });
+    return res.status(400).json({ error: "missing_fields", message: "category, question 필수",
+      received: { category: !!category, question: !!question, bodyKeys: Object.keys(body || {}) } });
   }
 
   const systemPrompt = CATEGORY_PROMPTS[category];
@@ -175,9 +212,12 @@ export default async function handler(req, res) {
     openai: userOpenaiKey ? "user" : (process.env.OPENAI_API_KEY ? "server" : "none"),
   };
 
-  // RAG 컨텍스트 생성
+  // RAG 컨텍스트 생성 — LLM이 원문 인용 가능하도록 명확히 라벨링
+  // (callClaude/callGPT 가 내부에서 system 프롬프트에 자동 prepend)
   const ragContext = Array.isArray(ragSamples) && ragSamples.length > 0
-    ? ragSamples.map((s, i) => `[사례 ${i + 1}] ${s.expert || "전문가"}\nQ: ${s.q}\nA: ${s.a}`).join("\n\n")
+    ? ragSamples.map((s, i) => `[별첨 사례 ${i + 1} — 출처: ${s.expert || "전문가"} 답변]
+질문: ${s.q}
+노무사 답변 원문: ${s.a}`).join("\n\n---\n\n")
     : "";
 
   const t0 = Date.now();
@@ -256,6 +296,11 @@ export default async function handler(req, res) {
 
   } catch (e) {
     console.error("[labor-advice] error:", e);
-    return res.status(500).json({ error: "internal_error", message: e.message });
+    return res.status(500).json({
+      error: "internal_error",
+      message: e?.message || String(e),
+      stack: process.env.NODE_ENV === "production" ? undefined : e?.stack,
+      hint: "labor-advice 핸들러에서 예외 발생. 키 설정 또는 LLM API 응답을 확인하세요.",
+    });
   }
 }
