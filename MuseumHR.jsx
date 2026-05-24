@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
+import LaborAdvisorModule from "./labor-advisor.jsx";
 
 /* ============================================================
    한국잠사플레이팜 농업회사법인(주) — 직원관리 통합 시스템
@@ -58,6 +59,7 @@ const TABS = [
   { id:"checklist", icon:"✅", label:"업무체크리스트" },
   { id:"worklog",   icon:"📝", label:"업무일지" },
   { id:"contract",  icon:"📜", label:"근로계약서" },
+  { id:"advisor",   icon:"⚖️", label:"노무관리" },
 ];
 
 /* ─── 디자인 토큰 (jamsa-panel 다크 테마 + 실크 골드 액센트) ─── */
@@ -295,6 +297,7 @@ export default function MuseumHR({ onClose, userCtx = null } = {}) {
     checklist:  <ChecklistModule employees={employees}/>,
     worklog:    <WorklogModule employees={employees}/>,
     contract:   <ContractModule employees={employees} session={session} userRole={userRole}/>,
+    advisor:    <LaborAdvisorModule T={T} fontFamily={fontFamily} sansFamily={sansFamily}/>,
   };
 
   return (
