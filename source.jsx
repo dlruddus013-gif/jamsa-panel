@@ -24033,26 +24033,34 @@ function IntegratedHomeDashboard({ userCtx, facActions = [], worklogs = [], audi
           const _s = _snaps[ch];
           const _ca = _ana[ch];
           const _isOffline = !!_s?.error; // 폴러가 마지막 fetch에서 실패한 경우
-          const _url = (_s?.url && !_s?.error) ? _s.url : `${_directBase.replace(/\/+$/, "")}/api/snap/${ch}?t=${_liveTs}`;
+          // 🔧 FIX: 마커 셀은 직접 URL fallback 안 씀 (브라우저 6 동시연결 제한에
+          //    걸려 평소 안 떴음). 폴러 blob URL만 사용, 없으면 placeholder.
+          //    폴러는 동시 fetch 4로 캡되어 있어 안정적으로 채워짐.
+          const _hasBlob = !!(_s?.url && !_s?.error);
+          const _url = _hasBlob ? _s.url : "";
           const _fbId = `cctvFb_${z.id}_${ch}`;
           let _cellBorder = "1px solid rgba(255,255,255,0.2)";
           let _cellAnim = "";
           if (_isOffline) { _cellBorder = "1px solid #dc2626"; }
           else if (_ca?.level === "DANGER") { _cellBorder = "1px solid #dc2626"; _cellAnim = "animation:cctvDangerPulse 1.2s infinite;"; }
           else if (_ca?.level === "WARNING") { _cellBorder = "1px solid #f59e0b"; }
-          // 셀 클릭 → 해당 스팟의 전체 CCTV 그리드 모달 (사용자 요청: "지도에서 CCTV 클릭 → 그 스팟 전체화면")
+          // 셀 클릭 → 해당 스팟의 전체 CCTV 그리드 모달
           const _cellClick = cctvEditMode
             ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${ch})"`
             : `onclick="event.stopPropagation();window.__jamsaOpenCctvGrid&&window.__jamsaOpenCctvGrid('${z.id}','${_chCsv}')"`;
-          // 폴러가 error 상태면 폴백 표시(📷)를 즉시 보여줘 사용자가 오프라인 채널을 한눈에 인지
-          const _imgDisplay = _isOffline ? 'none' : '';
-          const _fbDisplay = _isOffline ? 'flex' : 'none';
-          return `<div ${_cellClick} title="CH${ch}${_isOffline ? ' · 🔴 오프라인 (스냅샷 실패)' : ' — 클릭하면 스팟 전체 CCTV를 크게 보기'}" style="position:relative;width:${_cellW}px;height:${_cellH}px;border-radius:3px;overflow:hidden;border:${_cellBorder};${_cellAnim}background:#0f172a;flex-shrink:0;cursor:pointer;">
+          // blob URL 있으면 img, 없으면 placeholder (오프라인 = 빨강 / 대기 = 회색)
+          const _imgDisplay = _hasBlob ? '' : 'none';
+          const _fbDisplay = _hasBlob ? 'none' : 'flex';
+          const _fbIcon = _isOffline ? '🔴' : '⏳';
+          const _fbLabel = _isOffline ? 'OFFLINE' : '로딩';
+          const _fbColor = _isOffline ? '#fca5a5' : 'rgba(255,255,255,0.45)';
+          const _fbBg = _isOffline ? 'rgba(60,10,10,0.93)' : 'rgba(15,23,42,0.93)';
+          return `<div ${_cellClick} title="CH${ch}${_isOffline ? ' · 🔴 오프라인' : _hasBlob ? ' — 클릭하면 스팟 전체 CCTV 크게 보기' : ' · ⏳ 스냅샷 폴링 대기 중 (몇 초 안에 표시됨)'}" style="position:relative;width:${_cellW}px;height:${_cellH}px;border-radius:3px;overflow:hidden;border:${_cellBorder};${_cellAnim}background:#0f172a;flex-shrink:0;cursor:pointer;">
             <img data-cctv-marker-ch="${ch}" src="${_url}" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover;display:${_imgDisplay};" onerror="this.style.display='none';var fb=document.getElementById('${_fbId}');if(fb)fb.style.display='flex';"/>
-            <div id="${_fbId}" style="display:${_fbDisplay};position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:${_isOffline ? '#fca5a5' : 'rgba(255,255,255,0.6)'};background:${_isOffline ? 'rgba(60,10,10,0.93)' : 'rgba(15,23,42,0.93)'};">
-              <div style="font-size:${_n===1?'16':'11'}px;">${_isOffline ? '🔴' : '📷'}</div>
+            <div id="${_fbId}" style="display:${_fbDisplay};position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:${_fbColor};background:${_fbBg};">
+              <div style="font-size:${_n===1?'16':'11'}px;">${_fbIcon}</div>
               <div style="font-size:${_n===1?'8':'7'}px;font-weight:700;margin-top:1px;">CH${ch}</div>
-              ${_isOffline ? `<div style="font-size:${_n===1?'7':'6'}px;color:#fca5a5;font-weight:800;margin-top:1px;letter-spacing:0.3px;">OFFLINE</div>` : ''}
+              <div style="font-size:${_n===1?'7':'6'}px;color:${_fbColor};font-weight:800;margin-top:1px;letter-spacing:0.3px;">${_fbLabel}</div>
             </div>
             <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.72),transparent);padding:1px 3px;font-size:${_n===1?'8':'7'}px;color:#fff;font-weight:800;">CH${ch}</div>
             ${_ca?.level==="DANGER" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(220,38,38,0.96);padding:1px 2px;font-size:7px;color:#fff;font-weight:900;text-align:center;">🚨</div>` : _ca?.level==="WARNING" ? `<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(245,158,11,0.96);padding:1px 2px;font-size:7px;color:#fff;font-weight:900;text-align:center;">⚠️</div>` : ''}
@@ -28008,21 +28016,26 @@ function OsmFallbackMap({ zoneStatus, onSelectZone, onOpenApiKey, hasError, erro
         const s2 = snaps[ch];
         const ca = ana[ch];
         const isOffline = !!s2?.error;
-        const url = (s2?.url && !s2?.error) ? s2.url : `${dirBase.replace(/\/+$/,"")}/api/snap/${ch}?t=${liveTs}`;
+        // 🔧 FIX: 직접 URL fallback 제거 → 폴러 blob URL 만 사용 (Naver 와 동일)
+        const hasBlob = !!(s2?.url && !s2?.error);
+        const url = hasBlob ? s2.url : "";
         const fbId = `cctvFbL_${z.id}_${ch}`;
         const borderColor = isOffline ? "#dc2626" : ca?.level==="DANGER"?"#dc2626":ca?.level==="WARNING"?"#f59e0b":"rgba(255,255,255,0.2)";
-        // 셀 클릭도 그리드로 — 사용자 요청: 지도 CCTV 클릭하면 전체 CCTV가 큰 화면으로
         const cellClick = cctvEditMode
           ? `onclick="event.stopPropagation();window.__jamsaPickChannel&&window.__jamsaPickChannel(${ch})"`
           : `onclick="event.stopPropagation();window.__jamsaOpenCctvGrid&&window.__jamsaOpenCctvGrid('${z.id}','${chCsv}')"`;
-        const imgDisp = isOffline ? 'none' : '';
-        const fbDisp = isOffline ? 'flex' : 'none';
-        return `<div ${cellClick} title="CH${ch}${isOffline ? ' · 🔴 오프라인' : ' — 클릭하면 스팟 전체 CCTV를 크게 보기'}" style="position:relative;width:${cellW}px;height:${cellH}px;border-radius:3px;overflow:hidden;border:1px solid ${borderColor};background:#0f172a;flex-shrink:0;cursor:pointer;">
+        const imgDisp = hasBlob ? '' : 'none';
+        const fbDisp = hasBlob ? 'none' : 'flex';
+        const fbIcon = isOffline ? '🔴' : '⏳';
+        const fbLabel = isOffline ? 'OFFLINE' : '로딩';
+        const fbColor = isOffline ? '#fca5a5' : 'rgba(255,255,255,0.45)';
+        const fbBg = isOffline ? 'rgba(60,10,10,0.93)' : 'rgba(15,23,42,0.93)';
+        return `<div ${cellClick} title="CH${ch}${isOffline ? ' · 🔴 오프라인' : hasBlob ? ' — 클릭하면 스팟 전체 CCTV 크게 보기' : ' · ⏳ 폴링 대기 중'}" style="position:relative;width:${cellW}px;height:${cellH}px;border-radius:3px;overflow:hidden;border:1px solid ${borderColor};background:#0f172a;flex-shrink:0;cursor:pointer;">
           <img data-cctv-marker-ch="${ch}" src="${url}" style="width:100%;height:100%;object-fit:cover;display:${imgDisp};" onerror="this.style.display='none';var fb=document.getElementById('${fbId}');if(fb)fb.style.display='flex';"/>
-          <div id="${fbId}" style="display:${fbDisp};position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:${isOffline?'#fca5a5':'rgba(255,255,255,0.6)'};background:${isOffline?'rgba(60,10,10,0.93)':'rgba(15,23,42,0.93)'};">
-            <div style="font-size:${nCh===1?'16':'11'}px;">${isOffline?'🔴':'📷'}</div>
+          <div id="${fbId}" style="display:${fbDisp};position:absolute;inset:0;flex-direction:column;align-items:center;justify-content:center;color:${fbColor};background:${fbBg};">
+            <div style="font-size:${nCh===1?'16':'11'}px;">${fbIcon}</div>
             <div style="font-size:${nCh===1?'8':'7'}px;font-weight:700;margin-top:1px;">CH${ch}</div>
-            ${isOffline ? `<div style="font-size:${nCh===1?'7':'6'}px;color:#fca5a5;font-weight:800;margin-top:1px;letter-spacing:0.3px;">OFFLINE</div>` : ''}
+            <div style="font-size:${nCh===1?'7':'6'}px;color:${fbColor};font-weight:800;margin-top:1px;letter-spacing:0.3px;">${fbLabel}</div>
           </div>
           <div style="position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(0,0,0,0.72),transparent);padding:1px 3px;font-size:${nCh===1?'8':'7'}px;color:#fff;font-weight:800;">CH${ch}</div>
           ${ca?.level==="DANGER"?`<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(220,38,38,0.96);padding:1px 2px;font-size:7px;color:#fff;font-weight:900;text-align:center;">🚨</div>`:ca?.level==="WARNING"?`<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(245,158,11,0.96);padding:1px 2px;font-size:7px;color:#fff;font-weight:900;text-align:center;">⚠️</div>`:''}
