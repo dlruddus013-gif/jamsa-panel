@@ -11,6 +11,8 @@
 //      "로컬 브릿지" 입력란에 http://localhost:5555 (또는 박물관 PC LAN IP:5555)
 // ────────────────────────────────────────────────────────────────────
 const http = require('http');
+const https = require('https');
+const { URL } = require('url');
 
 const PORT = 5555;
 
@@ -277,3 +279,98 @@ server.listen(PORT, () => {
   console.log(`   http://localhost:${PORT}  (또는 LAN IP:${PORT})`);
   console.log('═══════════════════════════════════════════════════');
 });
+
+// ─── 연결 워커 ─────────────────────────────────────────────────────
+const workerState = {
+  running: false,
+  retryCount: 0,
+  lastError: null,
+  lastConnectedAt: null,
+  backoffTimer: null,
+  connect: null,
+};
+
+function resetReconnect() {
+  const previousRetryCount = workerState.retryCount;
+  workerState.retryCount = 0;
+  if (workerState.backoffTimer) {
+    clearTimeout(workerState.backoffTimer);
+    workerState.backoffTimer = null;
+  }
+  if (typeof workerState.connect === 'function') {
+    setImmediate(() => {
+      try { workerState.connect(); }
+      catch (e) { workerState.lastError = e && e.message ? e.message : String(e); }
+    });
+  }
+  return { ok: true, previousRetryCount };
+}
+
+function getWorkerStatus() {
+  return {
+    running: workerState.running,
+    retryCount: workerState.retryCount,
+    lastError: workerState.lastError,
+    lastConnectedAt: workerState.lastConnectedAt,
+  };
+}
+
+// ─── Heartbeat 루프 ─────────────────────────────────────────────────
+// 30초마다 getWorkerStatus() 결과를 Supabase service_status 테이블에 upsert.
+// 비활성화: SUPABASE_URL / SUPABASE_SERVICE_KEY 둘 중 하나라도 비어있으면 no-op.
+const HEARTBEAT_INTERVAL_MS = 30000;
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const SERVICE_NAME = process.env.SERVICE_NAME || 'connection-worker';
+
+function sendHeartbeat() {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return;
+  let url;
+  try {
+    url = new URL(`${SUPABASE_URL.replace(/\/+$/, '')}/rest/v1/service_status?on_conflict=name`);
+  } catch (e) { return; }
+
+  const status = getWorkerStatus();
+  const now = new Date().toISOString();
+  const payload = JSON.stringify({
+    name: SERVICE_NAME,
+    running: !!status.running,
+    retry_count: Number(status.retryCount) || 0,
+    last_heartbeat: now,
+    updated_at: now,
+  });
+
+  const lib = url.protocol === 'https:' ? https : http;
+  const req = lib.request({
+    method: 'POST',
+    hostname: url.hostname,
+    port: url.port || (url.protocol === 'https:' ? 443 : 80),
+    path: url.pathname + url.search,
+    headers: {
+      'apikey': SUPABASE_SERVICE_KEY,
+      'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(payload),
+      'Prefer': 'resolution=merge-duplicates,return=minimal',
+    },
+    timeout: 8000,
+  }, (res) => {
+    res.on('data', () => {});
+    res.on('end', () => {
+      if (res.statusCode >= 400) {
+        console.warn(`[heartbeat] HTTP ${res.statusCode}`);
+      }
+    });
+  });
+  req.on('timeout', () => req.destroy());
+  req.on('error', (e) => console.warn(`[heartbeat] ${e.message}`));
+  req.write(payload);
+  req.end();
+}
+
+if (SUPABASE_URL && SUPABASE_SERVICE_KEY) {
+  setImmediate(sendHeartbeat);
+  setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS).unref?.();
+}
+
+module.exports = { resetReconnect, getWorkerStatus };

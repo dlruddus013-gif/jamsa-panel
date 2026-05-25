@@ -17,6 +17,9 @@ import keys from '../api_handlers/keys.js';
 import laborAdvice from '../api_handlers/labor-advice.js';
 import smsSend from '../api_handlers/sms-send.js';
 import smsScheduler from '../api_handlers/sms-scheduler.js';
+import surveySubmit from '../api_handlers/survey-submit.js';
+import couponVerify from '../api_handlers/coupon-verify.js';
+import bookingCreate from '../api_handlers/booking-create.js';
 import notifySend from '../api_handlers/notify-send.js';
 import openbankingSync from '../api_handlers/openbanking-sync.js';
 import operationStats from '../api_handlers/operation-stats.js';
@@ -62,6 +65,9 @@ const routes = {
   'labor-advice': laborAdvice,
   'sms-send': smsSend,
   'sms-scheduler': smsScheduler,
+  'survey-submit': surveySubmit,
+  'coupon-verify': couponVerify,
+  'booking-create': bookingCreate,
   'notify-send': notifySend,
   'openbanking-sync': openbankingSync,
   'operation-stats': operationStats,

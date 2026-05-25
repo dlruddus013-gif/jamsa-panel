@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>잠사박물관 무료 입장권</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Noto Sans KR','Apple SD Gothic Neo',sans-serif}
+body{background:linear-gradient(135deg,#5D3A6B,#1e1b4b);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.ticket{background:#fff;border-radius:20px;max-width:380px;width:100%;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,0.3);position:relative}
+.ticket::before,.ticket::after{content:'';position:absolute;left:50%;transform:translateX(-50%);width:24px;height:24px;background:linear-gradient(135deg,#5D3A6B,#1e1b4b);border-radius:50%}
+.ticket::before{top:240px;box-shadow:-180px 0 0 #5D3A6B,180px 0 0 #5D3A6B}
+header{background:linear-gradient(135deg,#fbbf24,#f59e0b);padding:24px;text-align:center;color:#78350f}
+header .label{font-size:11px;font-weight:800;letter-spacing:3px;margin-bottom:6px}
+header h1{font-size:22px;font-weight:900;margin-bottom:4px}
+header .sub{font-size:11px;opacity:0.9}
+.qr-section{padding:30px 24px;text-align:center;background:#fff}
+.qr-wrap{display:inline-block;padding:16px;background:#fff;border:3px solid #fbbf24;border-radius:14px}
+#qrcode canvas{display:block}
+.code-display{font-family:monospace;font-size:18px;font-weight:900;color:#78350f;letter-spacing:2px;margin-top:14px}
+.divider{padding:16px 24px 0;display:flex;align-items:center;gap:10px;color:#cbd5e1}
+.divider .line{flex:1;height:1px;background:#e2e8f0}
+.divider .text{font-size:10px;color:#94a3b8;font-weight:600}
+.details{padding:0 24px 24px}
+.detail-row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px dashed #e2e8f0;font-size:12px}
+.detail-row:last-child{border-bottom:none}
+.detail-row .k{color:#94a3b8;font-weight:600}
+.detail-row .v{color:#1e293b;font-weight:700}
+.status-badge{display:inline-block;padding:4px 12px;border-radius:999px;font-size:11px;font-weight:800}
+.status-badge.valid{background:#d1fae5;color:#065f46}
+.status-badge.used{background:#fee2e2;color:#991b1b}
+.status-badge.expired{background:#e2e8f0;color:#475569}
+footer{background:#f8fafc;padding:14px 24px;text-align:center;border-top:1px solid #e2e8f0}
+footer .note{font-size:10px;color:#94a3b8;line-height:1.6}
+.staff-section{background:#fef3c7;padding:14px 24px;border-top:2px dashed #fbbf24}
+.staff-section .title{font-size:11px;font-weight:800;color:#78350f;margin-bottom:8px;text-align:center}
+.staff-section button{width:100%;padding:12px;background:#78350f;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:800;cursor:pointer}
+.staff-section button:disabled{opacity:0.5;cursor:not-allowed}
+.loading,.error{padding:60px 24px;text-align:center;color:#fff;background:rgba(0,0,0,0.3);border-radius:20px;max-width:380px;width:100%}
+.spinner{display:inline-block;width:36px;height:36px;border:3px solid rgba(255,255,255,0.2);border-top-color:#fbbf24;border-radius:50%;animation:spin 0.8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="loadingView" class="loading">
+  <div class="spinner"></div>
+  <div style="margin-top:14px;font-size:14px">입장권 정보 확인 중...</div>
+</div>
+
+<div id="ticketView" class="ticket" style="display:none">
+  <header>
+    <div class="label">한국잠사플레이팜</div>
+    <h1>🎫 무료 입장권</h1>
+    <div class="sub">JAMSA MUSEUM FREE PASS</div>
+  </header>
+
+  <div class="qr-section">
+    <div class="qr-wrap" id="qrcode"></div>
+    <div class="code-display" id="codeDisplay">—</div>
+    <div id="statusBadge" style="margin-top:10px"></div>
+  </div>
+
+  <div class="divider"><span class="line"></span><span class="text">상세 정보</span><span class="line"></span></div>
+  <div class="details">
+    <div class="detail-row"><span class="k">종류</span><span class="v" id="ctype">—</span></div>
+    <div class="detail-row"><span class="k">발급일</span><span class="v" id="issued">—</span></div>
+    <div class="detail-row"><span class="k">유효기한</span><span class="v" id="expires">—</span></div>
+    <div class="detail-row" id="usedRow" style="display:none"><span class="k">사용일</span><span class="v" id="usedAt">—</span></div>
+  </div>
+
+  <div id="staffSection" class="staff-section" style="display:none">
+    <div class="title">🔒 매표소 직원 전용</div>
+    <button id="useBtn">✅ 사용 처리 (1회만 가능)</button>
+  </div>
+
+  <footer>
+    <div class="note">
+      매표소에서 본 화면(QR)을 제시하시면 무료 입장 가능합니다.<br>
+      ⚠️ 사용 후 재발급 불가 — 입장 시 직원이 사용 처리합니다.
+    </div>
+  </footer>
+</div>
+
+<div id="errorView" class="error" style="display:none">
+  <div style="font-size:48px">⚠️</div>
+  <h2 style="font-size:18px;margin:10px 0">유효하지 않은 입장권</h2>
+  <div id="errorMsg" style="font-size:13px;color:rgba(255,255,255,0.85)"></div>
+</div>
+
+<script>
+const code = (location.pathname.match(/\/coupon\/(.+?)$/) || location.search.match(/[?&]code=([^&]+)/) || [])[1];
+const isStaff = location.search.includes('staff=1');
+
+function show(view) {
+  for (const id of ['loadingView','ticketView','errorView']) {
+    document.getElementById(id).style.display = id === view ? 'block' : 'none';
+  }
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+async function load() {
+  if (!code) {
+    show('errorView');
+    document.getElementById('errorMsg').textContent = 'URL에 입장권 코드가 없습니다';
+    return;
+  }
+  try {
+    const r = await fetch(`/api/coupon-verify?code=${encodeURIComponent(code)}`);
+    const d = await r.json();
+    if (!d.ok) {
+      show('errorView');
+      document.getElementById('errorMsg').textContent = d.error === 'coupon_not_found' ? '입장권을 찾을 수 없습니다' : (d.message || d.error);
+      return;
+    }
+    const c = d.coupon;
+    document.getElementById('codeDisplay').textContent = c.code;
+    document.getElementById('ctype').textContent = c.coupon_type === 'free_admission' ? '무료 입장권' : c.coupon_type;
+    document.getElementById('issued').textContent = fmtDate(c.issued_at);
+    document.getElementById('expires').textContent = fmtDate(c.expires_at);
+    if (c.used) {
+      document.getElementById('usedRow').style.display = 'flex';
+      document.getElementById('usedAt').textContent = fmtDate(c.used_at);
+    }
+    // 상태 배지
+    const badge = document.getElementById('statusBadge');
+    if (d.status === 'valid') badge.innerHTML = '<span class="status-badge valid">✓ 사용 가능</span>';
+    else if (d.status === 'used') badge.innerHTML = '<span class="status-badge used">✗ 사용 완료</span>';
+    else badge.innerHTML = '<span class="status-badge expired">⌛ 기한 만료</span>';
+
+    // QR 생성
+    QRCode.toCanvas(document.getElementById('qrcode'), `${location.origin}/coupon/${c.code}?staff=1`, {
+      width: 200, color: { dark: '#1e293b', light: '#ffffff' }, margin: 1,
+    });
+
+    // 매표소 모드 (staff=1) — 사용 처리 버튼
+    if (isStaff && d.status === 'valid') {
+      document.getElementById('staffSection').style.display = 'block';
+      document.getElementById('useBtn').onclick = async () => {
+        if (!confirm(`이 입장권을 사용 처리하시겠습니까?\n\n${c.code}\n\n* 한 번만 가능합니다`)) return;
+        const btn = document.getElementById('useBtn');
+        btn.disabled = true; btn.textContent = '⏳ 처리 중...';
+        try {
+          const r2 = await fetch('/api/coupon-verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: c.code, action: 'use', used_by: 'staff' }),
+          });
+          const d2 = await r2.json();
+          if (d2.ok) {
+            alert('✅ 사용 처리 완료');
+            location.reload();
+          } else {
+            alert('실패: ' + (d2.message || d2.error));
+            btn.disabled = false; btn.textContent = '✅ 사용 처리 (1회만 가능)';
+          }
+        } catch (e) {
+          alert('네트워크 오류: ' + e.message);
+          btn.disabled = false; btn.textContent = '✅ 사용 처리 (1회만 가능)';
+        }
+      };
+    }
+
+    show('ticketView');
+  } catch (e) {
+    show('errorView');
+    document.getElementById('errorMsg').textContent = '네트워크 오류: ' + e.message;
+  }
+}
+load();
+</script>
+</body>
+</html>

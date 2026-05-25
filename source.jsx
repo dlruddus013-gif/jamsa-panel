@@ -30407,6 +30407,7 @@ function WorkScheduleModule({ currentUser }) {
    ============================================================ */
 function GroupReservationModule() {
   const [fullscreen, setFullscreen] = useState(false);
+  const [smsPanelOpen, setSmsPanelOpen] = useState(false);
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 100px)", background: "#faf6eb" }}>
       <div style={{
@@ -30417,10 +30418,21 @@ function GroupReservationModule() {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <strong style={{ fontSize: 13, fontWeight: 800 }}>🎫 단체예약관리 v2.6.1</strong>
           <span style={{ fontSize: 10, opacity: 0.9 }}>
-            단체관광·교육 프로그램 · 예약/입금/배차/통계 · 1,502건 시드
+            단체관광·교육 · 예약/입금/배차/통계
           </span>
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <button onClick={() => setSmsPanelOpen(v => !v)}
+            title="뿌리오 SMS · 만족도 설문 · 경품 발급 관리"
+            style={{
+              padding: "4px 10px", fontSize: 10, fontWeight: 700, cursor: "pointer",
+              background: smsPanelOpen ? "#fbbf24" : "rgba(0,0,0,0.25)",
+              color: smsPanelOpen ? "#78350f" : "#fff",
+              border: smsPanelOpen ? "1px solid #fbbf24" : "1px solid rgba(255,255,255,0.3)",
+              borderRadius: 5,
+            }}>
+            📲 SMS · 설문 {smsPanelOpen ? "ON" : "OFF"}
+          </button>
           <button onClick={() => setFullscreen(v => !v)}
             style={{
               padding: "4px 10px", fontSize: 10, fontWeight: 700, cursor: "pointer",
@@ -30439,18 +30451,21 @@ function GroupReservationModule() {
           </a>
         </div>
       </div>
-      <iframe
-        src="/group-reservation.html"
-        title="단체예약관리"
-        style={{
-          flex: 1, width: "100%", minHeight: 600, border: "none", background: "#faf6eb",
-          ...(fullscreen ? {
-            position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
-            width: "100vw", height: "100vh", zIndex: 9999, minHeight: "100vh",
-          } : {}),
-        }}
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals allow-popups-to-escape-sandbox allow-presentation"
-      />
+      <div style={{ flex: 1, display: "grid", gridTemplateColumns: smsPanelOpen ? "1fr 360px" : "1fr", minHeight: 0 }}>
+        <iframe
+          src="/group-reservation.html"
+          title="단체예약관리"
+          style={{
+            width: "100%", height: "100%", minHeight: 600, border: "none", background: "#faf6eb",
+            ...(fullscreen ? {
+              position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+              width: "100vw", height: "100vh", zIndex: 9999, minHeight: "100vh",
+            } : {}),
+          }}
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals allow-popups-to-escape-sandbox allow-presentation"
+        />
+        {smsPanelOpen && <ReservationSmsPanel />}
+      </div>
       {fullscreen && (
         <button onClick={() => setFullscreen(false)}
           style={{
@@ -30462,6 +30477,196 @@ function GroupReservationModule() {
           ✕ 전체화면 종료
         </button>
       )}
+    </div>
+  );
+}
+
+// 단체예약 SMS · 설문 · 경품 사이드 패널
+function ReservationSmsPanel() {
+  const [tab, setTab] = useState("send"); // send | logs | scheduler
+  const [smsTo, setSmsTo] = useState("");
+  const [smsContent, setSmsContent] = useState("[잠사박물관] ");
+  const [sending, setSending] = useState(false);
+  const [sendResult, setSendResult] = useState(null);
+  const [status, setStatus] = useState(null);
+  const [logs, setLogs] = useState(null);
+
+  useEffect(() => {
+    fetch("/api/sms-send", { method: "GET" }).then(r => r.json()).then(setStatus).catch(() => {});
+  }, []);
+
+  const send = async () => {
+    if (!smsTo || !smsContent) { alert("수신번호 + 내용 모두 입력"); return; }
+    setSending(true); setSendResult(null);
+    try {
+      const r = await fetch("/api/sms-send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: smsTo, content: smsContent, kind: "manual" }),
+      });
+      const d = await r.json();
+      setSendResult(d);
+    } catch (e) {
+      setSendResult({ ok: false, message: e.message });
+    } finally { setSending(false); }
+  };
+
+  const triggerScheduler = async () => {
+    try {
+      const r = await fetch("/api/sms-scheduler");
+      const d = await r.json();
+      alert(`스케줄러 실행 결과:\n예약: ${JSON.stringify(d.scheduled)}\n처리: ${JSON.stringify(d.processed)}`);
+    } catch (e) { alert(e.message); }
+  };
+
+  const isReady = status?.configured?.account && status?.configured?.api_key && status?.configured?.sender;
+
+  return (
+    <div style={{ background: "#1e293b", color: "#f1f5f9", borderLeft: "1px solid #334155",
+      display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+      <div style={{ padding: "12px 14px", background: "linear-gradient(135deg,#1e1b4b,#5D3A6B)",
+        borderBottom: "1px solid #334155" }}>
+        <div style={{ fontSize: 13, fontWeight: 800 }}>📲 뿌리오 SMS · 설문 · 경품</div>
+        <div style={{ fontSize: 9, opacity: 0.85, marginTop: 3 }}>
+          {isReady
+            ? "✅ 백엔드 연결됨"
+            : "⚠️ Vercel 환경변수 (PPURIO_ACCOUNT/API_KEY/SENDER) 미설정"}
+        </div>
+      </div>
+
+      {/* 탭 */}
+      <div style={{ display: "flex", borderBottom: "1px solid #334155" }}>
+        {[
+          { k: "send", l: "✉️ 발송" },
+          { k: "logs", l: "📋 로그" },
+          { k: "scheduler", l: "⏰ 스케줄러" },
+        ].map(t => (
+          <button key={t.k} onClick={() => setTab(t.k)}
+            style={{ flex: 1, padding: "10px 8px", background: tab === t.k ? "#334155" : "transparent",
+              border: "none", color: tab === t.k ? "#fbbf24" : "#94a3b8",
+              cursor: "pointer", fontSize: 11, fontWeight: 700, borderBottom: tab === t.k ? "2px solid #fbbf24" : "none" }}>
+            {t.l}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto", padding: 14 }}>
+        {tab === "send" && (
+          <div>
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, display: "block", marginBottom: 4 }}>수신번호</label>
+              <input type="tel" value={smsTo} onChange={e => setSmsTo(e.target.value)}
+                placeholder="010-1234-5678"
+                style={{ width: "100%", padding: "8px 10px", fontSize: 12, background: "#0f172a",
+                  color: "#f1f5f9", border: "1px solid #334155", borderRadius: 5, fontFamily: "monospace" }} />
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, display: "block", marginBottom: 4 }}>메시지 본문</label>
+              <textarea value={smsContent} onChange={e => setSmsContent(e.target.value)}
+                style={{ width: "100%", padding: "8px 10px", fontSize: 12, background: "#0f172a",
+                  color: "#f1f5f9", border: "1px solid #334155", borderRadius: 5, minHeight: 110,
+                  fontFamily: "inherit", resize: "vertical" }} />
+              <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 4 }}>
+                {smsContent.length} / 2000자
+                {smsContent.length > 90 ? " · LMS 자동 전환" : " · SMS"}
+              </div>
+            </div>
+            <button onClick={send} disabled={sending || !isReady}
+              style={{ width: "100%", padding: 12,
+                background: !isReady ? "#475569" : sending ? "#92400e" : "linear-gradient(135deg,#7c3aed,#5b21b6)",
+                color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 800,
+                cursor: (sending || !isReady) ? "not-allowed" : "pointer" }}>
+              {sending ? "⏳ 발송 중..." : "🚀 즉시 발송"}
+            </button>
+            {sendResult && (
+              <div style={{ marginTop: 10, padding: 10, borderRadius: 5, fontSize: 11,
+                background: sendResult.ok ? "rgba(22,163,74,0.2)" : "rgba(220,38,38,0.2)",
+                border: `1px solid ${sendResult.ok ? "#16a34a" : "#dc2626"}`,
+                color: sendResult.ok ? "#86efac" : "#fca5a5" }}>
+                {sendResult.ok
+                  ? `✅ 발송 완료 · messageKey: ${sendResult.messageKey} · ${sendResult.elapsedMs}ms`
+                  : `❌ ${sendResult.message || sendResult.error}`}
+              </div>
+            )}
+            <div style={{ marginTop: 14, padding: 10, background: "#0f172a", borderRadius: 5, fontSize: 10, color: "#94a3b8", lineHeight: 1.7 }}>
+              💡 사전 등록된 5개 템플릿이 자동 발송됩니다:
+              <ul style={{ marginLeft: 16, marginTop: 4 }}>
+                <li>예약 시 → booking_confirm (즉시)</li>
+                <li>D-14 → d14_reminder (일정 공유)</li>
+                <li>D-1 → d1_arrival_confirm (도착시간 재확인)</li>
+                <li>당일 → 도착 10분 전 자동 알림</li>
+                <li>방문 다음날 → survey_invite (설문 + 경품)</li>
+              </ul>
+            </div>
+          </div>
+        )}
+
+        {tab === "logs" && (
+          <div>
+            <button onClick={async () => {
+              try {
+                const sb = window.__supabase;
+                if (!sb) { setLogs({ error: "supabase 미연결" }); return; }
+                const { data, error } = await sb.from("res_sms_logs")
+                  .select("kind, recipient, status, content, error_message, sent_at")
+                  .order("sent_at", { ascending: false }).limit(20);
+                if (error) setLogs({ error: error.message });
+                else setLogs({ data });
+              } catch (e) { setLogs({ error: e.message }); }
+            }}
+              style={{ width: "100%", padding: 10, background: "#334155", color: "#f1f5f9", border: "none", borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: "pointer", marginBottom: 10 }}>
+              🔄 최근 20건 새로고침
+            </button>
+            {logs?.error && <div style={{ color: "#fca5a5", fontSize: 11 }}>오류: {logs.error}</div>}
+            {logs?.data && logs.data.length === 0 && <div style={{ color: "#94a3b8", fontSize: 11, textAlign: "center", padding: 20 }}>발송 기록 없음</div>}
+            {logs?.data && logs.data.map((l, i) => (
+              <div key={i} style={{ padding: 8, marginBottom: 6, background: "#0f172a", borderRadius: 4, fontSize: 10,
+                borderLeft: `3px solid ${l.status === "sent" ? "#16a34a" : "#dc2626"}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                  <span style={{ fontWeight: 700, color: l.status === "sent" ? "#86efac" : "#fca5a5" }}>
+                    {l.status === "sent" ? "✓" : "✗"} {l.kind}
+                  </span>
+                  <span style={{ color: "#94a3b8" }}>{l.sent_at?.slice(11, 16)}</span>
+                </div>
+                <div style={{ color: "#cbd5e1", fontFamily: "monospace" }}>{l.recipient}</div>
+                <div style={{ color: "#94a3b8", marginTop: 3, lineHeight: 1.5, fontSize: 9 }}>
+                  {(l.content || "").slice(0, 80)}...
+                </div>
+                {l.error_message && <div style={{ color: "#fca5a5", marginTop: 3, fontSize: 9 }}>{l.error_message}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {tab === "scheduler" && (
+          <div>
+            <div style={{ padding: 10, background: "#0f172a", borderRadius: 5, fontSize: 10, color: "#cbd5e1", lineHeight: 1.7, marginBottom: 10 }}>
+              <strong style={{ color: "#fbbf24" }}>⏰ Vercel Cron — 매시 정각 자동 실행</strong>
+              <ul style={{ marginLeft: 16, marginTop: 4 }}>
+                <li>D-14 예약 검색 → 일정 공유 SMS 큐 등록</li>
+                <li>D-1 예약 검색 → 도착시간 재확인 SMS</li>
+                <li>당일 도착 10분 전 → 자동 알림 (정문 안내)</li>
+                <li>res_sms_queue 에 due 항목 50건씩 처리</li>
+              </ul>
+            </div>
+            <button onClick={triggerScheduler}
+              style={{ width: "100%", padding: 12, background: "linear-gradient(135deg,#16a34a,#15803d)",
+                color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+              ⚡ 지금 스케줄러 수동 실행
+            </button>
+            <div style={{ marginTop: 12, padding: 10, background: "#0f172a", borderRadius: 5, fontSize: 10, color: "#94a3b8" }}>
+              <strong style={{ color: "#cbd5e1" }}>설정 상태</strong>
+              <div style={{ marginTop: 6, fontFamily: "monospace", lineHeight: 1.7 }}>
+                <div>PPURIO_ACCOUNT: {status?.configured?.account ? "✅" : "❌"}</div>
+                <div>PPURIO_API_KEY: {status?.configured?.api_key ? "✅" : "❌"}</div>
+                <div>PPURIO_SENDER: {status?.configured?.sender ? "✅" : "❌"}</div>
+                <div>알림톡 프로필: {status?.configured?.kakao_profile ? "✅" : "—"}</div>
+                <div>로그 저장: {status?.configured?.supabase_logging ? "✅" : "❌ (SERVICE_ROLE_KEY 필요)"}</div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

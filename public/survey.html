@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>잠사박물관 만족도 설문 + 무료 입장권</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Noto Sans KR',sans-serif}
+body{background:linear-gradient(135deg,#0f172a,#1e1b4b);min-height:100vh;color:#f1f5f9;padding:16px;display:flex;justify-content:center;align-items:flex-start}
+.wrap{max-width:520px;width:100%;background:#1e293b;border-radius:16px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.4)}
+header{background:linear-gradient(135deg,#5D3A6B,#7B5290);padding:24px 22px;text-align:center}
+header h1{font-size:18px;font-weight:900;color:#fff;margin-bottom:6px}
+header .sub{font-size:11px;color:rgba(255,255,255,0.85);line-height:1.5}
+.gift{margin-top:12px;padding:8px 14px;background:rgba(0,0,0,0.3);border-radius:999px;font-size:11px;font-weight:700;color:#fde68a;display:inline-block}
+.body{padding:22px}
+.row{margin-bottom:20px}
+.label{font-size:13px;font-weight:700;color:#e2e8f0;margin-bottom:10px;display:flex;align-items:center;gap:6px}
+.required{color:#fca5a5;font-size:10px;font-weight:800;margin-left:4px}
+.stars{display:flex;gap:6px}
+.star{flex:1;height:48px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:22px;transition:all .15s;user-select:none}
+.star:hover{background:rgba(124,58,237,0.15);border-color:#7c3aed}
+.star.active{background:linear-gradient(135deg,#fbbf24,#f59e0b);border-color:#fbbf24;color:#0f172a;transform:scale(1.05)}
+.nps-grid{display:grid;grid-template-columns:repeat(11,1fr);gap:3px}
+.nps-btn{aspect-ratio:1;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:#cbd5e1;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s}
+.nps-btn:hover{background:rgba(124,58,237,0.15)}
+.nps-btn.active{background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border-color:#7c3aed}
+.nps-labels{display:flex;justify-content:space-between;font-size:9px;color:#94a3b8;margin-top:5px}
+textarea{width:100%;min-height:80px;padding:10px 12px;background:rgba(0,0,0,0.3);color:#f1f5f9;border:1px solid rgba(255,255,255,0.1);border-radius:8px;font-size:13px;font-family:inherit;resize:vertical}
+textarea:focus{outline:none;border-color:#7c3aed}
+.toggle-row{display:flex;align-items:center;gap:10px;padding:12px 14px;background:rgba(255,255,255,0.04);border-radius:8px;cursor:pointer;font-size:12px}
+.toggle-row input{width:18px;height:18px;cursor:pointer}
+button.submit{width:100%;padding:16px;background:linear-gradient(135deg,#5D3A6B,#7B5290);color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:900;cursor:pointer;letter-spacing:0.5px;box-shadow:0 4px 16px rgba(124,58,237,0.4)}
+button.submit:disabled{opacity:0.5;cursor:not-allowed}
+button.submit:active:not(:disabled){transform:scale(0.98)}
+.loading,.done,.error{padding:40px 22px;text-align:center}
+.done .checkmark{font-size:54px;margin-bottom:12px}
+.coupon-box{margin-top:14px;padding:18px;background:linear-gradient(135deg,#fbbf24,#f59e0b);border-radius:12px;color:#78350f}
+.coupon-box .label{color:#78350f;font-size:11px;font-weight:800;margin-bottom:6px;justify-content:center}
+.coupon-box .code{font-size:20px;font-weight:900;letter-spacing:2px;margin:8px 0;font-family:monospace}
+.coupon-box a{display:inline-block;margin-top:10px;padding:10px 18px;background:#78350f;color:#fde68a;text-decoration:none;border-radius:6px;font-size:12px;font-weight:800}
+.error{color:#fca5a5}
+.spinner{display:inline-block;width:32px;height:32px;border:3px solid rgba(255,255,255,0.2);border-top-color:#7c3aed;border-radius:50%;animation:spin 0.8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.meta{font-size:11px;color:#94a3b8;margin-top:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🪲 잠사박물관 방문 후기</h1>
+    <div class="sub">2분만 시간 내주시면 큰 도움이 됩니다</div>
+    <div class="gift">🎁 응답 완료 시 무료 입장권 1매 즉시 발급</div>
+  </header>
+
+  <div id="loadingView" class="loading">
+    <div class="spinner"></div>
+    <div style="margin-top:14px;color:#cbd5e1;font-size:13px">설문 정보 불러오는 중...</div>
+  </div>
+
+  <div id="formView" class="body" style="display:none">
+    <div id="meta" class="meta" style="margin-bottom:18px"></div>
+
+    <div class="row">
+      <div class="label">전반적인 만족도 <span class="required">필수</span></div>
+      <div class="stars" data-field="rating_overall">
+        <div class="star" data-v="1">1</div><div class="star" data-v="2">2</div>
+        <div class="star" data-v="3">3</div><div class="star" data-v="4">4</div>
+        <div class="star" data-v="5">5</div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="label">프로그램 만족도</div>
+      <div class="stars" data-field="rating_program">
+        <div class="star" data-v="1">1</div><div class="star" data-v="2">2</div>
+        <div class="star" data-v="3">3</div><div class="star" data-v="4">4</div>
+        <div class="star" data-v="5">5</div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="label">직원·해설 친절도</div>
+      <div class="stars" data-field="rating_staff">
+        <div class="star" data-v="1">1</div><div class="star" data-v="2">2</div>
+        <div class="star" data-v="3">3</div><div class="star" data-v="4">4</div>
+        <div class="star" data-v="5">5</div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="label">시설·청결 만족도</div>
+      <div class="stars" data-field="rating_facility">
+        <div class="star" data-v="1">1</div><div class="star" data-v="2">2</div>
+        <div class="star" data-v="3">3</div><div class="star" data-v="4">4</div>
+        <div class="star" data-v="5">5</div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="label">다른 분에게 추천하시겠어요? (NPS)</div>
+      <div class="nps-grid" data-field="nps">
+        <button type="button" class="nps-btn" data-v="0">0</button>
+        <button type="button" class="nps-btn" data-v="1">1</button>
+        <button type="button" class="nps-btn" data-v="2">2</button>
+        <button type="button" class="nps-btn" data-v="3">3</button>
+        <button type="button" class="nps-btn" data-v="4">4</button>
+        <button type="button" class="nps-btn" data-v="5">5</button>
+        <button type="button" class="nps-btn" data-v="6">6</button>
+        <button type="button" class="nps-btn" data-v="7">7</button>
+        <button type="button" class="nps-btn" data-v="8">8</button>
+        <button type="button" class="nps-btn" data-v="9">9</button>
+        <button type="button" class="nps-btn" data-v="10">10</button>
+      </div>
+      <div class="nps-labels"><span>👎 전혀</span><span>🤩 적극</span></div>
+    </div>
+
+    <div class="row">
+      <div class="label">좋았던 점 (자유 의견)</div>
+      <textarea id="comments" placeholder="누에 체험·해설·시설·접근성 등 — 좋았던 경험을 알려주세요"></textarea>
+    </div>
+
+    <div class="row">
+      <div class="label">개선했으면 하는 점</div>
+      <textarea id="improvement" placeholder="불편하거나 아쉬웠던 점을 알려주시면 다음 방문이 더 좋아집니다"></textarea>
+    </div>
+
+    <div class="row">
+      <label class="toggle-row">
+        <input type="checkbox" id="revisit" checked>
+        <span>다음에도 방문 의향이 있습니다</span>
+      </label>
+    </div>
+
+    <div class="row">
+      <label class="toggle-row">
+        <input type="checkbox" id="marketing">
+        <span>새 프로그램·할인 안내 SMS 수신 동의 (선택)</span>
+      </label>
+    </div>
+
+    <button class="submit" id="submitBtn">✨ 설문 제출 + 입장권 받기</button>
+    <div style="font-size:10px;color:#64748b;text-align:center;margin-top:10px">
+      개인정보는 만족도 분석·경품 발송에만 사용됩니다 (3년 보관 후 자동 폐기)
+    </div>
+  </div>
+
+  <div id="doneView" class="done" style="display:none">
+    <div class="checkmark">🎉</div>
+    <h2 style="font-size:17px;color:#fbbf24;margin-bottom:8px">설문 응답 완료!</h2>
+    <div style="color:#cbd5e1;font-size:13px">소중한 의견 감사합니다</div>
+    <div id="couponSection" style="display:none">
+      <div class="coupon-box">
+        <div class="label">🎫 무료 입장권 1매</div>
+        <div class="code" id="couponCode">—</div>
+        <div style="font-size:10px;opacity:0.85">6개월 이내 사용 · 매표소 QR 제시</div>
+        <a id="couponLink" href="#" target="_blank">QR 보기 + 저장</a>
+      </div>
+    </div>
+  </div>
+
+  <div id="errorView" class="error" style="display:none">
+    <div style="font-size:42px">⚠️</div>
+    <h2 style="color:#fca5a5;font-size:15px;margin:10px 0">설문 불러오기 실패</h2>
+    <div id="errorMsg" style="color:#cbd5e1;font-size:12px"></div>
+  </div>
+</div>
+
+<script>
+const token = (location.pathname.match(/\/survey\/(.+?)$/) || location.search.match(/[?&]token=([^&]+)/) || [])[1];
+const state = { rating_overall: null, rating_program: null, rating_staff: null, rating_facility: null, nps: null };
+
+function show(view) {
+  for (const id of ['loadingView','formView','doneView','errorView']) {
+    document.getElementById(id).style.display = id === view ? (view === 'formView' ? 'block' : 'block') : 'none';
+  }
+}
+
+if (!token) {
+  show('errorView');
+  document.getElementById('errorMsg').textContent = '유효하지 않은 URL입니다 (토큰 없음)';
+} else {
+  fetch(`/api/survey-submit?token=${encodeURIComponent(token)}`)
+    .then(r => r.json()).then(d => {
+      if (!d.ok) {
+        show('errorView');
+        document.getElementById('errorMsg').textContent = d.error === 'survey_not_found' ? '설문을 찾을 수 없습니다 (만료된 링크일 수 있어요)' : (d.message || d.error);
+        return;
+      }
+      if (d.survey.alreadyResponded) {
+        show('doneView');
+        if (d.survey.couponIssued) {
+          document.getElementById('couponSection').style.display = 'block';
+          document.getElementById('couponCode').textContent = '이미 발급된 입장권';
+          document.getElementById('couponLink').style.display = 'none';
+        }
+        return;
+      }
+      const meta = [];
+      if (d.survey.groupName) meta.push(`<strong>${d.survey.groupName}</strong>`);
+      if (d.survey.bookingDate) meta.push(`${d.survey.bookingDate} 방문`);
+      document.getElementById('meta').innerHTML = meta.join(' · ');
+      show('formView');
+    }).catch(e => {
+      show('errorView');
+      document.getElementById('errorMsg').textContent = '네트워크 오류: ' + e.message;
+    });
+}
+
+// 별점 클릭
+document.querySelectorAll('.stars').forEach(group => {
+  const field = group.dataset.field;
+  group.querySelectorAll('.star').forEach(s => {
+    s.onclick = () => {
+      const v = parseInt(s.dataset.v);
+      state[field] = v;
+      group.querySelectorAll('.star').forEach((x, i) => {
+        x.classList.toggle('active', i < v);
+      });
+    };
+  });
+});
+
+// NPS 클릭
+document.querySelectorAll('.nps-btn').forEach(b => {
+  b.onclick = () => {
+    state.nps = parseInt(b.dataset.v);
+    document.querySelectorAll('.nps-btn').forEach(x => x.classList.toggle('active', x === b));
+  };
+});
+
+document.getElementById('submitBtn').onclick = async () => {
+  if (!state.rating_overall) {
+    alert('전반적인 만족도(필수)를 선택해주세요');
+    return;
+  }
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true; btn.textContent = '⏳ 제출 중...';
+  try {
+    const r = await fetch('/api/survey-submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token,
+        ...state,
+        comments: document.getElementById('comments').value.trim() || null,
+        improvement_suggestions: document.getElementById('improvement').value.trim() || null,
+        would_revisit: document.getElementById('revisit').checked,
+        agreed_to_marketing: document.getElementById('marketing').checked,
+      }),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      alert((d.error === 'already_responded' ? '이미 응답하셨습니다' : (d.message || d.error)));
+      btn.disabled = false; btn.textContent = '✨ 설문 제출 + 입장권 받기';
+      return;
+    }
+    show('doneView');
+    if (d.couponCode) {
+      document.getElementById('couponSection').style.display = 'block';
+      document.getElementById('couponCode').textContent = d.couponCode;
+      document.getElementById('couponLink').href = d.couponUrl;
+    }
+  } catch (e) {
+    alert('제출 실패: ' + e.message);
+    btn.disabled = false; btn.textContent = '✨ 설문 제출 + 입장권 받기';
+  }
+};
+</script>
+</body>
+</html>

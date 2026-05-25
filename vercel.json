@@ -100,6 +100,8 @@
     { "source": "/m2", "destination": "/staff-checkin-v2.html" },
     { "source": "/roles", "destination": "/multirole-demo.html" },
     { "source": "/multirole", "destination": "/multirole-demo.html" },
+    { "source": "/survey/:token", "destination": "/survey.html" },
+    { "source": "/coupon/:code", "destination": "/coupon.html" },
     { "source": "/", "destination": "/index.html" }
   ],
   "crons": [
