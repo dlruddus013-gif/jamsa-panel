@@ -30589,6 +30589,16 @@ function AppInner() {
   // Shared audit log - every AI analysis, action creation, and completion is logged
   const [auditLog, setAuditLog] = useLocalStorage("jamsa_audit_log", []);
   const [showAuditLog, setShowAuditLog] = useState(false);
+  // 📱 모바일 햄버거 메뉴 (우측 시스템 도구 드로어)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [isMobileApp, setIsMobileApp] = useState(() => {
+    try { const w = window.innerWidth; return w > 0 && w <= 900; } catch (e) { return false; }
+  });
+  useEffect(() => {
+    const onResize = () => { try { const w = window.innerWidth; setIsMobileApp(w > 0 && w <= 900); } catch (e) {} };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   const [worklogs, setWorklogs] = useLocalStorage("jamsa_worklogs", []);
   const [showWorklog, setShowWorklog] = useState(false);
   const [showBackup, setShowBackup] = useState(false);
@@ -30615,17 +30625,69 @@ function AppInner() {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", fontFamily: "'Pretendard','Noto Sans KR',-apple-system,sans-serif", background: "#f5f5f5", overflow: "hidden" }}>
       <style>{`@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');*{box-sizing:border-box;margin:0;padding:0}
-        /* 모바일 상단 메뉴 가로 스크롤바 숨김 */
         .jamsa-modnav::-webkit-scrollbar, .jamsa-topbar-left::-webkit-scrollbar { height: 0; display: none; }
-        /* 📱 모바일에서 모듈 nav를 가로 스크롤로 */
-        @media (max-width: 768px) {
-          .jamsa-topbar { padding: 6px 10px !important; gap: 6px !important; }
-          .jamsa-topbar-title { font-size: 12px !important; }
-          .jamsa-modnav { padding: 2px !important; gap: 1px !important; }
-          .jamsa-modnav button { padding: 8px 10px !important; font-size: 12px !important; min-height: 38px !important; flex-shrink: 0 !important; }
-          .jamsa-topbar-right { gap: 4px !important; flex-wrap: wrap; }
-          .jamsa-topbar-right button { padding: 5px 8px !important; font-size: 10px !important; }
+
+        /* 📱 모바일/태블릿 (~900px) 메뉴 가시성 개선 */
+        @media (max-width: 900px) {
+          .jamsa-topbar { padding: 6px 10px !important; gap: 6px !important; flex-wrap: nowrap !important; }
+          .jamsa-topbar-title { display: none !important; }   /* 타이틀 숨김 — 좁은 화면 공간 절약 */
+          .jamsa-topbar-left { flex: 1 1 auto !important; min-width: 0 !important; position: relative; overflow: hidden; }
+          .jamsa-modnav {
+            padding: 3px !important; gap: 2px !important;
+            overflow-x: auto !important; overflow-y: hidden;
+            scrollbar-width: none;
+            -webkit-overflow-scrolling: touch;
+            flex-wrap: nowrap !important;
+            mask-image: linear-gradient(to right, transparent 0, black 12px, black calc(100% - 12px), transparent 100%);
+            -webkit-mask-image: linear-gradient(to right, transparent 0, black 12px, black calc(100% - 12px), transparent 100%);
+          }
+          .jamsa-modnav button, .jamsa-modnav a {
+            padding: 7px 11px !important; font-size: 12px !important;
+            min-height: 36px !important; flex-shrink: 0 !important;
+            white-space: nowrap;
+          }
+          /* 우측 시스템 도구는 햄버거 안으로 들어가서 보임. 헤더에는 ≡ 버튼 + 사용자 이름만 */
+          .jamsa-topbar-right { display: none !important; }
+          .jamsa-topbar-right-mobile { display: flex !important; gap: 6px; align-items: center; flex-shrink: 0; }
+          .jamsa-hamburger {
+            width: 38px; height: 38px; padding: 0 !important;
+            border-radius: 8px !important; border: 1px solid rgba(255,255,255,0.2) !important;
+            background: rgba(255,255,255,0.1) !important; color: #fff !important;
+            font-size: 18px !important; cursor: pointer; display: inline-flex !important;
+            align-items: center; justify-content: center; font-weight: 800;
+          }
+          .jamsa-hamburger:active { background: rgba(255,255,255,0.25) !important; }
+          /* 드로어 */
+          .jamsa-drawer-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 9998;
+            animation: jamsaDrawerFade 0.2s ease-out;
+          }
+          .jamsa-drawer {
+            position: fixed; top: 0; right: 0; bottom: 0; width: 280px;
+            background: linear-gradient(180deg,#0f172a,#1e293b);
+            box-shadow: -4px 0 20px rgba(0,0,0,0.4); z-index: 9999;
+            display: flex; flex-direction: column;
+            animation: jamsaDrawerIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+            overflow-y: auto;
+          }
+          @keyframes jamsaDrawerIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+          @keyframes jamsaDrawerFade { from { opacity: 0; } to { opacity: 1; } }
         }
+
+        /* 데스크탑 (>900px): 햄버거 + 모바일 우측 숨김 */
+        @media (min-width: 901px) {
+          .jamsa-hamburger, .jamsa-topbar-right-mobile { display: none !important; }
+        }
+
+        /* 드로어 내부 버튼 */
+        .jamsa-drawer-btn {
+          display: flex; align-items: center; gap: 10px; width: 100%;
+          padding: 14px 18px; background: transparent;
+          color: #e2e8f0; border: none; border-bottom: 1px solid rgba(255,255,255,0.08);
+          cursor: pointer; font-size: 13px; font-weight: 600; text-align: left;
+          font-family: inherit; transition: background 0.15s;
+        }
+        .jamsa-drawer-btn:active { background: rgba(255,255,255,0.08); }
       `}</style>
 
       {/* ─── Module switcher bar ─── */}
@@ -30736,7 +30798,18 @@ function AppInner() {
             </a>
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        {/* 📱 모바일 전용: 햄버거 + 사용자 이름만 표시 */}
+        <div className="jamsa-topbar-right-mobile" style={{ display: "none" }}>
+          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.7)", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {currentUser.name}
+          </span>
+          <button className="jamsa-hamburger" onClick={() => setMobileMenuOpen(true)} title="시스템 도구 열기">
+            ≡
+          </button>
+        </div>
+
+        {/* 데스크탑 우측 시스템 도구 (>900px) */}
+        <div className="jamsa-topbar-right" style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button data-jamsa-module="subagents" onClick={() => setModule("subagents")} title="자동 서브에이전트 관제"
             style={{ padding: "5px 10px", borderRadius: 6, background: autoAgentAlertCount > 0 ? "rgba(220,38,38,0.18)" : "rgba(124,58,237,0.18)", border: autoAgentAlertCount > 0 ? "1px solid rgba(248,113,113,0.45)" : "1px solid rgba(167,139,250,0.35)", color: "#fff", cursor: "pointer", fontSize: 11, fontWeight: 800, display: "flex", alignItems: "center", gap: 4 }}>
             🤖 서브에이전트 <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 10, background: autoAgentAlertCount > 0 ? "rgba(248,113,113,0.28)" : "rgba(167,139,250,0.25)", color: autoAgentAlertCount > 0 ? "#fecaca" : "#ddd6fe" }}>{autoAgentEnabled ? autoAgentReport.recommendations.length : "OFF"}</span>
@@ -30782,6 +30855,60 @@ function AppInner() {
           </button>
         </div>
       </div>
+
+      {/* 📱 모바일 햄버거 드로어 — 시스템 도구 모음 */}
+      {mobileMenuOpen && (
+        <>
+          <div className="jamsa-drawer-overlay" onClick={() => setMobileMenuOpen(false)} />
+          <div className="jamsa-drawer">
+            <div style={{ padding: "16px 18px", borderBottom: "1px solid rgba(255,255,255,0.12)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 800, color: "#fff" }}>{currentUser.name}</div>
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.55)", marginTop: 2 }}>
+                  {currentUser.dept} · {roleMeta.emoji} {roleMeta.name}
+                </div>
+              </div>
+              <button onClick={() => setMobileMenuOpen(false)}
+                style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(255,255,255,0.1)", border: "none", color: "#fff", cursor: "pointer", fontSize: 16, fontWeight: 800 }}>×</button>
+            </div>
+            <button className="jamsa-drawer-btn" onClick={() => { setMobileMenuOpen(false); setModule("subagents"); }}>
+              <span>🤖</span> <span>서브에이전트</span>
+              {autoAgentAlertCount > 0 && (
+                <span style={{ marginLeft: "auto", padding: "1px 7px", borderRadius: 999, background: "rgba(248,113,113,0.4)", color: "#fecaca", fontSize: 10, fontWeight: 800 }}>{autoAgentAlertCount}</span>
+              )}
+            </button>
+            <button className="jamsa-drawer-btn" onClick={() => { setMobileMenuOpen(false); setShowWorklog(true); }}>
+              <span>📒</span> <span>업무일지</span>
+              <span style={{ marginLeft: "auto", padding: "1px 7px", borderRadius: 999, background: "rgba(5,150,105,0.25)", color: "#6ee7b7", fontSize: 10, fontWeight: 800 }}>{worklogs.length}</span>
+            </button>
+            <button className="jamsa-drawer-btn" onClick={() => { setMobileMenuOpen(false); setShowAuditLog(true); }}>
+              <span>📋</span> <span>활동 기록</span>
+              <span style={{ marginLeft: "auto", padding: "1px 7px", borderRadius: 999, background: "rgba(59,91,219,0.25)", color: "#93c5fd", fontSize: 10, fontWeight: 800 }}>{auditLog.length}</span>
+            </button>
+            <button className="jamsa-drawer-btn" onClick={() => { setMobileMenuOpen(false); setShowBackup(true); }}>
+              <span>💾</span> <span>백업 · 복원</span>
+            </button>
+            <a className="jamsa-drawer-btn" href="#clouddb" onClick={() => { setMobileMenuOpen(false); window.location.hash = "clouddb"; setModule("clouddb"); }} style={{ textDecoration: "none" }}>
+              <span>☁️</span> <span>DB 클라우드</span>
+            </a>
+            {(role6 === "staff" || role6 === "lead" || role6 === "admin") && (
+              <>
+                <button className="jamsa-drawer-btn" onClick={() => { setMobileMenuOpen(false); setShowConsent(true); }}>
+                  <span>📜</span> <span>위치정보 동의 (v3.2)</span>
+                </button>
+                <button className="jamsa-drawer-btn" onClick={() => { setMobileMenuOpen(false); setShowCorrection(true); }}>
+                  <span>📝</span> <span>출퇴근 기록 정정</span>
+                </button>
+              </>
+            )}
+            <div style={{ flex: 1 }} />
+            <button className="jamsa-drawer-btn" onClick={() => { setMobileMenuOpen(false); logout(); }}
+              style={{ borderTop: "2px solid rgba(248,113,113,0.3)", background: "rgba(220,38,38,0.12)", color: "#fca5a5", marginTop: 8 }}>
+              <span>🚪</span> <span>로그아웃</span>
+            </button>
+          </div>
+        </>
+      )}
 
       {/* ─── Active module ─── */}
       <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
