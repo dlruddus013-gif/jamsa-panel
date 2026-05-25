@@ -84,6 +84,11 @@ export function PresenceTrackingPanel() {
   const [filter, setFilter]     = useState("all");  // all / ZONE_ENTER / ZONE_DWELL / IDLE_ALERT
   const [showGwEditor, setShowGwEditor] = useState(false);
   const [now, setNow] = useState(Date.now());
+  // 비콘 게이트웨이 인프라 (beacon_gateways + v_gateway_status + staff_beacons)
+  const [gatewayInfra, setGatewayInfra] = useState([]);
+  const [staffBeacons, setStaffBeacons] = useState([]);
+  const [showStaffBind, setShowStaffBind] = useState(false);
+  const [editingGwId, setEditingGwId] = useState(null);
   // 비콘→스팟 감지 로그 (localStorage 기반, Supabase 없어도 작동)
   const [localLogs, setLocalLogs] = useState(() => getPresenceLogs());
   // 새 감지 이벤트 수신 시 로그 갱신
@@ -203,11 +208,14 @@ export function PresenceTrackingPanel() {
   async function loadAll(sb) {
     setLoading(true); setErr(null);
     try {
-      const [pres, occ, act, gw] = await Promise.all([
+      const [pres, occ, act, gw, infra, sbsb] = await Promise.all([
         sb.from("v_current_presence").select("*"),
         sb.from("v_zone_occupancy").select("*"),
         sb.from("v_daily_activity").select("*").limit(100),
         sb.from("gateway_zone_map").select("*").order("zone_name"),
+        // 신규: 비콘 게이트웨이 인프라 (정찬주 전무 통보분 — 9곳)
+        sb.from("v_gateway_status").select("*"),
+        sb.from("staff_beacons").select("id, staff_id, beacon_uuid, beacon_label, issued_at, returned_at").is("returned_at", null),
       ]);
       if (pres.error) throw pres.error;
       setPresence(pres.data || []);
@@ -221,6 +229,9 @@ export function PresenceTrackingPanel() {
       setGwMap(merged);
       // 병합본을 localStorage 에도 미러링 (오프라인 대비)
       saveGwMapLocal(merged);
+      // 게이트웨이 인프라 (없으면 빈 배열 — 테이블 미적용 환경 호환)
+      setGatewayInfra(infra?.data || []);
+      setStaffBeacons(sbsb?.data || []);
     } catch (e) {
       setErr(e?.message || String(e));
       // Supabase 실패 시 localStorage 만 사용
@@ -228,6 +239,119 @@ export function PresenceTrackingPanel() {
       if (localRows.length > 0) setGwMap(localRows);
     } finally { setLoading(false); }
   }
+
+  // ───── 게이트웨이 인프라 액션 ─────
+  // BASE_ZONES + 사용자 커스텀 zone 모두 합쳐서 드롭다운 옵션 추출
+  const allSpotsForPicker = useMemo(() => {
+    const base = (typeof window !== "undefined" && Array.isArray(window.__jamsaBaseZones))
+      ? window.__jamsaBaseZones : [];
+    let custom = [];
+    try { custom = JSON.parse(localStorage.getItem("jamsa_custom_zones") || "[]"); } catch (e) {}
+    let zc = {};
+    try { zc = JSON.parse(localStorage.getItem("jamsa_zone_customizations") || "{}"); } catch (e) {}
+    const merged = [...base, ...custom].filter(z => !zc[z.id]?._deleted);
+    return merged.map(z => ({
+      id: z.id,
+      name: zc[z.id]?.name || z.name,
+      icon: zc[z.id]?.icon || z.icon || "📍",
+      lat: z.lat, lng: z.lng,
+    }));
+  }, [now]);
+
+  // CCTV 채널 자동 추천 (스팟 변경 시 gateway_zone_map 에 자동 입력)
+  const autoCctvForSpot = (spotId) => {
+    if (!spotId) return null;
+    try {
+      const zc = JSON.parse(localStorage.getItem("jamsa_zone_customizations") || "{}");
+      const userChs = zc[spotId]?.cctvChannels;
+      if (Array.isArray(userChs) && userChs.length > 0) return userChs[0];
+      const cm = JSON.parse(localStorage.getItem("jamsa_cctv_zone_map") || "{}");
+      if (Array.isArray(cm[spotId]) && cm[spotId].length > 0) return cm[spotId][0];
+      const auto = (typeof window !== "undefined") ? window.__jamsaCctvAutoMap : null;
+      if (auto && Array.isArray(auto[spotId]) && auto[spotId].length > 0) return auto[spotId][0];
+    } catch (e) {}
+    return null;
+  };
+
+  // gateway_zone_map 자동 동기화 — beacon_gateways 의 serial+spot 이 바뀌면
+  // 기존 presence-tracking 트리거가 정상 동작하도록 zone_map 도 같이 업데이트
+  async function syncGatewayZoneMap(serial, spotId, spotName) {
+    const sb = supabaseRef.current;
+    if (!sb || !serial || !spotId) return;
+    const cctvCh = autoCctvForSpot(spotId);
+    try {
+      await sb.from("gateway_zone_map").upsert({
+        gateway_serial: serial,
+        zone_id:        spotId,
+        zone_name:      spotName,
+        cctv_channel:   cctvCh,
+        dwell_threshold_min: 2,
+        updated_at:     new Date().toISOString(),
+      }, { onConflict: "gateway_serial" });
+    } catch (e) {
+      console.warn("[gateway-zone-map sync]", e.message);
+    }
+  }
+
+  const updateGwStatus = async (id, newStatus) => {
+    const sb = supabaseRef.current;
+    if (!sb) return alert("Supabase 미연결");
+    const row = gatewayInfra.find(g => g.id === id);
+    const patch = { install_status: newStatus, updated_at: new Date().toISOString() };
+    if (newStatus === "active" && !row?.installed_at) {
+      patch.installed_at = new Date().toISOString();
+    }
+    const { error } = await sb.from("beacon_gateways").update(patch).eq("id", id);
+    if (error) alert("저장 실패: " + error.message);
+    else loadAll(sb);
+  };
+
+  const updateGwSerial = async (id, serial) => {
+    const sb = supabaseRef.current;
+    if (!sb) return alert("Supabase 미연결");
+    const row = gatewayInfra.find(g => g.id === id);
+    const trimmed = (serial || "").trim();
+    const { error } = await sb.from("beacon_gateways")
+      .update({ gateway_serial: trimmed || null, updated_at: new Date().toISOString() }).eq("id", id);
+    if (error) { alert("저장 실패: " + error.message); return; }
+    // 스팟이 매핑돼 있으면 gateway_zone_map 도 함께 갱신
+    if (trimmed && row?.spot_id) {
+      await syncGatewayZoneMap(trimmed, row.spot_id, row.spot_name);
+    }
+    setEditingGwId(null);
+    loadAll(sb);
+  };
+
+  const updateGwSpot = async (id, spotId) => {
+    const sb = supabaseRef.current;
+    if (!sb) return alert("Supabase 미연결");
+    const row = gatewayInfra.find(g => g.id === id);
+    const spot = allSpotsForPicker.find(s => s.id === spotId);
+    if (!spot) return;
+    const patch = {
+      spot_id:   spot.id,
+      spot_name: spot.name,
+      lat:       spot.lat || row?.lat || null,
+      lng:       spot.lng || row?.lng || null,
+      updated_at: new Date().toISOString(),
+    };
+    const { error } = await sb.from("beacon_gateways").update(patch).eq("id", id);
+    if (error) { alert("저장 실패: " + error.message); return; }
+    // 시리얼이 있으면 gateway_zone_map 도 함께 갱신
+    if (row?.gateway_serial) {
+      await syncGatewayZoneMap(row.gateway_serial, spot.id, spot.name);
+    }
+    loadAll(sb);
+  };
+
+  const gwInfraSummary = useMemo(() => {
+    const active   = gatewayInfra.filter(g => g.install_status === "active");
+    const planned  = gatewayInfra.filter(g => g.install_status === "planned");
+    const offline  = gatewayInfra.filter(g => g.install_status === "offline" || g.install_status === "maintenance");
+    const online   = active.filter(g => g.live_status === "online").length;
+    const detections24h = gatewayInfra.reduce((s, g) => s + (g.detections_24h || 0), 0);
+    return { active, planned, offline, online, detections24h, total: gatewayInfra.length };
+  }, [gatewayInfra]);
 
   function subscribeRealtime(sb) {
     if (channelRef.current) return;
@@ -239,6 +363,8 @@ export function PresenceTrackingPanel() {
         })
         .on("postgres_changes", { event: "*", schema: "public", table: "presence_events" }, () => loadAll(sb))
         .on("postgres_changes", { event: "*", schema: "public", table: "activity_log" }, () => loadAll(sb))
+        .on("postgres_changes", { event: "*", schema: "public", table: "beacon_gateways" }, () => loadAll(sb))
+        .on("postgres_changes", { event: "*", schema: "public", table: "staff_beacons"   }, () => loadAll(sb))
         .subscribe();
     } catch (e) {}
   }
@@ -269,9 +395,12 @@ export function PresenceTrackingPanel() {
           <div style={{ fontSize: 22 }}>📡</div>
           <div>
             <div data-banner-title style={{ fontSize: 13, fontWeight: 800 }}>
-              실시간 위치 추적 · 행동 분석
-              <span style={{ marginLeft: 8, fontSize: 10, padding: "2px 7px", borderRadius: 4, background: "rgba(255,255,255,0.18)" }}>
-                현장 {stats.presentNow}명 · 오늘 이벤트 {stats.eventsToday}건
+              실시간 위치 추적 · 행동 분석 · 게이트웨이 인프라
+              <span style={{ marginLeft: 8, fontSize: 10, padding: "2px 7px", borderRadius: 4, background: "rgba(34,197,94,0.25)" }}>
+                📡 {gwInfraSummary.active.length}/{gwInfraSummary.total} 가동
+              </span>
+              <span style={{ marginLeft: 4, fontSize: 10, padding: "2px 7px", borderRadius: 4, background: "rgba(255,255,255,0.18)" }}>
+                현장 {stats.presentNow}명 · 오늘 {stats.eventsToday}건
                 {stats.idleAlerts > 0 && <> · ⚠ {stats.idleAlerts}</>}
               </span>
             </div>
@@ -291,20 +420,27 @@ export function PresenceTrackingPanel() {
           <div style={{ fontSize: 22 }}>📡</div>
           <div>
             <div style={{ fontSize: 13, fontWeight: 800 }}>
-              실시간 위치 추적 · 행동 분석 · 일과별 로그
+              실시간 위치 추적 · 행동 분석 · 게이트웨이 인프라
               <span style={{ marginLeft: 8, fontSize: 10, padding: "2px 7px", borderRadius: 4, background: "rgba(255,255,255,0.18)" }}>
-                BLE GATEWAY · ZONE · CCTV · LOG
+                GATEWAY · BEACON · ZONE · CCTV · LOG
               </span>
             </div>
             <div style={{ fontSize: 10, opacity: 0.85, marginTop: 2 }}>
-              구역별 게이트웨이 비콘 감지 → 자동 행동 추론 → CCTV 연동 → 실시간 일과 로그
+              {gwInfraSummary.total > 0
+                ? `📡 게이트웨이 ${gwInfraSummary.active.length}/${gwInfraSummary.total} 가동 (온라인 ${gwInfraSummary.online}) · 휴대비콘 ${staffBeacons.length}개 · 현장 ${stats.presentNow}명 · 24h 감지 ${gwInfraSummary.detections24h.toLocaleString()}건`
+                : "구역별 게이트웨이 비콘 감지 → 자동 행동 추론 → CCTV 연동 → 실시간 일과 로그"}
             </div>
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <button onClick={() => setShowStaffBind(true)}
+            title="직원에게 휴대 비콘 매핑"
+            style={{ padding: "6px 12px", background: "linear-gradient(135deg,#0891b2,#0e7490)", border: "1px solid rgba(255,255,255,0.25)", borderRadius: 6, fontSize: 11, fontWeight: 700, color: "#fff", cursor: "pointer" }}>
+            👥 직원-비콘 매핑 <span style={{ fontSize: 9, opacity: 0.85 }}>({staffBeacons.length})</span>
+          </button>
           <button onClick={() => setShowGwEditor(true)}
             style={{ padding: "6px 12px", background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.25)", borderRadius: 6, fontSize: 11, fontWeight: 700, color: "#fff", cursor: "pointer" }}>
-            ⚙ 게이트웨이 매핑 <span style={{ fontSize: 9, opacity: 0.7 }}>({gwMap.length})</span>
+            ⚙ Zone 매핑 <span style={{ fontSize: 9, opacity: 0.7 }}>({gwMap.length})</span>
           </button>
           <button onClick={() => generateDailyWorklogsFromPresence(localLogs)}
             title="오늘 비콘 감지 로그를 직원별 업무일지로 자동 생성"
@@ -341,6 +477,48 @@ export function PresenceTrackingPanel() {
               ⚠ {err} · 로컬 매핑 {gwMap.length}건 표시 중
             </div>
           )}
+
+          {/* ─── 비콘 게이트웨이 인프라 (정찬주 전무 통보분 + 사용자 등록분) ─── */}
+          {gatewayInfra.length > 0 && (
+            <div style={{ padding: "12px 16px", borderBottom: "1px solid rgba(255,255,255,0.08)",
+              background: "linear-gradient(180deg,rgba(15,76,117,0.18) 0%,rgba(11,18,32,0) 100%)" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 11, fontWeight: 800, color: "#93c5fd", letterSpacing: ".1em", textTransform: "uppercase" }}>
+                    📡 비콘 게이트웨이 인프라
+                  </span>
+                  <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 3, background: "rgba(34,197,94,0.2)", color: "#86efac", fontWeight: 700 }}>
+                    {gwInfraSummary.active.length} 가동
+                  </span>
+                  <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 3, background: "rgba(251,191,36,0.2)", color: "#fbbf24", fontWeight: 700 }}>
+                    {gwInfraSummary.planned.length} 예정
+                  </span>
+                  {gwInfraSummary.offline.length > 0 && (
+                    <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 3, background: "rgba(220,38,38,0.2)", color: "#fca5a5", fontWeight: 700 }}>
+                      {gwInfraSummary.offline.length} 오프라인
+                    </span>
+                  )}
+                </div>
+                <span style={{ fontSize: 9, color: "#64748b" }}>
+                  카드의 스팟 드롭다운을 바꾸면 zone_map 자동 동기화 · 시리얼 클릭하면 인라인 편집
+                </span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 8 }}>
+                {gatewayInfra.map(g => (
+                  <GatewayInfraCard key={g.id} g={g}
+                    spots={allSpotsForPicker}
+                    isEditing={editingGwId === g.id}
+                    onStartEdit={() => setEditingGwId(g.id)}
+                    onCancelEdit={() => setEditingGwId(null)}
+                    onUpdateSerial={(v) => updateGwSerial(g.id, v)}
+                    onUpdateSpot={(spotId) => updateGwSpot(g.id, spotId)}
+                    onUpdateStatus={(s) => updateGwStatus(g.id, s)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
           <div style={{ display: "grid", gridTemplateColumns: "280px 1fr 360px", gap: 0 }}>
           {/* ─── (1) 구역별 인원 + CCTV ─── */}
           <div style={{ padding: "12px 14px", borderRight: "1px solid rgba(255,255,255,0.06)" }}>
@@ -565,6 +743,233 @@ export function PresenceTrackingPanel() {
           onSaved={() => { setShowGwEditor(false); loadAll(supabaseRef.current); }}
         />
       )}
+
+      {/* 직원-비콘 매핑 모달 */}
+      {showStaffBind && (
+        <StaffBeaconBindingModal
+          sb={supabaseRef.current}
+          current={staffBeacons}
+          onClose={() => setShowStaffBind(false)}
+          onChanged={() => loadAll(supabaseRef.current)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+//  비콘 게이트웨이 인프라 카드 (스팟 매칭 드롭다운 내장)
+// ────────────────────────────────────────────────────────────
+function GatewayInfraCard({ g, spots, isEditing, onStartEdit, onCancelEdit, onUpdateSerial, onUpdateSpot, onUpdateStatus }) {
+  const liveColor =
+    g.live_status === "online"     ? "#22c55e" :
+    g.live_status === "idle"       ? "#fbbf24" :
+    g.live_status === "offline"    ? "#ef4444" :
+    g.install_status === "planned" ? "#94a3b8" :
+                                     "#64748b";
+  const liveLabel =
+    g.live_status === "online"     ? "온라인" :
+    g.live_status === "idle"       ? "유휴" :
+    g.live_status === "offline"    ? "오프라인" :
+    g.live_status === "never_seen" ? "신호 없음" :
+    g.install_status === "planned" ? "설치 대기" :
+                                     g.install_status;
+  const cardBorder = g.install_status === "active"
+    ? "rgba(34,197,94,0.35)"
+    : g.install_status === "planned"
+      ? "rgba(251,191,36,0.35)"
+      : "rgba(220,38,38,0.35)";
+
+  return (
+    <div style={{
+      padding: "8px 10px", borderRadius: 6,
+      background: "rgba(255,255,255,0.04)",
+      border: `1px solid ${cardBorder}`,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: liveColor,
+            boxShadow: g.live_status === "online" ? "0 0 8px rgba(34,197,94,0.6)" : "none" }} />
+          <strong style={{ fontSize: 12, fontWeight: 700, color: "#f1f5f9" }}>{g.spot_name}</strong>
+          {g.is_outdoor && (
+            <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 3, background: "rgba(96,165,250,0.2)", color: "#93c5fd" }}>
+              야외
+            </span>
+          )}
+        </div>
+        <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: `${liveColor}22`, color: liveColor, fontWeight: 700 }}>
+          {liveLabel}
+        </span>
+      </div>
+
+      {/* 스팟 매칭 드롭다운 */}
+      <div style={{ marginBottom: 5 }}>
+        <label style={{ display: "block", fontSize: 9, color: "#64748b", fontWeight: 700, marginBottom: 2 }}>📍 스팟 매칭</label>
+        <select value={g.spot_id || ""} onChange={(e) => onUpdateSpot(e.target.value)}
+          style={{ width: "100%", padding: "3px 6px", background: "#0f172a", color: "#f1f5f9",
+            border: "1px solid rgba(255,255,255,0.15)", borderRadius: 3, fontSize: 11, cursor: "pointer" }}>
+          {!spots.find(s => s.id === g.spot_id) && g.spot_id && (
+            <option value={g.spot_id}>⚠ {g.spot_name} (미정의 스팟)</option>
+          )}
+          {spots.map(s => (
+            <option key={s.id} value={s.id}>{s.icon} {s.name}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* 시리얼 (인라인 편집) */}
+      <div style={{ fontSize: 10, color: "#94a3b8", fontFamily: "ui-monospace,monospace", marginBottom: 5 }}>
+        {isEditing ? (
+          <input
+            defaultValue={g.gateway_serial || ""}
+            placeholder="GW-XXXX-XXXXXX"
+            onBlur={(e) => onUpdateSerial(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") onUpdateSerial(e.target.value); if (e.key === "Escape") onCancelEdit(); }}
+            autoFocus
+            style={{ width: "100%", padding: "3px 6px", background: "#0f172a", color: "#f1f5f9",
+              border: "1px solid #475569", borderRadius: 3, fontSize: 10, fontFamily: "ui-monospace,monospace" }}
+          />
+        ) : (
+          <span onClick={onStartEdit} style={{ cursor: "pointer" }} title="클릭하면 시리얼 편집">
+            GW: {g.gateway_serial || <em style={{ color: "#fbbf24" }}>(미등록 — 클릭해 입력)</em>}
+            {g.detections_24h > 0 && <span style={{ color: "#86efac", marginLeft: 4 }}>· 24h {g.detections_24h.toLocaleString()}</span>}
+          </span>
+        )}
+      </div>
+
+      {/* 상태 토글 버튼 */}
+      <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+        {["active","planned","offline","maintenance"].filter(s => s !== g.install_status).map(s => {
+          const lbl = s === "active" ? "→ 가동" : s === "planned" ? "→ 예정" : s === "offline" ? "→ 오프" : "→ 점검";
+          return (
+            <button key={s} onClick={() => onUpdateStatus(s)}
+              style={{ padding: "2px 7px", fontSize: 9, fontWeight: 700, cursor: "pointer",
+                background: "rgba(255,255,255,0.06)", color: "#cbd5e1",
+                border: "1px solid rgba(255,255,255,0.15)", borderRadius: 3 }}>
+              {lbl}
+            </button>
+          );
+        })}
+      </div>
+
+      {g.notes && (
+        <div style={{ marginTop: 5, fontSize: 9, color: "#64748b", lineHeight: 1.4 }}>
+          {g.notes}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+//  직원-비콘 매핑 모달
+// ────────────────────────────────────────────────────────────
+function StaffBeaconBindingModal({ sb, current, onClose, onChanged }) {
+  const [staffList, setStaffList] = useState([]);
+  const [staffId, setStaffId] = useState("");
+  const [beaconUuid, setBeaconUuid] = useState("");
+  const [beaconLabel, setBeaconLabel] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    if (!sb) return;
+    sb.from("staff").select("id, name, role").order("name").then(({ data }) => setStaffList(data || []));
+  }, [sb]);
+
+  const add = async () => {
+    if (!staffId || !beaconUuid) { setErr("직원 + 비콘 UUID 필수"); return; }
+    if (!sb) { setErr("Supabase 미연결"); return; }
+    setSaving(true); setErr(null);
+    const { error } = await sb.from("staff_beacons").insert({
+      staff_id: Number(staffId),
+      beacon_uuid: beaconUuid.trim(),
+      beacon_label: beaconLabel.trim() || null,
+    });
+    setSaving(false);
+    if (error) { setErr(error.message); return; }
+    setBeaconUuid(""); setBeaconLabel(""); setStaffId("");
+    onChanged && onChanged();
+  };
+
+  const returnBeacon = async (id) => {
+    if (!confirm("이 비콘을 반납 처리하시겠습니까?")) return;
+    if (!sb) { alert("Supabase 미연결"); return; }
+    const { error } = await sb.from("staff_beacons")
+      .update({ returned_at: new Date().toISOString() }).eq("id", id);
+    if (error) { alert(error.message); return; }
+    onChanged && onChanged();
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 9999,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ background: "#0f172a", borderRadius: 10, maxWidth: 640, width: "100%",
+        maxHeight: "85vh", display: "flex", flexDirection: "column", overflow: "hidden",
+        color: "#f1f5f9", border: "1px solid #334155" }}>
+        <div style={{ padding: "12px 16px", borderBottom: "1px solid #334155",
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+          background: "linear-gradient(135deg,#0891b2,#0e7490)" }}>
+          <strong style={{ fontSize: 14 }}>👥 직원 ↔ 비콘 매핑</strong>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#fff", fontSize: 18, cursor: "pointer" }}>✕</button>
+        </div>
+
+        <div style={{ padding: 16, overflowY: "auto" }}>
+          {/* 신규 등록 폼 */}
+          <div style={{ padding: 12, background: "rgba(255,255,255,0.04)", borderRadius: 6, marginBottom: 14, border: "1px solid #334155" }}>
+            <div style={{ fontSize: 11, fontWeight: 800, marginBottom: 8, color: "#93c5fd" }}>+ 새 매핑 추가</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+              <select value={staffId} onChange={e => setStaffId(e.target.value)}
+                style={{ padding: 6, background: "#1e293b", color: "#f1f5f9", border: "1px solid #475569", borderRadius: 4, fontSize: 11 }}>
+                <option value="">— 직원 선택 —</option>
+                {staffList.map(s => <option key={s.id} value={s.id}>{s.name} ({s.role})</option>)}
+              </select>
+              <input type="text" value={beaconLabel} onChange={e => setBeaconLabel(e.target.value)}
+                placeholder="라벨 (선택, 예: BEACON-A1)"
+                style={{ padding: 6, background: "#1e293b", color: "#f1f5f9", border: "1px solid #475569", borderRadius: 4, fontSize: 11 }} />
+            </div>
+            <input type="text" value={beaconUuid} onChange={e => setBeaconUuid(e.target.value)}
+              placeholder="비콘 MAC/UUID (예: AC:23:3F:11:22:33)"
+              style={{ width: "100%", padding: 6, background: "#1e293b", color: "#f1f5f9", border: "1px solid #475569", borderRadius: 4, fontSize: 11, fontFamily: "monospace", marginBottom: 8 }} />
+            <button onClick={add} disabled={saving}
+              style={{ padding: "6px 14px", background: "linear-gradient(135deg,#0891b2,#0e7490)", color: "#fff", border: "none", borderRadius: 4, fontSize: 11, fontWeight: 700, cursor: saving ? "wait" : "pointer" }}>
+              {saving ? "저장 중..." : "+ 등록"}
+            </button>
+            {err && <div style={{ marginTop: 6, color: "#fca5a5", fontSize: 10 }}>{err}</div>}
+          </div>
+
+          <div style={{ fontSize: 11, fontWeight: 800, marginBottom: 8, color: "#cbd5e1" }}>
+            현재 휴대중 ({current.length})
+          </div>
+          {current.length === 0 ? (
+            <div style={{ padding: 24, textAlign: "center", color: "#64748b", fontSize: 11 }}>
+              등록된 비콘이 없습니다. 위에서 추가하세요.
+            </div>
+          ) : (
+            current.map(b => {
+              const s = staffList.find(x => x.id === b.staff_id);
+              return (
+                <div key={b.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: 10, marginBottom: 6, background: "rgba(255,255,255,0.04)", borderRadius: 5, border: "1px solid #334155" }}>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700 }}>
+                      {s?.name || `직원#${b.staff_id}`}
+                      {b.beacon_label && <span style={{ marginLeft: 6, fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "rgba(167,139,250,0.2)", color: "#c4b5fd" }}>{b.beacon_label}</span>}
+                    </div>
+                    <div style={{ fontSize: 9, color: "#94a3b8", fontFamily: "monospace", marginTop: 2 }}>
+                      {b.beacon_uuid} · 발급 {new Date(b.issued_at).toLocaleDateString("ko-KR")}
+                    </div>
+                  </div>
+                  <button onClick={() => returnBeacon(b.id)}
+                    style={{ padding: "4px 10px", background: "rgba(220,38,38,0.2)", color: "#fca5a5", border: "1px solid rgba(220,38,38,0.4)", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                    반납
+                  </button>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
     </div>
   );
 }
