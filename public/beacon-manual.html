@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>📡 비콘 게이트웨이 인프라 — 사용 매뉴얼</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Pretendard','Apple SD Gothic Neo','Noto Sans KR',sans-serif}
+body{background:#f8fafc;color:#0f172a;line-height:1.6;padding:30px 20px}
+.wrap{max-width:1100px;margin:0 auto}
+
+/* ───── 표지 인포그래픽 ───── */
+.hero{background:linear-gradient(135deg,#0f4c75 0%,#1e3a8a 50%,#5D3A6B 100%);color:#fff;border-radius:20px;padding:40px 40px;margin-bottom:30px;position:relative;overflow:hidden;box-shadow:0 20px 60px rgba(15,76,117,.25)}
+.hero::before{content:'📡';position:absolute;top:-30px;right:-20px;font-size:240px;opacity:.08;transform:rotate(-15deg)}
+.hero-pill{display:inline-block;padding:6px 14px;border-radius:99px;background:rgba(255,255,255,.18);font-size:11px;font-weight:800;letter-spacing:.15em;margin-bottom:14px}
+.hero h1{font-size:38px;font-weight:900;letter-spacing:-.02em;margin-bottom:8px;line-height:1.1}
+.hero h2{font-size:16px;font-weight:500;opacity:.92;margin-bottom:24px}
+.hero-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:24px}
+.hero-stat{background:rgba(255,255,255,.1);backdrop-filter:blur(10px);border-radius:12px;padding:16px;border:1px solid rgba(255,255,255,.18)}
+.hero-stat .n{font-size:32px;font-weight:900;line-height:1}
+.hero-stat .l{font-size:11px;opacity:.85;margin-top:4px;font-weight:600}
+.hero-meta{margin-top:20px;font-size:12px;opacity:.78;font-weight:600;letter-spacing:.05em}
+
+/* ───── 섹션 ───── */
+.section{background:#fff;border-radius:16px;padding:32px;margin-bottom:24px;box-shadow:0 4px 20px rgba(15,23,42,.06);border:1px solid #e2e8f0}
+.section h2{font-size:22px;font-weight:900;letter-spacing:-.01em;color:#1e293b;margin-bottom:6px;display:flex;align-items:center;gap:10px}
+.section h2 .num{display:inline-flex;width:32px;height:32px;background:linear-gradient(135deg,#0f4c75,#1e3a8a);color:#fff;border-radius:8px;align-items:center;justify-content:center;font-size:14px;font-weight:900}
+.section .sub{font-size:13px;color:#64748b;margin-bottom:24px;margin-left:42px}
+
+/* ───── 데이터 플로우 ───── */
+.flow{display:grid;grid-template-columns:1fr auto 1fr auto 1fr auto 1fr;gap:8px;align-items:center;padding:24px;background:linear-gradient(135deg,#f0f9ff 0%,#e0f2fe 100%);border-radius:14px;border:1px solid #bae6fd}
+.flow-box{background:#fff;border-radius:10px;padding:14px 10px;text-align:center;border:2px solid #0ea5e9;box-shadow:0 3px 10px rgba(14,165,233,.15)}
+.flow-box .icon{font-size:28px;margin-bottom:4px}
+.flow-box .title{font-size:11px;font-weight:800;color:#0c4a6e}
+.flow-box .desc{font-size:9px;color:#0369a1;margin-top:2px;line-height:1.3}
+.flow-arrow{font-size:20px;color:#0ea5e9;font-weight:900}
+
+/* ───── 패널 미리보기 (실제 UI 그대로) ───── */
+.preview-wrap{background:#0b1220;border-radius:14px;overflow:hidden;border:1px solid #334155;margin:18px 0}
+.preview-label{background:#fbbf24;color:#78350f;padding:6px 14px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;border-bottom:2px solid #f59e0b}
+.panel{background:#0b1220}
+.p-header{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;background:linear-gradient(90deg,#0f4c75,#1e3a8a);color:#fff;flex-wrap:wrap;gap:10px}
+.p-header-l{display:flex;align-items:center;gap:12px}
+.p-header-icon{font-size:22px}
+.p-title{font-size:13px;font-weight:800}
+.p-tag{margin-left:8px;font-size:10px;padding:2px 7px;border-radius:4px;background:rgba(255,255,255,.18)}
+.p-sub{font-size:10px;opacity:.85;margin-top:2px;color:#fff}
+.p-header-r{display:flex;gap:6px}
+.p-btn{padding:6px 12px;border-radius:6px;font-size:11px;font-weight:700;color:#fff;cursor:pointer;border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.12)}
+.p-btn-icon{padding:6px 10px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.2)}
+.p-btn-close{background:rgba(15,23,42,.35)}
+.p-body{padding:12px 20px;display:grid;grid-template-columns:1fr 1fr;gap:12px;color:#f1f5f9}
+.p-col-title{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.p-col-title-text{font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase}
+.col-active .p-col-title-text{color:#86efac}
+.col-planned .p-col-title-text{color:#fbbf24}
+.p-col-sub{font-size:9px;color:#64748b}
+.p-card{margin-bottom:6px;padding:8px 10px;border-radius:6px;background:rgba(255,255,255,.04)}
+.p-card-active{border:1px solid rgba(34,197,94,.3)}
+.p-card-planned{border:1px solid rgba(251,191,36,.3)}
+.p-card-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+.p-card-name{display:flex;align-items:center;gap:6px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%}
+.dot-online{background:#22c55e;box-shadow:0 0 8px rgba(34,197,94,.6)}
+.dot-planned{background:#94a3b8}
+.p-name{font-size:12px;font-weight:700}
+.p-outdoor{font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(96,165,250,.2);color:#93c5fd}
+.p-live{font-size:9px;padding:1px 6px;border-radius:3px;font-weight:700}
+.p-live-online{background:rgba(34,197,94,.13);color:#22c55e}
+.p-live-planned{background:rgba(148,163,184,.13);color:#94a3b8}
+.p-serial{font-size:10px;color:#94a3b8;font-family:ui-monospace,'SF Mono',monospace;margin-bottom:4px}
+.p-serial em{color:#fbbf24;font-style:normal}
+.p-notes{font-size:10px;color:#cbd5e1;margin-bottom:4px;line-height:1.4}
+.p-actions{display:flex;gap:4px;flex-wrap:wrap}
+.p-act{padding:2px 8px;font-size:9px;font-weight:700;cursor:pointer;background:rgba(255,255,255,.06);color:#cbd5e1;border:1px solid rgba(255,255,255,.15);border-radius:3px}
+
+/* 접힌 헤더 */
+.p-collapsed{cursor:pointer;padding:8px 16px;background:linear-gradient(90deg,#0f4c75,#1e3a8a);color:#fff;display:flex;align-items:center;justify-content:space-between}
+.pc-l{display:flex;align-items:center;gap:10px}
+.pc-icon{font-size:18px}
+.pc-title{font-size:12px;font-weight:800}
+.pc-pill-g{margin-left:8px;padding:1px 7px;background:rgba(34,197,94,.25);border-radius:3px;font-size:10px}
+.pc-pill-y{margin-left:4px;padding:1px 7px;background:rgba(251,191,36,.25);border-radius:3px;font-size:10px}
+.pc-sub{font-size:10px;opacity:.85;margin-top:2px}
+
+/* 매핑 모달 */
+.modal-demo{background:#0f172a;border-radius:10px;max-width:520px;margin:0 auto;color:#f1f5f9;border:1px solid #334155;overflow:hidden}
+.modal-h{padding:12px 16px;border-bottom:1px solid #334155;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(135deg,#0f4c75,#1e3a8a)}
+.modal-h strong{font-size:14px}
+.modal-h button{background:none;border:none;color:#fff;font-size:18px}
+.modal-body{padding:16px}
+.modal-form{padding:12px;background:rgba(255,255,255,.04);border-radius:6px;margin-bottom:14px;border:1px solid #334155}
+.modal-form-title{font-size:11px;font-weight:800;margin-bottom:8px;color:#93c5fd}
+.modal-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}
+.modal-input{padding:6px;background:#1e293b;color:#f1f5f9;border:1px solid #475569;border-radius:4px;font-size:11px;width:100%}
+.modal-input-mono{font-family:monospace}
+.modal-add-btn{padding:6px 14px;background:linear-gradient(135deg,#0891b2,#0e7490);color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:700}
+.modal-list-title{font-size:11px;font-weight:800;margin-bottom:8px;color:#cbd5e1}
+.modal-item{display:flex;align-items:center;justify-content:space-between;padding:10px;margin-bottom:6px;background:rgba(255,255,255,.04);border-radius:5px;border:1px solid #334155}
+.modal-item-name{font-size:12px;font-weight:700}
+.modal-item-label{margin-left:6px;font-size:9px;padding:1px 6px;border-radius:3px;background:rgba(167,139,250,.2);color:#c4b5fd}
+.modal-item-uuid{font-size:9px;color:#94a3b8;font-family:monospace;margin-top:2px}
+.modal-item-btn{padding:4px 10px;background:rgba(220,38,38,.2);color:#fca5a5;border:1px solid rgba(220,38,38,.4);border-radius:4px;font-size:10px;font-weight:700}
+
+/* ───── 스텝 가이드 ───── */
+.steps{counter-reset:step}
+.step{display:grid;grid-template-columns:60px 1fr;gap:18px;padding:20px 0;border-bottom:1px dashed #cbd5e1;align-items:start}
+.step:last-child{border-bottom:none}
+.step-num{width:50px;height:50px;border-radius:14px;background:linear-gradient(135deg,#0f4c75,#1e3a8a);color:#fff;font-size:22px;font-weight:900;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 14px rgba(15,76,117,.25)}
+.step h3{font-size:16px;font-weight:800;color:#1e293b;margin-bottom:6px}
+.step p{font-size:13px;color:#475569;margin-bottom:10px}
+.step .tip{padding:10px 14px;background:#f0f9ff;border-left:3px solid #0ea5e9;border-radius:6px;font-size:12px;color:#0c4a6e;margin-top:8px;line-height:1.6}
+.step .warn{padding:10px 14px;background:#fef3c7;border-left:3px solid #f59e0b;border-radius:6px;font-size:12px;color:#78350f;margin-top:8px}
+.step code{background:#f1f5f9;padding:1px 7px;border-radius:4px;font-family:ui-monospace,monospace;font-size:12px;color:#0f4c75;font-weight:600}
+
+/* ───── 비교 테이블 ───── */
+.status-table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13px}
+.status-table th{background:#0f4c75;color:#fff;padding:10px 12px;text-align:left;font-weight:700}
+.status-table td{padding:10px 12px;border-bottom:1px solid #e2e8f0}
+.status-table tr:hover{background:#f8fafc}
+.s-badge{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:800}
+.s-active{background:#dcfce7;color:#166534}
+.s-planned{background:#fef3c7;color:#78350f}
+.s-offline{background:#fee2e2;color:#991b1b}
+.s-maint{background:#e0e7ff;color:#3730a3}
+
+/* ───── 트러블슈팅 ───── */
+.qa{padding:16px;background:#f8fafc;border-radius:10px;margin-bottom:10px;border:1px solid #e2e8f0}
+.qa .q{font-size:14px;font-weight:800;color:#1e293b;margin-bottom:6px}
+.qa .a{font-size:13px;color:#475569;line-height:1.7}
+.qa .a code{background:#0f172a;color:#fbbf24;padding:1px 7px;border-radius:3px;font-family:ui-monospace,monospace;font-size:11px}
+
+/* ───── 푸터 ───── */
+.footer{text-align:center;padding:30px 20px;color:#94a3b8;font-size:12px}
+.footer a{color:#0f4c75;text-decoration:none;font-weight:700}
+
+@media (max-width:768px){
+  body{padding:14px 10px}
+  .hero{padding:24px 18px}
+  .hero h1{font-size:26px}
+  .hero-grid{grid-template-columns:repeat(2,1fr)}
+  .section{padding:20px 16px}
+  .flow{grid-template-columns:1fr;gap:12px}
+  .flow-arrow{transform:rotate(90deg)}
+  .p-body{grid-template-columns:1fr}
+  .step{grid-template-columns:1fr;gap:8px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- ═══════════════════════════════════════════════════════
+     표지 인포그래픽
+     ═══════════════════════════════════════════════════════ -->
+<div class="hero">
+  <span class="hero-pill">📡 INFRASTRUCTURE GUIDE</span>
+  <h1>비콘 게이트웨이 인프라 시스템</h1>
+  <h2>BLE 비콘 + WiFi AP + 게이트웨이 → 직원 실시간 위치 추적</h2>
+  <div class="hero-grid">
+    <div class="hero-stat"><div class="n">9</div><div class="l">총 설치 위치</div></div>
+    <div class="hero-stat"><div class="n">4</div><div class="l">✅ 가동 중</div></div>
+    <div class="hero-stat"><div class="n">5</div><div class="l">🚧 설치 예정</div></div>
+    <div class="hero-stat"><div class="n">30초</div><div class="l">자동 새로고침</div></div>
+  </div>
+  <div class="hero-meta">2026-05-25 · 정찬주 전무님 통보 기준 · 한국잠사플레이팜</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     1. 데이터 플로우
+     ═══════════════════════════════════════════════════════ -->
+<div class="section">
+  <h2><span class="num">1</span>데이터 흐름</h2>
+  <div class="sub">비콘 신호가 화면에 표시되기까지의 5단계 파이프라인</div>
+
+  <div class="flow">
+    <div class="flow-box"><div class="icon">📍</div><div class="title">직원 비콘</div><div class="desc">BLE 송신<br>(1초 1회)</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box"><div class="icon">📡</div><div class="title">게이트웨이</div><div class="desc">RSSI 측정<br>+ WiFi AP</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box"><div class="icon">☁️</div><div class="title">/api/beacon-webhook</div><div class="desc">JSON 수신<br>Vercel 서버리스</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box"><div class="icon">🗄️</div><div class="title">Supabase</div><div class="desc">beacon_detections<br>+ 트리거 자동 처리</div></div>
+  </div>
+
+  <div style="margin-top:20px;padding:18px;background:#fafbfc;border-radius:10px;border:1px solid #e2e8f0;font-size:13px;line-height:1.8;color:#475569">
+    <strong style="color:#0f4c75">📊 트리거 자동 처리:</strong><br>
+    ① <code style="background:#fff7ed;color:#9a3412;padding:1px 7px;border-radius:3px;font-family:monospace">trg_after_detection</code> → 직원의 새 구역 입장 감지 → <strong>presence_events</strong> 행 생성<br>
+    ② <code style="background:#fff7ed;color:#9a3412;padding:1px 7px;border-radius:3px;font-family:monospace">trg_touch_gateway</code> → 게이트웨이 카드의 <strong>last_seen_at</strong> 갱신 → UI 점등 🟢
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     2. 메인 패널 화면
+     ═══════════════════════════════════════════════════════ -->
+<div class="section">
+  <h2><span class="num">2</span>메인 패널 화면 (펼친 상태)</h2>
+  <div class="sub">통합지도 페이지 상단, PresenceTrackingPanel 아래에 위치</div>
+
+  <div class="preview-wrap">
+    <div class="preview-label">▶ 실제 화면 (live mockup) — 통합지도 > 메인 패널</div>
+    <div class="panel">
+      <div class="p-header">
+        <div class="p-header-l">
+          <span class="p-header-icon">📡</span>
+          <div>
+            <div class="p-title">
+              비콘 게이트웨이 인프라
+              <span class="p-tag">GATEWAY · WIFI AP · BEACON</span>
+            </div>
+            <div class="p-sub">4곳 가동 (온라인 4) · 5곳 설치예정 · 휴대 비콘 0개 · 24h 감지 0건</div>
+          </div>
+        </div>
+        <div class="p-header-r">
+          <button class="p-btn">👥 직원-비콘 매핑 (0)</button>
+          <button class="p-btn p-btn-icon">⟳</button>
+          <button class="p-btn p-btn-close">▴ 접기</button>
+        </div>
+      </div>
+      <div class="p-body">
+        <div class="col-active">
+          <div class="p-col-title">
+            <span class="p-col-title-text">✅ 가동 중 · 실내 (4)</span>
+            <span class="p-col-sub">2026-05-25 설치 완료</span>
+          </div>
+          <div class="p-card p-card-active">
+            <div class="p-card-row">
+              <div class="p-card-name"><span class="dot dot-online"></span><strong class="p-name">박물관</strong></div>
+              <span class="p-live p-live-online">온라인</span>
+            </div>
+            <div class="p-serial">GW: <em>(시리얼 미등록 — 클릭해 입력)</em></div>
+            <div class="p-notes">본관 1층 로비 - 무선AP 동시 설치</div>
+            <div class="p-actions">
+              <button class="p-act">→ 예정</button><button class="p-act">→ 오프라인</button><button class="p-act">→ 점검</button>
+            </div>
+          </div>
+          <div class="p-card p-card-active">
+            <div class="p-card-row">
+              <div class="p-card-name"><span class="dot dot-online"></span><strong class="p-name">키즈카페</strong></div>
+              <span class="p-live p-live-online">온라인</span>
+            </div>
+            <div class="p-serial">GW: <em>(시리얼 미등록 — 클릭해 입력)</em></div>
+            <div class="p-notes">실내 키즈카페</div>
+            <div class="p-actions">
+              <button class="p-act">→ 예정</button><button class="p-act">→ 오프라인</button><button class="p-act">→ 점검</button>
+            </div>
+          </div>
+          <div class="p-card p-card-active">
+            <div class="p-card-row">
+              <div class="p-card-name"><span class="dot dot-online"></span><strong class="p-name">누에쉼터</strong></div>
+              <span class="p-live p-live-online">온라인</span>
+            </div>
+            <div class="p-serial">GW: <em>(시리얼 미등록 — 클릭해 입력)</em></div>
+            <div class="p-notes">누에 체험 돔</div>
+            <div class="p-actions">
+              <button class="p-act">→ 예정</button><button class="p-act">→ 오프라인</button><button class="p-act">→ 점검</button>
+            </div>
+          </div>
+          <div class="p-card p-card-active">
+            <div class="p-card-row">
+              <div class="p-card-name"><span class="dot dot-online"></span><strong class="p-name">온실</strong></div>
+              <span class="p-live p-live-online">온라인</span>
+            </div>
+            <div class="p-serial">GW: <em>(시리얼 미등록 — 클릭해 입력)</em></div>
+            <div class="p-notes">온실 본동</div>
+            <div class="p-actions">
+              <button class="p-act">→ 예정</button><button class="p-act">→ 오프라인</button><button class="p-act">→ 점검</button>
+            </div>
+          </div>
+        </div>
+        <div class="col-planned">
+          <div class="p-col-title">
+            <span class="p-col-title-text">🚧 설치 예정 · 야외 (5)</span>
+            <span class="p-col-sub">무선AP 동시 설치 필요</span>
+          </div>
+          <div class="p-card p-card-planned">
+            <div class="p-card-row">
+              <div class="p-card-name"><span class="dot dot-planned"></span><strong class="p-name">단체식당</strong><span class="p-outdoor">야외</span></div>
+              <span class="p-live p-live-planned">설치 대기</span>
+            </div>
+            <div class="p-serial">GW: <em>(시리얼 미등록 — 클릭해 입력)</em></div>
+            <div class="p-notes">야외 단체식당 입구</div>
+            <div class="p-actions">
+              <button class="p-act">→ 가동</button><button class="p-act">→ 오프라인</button><button class="p-act">→ 점검</button>
+            </div>
+          </div>
+          <div class="p-card p-card-planned">
+            <div class="p-card-row">
+              <div class="p-card-name"><span class="dot dot-planned"></span><strong class="p-name">외부매표소</strong><span class="p-outdoor">야외</span></div>
+              <span class="p-live p-live-planned">설치 대기</span>
+            </div>
+            <div class="p-serial">GW: <em>(시리얼 미등록 — 클릭해 입력)</em></div>
+            <div class="p-notes">단체식당 옆 매표소 (별도 부지)</div>
+            <div class="p-actions">
+              <button class="p-act">→ 가동</button><button class="p-act">→ 오프라인</button><button class="p-act">→ 점검</button>
+            </div>
+          </div>
+          <div class="p-card p-card-planned">
+            <div class="p-card-row">
+              <div class="p-card-name"><span class="dot dot-planned"></span><strong class="p-name">냉동창고</strong><span class="p-outdoor">야외</span></div>
+              <span class="p-live p-live-planned">설치 대기</span>
+            </div>
+            <div class="p-serial">GW: <em>(시리얼 미등록 — 클릭해 입력)</em></div>
+            <div class="p-notes">식당동 후면 냉동창고</div>
+            <div class="p-actions">
+              <button class="p-act">→ 가동</button><button class="p-act">→ 오프라인</button><button class="p-act">→ 점검</button>
+            </div>
+          </div>
+          <div class="p-card p-card-planned">
+            <div class="p-card-row">
+              <div class="p-card-name"><span class="dot dot-planned"></span><strong class="p-name">온실의 창고</strong><span class="p-outdoor">야외</span></div>
+              <span class="p-live p-live-planned">설치 대기</span>
+            </div>
+            <div class="p-serial">GW: <em>(시리얼 미등록 — 클릭해 입력)</em></div>
+            <div class="p-notes">온실 부속 창고</div>
+            <div class="p-actions">
+              <button class="p-act">→ 가동</button><button class="p-act">→ 오프라인</button><button class="p-act">→ 점검</button>
+            </div>
+          </div>
+          <div class="p-card p-card-planned">
+            <div class="p-card-row">
+              <div class="p-card-name"><span class="dot dot-planned"></span><strong class="p-name">수영장</strong><span class="p-outdoor">야외</span></div>
+              <span class="p-live p-live-planned">설치 대기</span>
+            </div>
+            <div class="p-serial">GW: <em>(시리얼 미등록 — 클릭해 입력)</em></div>
+            <div class="p-notes">여름 물놀이장</div>
+            <div class="p-actions">
+              <button class="p-act">→ 가동</button><button class="p-act">→ 오프라인</button><button class="p-act">→ 점검</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3 style="margin-top:24px;margin-bottom:10px;font-size:15px;font-weight:800;color:#1e293b">접힌 상태 (공간 절약 모드)</h3>
+  <div class="preview-wrap">
+    <div class="preview-label">▼ 헤더만 보이는 컴팩트 뷰 — 한 번 더 클릭하면 펼침</div>
+    <div class="panel">
+      <div class="p-collapsed">
+        <div class="pc-l">
+          <span class="pc-icon">📡</span>
+          <div>
+            <div class="pc-title">
+              비콘 게이트웨이 인프라
+              <span class="pc-pill-g">4곳 가동</span>
+              <span class="pc-pill-y">5곳 예정</span>
+            </div>
+            <div class="pc-sub">온라인 4/4 · 24h 감지 0건 · 휴대 비콘 0개</div>
+          </div>
+        </div>
+        <span style="font-size:11px;opacity:.8">▾ 펼치기</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     3. 매핑 모달
+     ═══════════════════════════════════════════════════════ -->
+<div class="section">
+  <h2><span class="num">3</span>직원 ↔ 비콘 매핑 모달</h2>
+  <div class="sub">패널 헤더의 <strong>👥 직원-비콘 매핑</strong> 버튼 클릭 시 열림</div>
+
+  <div class="preview-wrap" style="padding:20px;background:#1e293b">
+    <div class="modal-demo">
+      <div class="modal-h">
+        <strong>👥 직원 ↔ 비콘 매핑</strong>
+        <button>✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-form">
+          <div class="modal-form-title">+ 새 매핑 추가</div>
+          <div class="modal-row">
+            <select class="modal-input"><option>— 직원 선택 —</option><option>김매니저 (MANAGER)</option><option>이직원 (STAFF)</option></select>
+            <input class="modal-input" placeholder="라벨 (선택, 예: BEACON-A1)">
+          </div>
+          <input class="modal-input modal-input-mono" placeholder="비콘 MAC/UUID (예: AC:23:3F:11:22:33)" style="margin-bottom:8px">
+          <button class="modal-add-btn">+ 등록</button>
+        </div>
+        <div class="modal-list-title">현재 휴대중 (2)</div>
+        <div class="modal-item">
+          <div>
+            <div class="modal-item-name">김매니저 <span class="modal-item-label">BEACON-A1</span></div>
+            <div class="modal-item-uuid">AC:23:3F:11:22:33 · 발급 2026-05-25</div>
+          </div>
+          <button class="modal-item-btn">반납</button>
+        </div>
+        <div class="modal-item">
+          <div>
+            <div class="modal-item-name">이직원 <span class="modal-item-label">BEACON-A2</span></div>
+            <div class="modal-item-uuid">AC:23:3F:44:55:66 · 발급 2026-05-25</div>
+          </div>
+          <button class="modal-item-btn">반납</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     4. 사용 순서
+     ═══════════════════════════════════════════════════════ -->
+<div class="section">
+  <h2><span class="num">4</span>사용 매뉴얼 — 단계별 가이드</h2>
+  <div class="sub">현장에서 게이트웨이 도착 → 비콘 배부 → 모니터링까지</div>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        <h3>📡 게이트웨이 시리얼 등록</h3>
+        <p>실제 장비가 박물관에 도착하면, 통합지도 메인 화면 상단의 비콘 인프라 패널에서 해당 카드의 <strong>"(시리얼 미등록 — 클릭해 입력)"</strong> 텍스트를 클릭하세요.</p>
+        <div class="tip">💡 시리얼은 게이트웨이 본체 뒷면 라벨에 있는 MAC 주소 또는 시리얼 번호입니다 (예: <code>GW-MK110-A1B2C3</code>). 입력 후 Enter 또는 입력칸 밖을 클릭하면 자동 저장됩니다.</div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        <h3>🔧 야외 5곳 설치 후 상태 변경</h3>
+        <p>단체식당·외부매표소·냉동창고·온실의 창고·수영장 5곳은 야외라 무선AP와 함께 신규 설치가 필요합니다. 설치가 완료되면 해당 카드의 <code>→ 가동</code> 버튼을 누르세요.</p>
+        <div class="tip">💡 상태가 <strong>planned</strong> → <strong>active</strong> 로 바뀌며, <code>installed_at</code> 컬럼에 현재 시각이 자동 저장됩니다.</div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        <h3>👥 직원에게 비콘 배부 + 시스템 등록</h3>
+        <p>매일 출근 시 직원에게 BLE 비콘을 배부하고, 패널 헤더의 <strong>👥 직원-비콘 매핑</strong> 버튼을 누르세요. 직원 드롭다운에서 이름을 선택하고 비콘의 MAC 주소를 입력하면 끝.</p>
+        <div class="tip">💡 비콘 MAC은 비콘 본체 또는 포장 라벨에 표기되어 있습니다. 형식: <code>AC:23:3F:11:22:33</code> (콜론 포함)</div>
+        <div class="warn">⚠️ 같은 비콘 UUID 는 <strong>1명의 직원에게만</strong> 활성화될 수 있습니다 (DB 유니크 제약). 이전 사용자에게서 회수했다면 그 사용자의 매핑을 먼저 "반납" 처리하세요.</div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        <h3>📊 실시간 모니터링</h3>
+        <p>패널은 30초마다 자동 새로고침되며, Supabase Realtime 구독으로 <strong>새 게이트웨이 추가/상태 변경 시 즉시</strong> 화면이 갱신됩니다.</p>
+        <p style="margin-top:10px"><strong>각 카드의 점등 색상:</strong></p>
+        <table class="status-table">
+          <tr><th>색상</th><th>상태</th><th>의미</th></tr>
+          <tr><td>🟢 초록</td><td>온라인</td><td>최근 5분 내 신호 수신</td></tr>
+          <tr><td>🟡 노랑</td><td>유휴</td><td>5분 ~ 1시간 신호 없음</td></tr>
+          <tr><td>🔴 빨강</td><td>오프라인</td><td>1시간 이상 신호 없음 → 점검 필요</td></tr>
+          <tr><td>⚪ 회색</td><td>신호 없음</td><td>등록은 됐지만 한 번도 수신 안됨</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">5</div>
+      <div>
+        <h3>🔄 일과 종료 — 비콘 회수</h3>
+        <p>직원 퇴근 시 비콘을 회수하면 매핑 모달에서 해당 항목의 <strong>"반납"</strong> 버튼을 누르세요.</p>
+        <div class="tip">💡 반납 처리하면 <code>returned_at</code> 에 시각이 기록되며, 같은 비콘을 다음날 다른 직원에게 새로 매핑할 수 있습니다.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     5. 상태값 레퍼런스
+     ═══════════════════════════════════════════════════════ -->
+<div class="section">
+  <h2><span class="num">5</span>install_status 상태값 레퍼런스</h2>
+  <div class="sub">게이트웨이 카드의 액션 버튼으로 변경 가능한 4가지 상태</div>
+
+  <table class="status-table">
+    <tr><th>상태</th><th>의미</th><th>사용 시점</th></tr>
+    <tr><td><span class="s-badge s-active">active</span></td><td>가동 중</td><td>장비 설치 완료 + 시리얼 등록 완료</td></tr>
+    <tr><td><span class="s-badge s-planned">planned</span></td><td>설치 예정</td><td>위치는 정해졌지만 장비 미도착</td></tr>
+    <tr><td><span class="s-badge s-offline">offline</span></td><td>오프라인</td><td>설치는 됐지만 신호 두절 (긴급 점검)</td></tr>
+    <tr><td><span class="s-badge s-maint">maintenance</span></td><td>점검 중</td><td>일시적 유지보수 (오프라인 알람 끄기)</td></tr>
+  </table>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     6. DB 스키마
+     ═══════════════════════════════════════════════════════ -->
+<div class="section">
+  <h2><span class="num">6</span>백엔드 스키마 (참고용)</h2>
+  <div class="sub">Supabase 에 적용된 3개 테이블 · 1개 뷰 · 1개 트리거</div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px">
+    <div style="padding:16px;background:#0f172a;color:#f1f5f9;border-radius:10px;font-family:ui-monospace,monospace;font-size:11px;line-height:1.6">
+      <div style="color:#fbbf24;font-weight:800;margin-bottom:8px">🗄️ beacon_gateways</div>
+      <div>id, gateway_serial (uniq)</div>
+      <div>spot_id, spot_name</div>
+      <div style="color:#86efac">install_status (active/planned/offline/maintenance)</div>
+      <div>is_outdoor, paired_ap_mac</div>
+      <div>lat, lng, notes</div>
+      <div style="color:#93c5fd">installed_at, last_seen_at</div>
+    </div>
+    <div style="padding:16px;background:#0f172a;color:#f1f5f9;border-radius:10px;font-family:ui-monospace,monospace;font-size:11px;line-height:1.6">
+      <div style="color:#fbbf24;font-weight:800;margin-bottom:8px">🗄️ staff_beacons</div>
+      <div>id, staff_id (→ staff)</div>
+      <div>beacon_uuid (uniq when active)</div>
+      <div>beacon_label, beacon_type</div>
+      <div style="color:#93c5fd">issued_at, returned_at</div>
+      <div style="color:#86efac">is_active (computed)</div>
+      <div>battery_pct</div>
+    </div>
+    <div style="padding:16px;background:#0f172a;color:#f1f5f9;border-radius:10px;font-family:ui-monospace,monospace;font-size:11px;line-height:1.6">
+      <div style="color:#fbbf24;font-weight:800;margin-bottom:8px">👁️ v_gateway_status (뷰)</div>
+      <div>모든 beacon_gateways 컬럼 +</div>
+      <div style="color:#86efac">live_status (online/idle/offline/never_seen)</div>
+      <div style="color:#86efac">detections_24h (24시간 수신 건수)</div>
+      <div style="margin-top:6px;color:#94a3b8">→ 패널은 이 뷰만 조회</div>
+    </div>
+    <div style="padding:16px;background:#0f172a;color:#f1f5f9;border-radius:10px;font-family:ui-monospace,monospace;font-size:11px;line-height:1.6">
+      <div style="color:#fbbf24;font-weight:800;margin-bottom:8px">⚡ trg_touch_gateway (트리거)</div>
+      <div style="color:#cbd5e1">beacon_detections INSERT 시</div>
+      <div style="color:#cbd5e1">→ 매칭되는 beacon_gateways 행의</div>
+      <div style="color:#86efac">last_seen_at 자동 갱신</div>
+      <div style="margin-top:6px;color:#94a3b8">→ UI 점등 색상 결정</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     7. 트러블슈팅
+     ═══════════════════════════════════════════════════════ -->
+<div class="section">
+  <h2><span class="num">7</span>자주 묻는 질문 (FAQ)</h2>
+  <div class="sub">현장에서 자주 발생하는 문제와 해결법</div>
+
+  <div class="qa">
+    <div class="q">Q. 게이트웨이를 설치했는데 카드가 계속 "신호 없음" (회색) 입니다</div>
+    <div class="a">
+      ① 패널에서 해당 카드의 시리얼이 올바르게 입력됐는지 확인하세요. <strong>장비 라벨의 시리얼과 100% 일치</strong>해야 매칭됩니다.<br>
+      ② 게이트웨이의 WiFi 연결 상태를 점검하세요. AP 와 함께 설치되어야 인터넷에 닿습니다.<br>
+      ③ 게이트웨이 펌웨어 설정에서 webhook URL 이 <code>https://jamsa-panel.vercel.app/api/beacon-webhook</code> 으로 되어 있는지 확인.
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="q">Q. 직원이 비콘을 분실/파손했을 때</div>
+    <div class="a">
+      매핑 모달에서 해당 항목의 <strong>"반납"</strong> 버튼을 눌러 비활성화하세요. 그러면 <code>returned_at</code> 이 기록되어 분실/파손 시점이 감사 로그에 남습니다. 새 비콘 도착 시 직원에게 다시 매핑하면 됩니다.
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="q">Q. 5곳 야외 설치 위치를 변경하고 싶어요</div>
+    <div class="a">
+      현재 5곳(단체식당·외부매표소·냉동창고·온실의 창고·수영장)은 정찬주 전무님 통보 기준으로 시드되어 있습니다. 위치를 변경하려면:<br>
+      ① Supabase Studio → Table editor → <code>beacon_gateways</code> 테이블에서 직접 수정<br>
+      ② 또는 추가 위치는 INSERT 로 새 행 추가 (spot_id 는 통합지도의 BASE_ZONES id 중 하나)
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="q">Q. 비콘이 여러 게이트웨이에 동시에 잡힐 때는?</div>
+    <div class="a">
+      RSSI(신호 강도)가 <strong>가장 강한 게이트웨이</strong>를 기준으로 그 직원의 위치를 판정합니다. <code>process_beacon_detection</code> 트리거가 자동으로 처리하며, <code>presence_events</code> 테이블에 입장/퇴장 이벤트로 누적됩니다.
+    </div>
+  </div>
+
+  <div class="qa">
+    <div class="q">Q. 패널이 통합지도에서 안 보여요</div>
+    <div class="a">
+      ① 화면 좌하단 <strong>▾ 패널 보기</strong> 버튼이 보이면 누르세요 (지도 풀스크린 모드일 수 있음)<br>
+      ② 패널 헤더의 <strong>▴ 접기</strong> 토글로 접혀 있을 수 있습니다. localStorage 의 <code>jp_beacon_infra_collapsed</code> 값을 확인하거나 헤더를 클릭해 펼치세요.<br>
+      ③ Supabase 로그인이 안 되어 있으면 <code>window.__supabase</code> 가 없어서 데이터가 안 떠요 → 다시 로그인.
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     8. 빠른 참조 카드
+     ═══════════════════════════════════════════════════════ -->
+<div class="section" style="background:linear-gradient(135deg,#fef3c7 0%,#fde68a 100%);border-color:#fbbf24">
+  <h2 style="color:#78350f"><span class="num" style="background:linear-gradient(135deg,#f59e0b,#d97706)">⚡</span>빠른 참조 카드</h2>
+  <div class="sub" style="color:#92400e">한눈에 보는 운영 체크리스트</div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px">
+    <div style="padding:16px;background:#fff;border-radius:10px;border:1px solid #fbbf24">
+      <div style="font-size:13px;font-weight:800;color:#78350f;margin-bottom:8px">🌅 매일 아침 출근 시</div>
+      <div style="font-size:12px;color:#451a03;line-height:1.8">
+        ☐ 패널 펼쳐서 모든 카드 🟢 인지 확인<br>
+        ☐ 직원에게 비콘 배부 → 매핑 모달에서 등록<br>
+        ☐ 오프라인🔴 카드 있으면 즉시 점검
+      </div>
+    </div>
+    <div style="padding:16px;background:#fff;border-radius:10px;border:1px solid #fbbf24">
+      <div style="font-size:13px;font-weight:800;color:#78350f;margin-bottom:8px">🌙 매일 저녁 퇴근 시</div>
+      <div style="font-size:12px;color:#451a03;line-height:1.8">
+        ☐ 직원에게서 비콘 회수<br>
+        ☐ 매핑 모달에서 "반납" 클릭<br>
+        ☐ 분실/파손 시 메모 작성
+      </div>
+    </div>
+    <div style="padding:16px;background:#fff;border-radius:10px;border:1px solid #fbbf24">
+      <div style="font-size:13px;font-weight:800;color:#78350f;margin-bottom:8px">📦 신규 게이트웨이 도착 시</div>
+      <div style="font-size:12px;color:#451a03;line-height:1.8">
+        ☐ 야외 5곳 중 해당 카드 찾기<br>
+        ☐ 시리얼 미등록 텍스트 클릭 → 입력<br>
+        ☐ 설치 완료 후 <code>→ 가동</code> 버튼
+      </div>
+    </div>
+    <div style="padding:16px;background:#fff;border-radius:10px;border:1px solid #fbbf24">
+      <div style="font-size:13px;font-weight:800;color:#78350f;margin-bottom:8px">🚨 장애 발생 시</div>
+      <div style="font-size:12px;color:#451a03;line-height:1.8">
+        ☐ 패널의 ⟳ 새로고침 버튼<br>
+        ☐ 1분 대기 후 여전히 오프라인이면 현장 점검<br>
+        ☐ 임시 점검 시 <code>→ 점검</code> 으로 알람 끄기
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  📡 한국잠사플레이팜 비콘 인프라 v1.0 · 2026-05-25 작성<br>
+  배포 URL: <a href="https://jamsa-panel.vercel.app/beacon-manual" target="_blank">https://jamsa-panel.vercel.app/beacon-manual</a><br>
+  데이터 출처: Supabase 프로젝트 <code style="background:#0f172a;color:#fbbf24;padding:1px 7px;border-radius:3px;font-family:monospace;font-size:11px">ewxquecxsxsfhyzfaaci</code>
+</div>
+
+</div>
+</body>
+</html>
