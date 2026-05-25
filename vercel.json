@@ -101,5 +101,11 @@
     { "source": "/roles", "destination": "/multirole-demo.html" },
     { "source": "/multirole", "destination": "/multirole-demo.html" },
     { "source": "/", "destination": "/index.html" }
+  ],
+  "crons": [
+    {
+      "path": "/api/sms-scheduler",
+      "schedule": "0 * * * *"
+    }
   ]
 }

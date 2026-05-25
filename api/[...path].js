@@ -15,6 +15,8 @@ import forecastKpi from '../api_handlers/forecast-kpi.js';
 import inventoryAiAnalyze from '../api_handlers/inventory-ai-analyze.js';
 import keys from '../api_handlers/keys.js';
 import laborAdvice from '../api_handlers/labor-advice.js';
+import smsSend from '../api_handlers/sms-send.js';
+import smsScheduler from '../api_handlers/sms-scheduler.js';
 import notifySend from '../api_handlers/notify-send.js';
 import openbankingSync from '../api_handlers/openbanking-sync.js';
 import operationStats from '../api_handlers/operation-stats.js';
@@ -58,6 +60,8 @@ const routes = {
   'inventory-ai-analyze': inventoryAiAnalyze,
   'keys': keys,
   'labor-advice': laborAdvice,
+  'sms-send': smsSend,
+  'sms-scheduler': smsScheduler,
   'notify-send': notifySend,
   'openbanking-sync': openbankingSync,
   'operation-stats': operationStats,

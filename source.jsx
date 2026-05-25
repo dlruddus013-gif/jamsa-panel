@@ -30591,6 +30591,8 @@ function AppInner() {
   const [showAuditLog, setShowAuditLog] = useState(false);
   // 📱 모바일 햄버거 메뉴 (우측 시스템 도구 드로어)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  // 📱 모바일 모듈 카테고리 그리드 (전체 메뉴 한눈에)
+  const [categoryGridOpen, setCategoryGridOpen] = useState(false);
   const [isMobileApp, setIsMobileApp] = useState(() => {
     try { const w = window.innerWidth; return w > 0 && w <= 900; } catch (e) { return false; }
   });
@@ -30674,9 +30676,23 @@ function AppInner() {
           @keyframes jamsaDrawerFade { from { opacity: 0; } to { opacity: 1; } }
         }
 
-        /* 데스크탑 (>900px): 햄버거 + 모바일 우측 숨김 */
+        /* 데스크탑 (>900px): 햄버거 + 모바일 우측 + 카테고리 버튼 숨김 */
         @media (min-width: 901px) {
-          .jamsa-hamburger, .jamsa-topbar-right-mobile { display: none !important; }
+          .jamsa-hamburger, .jamsa-topbar-right-mobile, .jamsa-category-btn { display: none !important; }
+        }
+
+        /* 모바일 전체 카테고리 버튼 (좌측, modnav 옆) */
+        @media (max-width: 900px) {
+          .jamsa-category-btn {
+            display: inline-flex !important; align-items: center; gap: 4px;
+            padding: 7px 10px !important; min-height: 36px !important;
+            background: linear-gradient(135deg,#7c3aed,#5b21b6) !important;
+            color: #fff !important; border: none !important; border-radius: 6px !important;
+            font-size: 12px !important; font-weight: 800; cursor: pointer;
+            flex-shrink: 0 !important; white-space: nowrap;
+            box-shadow: 0 2px 8px rgba(124,58,237,0.4);
+          }
+          .jamsa-category-btn:active { transform: scale(0.96); }
         }
 
         /* 드로어 내부 버튼 */
@@ -30695,6 +30711,10 @@ function AppInner() {
         <div className="jamsa-topbar-left" style={{ display: "flex", alignItems: "center", gap: 14, flex: "1 1 auto", minWidth: 0, overflowX: "auto" }}>
           <div className="jamsa-topbar-title" style={{ fontSize: 14, fontWeight: 800, letterSpacing: 0.2, flexShrink: 0 }}>🏛️ 통합관리 시스템</div>
           <div className="jamsa-modnav" style={{ display: "flex", gap: 2, background: "rgba(255,255,255,0.08)", padding: 3, borderRadius: 8, overflowX: "auto", scrollbarWidth: "none" }}>
+            <button className="jamsa-category-btn" onClick={() => setCategoryGridOpen(true)}
+              title="전체 카테고리 보기" style={{ display: "none" }}>
+              📂 전체 ({11})
+            </button>
             <button data-jamsa-module="home" onClick={() => setModule("home")}
               style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700,
                 background: module === "home" ? "linear-gradient(135deg,#059669,#0891b2)" : "transparent",
@@ -30855,6 +30875,82 @@ function AppInner() {
           </button>
         </div>
       </div>
+
+      {/* 📱 모바일 전체 카테고리 그리드 — 11개 모듈을 큰 카드로 한눈에 */}
+      {categoryGridOpen && (() => {
+        const cats = [
+          { k:"home",        i:"🗺️", l:"통합지도",     c:"linear-gradient(135deg,#059669,#0891b2)", isModule:true },
+          { k:"facility",    i:"🛠",  l:"시설점검",     c:"linear-gradient(135deg,#3b5bdb,#1e3a8a)", isModule:true },
+          { k:"inventory",   i:"📦", l:"재고관리",     c:"linear-gradient(135deg,#3b5bdb,#1e3a8a)", isModule:true },
+          { k:"safety",      i:"🛡️", l:"안전관리",     c:"linear-gradient(135deg,#ef4444,#b91c1c)", isModule:true },
+          { k:"subagents",   i:"🤖", l:"서브에이전트", c:"linear-gradient(135deg,#7c3aed,#2563eb)", isModule:true },
+          { k:"clouddb",     i:"☁️", l:"DB 클라우드",  c:"linear-gradient(135deg,#0ea5e9,#059669)", isModule:true },
+          { k:"_cctv",       i:"📹", l:"CCTV 관제",    c:"linear-gradient(135deg,#0891b2,#059669)", url:"https://cctv.thejamsa.com" },
+          { k:"schedule",    i:"📅", l:"근무일지",     c:"linear-gradient(135deg,#7c3aed,#0891b2)", isModule:true },
+          { k:"hr",          i:"👥", l:"직원관리",     c:"linear-gradient(135deg,#c9a96e,#a8864a)", isModule:true },
+          { k:"reservation", i:"🎫", l:"단체예약",     c:"linear-gradient(135deg,#5D3A6B,#7B5290)", isModule:true },
+          { k:"_attend",     i:"👥", l:"출퇴근",       c:"linear-gradient(135deg,#10b981,#059669)", url:"/attendance" },
+        ];
+        return (
+          <div onClick={() => setCategoryGridOpen(false)}
+            style={{
+              position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)",
+              backdropFilter: "blur(8px)", zIndex: 10000,
+              display: "flex", alignItems: "flex-start", justifyContent: "center",
+              padding: "20px 16px", overflowY: "auto",
+              animation: "jamsaDrawerFade 0.2s ease-out",
+            }}>
+            <div onClick={e => e.stopPropagation()}
+              style={{ width: "100%", maxWidth: 480 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, color: "#fff" }}>
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 900 }}>📂 전체 카테고리</div>
+                  <div style={{ fontSize: 11, opacity: 0.7, marginTop: 3 }}>이동할 모듈을 선택하세요</div>
+                </div>
+                <button onClick={() => setCategoryGridOpen(false)}
+                  style={{ width: 36, height: 36, borderRadius: 8, background: "rgba(255,255,255,0.12)", border: "none", color: "#fff", cursor: "pointer", fontSize: 18, fontWeight: 800 }}>×</button>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+                {cats.map(c => {
+                  const isActive = c.isModule && c.k === module;
+                  const handle = () => {
+                    setCategoryGridOpen(false);
+                    if (c.isModule) {
+                      window.location.hash = c.k;
+                      setModule(c.k);
+                    } else if (c.url) {
+                      const w = window.open(c.url, "_blank", "noopener");
+                      if (!w) location.href = c.url;
+                    }
+                  };
+                  return (
+                    <div key={c.k} onClick={handle}
+                      style={{
+                        padding: "18px 8px", borderRadius: 12,
+                        background: isActive ? c.c : "rgba(255,255,255,0.07)",
+                        border: isActive ? "2px solid #fff" : "2px solid rgba(255,255,255,0.1)",
+                        cursor: "pointer", textAlign: "center",
+                        transition: "all 0.15s",
+                        minHeight: 88,
+                        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6,
+                        boxShadow: isActive ? "0 4px 16px rgba(255,255,255,0.2)" : "none",
+                      }}>
+                      <div style={{ fontSize: 30 }}>{c.i}</div>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: "#fff", lineHeight: 1.2 }}>
+                        {c.l}
+                        {!c.isModule && <span style={{ fontSize: 8, opacity: 0.7, marginLeft: 2 }}>↗</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ marginTop: 12, padding: "8px 12px", background: "rgba(255,255,255,0.05)", borderRadius: 6, fontSize: 10, color: "rgba(255,255,255,0.55)", textAlign: "center" }}>
+                💡 카드를 탭하면 해당 모듈로 이동 · 현재 모듈은 흰 보더로 표시
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* 📱 모바일 햄버거 드로어 — 시스템 도구 모음 */}
       {mobileMenuOpen && (
