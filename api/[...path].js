@@ -32,6 +32,7 @@ import staffDispatch from '../api_handlers/staff-dispatch.js';
 import staffLocations from '../api_handlers/staff-locations.js';
 import staffLocationUpdate from '../api_handlers/staff-location-update.js';
 import preciseLocation from '../api_handlers/precise-location.js';
+import presenceCctvAnalyze from '../api_handlers/presence-cctv-analyze.js';
 import consent from '../api_handlers/consent.js';
 import correction from '../api_handlers/correction.js';
 import customerSession from '../api_handlers/customer-session.js';
@@ -80,6 +81,7 @@ const routes = {
   'staff-locations': staffLocations,
   'staff-location-update': staffLocationUpdate,
   'precise-location': preciseLocation,
+  'presence-cctv-analyze': presenceCctvAnalyze,
   'consent': consent,
   'correction': correction,
   'customer-session': customerSession,

@@ -104,6 +104,8 @@
     { "source": "/coupon/:code", "destination": "/coupon.html" },
     { "source": "/beacon-manual", "destination": "/beacon-manual.html" },
     { "source": "/manual/beacon", "destination": "/beacon-manual.html" },
+    { "source": "/minew-setup", "destination": "/minew-setup.html" },
+    { "source": "/manual/minew", "destination": "/minew-setup.html" },
     { "source": "/", "destination": "/index.html" }
   ],
   "crons": [

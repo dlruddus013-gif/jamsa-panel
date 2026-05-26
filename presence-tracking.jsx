@@ -89,6 +89,13 @@ export function PresenceTrackingPanel() {
   const [staffBeacons, setStaffBeacons] = useState([]);
   const [showStaffBind, setShowStaffBind] = useState(false);
   const [editingGwId, setEditingGwId] = useState(null);
+  // CCTV 자동 추적 — 각 활성 presence_event 별 입장/30s/변화/퇴장 스냅샷 시계열
+  const [cctvSnapshotsByEvent, setCctvSnapshotsByEvent] = useState({}); // { [presence_event_id]: [{...row}] }
+  const [cctvTrackingOn, setCctvTrackingOn] = useState(() => {
+    try { return localStorage.getItem("jamsa_cctv_auto_track") !== "0"; } catch (e) { return true; }
+  });
+  const [expandedEventId, setExpandedEventId] = useState(null);
+  const cctvTickRef = useRef({}); // { [presence_event_id]: lastTickAt }
   // 비콘→스팟 감지 로그 (localStorage 기반, Supabase 없어도 작동)
   const [localLogs, setLocalLogs] = useState(() => getPresenceLogs());
   // 새 감지 이벤트 수신 시 로그 갱신
@@ -353,6 +360,171 @@ export function PresenceTrackingPanel() {
     return { active, planned, offline, online, detections24h, total: gatewayInfra.length };
   }, [gatewayInfra]);
 
+  // ───── CCTV 자동 추적 ─────
+  // 활성 presence_events 마다 30초 주기로 스냅샷 + AI 분석 + 로그
+  // (입장 직후의 entry 행은 DB 트리거가 자동 생성, 여기서는 30s/변화/퇴장 분석)
+  const cctvSnapServer = () => {
+    try {
+      const v = (localStorage.getItem("jamsa_cctv_snap_server") || "").replace(/\/+$/, "");
+      if (v) return v;
+    } catch (e) {}
+    return location.protocol === "https:" ? "https://cctv.thejamsa.com" : "http://localhost:5556";
+  };
+
+  // CCTV 스냅샷 fetch → base64 (브라우저가 LAN/원격 CCTV 서버에 접근)
+  async function fetchCctvSnapshotAsBase64(channel) {
+    if (channel == null) return null;
+    const base = cctvSnapServer();
+    const url = `${base}/snapshot?channel=${channel}&_=${Date.now()}`;
+    try {
+      const r = await fetch(url, { cache: "no-store" });
+      if (!r.ok) return null;
+      const blob = await r.blob();
+      return await new Promise((resolve) => {
+        const fr = new FileReader();
+        fr.onloadend = () => resolve(fr.result);
+        fr.onerror = () => resolve(null);
+        fr.readAsDataURL(blob);
+      });
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // 한 presence_event 에 대해 1회 분석 + 로깅
+  async function runCctvAnalysisForPresence(p, eventType = "tick_30s") {
+    if (!p || !p.presence_event_id) return null;
+    if (p.cctv_channel == null) return null;
+
+    const t0 = Date.now();
+    const snapUrl = `${cctvSnapServer()}/snapshot?channel=${p.cctv_channel}`;
+    let aiSummary = null, aiDetail = null, aiActions = null, aiConfidence = null;
+    let snapshotB64 = null;
+
+    // 1) 스냅샷 fetch
+    snapshotB64 = await fetchCctvSnapshotAsBase64(p.cctv_channel);
+
+    // 2) AI 분석 (스냅샷 fetch 성공한 경우만)
+    if (snapshotB64) {
+      try {
+        const ar = await fetch("/api/cctv-ai-analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ch: p.cctv_channel,
+            zone: p.zone_name,
+            image: snapshotB64,
+            context: `직원 ${p.staff_name || p.beacon_uuid || "익명"} · 입장 후 ${p.dwell_sec_now || 0}초 경과`,
+          }),
+        });
+        const ad = await ar.json().catch(() => ({}));
+        if (ad?.ok || ad?.result) {
+          const r = ad.result || ad;
+          aiSummary = r.summary || null;
+          aiDetail  = r.detail  || null;
+          aiActions = r.objects || (r.actionRequired ? [{ kind: "action", label: r.actionRequired }] : null);
+          aiConfidence = r.peopleConfidence ?? null;
+        }
+      } catch (e) {
+        aiSummary = `(AI 분석 실패: ${e.message})`;
+      }
+    } else {
+      aiSummary = "(CCTV 스냅샷 fetch 실패 — CCTV 서버 가동 확인)";
+    }
+
+    // 3) 로그 저장 (자동으로 behavior_change 승격 판단)
+    try {
+      const lr = await fetch("/api/presence-cctv-analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          presence_event_id: p.presence_event_id,
+          staff_id:        p.staff_id,
+          staff_name:      p.staff_name,
+          beacon_uuid:     p.beacon_uuid,
+          zone_id:         p.zone_id,
+          zone_name:       p.zone_name,
+          gateway_serial:  p.gateway_serial,
+          cctv_channel:    p.cctv_channel,
+          event_type:      eventType,
+          dwell_sec:       p.dwell_sec_now || null,
+          snapshot_url:    snapUrl,
+          snapshot_b64:    null, // 작은 썸네일만 저장하고 싶으면 별도 리사이즈 필요
+          ai_provider:     "auto",
+          ai_summary:      aiSummary,
+          ai_detail:       aiDetail,
+          ai_actions:      aiActions,
+          ai_confidence:   aiConfidence,
+          ai_elapsed_ms:   Date.now() - t0,
+        }),
+      });
+      const ld = await lr.json().catch(() => ({}));
+      return ld.snapshot || null;
+    } catch (e) {
+      console.warn("[cctv-presence-log]", e.message);
+      return null;
+    }
+  }
+
+  // 각 active presence 의 스냅샷 시계열을 불러옴
+  const loadSnapshotsForEvent = async (presenceEventId) => {
+    const sb = supabaseRef.current;
+    if (!sb) return;
+    const { data } = await sb.from("presence_cctv_snapshots")
+      .select("*")
+      .eq("presence_event_id", presenceEventId)
+      .order("occurred_at", { ascending: true });
+    setCctvSnapshotsByEvent(prev => ({ ...prev, [presenceEventId]: data || [] }));
+  };
+
+  // 30초 주기 자동 추적 루프
+  useEffect(() => {
+    if (!cctvTrackingOn) return;
+    let cancelled = false;
+
+    const tick = async () => {
+      if (cancelled) return;
+      const sb = supabaseRef.current;
+      if (!sb) return;
+
+      try {
+        const { data: actives } = await sb.from("v_active_cctv_tracking").select("*");
+        if (!actives || actives.length === 0) return;
+
+        const now = Date.now();
+        for (const p of actives) {
+          // CCTV 채널이 없는 건 스킵
+          if (p.cctv_channel == null) continue;
+          const lastAt = cctvTickRef.current[p.presence_event_id] || 0;
+          // 직전 분석 후 28초 이상 지났으면 새 tick
+          if (now - lastAt < 28000) continue;
+          cctvTickRef.current[p.presence_event_id] = now;
+          const inserted = await runCctvAnalysisForPresence(p, "tick_30s");
+          if (inserted && !cancelled) {
+            await loadSnapshotsForEvent(p.presence_event_id);
+          }
+        }
+      } catch (e) {
+        console.warn("[cctv-tracker tick]", e.message);
+      }
+    };
+
+    // 즉시 1회 + 30초 간격
+    tick();
+    const id = setInterval(tick, 30000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [cctvTrackingOn, presence.length]);
+
+  // presence 가 추가/제거되면 그 이벤트의 스냅샷도 같이 로드
+  useEffect(() => {
+    presence.forEach(p => {
+      const eventId = p.presence_event_id || p.id;
+      if (eventId && !(eventId in cctvSnapshotsByEvent)) {
+        loadSnapshotsForEvent(eventId);
+      }
+    });
+  }, [presence]);
+
   function subscribeRealtime(sb) {
     if (channelRef.current) return;
     try {
@@ -365,6 +537,10 @@ export function PresenceTrackingPanel() {
         .on("postgres_changes", { event: "*", schema: "public", table: "activity_log" }, () => loadAll(sb))
         .on("postgres_changes", { event: "*", schema: "public", table: "beacon_gateways" }, () => loadAll(sb))
         .on("postgres_changes", { event: "*", schema: "public", table: "staff_beacons"   }, () => loadAll(sb))
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "presence_cctv_snapshots" }, (payload) => {
+          const eventId = payload?.new?.presence_event_id;
+          if (eventId) loadSnapshotsForEvent(eventId);
+        })
         .subscribe();
     } catch (e) {}
   }
@@ -692,21 +868,44 @@ export function PresenceTrackingPanel() {
             )}
           </div>
 
-          {/* ─── (3) 현재 위치 (각 직원) ─── */}
+          {/* ─── (3) 현재 위치 + CCTV 자동 추적 (각 직원) ─── */}
           <div style={{ padding: "12px 14px", maxHeight: 560, overflowY: "auto", background: "rgba(15,23,42,0.4)" }}>
-            <SectionTitle>📍 직원별 현재 위치</SectionTitle>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <SectionTitle>📍 직원별 현재 위치 + CCTV 행동 분석</SectionTitle>
+              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 9, color: "#94a3b8", cursor: "pointer", userSelect: "none" }}>
+                <input type="checkbox" checked={cctvTrackingOn}
+                  onChange={e => {
+                    setCctvTrackingOn(e.target.checked);
+                    try { localStorage.setItem("jamsa_cctv_auto_track", e.target.checked ? "1" : "0"); } catch (_) {}
+                  }}
+                  style={{ accentColor: "#0891b2" }} />
+                <span>30s 자동 추적</span>
+              </label>
+            </div>
+
             {presence.length === 0 ? (
-              <EmptyHint>현재 감지되는 비콘 없음</EmptyHint>
+              <EmptyHint>
+                현재 감지되는 비콘 없음
+                <br/><br/>
+                <span style={{ fontSize: 10 }}>
+                  💡 비콘이 게이트웨이에 잡히면<br/>
+                  자동으로 CCTV 캡쳐 + AI 분석 시작 (입장/30s/변화/퇴장)
+                </span>
+              </EmptyHint>
             ) : (
               presence.map(p => {
+                const eventId = p.presence_event_id || p.id;
                 const cctvUrl = getCctvUrl(p.cctv_channel);
                 const dwell = Math.floor((Date.now() - new Date(p.entered_at).getTime()) / 60000);
+                const snaps = cctvSnapshotsByEvent[eventId] || [];
+                const lastSnap = snaps[snaps.length - 1];
+                const isExpanded = expandedEventId === eventId;
                 return (
-                  <div key={p.staff_id || p.beacon_uuid}
+                  <div key={eventId || p.staff_id || p.beacon_uuid}
                     style={{ padding: 10, marginBottom: 6, borderRadius: 6, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 3 }}>
                       <div style={{ fontSize: 12, fontWeight: 700, color: "#f1f5f9" }}>
-                        {p.staff_name || `비콘 ${(p.beacon_uuid||"").slice(0,8)}`}
+                        {p.staff_name || <em style={{ color: "#fbbf24" }}>익명비콘 {(p.beacon_uuid||"").slice(0,8)}</em>}
                       </div>
                       <span style={{ fontSize: 10, fontFamily: "ui-monospace,monospace", color: "#a78bfa", fontWeight: 700 }}>
                         {dwell}분째
@@ -719,12 +918,101 @@ export function PresenceTrackingPanel() {
                     <div style={{ fontSize: 10, color: "#64748b", fontFamily: "ui-monospace,monospace", marginBottom: 6 }}>
                       입장 {fmtDateTime(p.entered_at)} · RSSI {p.max_rssi ?? "—"} · 감지 {p.detection_count}회
                     </div>
-                    {cctvUrl && (
-                      <a href={cctvUrl} target="_blank" rel="noopener"
-                        style={{ display: "inline-block", padding: "3px 9px", borderRadius: 4, background: "linear-gradient(135deg,#0891b2,#059669)", color: "#fff", fontSize: 10, fontWeight: 700, textDecoration: "none" }}>
-                        📹 CCTV ch{p.cctv_channel} ↗
-                      </a>
+
+                    {/* CCTV 추적 진행 — 입장/30s/변화/퇴장 스냅샷 시계열 */}
+                    {snaps.length > 0 && (
+                      <div style={{ marginTop: 6, padding: 7, background: "rgba(8,145,178,0.08)", borderRadius: 5, border: "1px solid rgba(8,145,178,0.2)" }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
+                          <span style={{ fontSize: 9, fontWeight: 800, color: "#67e8f9", letterSpacing: ".05em" }}>
+                            📹 CCTV 행동 추적 ({snaps.length})
+                          </span>
+                          <button onClick={() => setExpandedEventId(isExpanded ? null : eventId)}
+                            style={{ background: "transparent", border: "1px solid rgba(103,232,249,0.3)", color: "#67e8f9", borderRadius: 3, padding: "1px 7px", fontSize: 9, cursor: "pointer", fontWeight: 700 }}>
+                            {isExpanded ? "▴ 접기" : "▾ 전체 보기"}
+                          </button>
+                        </div>
+                        {/* 항상 보이는 마지막 분석 결과 */}
+                        {lastSnap && (
+                          <div style={{ display: "flex", alignItems: "flex-start", gap: 7 }}>
+                            <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 3, fontWeight: 700,
+                              background: lastSnap.event_type === "entry" ? "rgba(34,197,94,0.25)"
+                                : lastSnap.event_type === "behavior_change" ? "rgba(251,191,36,0.25)"
+                                : lastSnap.event_type === "exit" ? "rgba(220,38,38,0.25)"
+                                : "rgba(148,163,184,0.2)",
+                              color: lastSnap.event_type === "entry" ? "#86efac"
+                                : lastSnap.event_type === "behavior_change" ? "#fbbf24"
+                                : lastSnap.event_type === "exit" ? "#fca5a5"
+                                : "#cbd5e1",
+                              flexShrink: 0,
+                            }}>
+                              {lastSnap.event_type === "entry" ? "입장"
+                                : lastSnap.event_type === "behavior_change" ? "변화"
+                                : lastSnap.event_type === "exit" ? "퇴장"
+                                : `30s #${lastSnap.tick_seq ?? 0}`}
+                            </span>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 10, color: "#e0f2fe", lineHeight: 1.4 }}>
+                                {lastSnap.ai_summary || "(분석 대기 중)"}
+                              </div>
+                              <div style={{ fontSize: 9, color: "#64748b", marginTop: 2, fontFamily: "ui-monospace,monospace" }}>
+                                {fmtTimeFull(lastSnap.occurred_at)}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        {/* 펼침 시 전체 시계열 */}
+                        {isExpanded && (
+                          <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed rgba(103,232,249,0.2)" }}>
+                            {snaps.map((s, i) => (
+                              <div key={s.id || i} style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "flex-start" }}>
+                                {s.snapshot_url && (
+                                  <img src={s.snapshot_url} loading="lazy" alt=""
+                                    style={{ width: 48, height: 36, objectFit: "cover", borderRadius: 3, border: "1px solid rgba(255,255,255,0.1)", flexShrink: 0, background: "#0f172a" }}
+                                    onError={(e) => { e.target.style.display = "none"; }} />
+                                )}
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontSize: 9, color: "#94a3b8", fontFamily: "ui-monospace,monospace", display: "flex", gap: 5, alignItems: "center", marginBottom: 1 }}>
+                                    <span style={{ fontSize: 8, padding: "0px 4px", borderRadius: 2, fontWeight: 700,
+                                      background: s.event_type === "entry" ? "rgba(34,197,94,0.2)" : s.event_type === "behavior_change" ? "rgba(251,191,36,0.2)" : s.event_type === "exit" ? "rgba(220,38,38,0.2)" : "rgba(148,163,184,0.15)",
+                                      color: s.event_type === "entry" ? "#86efac" : s.event_type === "behavior_change" ? "#fbbf24" : s.event_type === "exit" ? "#fca5a5" : "#94a3b8" }}>
+                                      {s.event_type === "entry" ? "IN" : s.event_type === "behavior_change" ? "Δ" : s.event_type === "exit" ? "OUT" : `t${s.tick_seq ?? 0}`}
+                                    </span>
+                                    <span>{fmtTimeFull(s.occurred_at)}</span>
+                                    {s.dwell_sec != null && <span>· {Math.floor(s.dwell_sec/60)}m{s.dwell_sec%60}s</span>}
+                                  </div>
+                                  <div style={{ fontSize: 10, color: "#cbd5e1", lineHeight: 1.4 }}>
+                                    {s.ai_summary || "(분석 결과 없음)"}
+                                  </div>
+                                  {s.ai_changed_from && (
+                                    <div style={{ fontSize: 8, color: "#fbbf24", marginTop: 1, fontStyle: "italic" }}>
+                                      ⤴ 이전: "{s.ai_changed_from.slice(0, 50)}..."
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     )}
+
+                    <div style={{ marginTop: 6, display: "flex", gap: 4 }}>
+                      {cctvUrl && (
+                        <a href={cctvUrl} target="_blank" rel="noopener"
+                          style={{ display: "inline-block", padding: "3px 9px", borderRadius: 4, background: "linear-gradient(135deg,#0891b2,#059669)", color: "#fff", fontSize: 10, fontWeight: 700, textDecoration: "none" }}>
+                          📹 CCTV ch{p.cctv_channel} ↗
+                        </a>
+                      )}
+                      {p.cctv_channel != null && (
+                        <button onClick={async () => {
+                          const inserted = await runCctvAnalysisForPresence({ ...p, presence_event_id: eventId, dwell_sec_now: dwell*60 }, "manual");
+                          if (inserted) loadSnapshotsForEvent(eventId);
+                        }}
+                          style={{ padding: "3px 9px", borderRadius: 4, background: "rgba(124,58,237,0.3)", color: "#c4b5fd", border: "1px solid rgba(167,139,250,0.4)", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                          ⚡ 지금 분석
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })
@@ -874,7 +1162,12 @@ function StaffBeaconBindingModal({ sb, current, onClose, onChanged }) {
 
   useEffect(() => {
     if (!sb) return;
-    sb.from("staff").select("id, name, role").order("name").then(({ data }) => setStaffList(data || []));
+    // staff 테이블에는 role 컬럼이 없음 — dept_id 사용. 이름 정렬 유지
+    sb.from("staff").select("id, name, dept_id, is_part_time, active").eq("active", true).order("name")
+      .then(({ data, error }) => {
+        if (error) console.warn("[staff list]", error.message);
+        setStaffList(data || []);
+      });
   }, [sb]);
 
   const add = async () => {
@@ -921,8 +1214,12 @@ function StaffBeaconBindingModal({ sb, current, onClose, onChanged }) {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
               <select value={staffId} onChange={e => setStaffId(e.target.value)}
                 style={{ padding: 6, background: "#1e293b", color: "#f1f5f9", border: "1px solid #475569", borderRadius: 4, fontSize: 11 }}>
-                <option value="">— 직원 선택 —</option>
-                {staffList.map(s => <option key={s.id} value={s.id}>{s.name} ({s.role})</option>)}
+                <option value="">— 직원 선택 ({staffList.length}명) —</option>
+                {staffList.map(s => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}{s.is_part_time ? " (알바)" : ""}{s.dept_id ? ` · dept#${s.dept_id}` : ""}
+                  </option>
+                ))}
               </select>
               <input type="text" value={beaconLabel} onChange={e => setBeaconLabel(e.target.value)}
                 placeholder="라벨 (선택, 예: BEACON-A1)"
