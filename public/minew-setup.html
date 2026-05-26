@@ -178,20 +178,24 @@ python minew_server.py</pre>
   <div class="endpoint-grid">
     <div class="endpoint">
       <div><span class="method method-post">POST</span><span class="url">/minew</span></div>
-      <div class="desc">Minew 게이트웨이 webhook 수신 URL<br>게이트웨이 설정에 이 주소를 등록</div>
+      <div class="desc">Minew 게이트웨이 webhook 수신 URL<br>게이트웨이 설정에 이 주소를 등록 (JSON + Binary 자동 분기)</div>
     </div>
     <div class="endpoint">
       <div><span class="method method-get">GET</span><span class="url">/health</span></div>
-      <div class="desc">서버 상태 확인 (uptime, 메모리 등)</div>
+      <div class="desc">{ status: "running", receive_url: "/minew" }</div>
     </div>
     <div class="endpoint">
-      <div><span class="method method-get">GET</span><span class="url">/logs</span></div>
-      <div class="desc">최근 수신 로그 (since=ID, limit=N 옵션)</div>
+      <div><span class="method method-get">GET</span><span class="url">/logs?limit=30</span></div>
+      <div class="desc">최근 N건 (DESC by id) — 평면 컬럼 (gateway_mac, beacon_mac, rssi, uuid, major, minor, raw_file)</div>
     </div>
     <div class="endpoint">
-      <div><span class="method method-get">GET</span><span class="url">/raw/:id</span></div>
-      <div class="desc">특정 raw 페이로드 JSON 원본</div>
+      <div><span class="method method-get">GET</span><span class="url">/raw/{log_id}</span></div>
+      <div class="desc">특정 id 의 행 전체 + raw_json 파싱된 객체</div>
     </div>
+  </div>
+  <div class="tip" style="margin-top:14px">
+    💡 저장: <code>minew_ble_data.db</code> (SQLite) + <code>minew_received.jsonl</code> + <code>raw_payloads/</code> 폴더<br>
+    JSON 페이로드의 다양한 키명을 자동 인식 (gateway_mac / gatewayMac / gw_mac / device_mac / mac 등 → find_value 재귀 탐색)
   </div>
   <div class="tip" style="margin-top:14px">
     💡 Minew 게이트웨이 관리 페이지 (보통 192.168.1.xxx) 에 접속 → "데이터 전송"/"Webhook" 메뉴에서<br>
@@ -209,11 +213,12 @@ python minew_server.py</pre>
   <div class="step">
     <div class="step-num">A</div>
     <div>
-      <h3>브리지 스크립트 다운로드</h3>
-      <p>GitHub repo 의 <code>scripts/jamsa-minew-bridge.py</code> 파일을 박물관 PC 의 minew_server.py 옆에 복사:</p>
+      <h3>브리지 스크립트 다운로드 (v2 · 2026-05-25)</h3>
+      <p>실제 <code>minew_server.py</code> 엔드포인트 사양(`/logs?limit=N` DESC + `/raw/{id}`) 에 맞춰 보정된 버전. 박물관 PC 의 <code>minew_server.py</code> 옆에 복사:</p>
       <pre class="path">C:\minew_server\jamsa-minew-bridge.py</pre>
-      <p>또는 PowerShell 로 직접 다운로드:</p>
+      <p>PowerShell 로 직접 다운로드:</p>
       <pre class="cmd">curl -o C:\minew_server\jamsa-minew-bridge.py https://raw.githubusercontent.com/dlruddus013-gif/jamsa-panel/main/scripts/jamsa-minew-bridge.py</pre>
+      <div class="tip">💡 브리지는 minew_server.py 와 <strong>별도 콘솔 창</strong>에서 동시에 실행됩니다. minew_server 가 SQLite 에 적재하면 → 브리지가 3초마다 새 행만 골라서 → Vercel 로 forward.</div>
     </div>
   </div>
 

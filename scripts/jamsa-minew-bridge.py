@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """
 잠사박물관 Minew BLE 게이트웨이 → Vercel webhook 브리지
+(정찬주 전무님 첨부 minew_server.py 의 실제 endpoint 에 맞춰 보정 — 2026-05-25)
 
-배경:
-  Minew G1/G2 게이트웨이는 webhook URL 을 단 하나만 설정할 수 있는데,
-  현장에서는 minew_server.py (FastAPI, port 8080) 가 raw 데이터를
-  로컬 SQLite + JSONL 로 저장하기 위해 그 자리를 차지하고 있다.
-  이 브리지는 minew_server.py 와 함께 돌면서, 새로 들어온 raw 페이로드를
-  주기적으로 폴링해서 우리 클라우드의 /api/beacon-webhook 으로 forward 한다.
+minew_server.py 실제 사양:
+  POST /minew        — Minew G1-E 게이트웨이가 POST 하는 수신 URL
+  GET  /health       — { status, server, receive_url }
+  GET  /logs?limit=N — 최근 N건 (DESC by id), `since` 파라미터 없음
+  GET  /raw/{id}     — 특정 id 의 row 전체 (raw_json 포함)
+
+이 브리지 동작:
+  1) /logs?limit=200 으로 최근 데이터 가져옴 (DESC 정렬)
+  2) state-file 의 last_id 보다 큰 것만 골라 ASC 로 정렬
+  3) 각각 /raw/{id} 로 raw_json 가져옴
+  4) Vercel /api/beacon-webhook 으로 forward (raw_json + gateway_mac 힌트)
+  5) state-file 에 last_id 저장
 
 사용법:
   pip install requests
@@ -15,23 +22,24 @@
       --minew  http://localhost:8080 \\
       --webhook https://jamsa-panel.vercel.app/api/beacon-webhook \\
       --interval 3 \\
-      --state-file C:\\minew_server\\bridge-state.json
+      --state-file C:\\minew_server\\bridge-state.json \\
+      --verbose
 
 옵션:
   --minew         : minew_server.py 가 떠 있는 base URL (default http://localhost:8080)
   --webhook       : forward 대상 (default https://jamsa-panel.vercel.app/api/beacon-webhook)
   --interval      : polling 주기 초 (default 3)
   --state-file    : 마지막으로 처리한 raw id 기억하는 파일
-  --logs-endpoint : /logs 경로 (default /logs?since=ID&limit=200)
+  --batch-limit   : /logs 한 번에 가져올 행 수 (default 200, 트래픽 많으면 500까지)
+  --verbose       : 매 forward 마다 1줄 출력
 
-자동 시작:
-  Windows 작업 스케줄러 → 작업 만들기 → 트리거: 시스템 시작 시
-  → 동작: python.exe + 이 스크립트 경로
+자동 시작 (Windows 작업 스케줄러):
+  트리거: 시스템 시작 시
+  동작:   python.exe  C:\\minew_server\\jamsa-minew-bridge.py
 """
 
 import argparse
 import json
-import os
 import sys
 import time
 from datetime import datetime
@@ -46,44 +54,94 @@ except ImportError:
 
 def load_state(path: Path) -> dict:
     if not path.exists():
-        return {"last_id": 0, "forwarded": 0, "errors": 0}
+        return {"last_id": 0, "forwarded": 0, "errors": 0, "started_at": datetime.now().isoformat()}
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        return {"last_id": 0, "forwarded": 0, "errors": 0}
+        return {"last_id": 0, "forwarded": 0, "errors": 0, "started_at": datetime.now().isoformat()}
 
 
 def save_state(path: Path, state: dict):
     path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def fetch_new_payloads(minew_base: str, since_id: int, limit: int = 200) -> list:
-    """minew_server.py /logs?since=ID&limit=N 에서 새 페이로드 가져오기"""
-    url = f"{minew_base}/logs?since={since_id}&limit={limit}"
+def fetch_recent_logs(minew_base: str, since_id: int, limit: int = 200) -> list:
+    """minew_server.py /logs?limit=N → since_id 보다 큰 것만 ASC 정렬해서 반환"""
+    url = f"{minew_base}/logs?limit={limit}"
     r = requests.get(url, timeout=10)
     r.raise_for_status()
-    data = r.json()
-    # 응답 형식 추정: {"logs": [{id, ts, payload, ...}, ...]}
-    # 형식이 다르면 사용자가 minew_server.py 의 /logs 응답에 맞게 수정
-    if isinstance(data, list):
-        return data
-    return data.get("logs", []) or data.get("data", []) or []
+    rows = r.json()  # DESC by id
+    if not isinstance(rows, list):
+        return []
+    new_rows = [row for row in rows if isinstance(row, dict) and (row.get("id") or 0) > since_id]
+    new_rows.sort(key=lambda r: r.get("id", 0))  # ASC
+    return new_rows
 
 
-def forward_to_webhook(webhook: str, payload: dict, gateway_serial_hint: str = None) -> bool:
-    """우리 cloud /api/beacon-webhook 으로 forward"""
-    # /api/beacon-webhook 가 받는 형식에 맞춰서 변환
-    forward = payload if isinstance(payload, dict) else {"raw": payload}
-    if gateway_serial_hint and "gatewaySerial" not in forward:
-        forward["gatewaySerial"] = gateway_serial_hint
-
-    r = requests.post(webhook, json=forward, timeout=15)
+def fetch_raw(minew_base: str, log_id: int) -> dict:
+    """특정 id 의 행 전체 (raw_json 포함)"""
+    r = requests.get(f"{minew_base}/raw/{log_id}", timeout=10)
     r.raise_for_status()
-    return r.ok
+    return r.json()
+
+
+def build_forward_payload(log_row: dict, raw_row: dict) -> dict:
+    """
+    Vercel /api/beacon-webhook 가 기대하는 형식으로 변환.
+    우리 webhook handler 는 다양한 별칭(gatewaySerial / gateway / gw_mac / deviceMac 등)을
+    이미 지원하므로 raw_json 을 그대로 보내고, 누락된 게이트웨이 힌트만 보충한다.
+    """
+    payload = raw_row.get("raw_json")
+    if not isinstance(payload, dict):
+        # JSON 파싱 실패 / binary 페이로드인 경우 → 메타데이터 + base64 로 감싸 보냄
+        payload = {
+            "_source": "minew-bridge",
+            "_payload_type": raw_row.get("payload_type"),
+            "raw_base64": raw_row.get("raw_base64"),
+            "raw_hex_preview": (raw_row.get("raw_hex") or "")[:200],
+        }
+
+    # 게이트웨이 시리얼 보강 (raw_json 에 없으면 minew 의 flat 필드에서 가져옴)
+    if "gatewaySerial" not in payload and "gateway" not in payload:
+        gw_mac = (log_row.get("gateway_mac") or raw_row.get("gateway_mac")
+                  or payload.get("gateway_mac") or payload.get("gw_mac"))
+        if gw_mac:
+            payload["gatewaySerial"] = gw_mac
+
+    # 단일 비콘 형태 (Minew G1-E 가 1건씩 보낼 때) → beacons 배열로 변환
+    has_beacons = any(k in payload for k in ("beacons", "obj", "advertisements", "data", "devices"))
+    if not has_beacons:
+        beacon_mac = log_row.get("beacon_mac") or raw_row.get("beacon_mac") or payload.get("beacon_mac")
+        beacon_rssi = log_row.get("rssi") or raw_row.get("rssi") or payload.get("rssi")
+        beacon_uuid = log_row.get("uuid") or raw_row.get("uuid") or payload.get("uuid")
+        if beacon_mac or beacon_uuid:
+            payload["beacons"] = [{
+                "mac": beacon_mac,
+                "uuid": beacon_uuid or beacon_mac,
+                "rssi": int(beacon_rssi) if beacon_rssi and str(beacon_rssi).lstrip("-").isdigit() else None,
+                "major": payload.get("major"),
+                "minor": payload.get("minor"),
+            }]
+
+    # 수신 시각 메타
+    if log_row.get("received_at"):
+        payload.setdefault("timestamp", log_row["received_at"])
+
+    return payload
+
+
+def forward_to_webhook(webhook: str, payload: dict, timeout: int = 15) -> dict:
+    r = requests.post(webhook, json=payload, timeout=timeout)
+    if not r.ok:
+        raise requests.HTTPError(f"{r.status_code}: {r.text[:200]}", response=r)
+    try:
+        return r.json()
+    except Exception:
+        return {"ok": True, "_text": r.text[:200]}
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Minew → Vercel webhook bridge")
+    parser = argparse.ArgumentParser(description="Minew → Vercel webhook bridge (2026-05-25 ver.)")
     parser.add_argument("--minew", default="http://localhost:8080",
                         help="minew_server.py base URL")
     parser.add_argument("--webhook", default="https://jamsa-panel.vercel.app/api/beacon-webhook",
@@ -92,52 +150,57 @@ def main():
                         help="polling interval (seconds)")
     parser.add_argument("--state-file", default="bridge-state.json",
                         help="state file path")
-    parser.add_argument("--limit", type=int, default=200,
-                        help="max payloads per tick")
+    parser.add_argument("--batch-limit", type=int, default=200,
+                        help="rows per /logs call (max 500 권장)")
     parser.add_argument("--verbose", action="store_true",
                         help="print every forward")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="forward 안 하고 콘솔에만 출력")
     args = parser.parse_args()
 
     state_path = Path(args.state_file)
     state = load_state(state_path)
 
     print(f"╔════════════════════════════════════════════════════════════╗")
-    print(f"║  잠사 Minew BLE → Vercel Webhook Bridge                    ║")
+    print(f"║  잠사 Minew BLE → Vercel Webhook Bridge  v2 (2026-05-25)  ║")
     print(f"╚════════════════════════════════════════════════════════════╝")
     print(f"  Minew     : {args.minew}")
-    print(f"  Webhook   : {args.webhook}")
-    print(f"  Interval  : {args.interval}s")
+    print(f"  Webhook   : {args.webhook}{'  [DRY-RUN]' if args.dry_run else ''}")
+    print(f"  Interval  : {args.interval}s · batch {args.batch_limit}")
     print(f"  StateFile : {state_path.absolute()}")
-    print(f"  StartID   : {state['last_id']}  (지금까지 forward: {state.get('forwarded',0)})")
+    print(f"  StartID   : {state['last_id']}  (누적 forward: {state.get('forwarded',0)})")
     print("─" * 64)
 
     last_health = 0
     while True:
         tick_start = time.time()
         try:
-            payloads = fetch_new_payloads(args.minew, state["last_id"], args.limit)
+            new_rows = fetch_recent_logs(args.minew, state["last_id"], args.batch_limit)
             n_ok, n_err = 0, 0
             max_id = state["last_id"]
 
-            for p in payloads:
-                pid = p.get("id") or p.get("ID") or 0
-                if pid <= state["last_id"]:
-                    continue
-                payload = p.get("payload") or p.get("body") or p.get("data") or p
-                gw_serial = p.get("gateway") or p.get("gateway_serial") or p.get("device_mac")
+            for log_row in new_rows:
+                log_id = log_row.get("id") or 0
                 try:
-                    forward_to_webhook(args.webhook, payload, gw_serial)
+                    raw_row = fetch_raw(args.minew, log_id)
+                    payload = build_forward_payload(log_row, raw_row)
+
+                    if args.dry_run:
+                        print(f"  [DRY] #{log_id} → {json.dumps(payload, ensure_ascii=False)[:200]}")
+                    else:
+                        result = forward_to_webhook(args.webhook, payload)
+                        if args.verbose:
+                            bcount = result.get("received", 0) if isinstance(result, dict) else 0
+                            gw = result.get("gateway", "?") if isinstance(result, dict) else "?"
+                            print(f"  ✓ #{log_id}  gw={gw}  beacons={bcount}")
                     n_ok += 1
-                    max_id = max(max_id, pid)
-                    if args.verbose:
-                        bcount = len(payload.get("beacons") or payload.get("obj") or []) if isinstance(payload, dict) else 0
-                        print(f"  ✓ #{pid} gw={gw_serial} beacons={bcount}")
+                    max_id = max(max_id, log_id)
                 except requests.HTTPError as e:
                     n_err += 1
-                    print(f"  ✗ #{pid} HTTP {e.response.status_code}: {e.response.text[:120]}", file=sys.stderr)
+                    print(f"  ✗ #{log_id} HTTP: {e}", file=sys.stderr)
                 except Exception as e:
                     n_err += 1
-                    print(f"  ✗ #{pid} {type(e).__name__}: {e}", file=sys.stderr)
+                    print(f"  ✗ #{log_id} {type(e).__name__}: {e}", file=sys.stderr)
 
             if n_ok or n_err:
                 ts = datetime.now().strftime("%H:%M:%S")
@@ -145,6 +208,7 @@ def main():
             state["last_id"] = max_id
             state["forwarded"] = state.get("forwarded", 0) + n_ok
             state["errors"] = state.get("errors", 0) + n_err
+            state["last_tick_at"] = datetime.now().isoformat()
             save_state(state_path, state)
 
         except requests.ConnectionError:
