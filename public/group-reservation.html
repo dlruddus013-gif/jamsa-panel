@@ -4053,25 +4053,149 @@ function buildWeekSummary(weekBks){
   const wkPend=weekBks.filter(b=>b.status==='대기').length;
   const wkActCnt=weekBks.filter(b=>b.actualStudents!=null).length;
   const wkActPeople=weekBks.filter(b=>b.actualStudents!=null).reduce((s,b)=>s+(b.actualStudents||0)+(b.actualTeachers!=null?b.actualTeachers:b.teachers),0);
-  const addonTotals={};
-  let mealTotal={child:0,elem:0,teacher:0,name:''};
+
+  // ── 부가체험 집계 (메뉴별 + 날짜별 + 단체 리스트) ──
+  const addonAgg={}; // {name: {qty:N, days:{date:N}, groups:[{name,qty}]}}
+  // ── 단체식 집계 (메뉴별 + 날짜별 + 단체 리스트) ──
+  const mealAgg={};  // {name: {child,elem,teacher,total,days:{date:total},groups:[{name,qty}]}}
+
   weekBks.forEach(b=>{
     const useAct=b.actualStudents!=null;
     const addons=useAct?(b.actualAddonQty||[]):((b.addons||[]).map(a=>{
       const n=formCfg.addons.find(x=>a.includes(x.name));
       return n?{name:n.name,qty:b.students}:null;
     }).filter(Boolean));
-    addons.forEach(aq=>{addonTotals[aq.name]=(addonTotals[aq.name]||0)+(aq.qty||0);});
+    addons.forEach(aq=>{
+      if(!aq||!aq.name)return;
+      if(!addonAgg[aq.name])addonAgg[aq.name]={qty:0,days:{},groups:[]};
+      addonAgg[aq.name].qty+=(aq.qty||0);
+      addonAgg[aq.name].days[b.date]=(addonAgg[aq.name].days[b.date]||0)+(aq.qty||0);
+      addonAgg[aq.name].groups.push({name:b.name,qty:aq.qty||0,date:b.date});
+    });
+
+    // 단체식 — 잔존 '이용함' sentinel 데이터 보호 (shouldShowMealBadge 헬퍼와 동일 로직)
+    const mealValid=(b)=>{
+      if(!b||!b.meal)return false;
+      if(b.meal==='이용안함')return false;
+      if(b.meal==='이용함'&&!(b.courseType||'').includes('단체식'))return false;
+      return true;
+    };
     if(useAct&&b.actualMeal&&b.actualMealQty){
-      mealTotal.child+=(b.actualMealQty.child||0);mealTotal.elem+=(b.actualMealQty.elem||0);mealTotal.teacher+=(b.actualMealQty.teacher||0);mealTotal.name=b.actualMeal;
-    } else if(b.meal&&b.meal!=='이용안함'){
-      mealTotal.child+=(b.studentsChild||0);mealTotal.elem+=(b.studentsElem||0);mealTotal.teacher+=b.teachers;mealTotal.name=b.meal;
+      const nm=b.actualMeal;
+      if(!mealAgg[nm])mealAgg[nm]={child:0,elem:0,teacher:0,total:0,days:{},groups:[]};
+      const c=b.actualMealQty.child||0, e=b.actualMealQty.elem||0, t=b.actualMealQty.teacher||0;
+      mealAgg[nm].child+=c;mealAgg[nm].elem+=e;mealAgg[nm].teacher+=t;
+      mealAgg[nm].total+=(c+e+t);
+      mealAgg[nm].days[b.date]=(mealAgg[nm].days[b.date]||0)+(c+e+t);
+      mealAgg[nm].groups.push({name:b.name,qty:c+e+t,date:b.date});
+    } else if(mealValid(b)){
+      const nm=b.meal==='이용함'?'단체식':b.meal;
+      if(!mealAgg[nm])mealAgg[nm]={child:0,elem:0,teacher:0,total:0,days:{},groups:[]};
+      // studentsChild/Elem 없으면 students 전체를 유아로 가정
+      const c=b.studentsChild||(!b.studentsElem?b.students:0)||0;
+      const e=b.studentsElem||0;
+      const t=b.teachers||0;
+      mealAgg[nm].child+=c;mealAgg[nm].elem+=e;mealAgg[nm].teacher+=t;
+      mealAgg[nm].total+=(c+e+t);
+      mealAgg[nm].days[b.date]=(mealAgg[nm].days[b.date]||0)+(c+e+t);
+      mealAgg[nm].groups.push({name:b.name,qty:c+e+t,date:b.date});
     }
   });
-  const addonStr=Object.keys(addonTotals).length?Object.entries(addonTotals).map(([k,v])=>`${k} ${v}명`).join(', '):'없음';
-  const mealSum=mealTotal.child+mealTotal.elem+mealTotal.teacher;
-  const mealStr=mealSum>0?`${mealTotal.name||'단체식'} ${mealSum}명 (유${mealTotal.child}+초${mealTotal.elem}+인솔${mealTotal.teacher})`:'없음';
-  return {wkTeams,wkPeople,wkEst,wkActEst,wkConf,wkPend,wkActCnt,wkActPeople,addonStr,mealStr};
+
+  // 한 줄 요약 (기존 호환)
+  const addonStr=Object.keys(addonAgg).length?Object.entries(addonAgg).map(([k,v])=>`${k} ${v.qty}명`).join(', '):'없음';
+  const mealEntries=Object.entries(mealAgg);
+  const mealTotalSum=mealEntries.reduce((s,[,v])=>s+v.total,0);
+  const mealStr=mealEntries.length?mealEntries.map(([k,v])=>`${k} ${v.total}명`).join(', '):'없음';
+
+  return {wkTeams,wkPeople,wkEst,wkActEst,wkConf,wkPend,wkActCnt,wkActPeople,addonStr,mealStr,mealTotalSum,addonAgg,mealAgg};
+}
+
+// ── 재료 준비 카드 (주간 단체식·부가체험 집계) ──
+function buildPrepCard(sm,weekLabel){
+  const mealEntries=Object.entries(sm.mealAgg||{});
+  const addonEntries=Object.entries(sm.addonAgg||{}).sort((a,b)=>b[1].qty-a[1].qty);
+  if(mealEntries.length===0&&addonEntries.length===0)return '';
+
+  // 날짜 정렬용
+  const fmtDay=(d)=>{const x=new Date(d);return `${x.getMonth()+1}/${x.getDate()}(${['일','월','화','수','목','금','토'][x.getDay()]})`;};
+  const cardId='prep_'+(weekLabel||'').replace(/[^a-z0-9]/gi,'')+'_'+Math.random().toString(36).slice(2,7);
+
+  let h=`<div style="background:linear-gradient(135deg,#fff8e1,#fff3c4);border:2px solid #FFB300;border-radius:12px;padding:0;margin-top:10px;overflow:hidden;">
+    <div onclick="(function(){var b=document.getElementById('${cardId}_body');b.style.display=b.style.display==='none'?'block':'none';var i=document.getElementById('${cardId}_ico');if(i)i.textContent=b.style.display==='none'?'▶':'▼';})()"
+      style="padding:10px 14px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,#FFA000,#FF6F00);color:#fff;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:18px;">📦</span>
+        <strong style="font-size:14px;">${weekLabel||'이번주'} 재료 준비 (식자재 + 체험재료)</strong>
+        <span style="font-size:11px;padding:2px 8px;background:rgba(255,255,255,.25);border-radius:99px;">
+          ${mealEntries.length>0?`🍚 ${sm.mealTotalSum}명`:''}${mealEntries.length>0&&addonEntries.length>0?' · ':''}${addonEntries.length>0?`🎨 ${addonEntries.length}종 ${addonEntries.reduce((s,[,v])=>s+v.qty,0)}명`:''}
+        </span>
+      </div>
+      <span id="${cardId}_ico" style="font-size:12px;">▼</span>
+    </div>
+    <div id="${cardId}_body" style="display:block;padding:12px 14px;">`;
+
+  // 단체식
+  if(mealEntries.length>0){
+    h+=`<div style="margin-bottom:10px;">
+      <div style="font-size:12px;font-weight:800;color:#C2185B;margin-bottom:6px;display:flex;align-items:center;gap:6px;">
+        🍚 단체식 (총 ${sm.mealTotalSum}명)
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff;border-radius:6px;overflow:hidden;">
+        <thead><tr style="background:#FCE4EC;">
+          <th style="padding:5px 8px;text-align:left;font-size:11px;color:#880E4F;border-bottom:1px solid #F8BBD0;">메뉴</th>
+          <th style="padding:5px 8px;text-align:center;font-size:11px;color:#880E4F;border-bottom:1px solid #F8BBD0;width:55px;">총인원</th>
+          <th style="padding:5px 8px;text-align:center;font-size:11px;color:#880E4F;border-bottom:1px solid #F8BBD0;width:130px;">내역 (유/초/인솔)</th>
+          <th style="padding:5px 8px;text-align:left;font-size:11px;color:#880E4F;border-bottom:1px solid #F8BBD0;">날짜별</th>
+        </tr></thead><tbody>`;
+    mealEntries.forEach(([name,v])=>{
+      const dayStr=Object.entries(v.days).sort().map(([d,n])=>`<span style="display:inline-block;padding:1px 7px;margin:1px;background:#FFF3E0;color:#E65100;border-radius:99px;font-size:10px;font-weight:700;">${fmtDay(d)} <b>${n}</b></span>`).join('');
+      h+=`<tr>
+        <td style="padding:6px 8px;font-weight:700;color:#C2185B;border-bottom:1px solid #FCE4EC;">${name}</td>
+        <td style="padding:6px 8px;text-align:center;font-weight:800;font-size:14px;color:#AD1457;border-bottom:1px solid #FCE4EC;">${v.total}</td>
+        <td style="padding:6px 8px;text-align:center;font-size:11px;color:#666;border-bottom:1px solid #FCE4EC;">유${v.child} / 초${v.elem} / 인솔${v.teacher}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #FCE4EC;">${dayStr}</td>
+      </tr>`;
+    });
+    h+=`</tbody></table>
+    </div>`;
+  }
+
+  // 부가체험
+  if(addonEntries.length>0){
+    h+=`<div>
+      <div style="font-size:12px;font-weight:800;color:#7B1FA2;margin-bottom:6px;display:flex;align-items:center;gap:6px;">
+        🎨 부가체험 재료 (${addonEntries.length}종)
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff;border-radius:6px;overflow:hidden;">
+        <thead><tr style="background:#F3E5F5;">
+          <th style="padding:5px 8px;text-align:left;font-size:11px;color:#4A148C;border-bottom:1px solid #E1BEE7;">체험명</th>
+          <th style="padding:5px 8px;text-align:center;font-size:11px;color:#4A148C;border-bottom:1px solid #E1BEE7;width:55px;">총인원</th>
+          <th style="padding:5px 8px;text-align:left;font-size:11px;color:#4A148C;border-bottom:1px solid #E1BEE7;">날짜별 (단체)</th>
+        </tr></thead><tbody>`;
+    addonEntries.forEach(([name,v])=>{
+      const grpByDate={};
+      v.groups.forEach(g=>{if(!grpByDate[g.date])grpByDate[g.date]=[];grpByDate[g.date].push(g);});
+      const dayStr=Object.entries(grpByDate).sort().map(([d,gs])=>{
+        const total=gs.reduce((s,g)=>s+g.qty,0);
+        const grpList=gs.map(g=>`${g.name.slice(0,8)} ${g.qty}`).join(', ');
+        return `<div style="margin:2px 0;font-size:10px;"><b style="color:#7B1FA2;">${fmtDay(d)} ${total}명</b> <span style="color:#888;">— ${grpList}</span></div>`;
+      }).join('');
+      h+=`<tr>
+        <td style="padding:6px 8px;font-weight:700;color:#7B1FA2;border-bottom:1px solid #F3E5F5;">${name}</td>
+        <td style="padding:6px 8px;text-align:center;font-weight:800;font-size:14px;color:#6A1B9A;border-bottom:1px solid #F3E5F5;">${v.qty}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #F3E5F5;">${dayStr}</td>
+      </tr>`;
+    });
+    h+=`</tbody></table>
+    </div>`;
+  }
+
+  h+=`<div style="margin-top:10px;padding:8px 12px;background:rgba(255,193,7,.15);border-radius:6px;font-size:11px;color:#5D4037;line-height:1.6;">
+    💡 <b>준비 가이드:</b> 각 메뉴/체험별 인원만큼 식자재·체험재료 (오디·뽕잎·찰흙 등) 를 사전 발주하세요.
+    날짜별 칩의 숫자가 그 날 필요한 수량입니다.
+  </div></div></div>`;
+  return h;
 }
 
 function renderOneWeek(offset,label){
@@ -4166,6 +4290,7 @@ function renderOneWeek(offset,label){
           </div>
         </div>
         ${sm.mealStr!=='없음'||sm.addonStr!=='없음'?`<div style="display:flex;gap:10px;flex-wrap:wrap;font-size:13px;color:#444;margin-top:8px;">${sm.mealStr!=='없음'?`<span style="background:#fff;padding:4px 10px;border-radius:6px;border:1px solid #F8BBD0;font-weight:600;">🍚 ${sm.mealStr}</span>`:''}${sm.addonStr!=='없음'?`<span style="background:#fff;padding:4px 10px;border-radius:6px;border:1px solid #E1BEE7;font-weight:600;">🎨 ${sm.addonStr}</span>`:''}</div>`:''}
+        ${buildPrepCard(sm,label)}
       </div>
     </td></tr>`;
   }
