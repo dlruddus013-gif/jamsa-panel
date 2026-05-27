@@ -30862,13 +30862,16 @@ function AppInner() {
           .jamsa-topbar-right { display: none !important; }
           .jamsa-topbar-right-mobile { display: flex !important; gap: 6px; align-items: center; flex-shrink: 0; }
           .jamsa-hamburger {
-            width: 38px; height: 38px; padding: 0 !important;
-            border-radius: 8px !important; border: 1px solid rgba(255,255,255,0.2) !important;
-            background: rgba(255,255,255,0.1) !important; color: #fff !important;
-            font-size: 18px !important; cursor: pointer; display: inline-flex !important;
+            min-width: 64px; height: 38px; padding: 0 10px !important;
+            border-radius: 8px !important; border: 1px solid rgba(167,139,250,0.4) !important;
+            background: linear-gradient(135deg,#7c3aed,#5b21b6) !important; color: #fff !important;
+            cursor: pointer; display: inline-flex !important;
             align-items: center; justify-content: center; font-weight: 800;
+            box-shadow: 0 2px 8px rgba(124,58,237,0.4);
+            font-family: inherit;
+            white-space: nowrap;
           }
-          .jamsa-hamburger:active { background: rgba(255,255,255,0.25) !important; }
+          .jamsa-hamburger:active { transform: scale(0.96); }
           /* 드로어 */
           .jamsa-drawer-overlay {
             position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 9998;
@@ -30891,19 +30894,8 @@ function AppInner() {
           .jamsa-hamburger, .jamsa-topbar-right-mobile, .jamsa-category-btn { display: none !important; }
         }
 
-        /* 모바일 전체 카테고리 버튼 (좌측, modnav 옆) */
-        @media (max-width: 900px) {
-          .jamsa-category-btn {
-            display: inline-flex !important; align-items: center; gap: 4px;
-            padding: 7px 10px !important; min-height: 36px !important;
-            background: linear-gradient(135deg,#7c3aed,#5b21b6) !important;
-            color: #fff !important; border: none !important; border-radius: 6px !important;
-            font-size: 12px !important; font-weight: 800; cursor: pointer;
-            flex-shrink: 0 !important; white-space: nowrap;
-            box-shadow: 0 2px 8px rgba(124,58,237,0.4);
-          }
-          .jamsa-category-btn:active { transform: scale(0.96); }
-        }
+        /* 📂 전체 카테고리 버튼은 ≡ 메뉴(jamsa-hamburger) 에 통합되어 더 이상 사용 안 함 */
+        .jamsa-category-btn { display: none !important; }
 
         /* 드로어 내부 버튼 */
         .jamsa-drawer-btn {
@@ -31028,13 +31020,18 @@ function AppInner() {
             </a>
           </div>
         </div>
-        {/* 📱 모바일 전용: 햄버거 + 사용자 이름만 표시 */}
+        {/* 📱 모바일 전용: 햄버거 + 사용자 이름 */}
         <div className="jamsa-topbar-right-mobile" style={{ display: "none" }}>
-          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.7)", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {currentUser.name}
-          </span>
-          <button className="jamsa-hamburger" onClick={() => setMobileMenuOpen(true)} title="시스템 도구 열기">
-            ≡
+          <button className="jamsa-hamburger" onClick={() => setMobileMenuOpen(true)}
+            title="전체 메뉴 — 모듈 11개 + 시스템 도구 + 매뉴얼">
+            <span style={{ fontSize: 18, lineHeight: 1 }}>≡</span>
+            <span style={{ fontSize: 11, fontWeight: 800, marginLeft: 5 }}>메뉴</span>
+            {autoAgentAlertCount > 0 && (
+              <span style={{ marginLeft: 4, padding: "1px 5px", borderRadius: 999,
+                background: "#dc2626", color: "#fff", fontSize: 9, fontWeight: 800 }}>
+                {autoAgentAlertCount}
+              </span>
+            )}
           </button>
         </div>
 
@@ -31163,58 +31160,127 @@ function AppInner() {
       })()}
 
       {/* 📱 모바일 햄버거 드로어 — 시스템 도구 모음 */}
-      {mobileMenuOpen && (
-        <>
-          <div className="jamsa-drawer-overlay" onClick={() => setMobileMenuOpen(false)} />
-          <div className="jamsa-drawer">
-            <div style={{ padding: "16px 18px", borderBottom: "1px solid rgba(255,255,255,0.12)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 800, color: "#fff" }}>{currentUser.name}</div>
-                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.55)", marginTop: 2 }}>
-                  {currentUser.dept} · {roleMeta.emoji} {roleMeta.name}
-                </div>
-              </div>
-              <button onClick={() => setMobileMenuOpen(false)}
-                style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(255,255,255,0.1)", border: "none", color: "#fff", cursor: "pointer", fontSize: 16, fontWeight: 800 }}>×</button>
-            </div>
-            <button className="jamsa-drawer-btn" onClick={() => { setMobileMenuOpen(false); setModule("subagents"); }}>
-              <span>🤖</span> <span>서브에이전트</span>
-              {autoAgentAlertCount > 0 && (
-                <span style={{ marginLeft: "auto", padding: "1px 7px", borderRadius: 999, background: "rgba(248,113,113,0.4)", color: "#fecaca", fontSize: 10, fontWeight: 800 }}>{autoAgentAlertCount}</span>
-              )}
-            </button>
-            <button className="jamsa-drawer-btn" onClick={() => { setMobileMenuOpen(false); setShowWorklog(true); }}>
-              <span>📒</span> <span>업무일지</span>
-              <span style={{ marginLeft: "auto", padding: "1px 7px", borderRadius: 999, background: "rgba(5,150,105,0.25)", color: "#6ee7b7", fontSize: 10, fontWeight: 800 }}>{worklogs.length}</span>
-            </button>
-            <button className="jamsa-drawer-btn" onClick={() => { setMobileMenuOpen(false); setShowAuditLog(true); }}>
-              <span>📋</span> <span>활동 기록</span>
-              <span style={{ marginLeft: "auto", padding: "1px 7px", borderRadius: 999, background: "rgba(59,91,219,0.25)", color: "#93c5fd", fontSize: 10, fontWeight: 800 }}>{auditLog.length}</span>
-            </button>
-            <button className="jamsa-drawer-btn" onClick={() => { setMobileMenuOpen(false); setShowBackup(true); }}>
-              <span>💾</span> <span>백업 · 복원</span>
-            </button>
-            <a className="jamsa-drawer-btn" href="#clouddb" onClick={() => { setMobileMenuOpen(false); window.location.hash = "clouddb"; setModule("clouddb"); }} style={{ textDecoration: "none" }}>
-              <span>☁️</span> <span>DB 클라우드</span>
-            </a>
-            {(role6 === "staff" || role6 === "lead" || role6 === "admin") && (
-              <>
-                <button className="jamsa-drawer-btn" onClick={() => { setMobileMenuOpen(false); setShowConsent(true); }}>
-                  <span>📜</span> <span>위치정보 동의 (v3.2)</span>
-                </button>
-                <button className="jamsa-drawer-btn" onClick={() => { setMobileMenuOpen(false); setShowCorrection(true); }}>
-                  <span>📝</span> <span>출퇴근 기록 정정</span>
-                </button>
-              </>
-            )}
-            <div style={{ flex: 1 }} />
-            <button className="jamsa-drawer-btn" onClick={() => { setMobileMenuOpen(false); logout(); }}
-              style={{ borderTop: "2px solid rgba(248,113,113,0.3)", background: "rgba(220,38,38,0.12)", color: "#fca5a5", marginTop: 8 }}>
-              <span>🚪</span> <span>로그아웃</span>
-            </button>
+      {mobileMenuOpen && (() => {
+        const close = () => setMobileMenuOpen(false);
+        const goModule = (k) => { close(); setModule(k); try { window.location.hash = k; } catch (_) {} };
+        const openCctv = () => {
+          close();
+          const u = (localStorage.getItem("jamsa_cctv_guard_url") || "https://cctv.thejamsa.com").replace(/\/+$/, "");
+          const w = window.open(u, "_blank", "noopener");
+          if (!w) { try { location.href = u; } catch (_) {} }
+        };
+        const SectionLabel = ({ children }) => (
+          <div style={{ padding: "10px 18px 4px", fontSize: 10, fontWeight: 800, color: "#94a3b8",
+            letterSpacing: ".12em", textTransform: "uppercase", background: "rgba(15,23,42,0.6)",
+            borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+            {children}
           </div>
-        </>
-      )}
+        );
+        const ModBtn = ({ k, icon, label, color }) => (
+          <button className="jamsa-drawer-btn" onClick={() => goModule(k)}
+            style={{ background: module === k ? `${color}22` : "transparent",
+              borderLeft: module === k ? `3px solid ${color}` : "3px solid transparent" }}>
+            <span style={{ fontSize: 18, width: 24, display: "inline-block" }}>{icon}</span>
+            <span style={{ flex: 1 }}>{label}</span>
+            {module === k && <span style={{ fontSize: 9, color, fontWeight: 800 }}>● 현재</span>}
+          </button>
+        );
+
+        return (
+          <>
+            <div className="jamsa-drawer-overlay" onClick={close} />
+            <div className="jamsa-drawer">
+              {/* 헤더 — 사용자 정보 */}
+              <div style={{ padding: "16px 18px", borderBottom: "1px solid rgba(255,255,255,0.12)", display: "flex", justifyContent: "space-between", alignItems: "center", background: "linear-gradient(135deg,#1e3a8a,#5D3A6B)" }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>{currentUser.name}</div>
+                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.7)", marginTop: 2 }}>
+                    {currentUser.dept} · {roleMeta.emoji} {roleMeta.name}
+                  </div>
+                </div>
+                <button onClick={close} aria-label="닫기"
+                  style={{ width: 34, height: 34, borderRadius: 8, background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", cursor: "pointer", fontSize: 18, fontWeight: 800 }}>×</button>
+              </div>
+
+              {/* ─── 1. 모듈 전환 (11개) ─── */}
+              <SectionLabel>🏛 모듈 전환 (11)</SectionLabel>
+              <ModBtn k="home"        icon="🗺️" label="통합지도"        color="#059669" />
+              <ModBtn k="facility"    icon="🛠"  label="시설점검"        color="#3b5bdb" />
+              <ModBtn k="inventory"   icon="📦" label="재고관리"        color="#3b5bdb" />
+              <ModBtn k="safety"      icon="🛡️" label="안전관리"        color="#ef4444" />
+              <ModBtn k="subagents"   icon="🤖" label="서브에이전트"    color="#7c3aed" />
+              <ModBtn k="clouddb"     icon="☁️" label="DB 클라우드"     color="#0ea5e9" />
+              <a className="jamsa-drawer-btn" onClick={openCctv}
+                style={{ background: "transparent", cursor: "pointer" }}>
+                <span style={{ fontSize: 18, width: 24, display: "inline-block" }}>📹</span>
+                <span style={{ flex: 1 }}>CCTV 관제</span>
+                <span style={{ fontSize: 10, color: "#67e8f9", fontWeight: 700 }}>↗ 새 탭</span>
+              </a>
+              <ModBtn k="schedule"    icon="📅" label="근무일지"        color="#7c3aed" />
+              <ModBtn k="hr"          icon="👥" label="직원관리"        color="#c9a96e" />
+              <ModBtn k="reservation" icon="🎫" label="단체예약"        color="#5D3A6B" />
+              <a className="jamsa-drawer-btn" href="/attendance" target="_blank" rel="noopener"
+                onClick={close} style={{ background: "transparent", textDecoration: "none" }}>
+                <span style={{ fontSize: 18, width: 24, display: "inline-block" }}>👥</span>
+                <span style={{ flex: 1 }}>BLE 출퇴근</span>
+                <span style={{ fontSize: 10, color: "#86efac", fontWeight: 700 }}>↗ 새 탭</span>
+              </a>
+
+              {/* ─── 2. 시스템 도구 ─── */}
+              <SectionLabel>🛠 시스템 도구</SectionLabel>
+              <button className="jamsa-drawer-btn" onClick={() => { close(); setShowWorklog(true); }}>
+                <span style={{ fontSize: 18, width: 24, display: "inline-block" }}>📒</span>
+                <span style={{ flex: 1 }}>업무일지</span>
+                <span style={{ marginLeft: "auto", padding: "1px 7px", borderRadius: 999, background: "rgba(5,150,105,0.25)", color: "#6ee7b7", fontSize: 10, fontWeight: 800 }}>{worklogs.length}</span>
+              </button>
+              <button className="jamsa-drawer-btn" onClick={() => { close(); setShowAuditLog(true); }}>
+                <span style={{ fontSize: 18, width: 24, display: "inline-block" }}>📋</span>
+                <span style={{ flex: 1 }}>활동 기록</span>
+                <span style={{ marginLeft: "auto", padding: "1px 7px", borderRadius: 999, background: "rgba(59,91,219,0.25)", color: "#93c5fd", fontSize: 10, fontWeight: 800 }}>{auditLog.length}</span>
+              </button>
+              <button className="jamsa-drawer-btn" onClick={() => { close(); setShowBackup(true); }}>
+                <span style={{ fontSize: 18, width: 24, display: "inline-block" }}>💾</span>
+                <span style={{ flex: 1 }}>백업 · 복원</span>
+              </button>
+              {(role6 === "staff" || role6 === "lead" || role6 === "admin") && (
+                <>
+                  <button className="jamsa-drawer-btn" onClick={() => { close(); setShowConsent(true); }}>
+                    <span style={{ fontSize: 18, width: 24, display: "inline-block" }}>📜</span>
+                    <span style={{ flex: 1 }}>위치정보 동의 (v3.2)</span>
+                  </button>
+                  <button className="jamsa-drawer-btn" onClick={() => { close(); setShowCorrection(true); }}>
+                    <span style={{ fontSize: 18, width: 24, display: "inline-block" }}>📝</span>
+                    <span style={{ flex: 1 }}>출퇴근 기록 정정</span>
+                  </button>
+                </>
+              )}
+
+              {/* ─── 3. 매뉴얼/가이드 ─── */}
+              <SectionLabel>📖 매뉴얼</SectionLabel>
+              <a className="jamsa-drawer-btn" href="/beacon-manual" target="_blank" rel="noopener"
+                onClick={close} style={{ background: "transparent", textDecoration: "none" }}>
+                <span style={{ fontSize: 18, width: 24, display: "inline-block" }}>📡</span>
+                <span style={{ flex: 1 }}>비콘 게이트웨이 매뉴얼</span>
+                <span style={{ fontSize: 10, color: "#94a3b8" }}>↗</span>
+              </a>
+              <a className="jamsa-drawer-btn" href="/minew-setup" target="_blank" rel="noopener"
+                onClick={close} style={{ background: "transparent", textDecoration: "none" }}>
+                <span style={{ fontSize: 18, width: 24, display: "inline-block" }}>🛰️</span>
+                <span style={{ flex: 1 }}>Minew 서버 설치 가이드</span>
+                <span style={{ fontSize: 10, color: "#94a3b8" }}>↗</span>
+              </a>
+
+              {/* 로그아웃 */}
+              <div style={{ flex: 1, minHeight: 12 }} />
+              <button className="jamsa-drawer-btn" onClick={() => { close(); logout(); }}
+                style={{ borderTop: "2px solid rgba(248,113,113,0.3)", background: "rgba(220,38,38,0.12)", color: "#fca5a5", marginTop: 8 }}>
+                <span style={{ fontSize: 18, width: 24, display: "inline-block" }}>🚪</span>
+                <span style={{ flex: 1 }}>로그아웃</span>
+              </button>
+            </div>
+          </>
+        );
+      })()}
 
       {/* ─── Active module ─── */}
       <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
