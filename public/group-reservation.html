@@ -4003,7 +4003,7 @@ function custEdit(id){
   document.getElementById('mft').innerHTML=`
     <button class="btn bg" onclick="saveCustEdit(${b.id})">💾 저장</button>
     <button class="btn bgy" onclick="cMdl()">취소</button>`;
-  document.getElementById('mdl').classList.add('show');
+  (function(){const _m=document.getElementById('mdl');if(_m){_m.style.display='';_m.classList.add('show');}})();
 }
 
 function saveCustEdit(id){
@@ -5163,13 +5163,18 @@ function renderDrPreview(forceAll){
   // Table
   if(list.length>0){
     h+='<div style="overflow-x:auto;max-height:400px;overflow-y:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">';
-    h+='<thead style="position:sticky;top:0;"><tr style="background:#f0f7f0;">';
-    ['날짜','단체명','구분','시간','아동','인솔','견적','실결제','상태'].forEach(function(c){h+='<th style="padding:6px 8px;border:1px solid #e0e0e0;font-weight:700;white-space:nowrap;">'+c+'</th>';});
+    h+='<thead style="position:sticky;top:0;z-index:1;"><tr style="background:#f0f7f0;">';
+    ['날짜','단체명','구분','시간','아동','인솔','단체식','부가체험','견적','실결제','상태'].forEach(function(c){h+='<th style="padding:6px 8px;border:1px solid #e0e0e0;font-weight:700;white-space:nowrap;background:#f0f7f0;">'+c+'</th>';});
     h+='</tr></thead><tbody>';
     var t=td();
+    var mealCnt=0; // 단체식 이용 건수 집계
     list.forEach(function(b){
       var bg=b.date===t?'background:#fffde7;':'';
       var stC=b.status==='확정'?'color:#2e7d32;':b.status==='대기'?'color:#e65100;':'color:#888;';
+      var mealOn=(typeof shouldShowMealBadge==='function')?shouldShowMealBadge(b):(b.meal&&b.meal!=='이용안함'&&!(b.meal==='이용함'&&!(b.courseType||'').includes('단체식')));
+      if(mealOn)mealCnt++;
+      var mealLabel=mealOn?(b.meal==='이용함'?'식사':b.meal):'-';
+      var addonStr=(b.addons&&b.addons.length)?b.addons.join(', '):'-';
       h+='<tr style="'+bg+'">';
       h+='<td style="padding:5px 8px;border:1px solid #eee;font-weight:600;white-space:nowrap;">'+b.date+'</td>';
       h+='<td style="padding:5px 8px;border:1px solid #eee;font-weight:700;color:#1a472a;">'+b.name+'</td>';
@@ -5177,6 +5182,16 @@ function renderDrPreview(forceAll){
       h+='<td style="padding:5px 8px;border:1px solid #eee;white-space:nowrap;">'+b.arrival+'~'+b.departure+'</td>';
       h+='<td style="padding:5px 8px;border:1px solid #eee;text-align:center;">'+b.students+'</td>';
       h+='<td style="padding:5px 8px;border:1px solid #eee;text-align:center;">'+b.teachers+'</td>';
+      // 단체식 — 컬러 칩
+      h+='<td style="padding:5px 8px;border:1px solid #eee;text-align:center;white-space:nowrap;">'
+        +(mealOn?'<span style="display:inline-block;padding:2px 7px;border-radius:99px;background:#fce4ec;color:#c2185b;font-weight:700;font-size:10px;">🍚 '+mealLabel+'</span>':'<span style="color:#bbb;">-</span>')
+        +'</td>';
+      // 부가체험 — 칩 묶음 (다수일 때 자동 줄바꿈)
+      h+='<td style="padding:5px 8px;border:1px solid #eee;font-size:10px;max-width:180px;">';
+      if(b.addons&&b.addons.length){
+        b.addons.forEach(function(a){h+='<span style="display:inline-block;padding:1px 6px;border-radius:99px;background:#f3e5f5;color:#7b1fa2;font-weight:700;font-size:9px;margin:1px 2px 1px 0;">🎨 '+a+'</span>';});
+      } else { h+='<span style="color:#bbb;">-</span>'; }
+      h+='</td>';
       h+='<td style="padding:5px 8px;border:1px solid #eee;text-align:right;">₩'+fmtWon(getEstimate(b))+'</td>';
       h+='<td style="padding:5px 8px;border:1px solid #eee;text-align:right;">'+(b.paidAmount!=null?'₩'+fmtWon(b.paidAmount):'-')+'</td>';
       h+='<td style="padding:5px 8px;border:1px solid #eee;text-align:center;font-weight:700;'+stC+'">'+b.status+'</td>';
@@ -5186,6 +5201,8 @@ function renderDrPreview(forceAll){
     h+='<td colspan="4" style="padding:6px 8px;border:1px solid #e0e0e0;">합계 ('+list.length+'건)</td>';
     h+='<td style="padding:6px 8px;border:1px solid #e0e0e0;text-align:center;">'+totStu+'</td>';
     h+='<td style="padding:6px 8px;border:1px solid #e0e0e0;text-align:center;">'+totTea+'</td>';
+    h+='<td style="padding:6px 8px;border:1px solid #e0e0e0;text-align:center;color:#c2185b;">'+mealCnt+'건</td>';
+    h+='<td style="padding:6px 8px;border:1px solid #e0e0e0;"></td>';
     h+='<td style="padding:6px 8px;border:1px solid #e0e0e0;text-align:right;">₩'+fmtWon(totEst)+'</td>';
     h+='<td style="padding:6px 8px;border:1px solid #e0e0e0;text-align:right;">₩'+fmtWon(totPaid)+'</td>';
     h+='<td style="padding:6px 8px;border:1px solid #e0e0e0;text-align:center;">'+(totStu+totTea)+'명</td>';
@@ -5736,7 +5753,7 @@ function agEditBk(id){
   document.getElementById('mft').innerHTML=`
     <button class="btn" style="background:#e65100;color:#fff;" onclick="saveAgEdit(${b.id})">💾 저장</button>
     <button class="btn bgy bs" onclick="cMdl()">닫기</button>`;
-  document.getElementById('mdl').classList.add('show');
+  (function(){const _m=document.getElementById('mdl');if(_m){_m.style.display='';_m.classList.add('show');}})();
 }
 
 function saveAgEdit(id){
@@ -8806,7 +8823,7 @@ function showDtl(id){
     ${isAdm&&b.status!=='취소'?`<button class="btn br bs" onclick="setSt(${b.id},'취소');cMdl();">취소</button>`:''}
     ${isAdm?`<button class="btn bs" style="background:#fdd;color:#c00;" onclick="delBk(${b.id});cMdl();">삭제</button>`:''}
     <button class="btn bgy bs" onclick="cMdl()">닫기</button>`;
-  document.getElementById('mdl').classList.add('show');
+  (function(){const _m=document.getElementById('mdl');if(_m){_m.style.display='';_m.classList.add('show');}})();
 }
 
 function savePaid(id){
@@ -8907,7 +8924,17 @@ function clearBkFee(id){
   const b=bks.find(x=>x.id===id);if(!b)return;
   b.feeRate=null;sv();toast('건별 수수료 초기화','s');showDtl(id);
 }
-function cMdl(){const m=document.getElementById('mdl');m.classList.remove('show');m.style.display='none';const inner=m.querySelector('.mdl');if(inner)inner.style.maxWidth='';}
+function cMdl(){
+  // .mo CSS 클래스가 이미 display:none, .mo.show 가 display:flex 이므로
+  // 인라인 style.display='none' 을 설정하면 다음 .show 추가가 무시되어
+  // 모달이 다시 안 열리는 버그가 있었음 → 인라인 display 를 비워 클래스 룰에 위임
+  const m=document.getElementById('mdl');
+  if(!m)return;
+  m.classList.remove('show');
+  m.style.display='';
+  const inner=m.querySelector('.mdl');
+  if(inner)inner.style.maxWidth='';
+}
 function rfr(){const a=document.querySelector('.page.act');if(!a)return;const id=a.id.replace('p-','');if(id==='ad')rDash();if(id==='ac')rCal();if(id==='ab')rAll();if(sD)sCd(sD);}
 
 // ===== SCHEDULE =====
