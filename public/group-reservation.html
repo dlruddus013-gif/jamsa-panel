@@ -4101,7 +4101,7 @@ function renderOneWeek(offset,label){
     grp.forEach((b,bi)=>{
       const sc=b.status==='확정'?'#2e7d32':b.status==='대기'?'#e65100':'#c62828';
       const scBg=b.status==='확정'?'#E8F5E9':b.status==='대기'?'#FFF3E0':'#FFEBEE';
-      const hasMeal=b.meal&&b.meal!=='이용안함';
+      const hasMeal=shouldShowMealBadge(b);
       const hasAddon=b.addons&&b.addons.length>0;
       let tags='';
       if(b.courseType)tags+=`<span style="font-size:10px;padding:3px 7px;border-radius:5px;background:${(b.courseType||'').includes('단체식')?'#E65100':'#2e7d32'};color:#fff;font-weight:700;display:inline-block;margin:1px;">${b.courseType.replace('기본코스','기본')}</span>`;
@@ -7239,7 +7239,7 @@ function ccSelDay(ds){
           <span>⏰ ${b.arrival}~${b.departure}</span>
           <span>👥 아동 ${b.students} + 인솔 ${b.teachers} = <strong>${b.students+b.teachers}명</strong>${b.actualStudents!=null?` <span style="color:#c2185b;font-size:11px;">→ 실제 ${(b.actualStudents||0)+(b.actualTeachers!=null?b.actualTeachers:b.teachers)}명</span>`:''}</span>
           <span>🎫 ${b.courseType}</span>
-          ${b.meal&&b.meal.includes('이용함')?'<span>🍚 단체식</span>':''}
+          ${shouldShowMealBadge(b)?'<span>🍚 단체식</span>':''}
         </div>
       </div>
       <span class="bdg" style="background:${sc}20;color:${sc};border:1px solid ${sc};">${b.status}</span>
@@ -7738,9 +7738,9 @@ function sCd(ds){
 
   document.querySelector('#dTb2 tbody').innerHTML=db.map(b=>{
     const sc=b.status==='확정'?'bdg-g':b.status==='대기'?'bdg-y':'bdg-r';
-    const hasMeal=b.meal&&b.meal!=='이용안함';
+    const hasMeal=shouldShowMealBadge(b);
     const ct=b.courseType||'기본코스';
-    const mealHtml=hasMeal?`<div style="margin-top:2px;"><span style="display:inline-block;font-size:9px;padding:1px 5px;border-radius:3px;background:#fce4ec;color:#c2185b;font-weight:700;">🍚 ${b.meal}</span></div>`:'';
+    const mealHtml=hasMeal?`<div style="margin-top:2px;"><span style="display:inline-block;font-size:9px;padding:1px 5px;border-radius:3px;background:#fce4ec;color:#c2185b;font-weight:700;">🍚 ${b.meal.replace('이용함','식사')}</span></div>`:'';
     const adStr=b.addons&&b.addons.length?b.addons.map(a=>`<span style="display:inline-block;font-size:9px;padding:1px 5px;border-radius:3px;background:#f3e5f5;color:#7b1fa2;margin:1px;">${a}</span>`).join(''):'<span style="color:#ddd;font-size:10px;">없음</span>';
     const memo=memos[b.id]||b.memo||b.etc||'';
     const memoHtml=memo?`<span style="font-size:9px;color:#e65100;background:#fff3e0;padding:1px 5px;border-radius:3px;" title="${memo.replace(/"/g,'&quot;')}">📝 ${memo.length>15?memo.substring(0,15)+'…':memo}</span>`:'<span style="color:#ddd;font-size:10px;">-</span>';
@@ -7931,8 +7931,25 @@ function setBkCourse(id,val){
   const b=bks.find(x=>x.id===id);if(!b)return;
   pushUndo('코스변경',`${b.name} → ${val}`,JSON.stringify(bks));
   b.courseType=val;
-  if(val.includes('단체식'))b.meal='이용함';
+  if(val.includes('단체식')){
+    // 단체식 추가 — 기존 실제 식사명 유지, 없으면 '이용함' 플래그
+    if(!b.meal||b.meal==='이용안함')b.meal='이용함';
+  } else {
+    // 단체식 제거 — 식사 플래그도 같이 해제 (이전 버그: '이용함' 잔존으로 캘린더 배지 표시)
+    b.meal='이용안함';
+  }
   sv();toast(`🍽️ ${b.name} → ${val}`,'s');rAll();
+}
+
+// 식사 배지 표시 여부 — 정합성 체크 (스테일 '이용함' 플래그 방어)
+//   · meal === '이용안함' or 빈 값 → 미표시
+//   · meal === '이용함' (sentinel) 인데 courseType 에 '단체식' 없음 → 미표시 (구버전 데이터 방어)
+//   · meal === 실제 메뉴명 (오디돈가스 등) → 표시
+function shouldShowMealBadge(b){
+  if(!b||!b.meal)return false;
+  if(b.meal==='이용안함')return false;
+  if(b.meal==='이용함'&&!(b.courseType||'').includes('단체식'))return false;
+  return true;
 }
 
 // ── 코스 팝업 ──
@@ -8532,7 +8549,7 @@ function rAll(){
         <td style="padding:3px 2px;border-right:1px solid #ddd;text-align:center;white-space:nowrap;font-size:11px;color:#222;font-weight:600;cursor:pointer;" ondblclick="inlineEditTime(this,${b.id})" title="더블클릭하여 수정">${b.arrival}~${b.departure}</td>
         <td style="padding:2px;border-right:1px solid #ddd;text-align:center;cursor:pointer;" onclick="popCourse(this,${b.id})">
           <span style="font-size:10px;padding:3px 5px;border-radius:5px;background:${(b.courseType||'').includes('단체식')?'#E65100':'#2e7d32'};color:#fff;font-weight:700;">${(b.courseType||'기본').replace('기본코스','기본')}</span>
-          ${b.meal&&b.meal.includes('이용함')?'<div style="font-size:8px;color:#C2185B;font-weight:800;">🍚식사</div>':''}
+          ${shouldShowMealBadge(b)?'<div style="font-size:8px;color:#C2185B;font-weight:800;">🍚식사</div>':''}
           ${b.addons&&b.addons.length?'<div style="font-size:8px;color:#7B1FA2;font-weight:700;">🎨'+b.addons.length+'</div>':''}
         </td>
         <td style="padding:3px 2px;border-right:1px solid #ddd;font-size:11px;white-space:nowrap;color:#222;font-weight:600;cursor:pointer;" ondblclick="inlineEdit(this,${b.id},'phone')" title="더블클릭하여 수정">${b.phone}</td>
