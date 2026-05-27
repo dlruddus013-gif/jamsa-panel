@@ -4055,16 +4055,40 @@ function buildWeekSummary(weekBks){
   const wkActPeople=weekBks.filter(b=>b.actualStudents!=null).reduce((s,b)=>s+(b.actualStudents||0)+(b.actualTeachers!=null?b.actualTeachers:b.teachers),0);
 
   // ── 부가체험 집계 (메뉴별 + 날짜별 + 단체 리스트) ──
+  // 정책: b.addons 의 원본 이름 그대로 보존. formCfg.addons 와의 .includes() 부분 일치는
+  //       false-positive (예: '동물먹이주기' → '먹이주기' 로 잘못 매핑) 가 많아 폐기.
+  //       실제 체크박스에서 고른 addon 이름만 그대로 사용한다.
   const addonAgg={}; // {name: {qty:N, days:{date:N}, groups:[{name,qty}]}}
   // ── 단체식 집계 (메뉴별 + 날짜별 + 단체 리스트) ──
   const mealAgg={};  // {name: {child,elem,teacher,total,days:{date:total},groups:[{name,qty}]}}
 
+  // addon 이름 정규화 — 너무 길거나 설명문 같은 텍스트(20자+ 또는 공백 다수)는 제외
+  const cleanAddonName=(raw)=>{
+    if(!raw)return null;
+    const s=String(raw).trim();
+    if(!s)return null;
+    // 설명문 / URL / 이메일 / 가격 표기 등은 addon 으로 간주하지 않음
+    if(s.length>30)return null;
+    if(/[\(\)]/.test(s)&&s.length>15)return null;     // 괄호 포함 긴 문장
+    if(/[@.,]/.test(s)&&s.length>15)return null;
+    if(/[+\/]/.test(s))return null;                   // '코스+단체식' 같은 합성 표기
+    // 양끝 '체험' / 공백 제거 (오디따기체험 / 오디따기 동일 취급)
+    return s;
+  };
+
   weekBks.forEach(b=>{
     const useAct=b.actualStudents!=null;
-    const addons=useAct?(b.actualAddonQty||[]):((b.addons||[]).map(a=>{
-      const n=formCfg.addons.find(x=>a.includes(x.name));
-      return n?{name:n.name,qty:b.students}:null;
-    }).filter(Boolean));
+    let addons;
+    if(useAct&&Array.isArray(b.actualAddonQty)&&b.actualAddonQty.length>0){
+      // 실제 입력값이 있으면 그것을 사용 (이름 + 정확한 qty)
+      addons=b.actualAddonQty.map(aq=>({name:cleanAddonName(aq?.name),qty:aq?.qty||0})).filter(aq=>aq.name);
+    } else if(Array.isArray(b.addons)&&b.addons.length>0){
+      // 체크박스에서 고른 raw 이름 그대로 (원본 보존)
+      const ppl=(b.students||0)+(b.teachers||0); // 인솔 포함 전체 인원
+      addons=b.addons.map(a=>({name:cleanAddonName(a),qty:ppl})).filter(aq=>aq.name);
+    } else {
+      addons=[];
+    }
     addons.forEach(aq=>{
       if(!aq||!aq.name)return;
       if(!addonAgg[aq.name])addonAgg[aq.name]={qty:0,days:{},groups:[]};
@@ -4073,25 +4097,33 @@ function buildWeekSummary(weekBks){
       addonAgg[aq.name].groups.push({name:b.name,qty:aq.qty||0,date:b.date});
     });
 
-    // 단체식 — 잔존 '이용함' sentinel 데이터 보호 (shouldShowMealBadge 헬퍼와 동일 로직)
-    const mealValid=(b)=>{
-      if(!b||!b.meal)return false;
-      if(b.meal==='이용안함')return false;
-      if(b.meal==='이용함'&&!(b.courseType||'').includes('단체식'))return false;
-      return true;
-    };
+    // ── 단체식 ──
+    // 우선순위: 1) actualMeal (실제 입력) → 2) b.meal (구체 메뉴) → 3) courseType 에 '단체식'
+    //         3) 의 경우엔 메뉴 미정 ('메뉴 미정') 으로 자리표시자 + 인원만 집계 → 식당팀이 미리 인지
+    const ppl=(b.students||0)+(b.teachers||0);
     if(useAct&&b.actualMeal&&b.actualMealQty){
       const nm=b.actualMeal;
-      if(!mealAgg[nm])mealAgg[nm]={child:0,elem:0,teacher:0,total:0,days:{},groups:[]};
+      if(!mealAgg[nm])mealAgg[nm]={child:0,elem:0,teacher:0,total:0,days:{},groups:[],source:'actual'};
       const c=b.actualMealQty.child||0, e=b.actualMealQty.elem||0, t=b.actualMealQty.teacher||0;
       mealAgg[nm].child+=c;mealAgg[nm].elem+=e;mealAgg[nm].teacher+=t;
       mealAgg[nm].total+=(c+e+t);
       mealAgg[nm].days[b.date]=(mealAgg[nm].days[b.date]||0)+(c+e+t);
       mealAgg[nm].groups.push({name:b.name,qty:c+e+t,date:b.date});
-    } else if(mealValid(b)){
-      const nm=b.meal==='이용함'?'단체식':b.meal;
-      if(!mealAgg[nm])mealAgg[nm]={child:0,elem:0,teacher:0,total:0,days:{},groups:[]};
-      // studentsChild/Elem 없으면 students 전체를 유아로 가정
+    } else if(b.meal&&b.meal!=='이용안함'&&!(b.meal==='이용함'&&!(b.courseType||'').includes('단체식'))){
+      // 구체 메뉴 입력됨 (또는 '이용함' sentinel 인데 courseType 가 단체식인 경우)
+      const nm=b.meal==='이용함'?'메뉴 미정':b.meal;
+      if(!mealAgg[nm])mealAgg[nm]={child:0,elem:0,teacher:0,total:0,days:{},groups:[],source:'booking'};
+      const c=b.studentsChild||(!b.studentsElem?b.students:0)||0;
+      const e=b.studentsElem||0;
+      const t=b.teachers||0;
+      mealAgg[nm].child+=c;mealAgg[nm].elem+=e;mealAgg[nm].teacher+=t;
+      mealAgg[nm].total+=(c+e+t);
+      mealAgg[nm].days[b.date]=(mealAgg[nm].days[b.date]||0)+(c+e+t);
+      mealAgg[nm].groups.push({name:b.name,qty:c+e+t,date:b.date});
+    } else if((b.courseType||'').includes('단체식')) {
+      // 코스에 +단체식 인데 b.meal 이 비어있거나 '이용안함' — 식당팀이 메뉴를 정할 수 있도록 자리표시자
+      const nm='메뉴 미정';
+      if(!mealAgg[nm])mealAgg[nm]={child:0,elem:0,teacher:0,total:0,days:{},groups:[],source:'course'};
       const c=b.studentsChild||(!b.studentsElem?b.students:0)||0;
       const e=b.studentsElem||0;
       const t=b.teachers||0;
@@ -4116,6 +4148,7 @@ function buildPrepCard(sm,weekLabel){
   const mealEntries=Object.entries(sm.mealAgg||{});
   const addonEntries=Object.entries(sm.addonAgg||{}).sort((a,b)=>b[1].qty-a[1].qty);
   if(mealEntries.length===0&&addonEntries.length===0)return '';
+  // 단체식·부가체험 둘 중 하나라도 있으면 양쪽 섹션 모두 표시 (없는 쪽은 "없음" 메시지)
 
   // 날짜 정렬용
   const fmtDay=(d)=>{const x=new Date(d);return `${x.getMonth()+1}/${x.getDate()}(${['일','월','화','수','목','금','토'][x.getDay()]})`;};
@@ -4135,44 +4168,55 @@ function buildPrepCard(sm,weekLabel){
     </div>
     <div id="${cardId}_body" style="display:block;padding:12px 14px;">`;
 
-  // 단체식
-  if(mealEntries.length>0){
-    h+=`<div style="margin-bottom:10px;">
-      <div style="font-size:12px;font-weight:800;color:#C2185B;margin-bottom:6px;display:flex;align-items:center;gap:6px;">
-        🍚 단체식 (총 ${sm.mealTotalSum}명)
-      </div>
-      <table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff;border-radius:6px;overflow:hidden;">
-        <thead><tr style="background:#FCE4EC;">
-          <th style="padding:5px 8px;text-align:left;font-size:11px;color:#880E4F;border-bottom:1px solid #F8BBD0;">메뉴</th>
-          <th style="padding:5px 8px;text-align:center;font-size:11px;color:#880E4F;border-bottom:1px solid #F8BBD0;width:55px;">총인원</th>
-          <th style="padding:5px 8px;text-align:center;font-size:11px;color:#880E4F;border-bottom:1px solid #F8BBD0;width:130px;">내역 (유/초/인솔)</th>
-          <th style="padding:5px 8px;text-align:left;font-size:11px;color:#880E4F;border-bottom:1px solid #F8BBD0;">날짜별</th>
-        </tr></thead><tbody>`;
+  // 단체식 (항상 표시 — 없으면 빈 상태 메시지)
+  h+=`<div style="margin-bottom:10px;">
+    <div style="font-size:12px;font-weight:800;color:#C2185B;margin-bottom:6px;display:flex;align-items:center;gap:6px;">
+      🍚 단체식 ${mealEntries.length>0?`(총 ${sm.mealTotalSum}명, ${mealEntries.length}메뉴)`:''}
+    </div>`;
+  if(mealEntries.length===0){
+    h+=`<div style="padding:14px;background:#fff;border-radius:6px;border:1px dashed #F8BBD0;text-align:center;color:#aaa;font-size:11px;">
+      이 주에 단체식을 신청한 예약이 없습니다.<br>
+      <span style="font-size:10px;color:#888;">신청 단계에서 코스를 <b>"기본코스+단체식"</b> 으로 설정하거나, 상세에서 식사 메뉴를 지정해 주세요.</span>
+    </div>`;
+  } else {
+    h+=`<table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff;border-radius:6px;overflow:hidden;">
+      <thead><tr style="background:#FCE4EC;">
+        <th style="padding:5px 8px;text-align:left;font-size:11px;color:#880E4F;border-bottom:1px solid #F8BBD0;">메뉴</th>
+        <th style="padding:5px 8px;text-align:center;font-size:11px;color:#880E4F;border-bottom:1px solid #F8BBD0;width:55px;">총인원</th>
+        <th style="padding:5px 8px;text-align:center;font-size:11px;color:#880E4F;border-bottom:1px solid #F8BBD0;width:130px;">내역 (유/초/인솔)</th>
+        <th style="padding:5px 8px;text-align:left;font-size:11px;color:#880E4F;border-bottom:1px solid #F8BBD0;">날짜별</th>
+      </tr></thead><tbody>`;
     mealEntries.forEach(([name,v])=>{
       const dayStr=Object.entries(v.days).sort().map(([d,n])=>`<span style="display:inline-block;padding:1px 7px;margin:1px;background:#FFF3E0;color:#E65100;border-radius:99px;font-size:10px;font-weight:700;">${fmtDay(d)} <b>${n}</b></span>`).join('');
+      // source 가 'course' (코스만 단체식, 메뉴 미정) 인 경우 노란 배지로 경고
+      const srcBadge=v.source==='course'?`<span style="margin-left:4px;font-size:9px;padding:1px 5px;background:#FFF3E0;color:#E65100;border-radius:99px;font-weight:700;" title="코스에는 +단체식 포함되어 있으나 구체 메뉴가 미입력 — 식당팀 확인 필요">⚠ 메뉴 미정</span>`:'';
       h+=`<tr>
-        <td style="padding:6px 8px;font-weight:700;color:#C2185B;border-bottom:1px solid #FCE4EC;">${name}</td>
+        <td style="padding:6px 8px;font-weight:700;color:#C2185B;border-bottom:1px solid #FCE4EC;">${name}${srcBadge}</td>
         <td style="padding:6px 8px;text-align:center;font-weight:800;font-size:14px;color:#AD1457;border-bottom:1px solid #FCE4EC;">${v.total}</td>
         <td style="padding:6px 8px;text-align:center;font-size:11px;color:#666;border-bottom:1px solid #FCE4EC;">유${v.child} / 초${v.elem} / 인솔${v.teacher}</td>
         <td style="padding:6px 8px;border-bottom:1px solid #FCE4EC;">${dayStr}</td>
       </tr>`;
     });
-    h+=`</tbody></table>
-    </div>`;
+    h+=`</tbody></table>`;
   }
+  h+=`</div>`;
 
-  // 부가체험
-  if(addonEntries.length>0){
-    h+=`<div>
-      <div style="font-size:12px;font-weight:800;color:#7B1FA2;margin-bottom:6px;display:flex;align-items:center;gap:6px;">
-        🎨 부가체험 재료 (${addonEntries.length}종)
-      </div>
-      <table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff;border-radius:6px;overflow:hidden;">
-        <thead><tr style="background:#F3E5F5;">
-          <th style="padding:5px 8px;text-align:left;font-size:11px;color:#4A148C;border-bottom:1px solid #E1BEE7;">체험명</th>
-          <th style="padding:5px 8px;text-align:center;font-size:11px;color:#4A148C;border-bottom:1px solid #E1BEE7;width:55px;">총인원</th>
-          <th style="padding:5px 8px;text-align:left;font-size:11px;color:#4A148C;border-bottom:1px solid #E1BEE7;">날짜별 (단체)</th>
-        </tr></thead><tbody>`;
+  // 부가체험 (항상 표시 — 없으면 빈 상태 메시지)
+  h+=`<div>
+    <div style="font-size:12px;font-weight:800;color:#7B1FA2;margin-bottom:6px;display:flex;align-items:center;gap:6px;">
+      🎨 부가체험 재료 ${addonEntries.length>0?`(${addonEntries.length}종 · 총 ${addonEntries.reduce((s,[,v])=>s+v.qty,0)}명)`:''}
+    </div>`;
+  if(addonEntries.length===0){
+    h+=`<div style="padding:14px;background:#fff;border-radius:6px;border:1px dashed #E1BEE7;text-align:center;color:#aaa;font-size:11px;">
+      이 주에 신청된 부가체험이 없습니다.
+    </div>`;
+  } else {
+    h+=`<table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff;border-radius:6px;overflow:hidden;">
+      <thead><tr style="background:#F3E5F5;">
+        <th style="padding:5px 8px;text-align:left;font-size:11px;color:#4A148C;border-bottom:1px solid #E1BEE7;">체험명</th>
+        <th style="padding:5px 8px;text-align:center;font-size:11px;color:#4A148C;border-bottom:1px solid #E1BEE7;width:55px;">총인원</th>
+        <th style="padding:5px 8px;text-align:left;font-size:11px;color:#4A148C;border-bottom:1px solid #E1BEE7;">날짜별 (단체)</th>
+      </tr></thead><tbody>`;
     addonEntries.forEach(([name,v])=>{
       const grpByDate={};
       v.groups.forEach(g=>{if(!grpByDate[g.date])grpByDate[g.date]=[];grpByDate[g.date].push(g);});
@@ -4187,9 +4231,9 @@ function buildPrepCard(sm,weekLabel){
         <td style="padding:6px 8px;border-bottom:1px solid #F3E5F5;">${dayStr}</td>
       </tr>`;
     });
-    h+=`</tbody></table>
-    </div>`;
+    h+=`</tbody></table>`;
   }
+  h+=`</div>`;
 
   h+=`<div style="margin-top:10px;padding:8px 12px;background:rgba(255,193,7,.15);border-radius:6px;font-size:11px;color:#5D4037;line-height:1.6;">
     💡 <b>준비 가이드:</b> 각 메뉴/체험별 인원만큼 식자재·체험재료 (오디·뽕잎·찰흙 등) 를 사전 발주하세요.
