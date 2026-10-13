@@ -233,6 +233,10 @@ details.rules{margin-top:18px}details.rules summary{cursor:pointer;color:var(--m
 @media (max-width:640px){.irow{grid-template-columns:64px minmax(0,1fr)}.irow .acts{grid-column:1/-1;align-items:flex-start!important}}
 .seg.sm button{padding:4px 8px;font-size:12px}
 .seg button.bad.on{background:var(--danger-bg);color:var(--danger)}.seg button.good.on{background:var(--ok-bg);color:var(--leaf-ink)}
+.mtx th,.mtx td{padding:4px 6px}.mtx{min-width:0}
+.mcell{border:0;border-radius:6px;min-width:44px;padding:6px 8px;font:500 13px var(--f-num);color:var(--ink);cursor:pointer}.mcell:disabled{cursor:default;color:var(--muted)}
+.bulk{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:var(--sunk);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:10px}
+.etbl{min-width:1200px;font-size:13px}.etbl td{padding:6px 8px}.etbl select,.etbl input{font-size:13px;padding:5px 7px}.etbl tr.selrow td{background:var(--warn-bg)}
 </style>
 
 <div class="wrap">
@@ -241,7 +245,7 @@ details.rules{margin-top:18px}details.rules summary{cursor:pointer;color:var(--m
     <div class="meta" id="meta">불러오는 중…</div>
   </header>
   <nav class="tabs" id="tabs" aria-label="화면 전환"></nav>
-  <div class="gsearch"><input id="gQ" type="search" placeholder="통합 검색: 작업·설비·사진·점검표·법규를 한 번에 (예: 누수, 에어바운스, 소화기)" aria-label="통합 검색"></div>
+  <div class="gsearch"><button class="btn gold" data-act="aiOpen" title="자연어로 조회·수정·작업 지시">AI 지시</button><input id="gQ" type="search" placeholder="통합 검색: 작업·설비·사진·점검표·법규를 한 번에 (예: 누수, 에어바운스, 소화기)" aria-label="통합 검색"></div>
   <div id="banner"></div>
   <main id="main"><div class="empty"><b>데이터를 불러오는 중입니다</b>잠시만 기다려 주세요.</div></main>
   <footer class="foot" id="foot"></footer>
@@ -264,8 +268,8 @@ const ASTAT=["정상","주의","고장","사용중지"];
 const TABS=[["dash","현황판"],["orders","작업지시"],["assets","설비대장"],["photos","사진 보관함"],["safety","안전·점검표"],["projects","시설개발"],["weather","날씨 점검"],["routine","정기 업무"],["vendors","업체"],["info","인포그래픽"],["cost","비용"]];
 const HF="힉스필드";
 
-const S={assets:[],orders:[],projects:[],reports:[],vendors:[],routines:[],checks:[],wx:[],pchk:[],insp:[]};
-let V={assets:[],orders:[],projects:[],reports:[],vendors:[],routines:[],checks:[],wx:[],pchk:[],insp:[]};
+const S={assets:[],orders:[],projects:[],reports:[],vendors:[],routines:[],checks:[],wx:[],pchk:[],insp:[],ailog:[]};
+let V={assets:[],orders:[],projects:[],reports:[],vendors:[],routines:[],checks:[],wx:[],pchk:[],insp:[],ailog:[]};
 const UI={site:(()=>{try{return localStorage.getItem("jamsa-fac-site")||"잠사박물관"}catch(e){return"잠사박물관"}})(),tab:"dash",oStatus:"미완료",oZone:"전체",aZone:"전체",aDue:"전체",ready:{assets:false,orders:false,projects:false}};
 let db=null, mode="loading", canWrite=true, sample=null, sampleImg=false, mcp=null, store=null;
 
@@ -315,7 +319,7 @@ async function sbSync(full){if(sbBusy||!sbTok)return;sbBusy=true;
   catch(e){if(e.code==="unauthorized"){sbSetTok(null);clearInterval(sbTimer);sbLogin("다시 로그인해 주세요.")}}
   finally{sbBusy=false}}
 async function sbStart(){sbTok=sbGetTok();if(!sbTok){sbLogin();return}await sbSync(true);if(mode!=="sb")return;
-  if(!ENCK){try{const k=await sbRpc("fac_key",{p_token:sbTok});const raw=Uint8Array.from(atob(k),c=>c.charCodeAt(0));ENCK=await crypto.subtle.importKey("raw",raw,"AES-GCM",false,["decrypt"]);loadPhotos();loadKB()}catch(_){PH.err=true;PH.kbErr=true;render()}}
+  if(!ENCK){try{const k=await sbRpc("fac_key",{p_token:sbTok});const raw=Uint8Array.from(atob(k),c=>c.charCodeAt(0));ENCK=await crypto.subtle.importKey("raw",raw,"AES-GCM",false,["decrypt"]);loadPhotos();loadKB();aiCheck()}catch(_){PH.err=true;PH.kbErr=true;render()}}
   clearInterval(sbTimer);sbTimer=setInterval(()=>sbSync(false),15000);setTimeout(()=>wxRefresh(false),1200)}
 async function sbLogout(){try{await sbRpc("inv_logout",{p_token:sbTok})}catch(_){}sbSetTok(null);clearInterval(sbTimer);for(const k of Object.keys(S))S[k]=[];sbLogin()}
 document.addEventListener("visibilitychange",()=>{if(mode==="sb"&&!document.hidden)sbSync(false)});
@@ -997,7 +1001,7 @@ function vPhotos(){
    <button class="kpi" data-act="pv" data-v="list"><div class="l">문제 발견 사진</div><div class="v">${iss.length}</div><div class="s">상 ${iss.filter(p=>p.sev==="상").length} · 중 ${iss.filter(p=>p.sev==="중").length} · 하 ${iss.filter(p=>p.sev==="하").length}</div></button>
    <button class="kpi ${open.length?"alert":""}" data-act="pv" data-v="list" data-st="미처리"><div class="l">미처리 문제</div><div class="v">${open.length}</div><div class="s">조치완료 ${dn}건</div></button>
    <button class="kpi" data-act="pv" data-v="zone"><div class="l">분류된 시설</div><div class="v">${zs.length}</div><div class="s">시설별 요약 보기</div></button></div>`;
-  const seg=`<div class="seg" style="margin-top:14px">${[["grid","사진"],["list","문제점 점검리스트"],["zone","시설별 요약"]].map(([k,l])=>`<button class="${mode===k?"on":""}" data-act="pv" data-v="${k}">${l}</button>`).join("")}</div>`;
+  const seg=`<div class="seg" style="margin-top:14px">${[["grid","사진"],["matrix","세부 조회"],["edit","편집"],["list","문제점 점검리스트"],["zone","시설별 요약"]].map(([k,l])=>`<button class="${mode===k?"on":""}" data-act="pv" data-v="${k}">${l}</button>`).join("")}</div>`;
   const cats=[...new Set(all.map(p=>p.cat))].sort((a,b)=>PCATS.indexOf(a)-PCATS.indexOf(b));
   const filt=mode==="zone"?"":`<div class="filters" style="margin-top:12px">
     <select id="fPZ" aria-label="시설">${["전체",...zs].map(s=>`<option ${UI.pz===s?"selected":""}>${esc(s)}</option>`).join("")}</select>
@@ -1005,16 +1009,19 @@ function vPhotos(){
     <input id="fPF" type="month" value="${esc(UI.pf||"")}" aria-label="시작 월" title="시작 월"><input id="fPT" type="month" value="${esc(UI.pt||"")}" aria-label="끝 월" title="끝 월">
     <div class="seg">${[["3m","최근 3개월"],["y","올해"],["ly","작년"],["all","전체"]].map(([k,l])=>{const [f,t]=pRange(k);return`<button class="${(UI.pf||"")===f&&(UI.pt||"")===t?"on":""}" data-act="pRange" data-v="${k}">${l}</button>`}).join("")}</div>
     <select id="fPS" aria-label="심각도">${["전체","상","중","하"].map(s=>`<option ${(UI.ps||"전체")===s?"selected":""} value="${s}">${s==="전체"?"심각도 전체":"심각도 "+s}</option>`).join("")}</select>
-    ${mode==="list"?`<select id="fPST" aria-label="처리 상태">${["전체","미처리",...PSTAT].map(s=>`<option ${(UI.pst||"전체")===s?"selected":""}>${s}</option>`).join("")}</select>`:`<label class="mchk"><input type="checkbox" id="fPI" ${UI.pi?"checked":""}>문제 사진만</label>`}
+    ${["list","edit","matrix"].includes(mode)?`<select id="fPST" aria-label="처리 상태">${["전체","미처리",...PSTAT].map(s=>`<option ${(UI.pst||"전체")===s?"selected":""}>${s}</option>`).join("")}</select>`:`<label class="mchk"><input type="checkbox" id="fPI" ${UI.pi?"checked":""}>문제 사진만</label>`}
+    ${mode==="edit"?`<label class="mchk"><input type="checkbox" id="fPI" ${UI.pi?"checked":""}>문제 사진만</label>`:""}${UI.ptag&&mode!=="matrix"?`<button class="chip plum" style="border:0;cursor:pointer" data-act="pTagF" data-v="">문제: ${esc(UI.ptag)} ✕</button>`:""}
     <input id="fPQ" type="search" placeholder="검색: 누수, 에어바운스, 전선, 2024-07…" value="${esc(UI.pq||"")}" aria-label="사진 검색" style="flex:1;min-width:180px">
   </div>`;
   let body="";
-  if(mode==="grid"){const list=pFilter(all).sort((a,b)=>b.d.localeCompare(a.d)||b.i-a.i);PH.cur=list.map(p=>p.i);
+  if(mode==="matrix")body=vPhotoMatrix(all);
+  else if(mode==="edit")body=vPhotoEdit(all);
+  else if(mode==="grid"){const list=pFilterAll(all).sort((a,b)=>b.d.localeCompare(a.d)||b.i-a.i);PH.cur=list.map(p=>p.i);
     const lim=UI.plim||300;const byM={};for(const p of list.slice(0,lim))(byM[p.d.slice(0,7)]=byM[p.d.slice(0,7)]||[]).push(p);
     body=`<div class="hint" style="margin-bottom:8px">${list.length.toLocaleString()}장 · 문제 ${list.filter(p=>p.issue).length}장 · 사진을 누르면 크게 보고 조치 상태를 기록합니다</div>`+
      (list.length?Object.keys(byM).sort().reverse().map(mk=>`<div class="sec-head" style="margin:16px 0 8px"><h3 class="sub">${mk.slice(0,4)}년 ${+mk.slice(5)}월</h3><span class="hint">${byM[mk].length}장${byM[mk].some(p=>p.issue)?` · 문제 ${byM[mk].filter(p=>p.issue).length}`:""}</span></div><div class="pgrid">${byM[mk].map(ptile).join("")}</div>`).join(""):'<div class="panel"><div class="empty"><b>조건에 맞는 사진이 없습니다</b>기간이나 검색어를 바꿔 보세요.</div></div>')+
      (list.length>lim?`<div class="row" style="justify-content:center;margin-top:14px"><button class="btn" data-act="pMore">${(list.length-lim).toLocaleString()}장 더 보기</button></div>`:"");}
-  else if(mode==="list"){const seq=issueSeq();let list=pFilter(all,{issueOnly:true});const st=UI.pst||"전체";
+  else if(mode==="list"){const seq=issueSeq();let list=pFilterAll(all,{issueOnly:true});const st=UI.pst||"전체";
     if(st==="미처리")list=list.filter(openIssue);else if(st!=="전체")list=list.filter(p=>pStat(p)===st);
     list.sort((a,b)=>a.d.localeCompare(b.d)||a.i-b.i);if(UI.pDesc)list.reverse();PH.cur=list.map(p=>p.i);
     const done=list.filter(p=>["조치완료","해당없음"].includes(pStat(p))).length;const lim=UI.plim||150;
@@ -1058,6 +1065,7 @@ function renderPhoto(){if(!PM)return;const p=PHV.find(x=>x.i===PM.i);if(!p){clos
       <select id="pFixZone" aria-label="시설">${[...new Set([p.zone,...ZONES_J,"수조·LSS","기타"])].map(z=>`<option ${z===p.zone?"selected":""}>${esc(z)}</option>`).join("")}</select>
       <select id="pFixCat" aria-label="분류">${PCATS.map(c=>`<option ${c===p.cat?"selected":""}>${c}</option>`).join("")}</select>
       <select id="pFixIssue" aria-label="문제 여부">${[["0","이상 없음"],["상","문제 · 상"],["중","문제 · 중"],["하","문제 · 하"]].map(([v,l])=>`<option value="${v}" ${(p.issue?p.sev:"0")===v?"selected":""}>${l}</option>`).join("")}</select>
+      <input id="pFixSubj" value="${esc(p.subj)}" placeholder="내용" style="flex:1;min-width:140px"><input id="pFixDesc" value="${esc(p.desc)}" placeholder="문제·조치 설명" style="flex-basis:100%">
       <button class="btn" data-act="pFix" data-i="${p.i}">적용</button></div></details>`:""}
     <div class="row" style="margin-top:4px">${canWrite?(o.orderId?`<button class="btn" data-act="editOrder" data-id="${esc(o.orderId)}">연결된 작업지시</button>`:`<button class="btn pri" data-act="pOrder" data-i="${p.i}">작업지시로</button>`)+(sample?`<button class="btn gold" data-act="pAI" data-i="${p.i}">AI 정밀분석 · 인포그래픽</button>`:""):""}</div>
    </div></div>
@@ -1157,11 +1165,200 @@ function vPhotoPanel(){if(!PHV.length)return"";const open=PHV.filter(openIssue).
   return`<div class="sec-head"><h2 class="sec">사진에서 나온 미처리 문제</h2><span class="hint">${open.length}건 · 상 ${open.filter(p=>p.sev==="상").length} · 중 ${open.filter(p=>p.sev==="중").length}</span><span class="sp"></span><button class="btn ghost" data-act="pGoList">점검리스트 보기</button></div>
   <div class="panel">${open.slice(0,5).map(p=>`<div class="item"><button class="pt sm" style="${tStyle(p.i,56)}" data-act="pOpen" data-i="${p.i}" aria-label="사진 보기"></button><div class="body"><div class="row"><span class="t">${esc(p.subj)}</span>${sevChip(p.sev)}</div><div class="d">${esc(p.d)} · ${esc(p.zone)} · ${esc(p.desc)}</div></div>${canWrite?`<button class="btn ghost" data-act="pOrder" data-i="${p.i}">작업지시로</button>`:""}</div>`).join("")}</div>`}
 
+/* ---------- 여러 건 저장 ---------- */
+async function putMany(coll,recs){if(!recs.length)return true;
+  if(mode==="sb"){try{for(let k=0;k<recs.length;k+=400){const part=recs.slice(k,k+400);await sbRpc("fac_put_many",{p_token:sbTok,p_coll:coll,p_docs:part.map(({id,...d})=>({id,data:d}))})}}
+    catch(e){if(e.code==="unauthorized")sbLogin("다시 로그인해 주세요.");else toast("저장하지 못했습니다. 잠시 후 다시 시도해 주세요.");return false}
+    for(const rec of recs){const arr=S[coll];const k=arr.findIndex(r=>r.id===rec.id);if(k>=0)arr[k]=rec;else arr.push(rec)}render();return true}
+  for(const r of recs)if(!await put(coll,r))return false;return true}
+async function pSaveMany(items){ // [{i,patch}] — patch.ov 는 기존 ov 와 합침
+  const recs=[];for(const {i,patch} of items){const p=PH.rows.find(x=>x.i===i);if(!p)continue;const o=PCK.get("p"+i)||{};
+    const rec={...o,id:"p"+i,site:p.site,at:today(),...patch};if(patch.ov)rec.ov={...(o.ov||{}),...patch.ov};recs.push(rec)}
+  if(mode==="sb"||!db)return putMany("pchk",recs);
+  for(const r of recs){const k=S.pchk.findIndex(x=>x.id===r.id);if(k>=0)S.pchk[k]=r;else S.pchk.push(r)}render();return putMany("pchk",recs)}
+
+/* ---------- 사진 필터 (시설·기간·문제) ---------- */
+function pFilterAll(list,{issueOnly,useStatus}={}){let l=pFilter(list,{issueOnly});
+  if(UI.ptag)l=l.filter(p=>p.tags.includes(UI.ptag));
+  const st=UI.pst||"전체";if(useStatus&&st!=="전체")l=l.filter(p=>st==="미처리"?openIssue(p):pStat(p)===st);return l}
+function topIssueTags(list,n){const c={};for(const p of list)if(p.issue)for(const t of p.tags)c[t]=(c[t]||0)+1;return Object.entries(c).sort((a,b)=>b[1]-a[1]).slice(0,n)}
+const PGRAN={year:"연",quarter:"분기",month:"월"};
+function perKey(d,g){if(g==="year")return d.slice(0,4);if(g==="quarter")return d.slice(0,4)+"-Q"+(Math.floor((+d.slice(5,7)-1)/3)+1);return d.slice(0,7)}
+function perRange(k){if(/^\d{4}$/.test(k))return[k+"-01",k+"-12"];const q=k.match(/^(\d{4})-Q(\d)$/);if(q){const s=(+q[2]-1)*3+1;return[`${q[1]}-${String(s).padStart(2,"0")}`,`${q[1]}-${String(s+2).padStart(2,"0")}`]}return[k,k]}
+const perLabel=(k,g)=>g==="year"?k+"년":g==="quarter"?k.replace("-Q"," ")+"분기":k.slice(2).replace("-",".");
+
+function vPhotoMatrix(all){
+  const g=UI.pg||"year",met=UI.pmet||"issue",dim=UI.pdim||"zone";
+  const base=pFilterAll(all,{useStatus:true});
+  const val=l=>met==="all"?l.length:met==="open"?l.filter(openIssue).length:l.filter(p=>p.issue).length;
+  const cols=[...new Set(base.map(p=>perKey(p.d,g)))].sort();
+  const rowKey=p=>dim==="zone"?p.zone:p.cat;
+  const rows=[...new Set(base.map(rowKey))].sort((a,b)=>dim==="zone"?zoneOrder(a)-zoneOrder(b)||a.localeCompare(b,"ko"):PCATS.indexOf(a)-PCATS.indexOf(b));
+  const cell={};let mx=1;for(const p of base){const k=rowKey(p)+"|"+perKey(p.d,g);(cell[k]=cell[k]||[]).push(p)}
+  for(const k in cell)mx=Math.max(mx,val(cell[k]));
+  const tags=topIssueTags(base.length?base:all,24);
+  const seg=(id,opts,cur)=>`<div class="seg sm">${opts.map(([k,l])=>`<button class="${cur===k?"on":""}" data-act="${id}" data-v="${k}">${l}</button>`).join("")}</div>`;
+  return`<div class="row" style="margin-bottom:10px">${seg("pDim",[["zone","시설 × 기간"],["cat","문제 분류 × 기간"]],dim)}${seg("pGran",[["year","연"],["quarter","분기"],["month","월"]],g)}${seg("pMet",[["issue","문제 건수"],["open","미처리"],["all","전체 사진"]],met)}</div>
+  <div class="row" style="gap:4px;margin-bottom:12px"><span class="hint">자주 나온 문제</span>${tags.map(([t,n])=>`<button class="chip ${UI.ptag===t?"plum":""}" style="border:0;cursor:pointer" data-act="pTagF" data-v="${esc(t)}">${esc(t)} ${n}</button>`).join("")}${UI.ptag?'<button class="chip red" style="border:0;cursor:pointer" data-act="pTagF" data-v="">문제 필터 해제 ✕</button>':""}</div>
+  ${rows.length?`<div class="tbl-wrap"><table class="mtx"><thead><tr><th>${dim==="zone"?"시설":"문제 분류"}</th>${cols.map(c=>`<th class="r">${esc(perLabel(c,g))}</th>`).join("")}<th class="r">합계</th></tr></thead><tbody>
+  ${rows.map(r=>{const tot=val(base.filter(p=>rowKey(p)===r));return`<tr><th style="background:var(--surface);color:var(--ink);font-size:13px">${esc(r)}</th>${cols.map(c=>{const l=cell[r+"|"+c]||[];const v=val(l);
+    return`<td class="r num"><button class="mcell" style="background:${v?`color-mix(in srgb, var(--danger) ${Math.round(8+v/mx*55)}%, transparent)`:"transparent"}" ${l.length?`data-act="pCell" data-r="${esc(r)}" data-c="${c}"`:"disabled"}>${v||"·"}</button></td>`}).join("")}<td class="r num"><b>${tot}</b></td></tr>`}).join("")}
+  </tbody></table></div><div class="hint" style="margin-top:8px">칸을 누르면 그 시설·기간의 사진을 편집 목록으로 엽니다.</div>`:'<div class="panel"><div class="empty"><b>조건에 맞는 사진이 없습니다</b></div></div>'}`}
+
+function vPhotoEdit(all){
+  const list=pFilterAll(all,{useStatus:true}).sort((a,b)=>b.d.localeCompare(a.d)||b.i-a.i);PH.cur=list.map(p=>p.i);
+  const per=50,pages=Math.max(1,Math.ceil(list.length/per)),pg=Math.min(UI.ppage||0,pages-1),page=list.slice(pg*per,pg*per+per);
+  const sel=UI.psel||(UI.psel=new Set());const zs=[...new Set([...ZONES_J,"수조·LSS","기타",...all.map(p=>p.zone)])];
+  const opt=(arr,v,blank)=>(blank?`<option value="">${blank}</option>`:"")+arr.map(x=>`<option ${x===v?"selected":""}>${esc(x)}</option>`).join("");
+  const sevOpts=v=>[["0","이상 없음"],["상","문제·상"],["중","문제·중"],["하","문제·하"]].map(([k,l])=>`<option value="${k}" ${v===k?"selected":""}>${l}</option>`).join("");
+  const nSel=[...sel].filter(i=>list.some(p=>p.i===i)).length;
+  return`<div class="bulk"><b>${nSel?`선택 ${nSel}건`:`조건 ${list.length.toLocaleString()}건`}</b><span class="hint">한꺼번에 바꾸기</span>
+    <select id="bZone" aria-label="시설">${opt(zs,"","시설 그대로")}</select><select id="bCat" aria-label="분류">${opt(PCATS,"","분류 그대로")}</select>
+    <select id="bSev" aria-label="문제 여부"><option value="">문제 그대로</option>${sevOpts("")}</select><select id="bSt" aria-label="처리 상태">${opt(PSTAT.slice(1),"","상태 그대로")}</select>
+    <input id="bNote" placeholder="메모 덧붙이기" style="min-width:140px;flex:1">
+    ${canWrite?`<button class="btn pri" data-act="bApply" data-v="sel" ${nSel?"":"disabled"}>선택 적용</button><button class="btn ${UI.bArm?"danger":""}" data-act="bApply" data-v="all">${UI.bArm?`정말 ${list.length}건 모두 적용`:"조건 전체 적용"}</button>`:""}</div>
+  <div class="tbl-wrap"><table class="etbl"><thead><tr><th><input type="checkbox" data-psall="1" aria-label="이 쪽 전체 선택" ${page.length&&page.every(p=>sel.has(p.i))?"checked":""}></th><th>사진</th><th>날짜</th><th>시설</th><th>분류</th><th>문제</th><th>처리 상태</th><th>내용</th><th>문제·조치 설명</th><th>메모</th></tr></thead><tbody>
+  ${page.map(p=>{const o=PCK.get("p"+p.i)||{},s=pStat(p),dis=canWrite?"":"disabled";return`<tr class="${sel.has(p.i)?"selrow":""}">
+    <td><input type="checkbox" data-psel="${p.i}" ${sel.has(p.i)?"checked":""} aria-label="선택"></td>
+    <td><button class="pt sm" style="${tStyle(p.i,52)}" data-act="pOpen" data-i="${p.i}" aria-label="크게 보기"></button></td>
+    <td class="num" style="white-space:nowrap">${esc(p.d)}</td>
+    <td><select data-pe="zone" data-i="${p.i}" ${dis}>${opt(zs,p.zone)}</select></td>
+    <td><select data-pe="cat" data-i="${p.i}" ${dis}>${opt(PCATS,p.cat)}</select></td>
+    <td><select data-pe="sev" data-i="${p.i}" ${dis}>${sevOpts(p.issue?p.sev:"0")}</select></td>
+    <td>${p.issue?`<select data-pe="st" data-i="${p.i}" ${dis}>${opt(PSTAT.slice(1),s==="미확인"?"":s,"미확인")}</select>`:'<span class="hint">-</span>'}</td>
+    <td><input data-pe="subj" data-i="${p.i}" value="${esc(p.subj)}" ${dis} style="min-width:150px"></td>
+    <td><input data-pe="desc" data-i="${p.i}" value="${esc(p.desc)}" ${dis} placeholder="${p.issue?"문제와 조치":""}" style="min-width:220px"></td>
+    <td><input data-pe="note" data-i="${p.i}" value="${esc(o.note||"")}" ${dis} placeholder="조치 메모" style="min-width:140px"></td></tr>`}).join("")||'<tr><td colspan="10"><div class="empty"><b>조건에 맞는 사진이 없습니다</b></div></td></tr>'}
+  </tbody></table></div>
+  <div class="row" style="justify-content:center;margin-top:12px"><button class="btn" data-act="pPage" data-v="${pg-1}" ${pg<=0?"disabled":""}>‹ 이전</button><span class="hint num">${pg+1} / ${pages} 쪽 · ${list.length.toLocaleString()}건</span><button class="btn" data-act="pPage" data-v="${pg+1}" ${pg>=pages-1?"disabled":""}>다음 ›</button></div>`}
+async function pEditField(i,field,value){const p=PHV.find(x=>x.i===i);if(!p)return;
+  if(field==="st")return pSaveMany([{i,patch:{st:value||"미확인"}}]);
+  if(field==="note")return pSaveMany([{i,patch:{note:value.trim()}}]);
+  if(field==="sev")return pSaveMany([{i,patch:{ov:{issue:value!=="0",sev:value==="0"?"":value}}}]);
+  return pSaveMany([{i,patch:{ov:{[field]:field==="subj"||field==="desc"?value.trim():value}}}])}
+async function bulkApply(which){const all=PHV;const list=pFilterAll(all,{useStatus:true});
+  const ids=which==="all"?list.map(p=>p.i):[...(UI.psel||[])].filter(i=>list.some(p=>p.i===i));
+  const z=$("#bZone").value,c=$("#bCat").value,sv=$("#bSev").value,st=$("#bSt").value,note=$("#bNote").value.trim();
+  if(!z&&!c&&!sv&&!st&&!note){toast("바꿀 항목을 하나 이상 고르세요.");return}
+  if(which==="all"&&!UI.bArm){UI.bArm=true;render();return}UI.bArm=false;
+  const items=ids.map(i=>{const o=PCK.get("p"+i)||{};const ov={};if(z)ov.zone=z;if(c)ov.cat=c;if(sv){ov.issue=sv!=="0";ov.sev=sv==="0"?"":sv}
+    const patch={};if(Object.keys(ov).length)patch.ov=ov;if(st)patch.st=st;if(note)patch.note=[o.note,note].filter(Boolean).join(" / ");return{i,patch}});
+  if(await pSaveMany(items)){UI.psel=new Set();toast(`${items.length}건을 바꿨습니다.`)}}
+
+/* ---------- AI 지시 ---------- */
+let AIS=null,AI_READY=null;
+const AI_GUIDE=`너는 한국잠사박물관 시설관리 프로그램의 실행 비서다. 사용자의 지시를 JSON 하나로 바꿔라: {"reply":"짧은 설명","actions":[...]}
+동작: view{tab,photoMode(grid|list|matrix|edit|zone),filter} / query{target(photos|orders|assets|routines),where,groupBy(zone|cat|year|month|sev|status|tag|none),title} / update_photos{where,set{st,zone,cat,sev,issue,note,subj,desc}} / create_order{fields{title,zone,type,category,priority,dueDate,assignee,desc},fromPhotos(선택)} / update_orders{where{zone,status,q,from,to,priority},set{status,priority,assignee,dueDate}} / create_routine{fields{title,freq,dom,dows,months,zone,category,legal,assignee,detail,basis}} / note{text}
+사진필터: {zone,cat,from(YYYY-MM),to,issue,sev,status(미처리|미확인|조치 필요|조치중|조치완료|해당없음),q,tag}. 숫자는 지어내지 말고 query를 써라. 모호하면 합리적으로 해석하고 reply에 적어라.`;
+async function fileToB64(f,maxSide=1280){const url=URL.createObjectURL(f);try{const im=new Image();im.src=url;await im.decode();const k=Math.min(1,maxSide/Math.max(im.naturalWidth,im.naturalHeight));
+  const c=document.createElement("canvas");c.width=Math.round(im.naturalWidth*k);c.height=Math.round(im.naturalHeight*k);c.getContext("2d").drawImage(im,0,0,c.width,c.height);return c.toDataURL("image/jpeg",.85)}finally{URL.revokeObjectURL(url)}}
+async function aiFetch(body,signal){const r=await fetch("/api/facility-ai",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token:sbTok,...body}),signal});
+  let j=null;try{j=await r.json()}catch(_){}
+  if(r.status===401){sbLogin("다시 로그인해 주세요.");throw{code:"unauthorized"}}
+  if(!r.ok||!j||!j.ok)throw{code:j?.error==="rate_limited"?"rate_limited":j?.error==="no_api_key"?"no_api_key":j?.error==="invalid_json"?"invalid_json":"ai_error",message:j?.message};return j.result}
+async function aiCheck(){if(mode!=="sb")return;try{const r=await fetch("/api/facility-ai");const j=await r.json();AI_READY=!!j.ready}catch(_){AI_READY=false}
+  if(AI_READY&&!sample){sample={json:async(prompt,o={})=>{let img="";if(o.images&&o.images[0])img=await fileToB64(o.images[0]);return aiFetch({mode:"json",prompt,imageB64:img},o.signal)}};sampleImg=true}render()}
+function aiContext(){const ph=PHV,iss=ph.filter(p=>p.issue);const byZ={};for(const p of ph){const z=byZ[p.zone]||(byZ[p.zone]={n:0,i:0,o:0});z.n++;if(p.issue)z.i++;if(openIssue(p))z.o++}
+  const open=V.orders.filter(o=>!["완료","기록"].includes(o.status));const oz={};for(const o of open)oz[o.zone]=(oz[o.zone]||0)+1;
+  return[`오늘 ${today()} · 사업장 ${UI.site} · 현재 화면 ${UI.tab}${UI.tab==="photos"?"/"+(UI.pv||"grid"):""}`,
+    `시설 목록: ${[...new Set([...ZN(),...Object.keys(byZ)])].join(", ")}`,`분류 목록: ${PCATS.join(", ")}`,`작업 상태: ${OSTAT.join(", ")} · 우선순위: ${PRI.join(", ")} · 작업 유형: ${OTYPE.join(", ")}`,
+    `사진 ${ph.length}장(문제 ${iss.length}, 미처리 ${ph.filter(openIssue).length}) · 기간 ${ph.length?ph.map(p=>p.d).sort()[0].slice(0,7)+"~"+ph.map(p=>p.d).sort().pop().slice(0,7):"-"}`,
+    `시설별 사진(전체/문제/미처리): ${Object.entries(byZ).map(([z,v])=>`${z} ${v.n}/${v.i}/${v.o}`).join("; ")}`,
+    `자주 나온 문제 태그: ${topIssueTags(ph,30).map(([t,n])=>t+" "+n).join(", ")}`,
+    `미완료 작업 ${open.length}건 (시설별: ${Object.entries(oz).map(([z,n])=>z+" "+n).join(", ")}) · 설비 ${V.assets.length} · 정기 업무 ${V.routines.length}`,
+    `현재 사진 필터: ${JSON.stringify({zone:UI.pz,cat:UI.pc,from:UI.pf,to:UI.pt,sev:UI.ps,status:UI.pst,q:UI.pq,tag:UI.ptag})}`].join("\n")}
+function aiMatchPhotos(w={}){const q=w.q||"";return PHV.filter(p=>(!w.zone||p.zone===w.zone||p.zone.includes(w.zone))&&(!w.cat||p.cat===w.cat)&&(!w.from||p.d.slice(0,7)>=w.from)&&(!w.to||p.d.slice(0,7)<=w.to)
+  &&(w.issue==null||!!p.issue===!!w.issue)&&(!w.sev||p.sev===w.sev)&&(!w.tag||p.tags.includes(w.tag))&&pMatch(p,q)
+  &&(!w.status||(w.status==="미처리"?openIssue(p):pStat(p)===w.status)))}
+function aiMatchOrders(w={}){const q=(w.q||"").trim();return V.orders.filter(o=>(!w.zone||o.zone===w.zone||String(o.zone).includes(w.zone))&&(!w.status||(w.status==="미완료"?!["완료","기록"].includes(o.status):o.status===w.status))
+  &&(!w.priority||o.priority===w.priority)&&(!w.from||String(o.createdAt||o.doneAt||"")>=w.from)&&(!w.to||String(o.createdAt||o.doneAt||"")<=w.to+"~")&&(!q||q.split(/\s+/).every(t=>[o.title,o.desc,o.zone,o.assignee,o.category].join(" ").includes(t))))}
+function aiGroup(rows,by,fn){const g={};for(const r of rows){const ks=by==="tag"?(r.tags||[]):[fn(r)];for(const k of ks)(g[k]=g[k]||[]).push(r)}return Object.entries(g).sort((a,b)=>b[1].length-a[1].length)}
+function aiQuery(a){const w=a.where||{},by=a.groupBy||"none";
+  if(a.target==="photos"){const rows=aiMatchPhotos(w);const f={zone:p=>p.zone,cat:p=>p.cat,year:p=>p.d.slice(0,4),month:p=>p.d.slice(0,7),sev:p=>p.issue?p.sev:"이상 없음",status:p=>pStat(p)||"이상 없음"}[by];
+    if(by==="none"||!f&&by!=="tag")return{head:["날짜","시설","내용","상태"],rows:rows.slice(0,40).map(p=>[p.d,p.zone,p.subj,pStat(p)||"-"]),total:rows.length,photos:rows.slice(0,24).map(p=>p.i)};
+    return{head:["구분","사진","문제","미처리"],rows:aiGroup(rows,by,f).slice(0,40).map(([k,l])=>[k,l.length,l.filter(p=>p.issue).length,l.filter(openIssue).length]),total:rows.length}}
+  if(a.target==="orders"){const rows=aiMatchOrders(w);const f={zone:o=>o.zone,cat:o=>o.category||"-",year:o=>String(o.createdAt||"").slice(0,4),month:o=>String(o.createdAt||"").slice(0,7),status:o=>o.status,sev:o=>o.priority}[by];
+    if(!f)return{head:["제목","시설","상태","기한"],rows:rows.slice(0,40).map(o=>[o.title,o.zone,o.status,o.dueDate||"-"]),total:rows.length};
+    return{head:["구분","건수","미완료"],rows:aiGroup(rows,by,f).slice(0,40).map(([k,l])=>[k,l.length,l.filter(o=>!["완료","기록"].includes(o.status)).length]),total:rows.length}}
+  const src=a.target==="assets"?V.assets:V.routines;const q=(w.q||"").trim();const rows=src.filter(r=>(!w.zone||r.zone===w.zone)&&(!q||JSON.stringify(r).includes(q)));
+  return{head:["이름","시설","상태·주기"],rows:rows.slice(0,40).map(r=>[r.name||r.title,r.zone,r.status||freqLabel(r)]),total:rows.length}}
+function aiDescribe(a){const st=a._res;
+  if(a.type==="view")return`화면 이동: ${({dash:"현황판",orders:"작업지시",assets:"설비대장",photos:"사진 보관함",safety:"안전·점검표",projects:"시설개발",weather:"날씨 점검",routine:"정기 업무",vendors:"업체",cost:"비용"})[a.tab]||a.tab||""}${a.filter?" · 필터 "+Object.entries(a.filter).filter(([,v])=>v!=null&&v!=="").map(([k,v])=>`${k}=${v}`).join(", "):""}`;
+  if(a.type==="query")return`조회: ${a.title||a.target}`;
+  if(a.type==="update_photos")return`사진 ${aiMatchPhotos(a.where).length}건 수정 → ${Object.entries(a.set||{}).map(([k,v])=>`${({st:"상태",zone:"시설",cat:"분류",sev:"심각도",issue:"문제",note:"메모",subj:"내용",desc:"설명"})[k]||k} ${v}`).join(", ")}`;
+  if(a.type==="create_order")return a.fromPhotos?`문제 사진 ${Math.min(50,aiMatchPhotos({issue:true,...a.fromPhotos}).length)}건마다 작업지시 생성${a.fields?.dueDate?" · 기한 "+a.fields.dueDate:""}`:`작업지시 생성: ${a.fields?.title||""} (${a.fields?.zone||""}${a.fields?.dueDate?" · 기한 "+a.fields.dueDate:""})`;
+  if(a.type==="update_orders")return`작업지시 ${aiMatchOrders(a.where).length}건 수정 → ${Object.entries(a.set||{}).map(([k,v])=>k+" "+v).join(", ")}`;
+  if(a.type==="create_routine")return`정기 업무 추가: ${a.fields?.title||""} (${a.fields?.freq||""})`;
+  if(a.type==="note")return a.text||"";return JSON.stringify(a).slice(0,120)}
+const AI_WRITE=new Set(["update_photos","create_order","update_orders","create_routine"]);
+function applyView(a){if(a.tab)UI.tab=a.tab;const f=a.filter||{};if(a.tab==="photos"||a.photoMode){UI.tab="photos";if(a.photoMode)UI.pv=a.photoMode;
+  UI.pz=f.zone||"전체";UI.pc=f.cat||"전체";UI.pf=f.from||"";UI.pt=f.to||"";UI.ps=f.sev||"전체";UI.pst=f.status||"전체";UI.pq=f.q||"";UI.ptag=f.tag||"";UI.pi=!!f.issue;UI.plim=0;UI.ppage=0}
+  if(UI.gq){UI.gq="";$("#gQ").value=""}}
+async function aiRun(){if(!AIS||AIS.busy)return;const prompt=($("#aiQ")?.value||AIS.prompt||"").trim();if(!prompt)return;
+  AIS={prompt,busy:true,actions:[],reply:"",err:""};renderAI();
+  try{let j;const ctx=aiContext();
+    if(mode==="sb")j=await aiFetch({mode:"plan",prompt,context:ctx});
+    else if(sample)j=await sample.json(`${AI_GUIDE}\n\n[프로그램 현황]\n${ctx}\n\n[사용자 지시]\n${prompt}`);
+    else throw{code:"no_ai"};
+    AIS.reply=String(j?.reply||"");AIS.actions=(Array.isArray(j?.actions)?j.actions:[]).slice(0,12).map(a=>({...a,_sel:AI_WRITE.has(a.type)}));
+    for(const a of AIS.actions){if(a.type==="query")a._res=aiQuery(a);if(a.type==="view"){applyView(a);render()}}
+    if(canWrite)put("ailog",{id:nid("ai"),site:UI.site,prompt,reply:AIS.reply,actions:AIS.actions.map(({_res,_sel,...x})=>x),by:sbUser?.name||"",at:new Date().toISOString()});
+  }catch(e){AIS.err={no_ai:"AI 지시는 claude.ai 페이지 또는 Vercel 배포판에서 쓸 수 있습니다.",no_api_key:"Vercel 환경변수에 ANTHROPIC_API_KEY가 없어 AI를 쓸 수 없습니다.",rate_limited:"요청이 많습니다. 1분 뒤 다시 시도해 주세요.",invalid_json:"AI 답을 해석하지 못했습니다. 지시를 조금 바꿔 다시 보내 주세요.",unauthorized:"다시 로그인해 주세요."}[e?.code]||"AI 호출에 실패했습니다. 잠시 후 다시 시도해 주세요."}
+  finally{if(AIS){AIS.busy=false;renderAI()}}}
+async function aiExec(){if(!AIS||AIS.busy||!canWrite)return;AIS.busy=true;renderAI();const log=[];
+  try{for(const a of AIS.actions){if(!a._sel||!AI_WRITE.has(a.type))continue;
+    if(a.type==="update_photos"){const set=a.set||{};const rows=aiMatchPhotos(a.where);const ov={};for(const k of ["zone","cat","subj","desc"])if(set[k])ov[k]=set[k];
+      if(set.sev)ov.sev=set.sev;if(set.issue!=null){ov.issue=!!set.issue;if(!set.issue)ov.sev=""}
+      const items=rows.map(p=>{const patch={};if(Object.keys(ov).length)patch.ov=ov;if(set.st)patch.st=set.st;if(set.note){const o=PCK.get("p"+p.i)||{};patch.note=[o.note,set.note].filter(Boolean).join(" / ")}return{i:p.i,patch}});
+      if(await pSaveMany(items))log.push(`사진 ${items.length}건 수정`)}
+    else if(a.type==="create_order"){const f=a.fields||{};const base={site:UI.site,status:"접수",createdAt:today(),src:"AI 지시"};
+      if(a.fromPhotos){const ps=aiMatchPhotos({issue:true,...a.fromPhotos}).filter(p=>!(PCK.get("p"+p.i)||{}).orderId).slice(0,50);
+        const recs=ps.map(p=>({id:nid("o"),...photoOrderPre(p),...base,...Object.fromEntries(Object.entries(f).filter(([k,v])=>v&&k!=="title"&&k!=="desc"))}));
+        if(await putMany("orders",recs)){await pSaveMany(recs.map(r=>({i:r.photoRef,patch:{orderId:r.id,st:"조치중"}})));log.push(`작업지시 ${recs.length}건 생성`)}}
+      else{const rec={id:nid("o"),...base,zone:f.zone||ZN()[0],type:OTYPE.includes(f.type)?f.type:"고장수리",priority:PRI.includes(f.priority)?f.priority:"보통",category:CATS.includes(f.category)?f.category:"기타",title:String(f.title||"AI 지시 작업").slice(0,80),desc:f.desc||"",assignee:f.assignee||"",dueDate:f.dueDate||""};
+        if(await put("orders",rec))log.push(`작업지시 "${rec.title}" 생성`)}}
+    else if(a.type==="update_orders"){const set=a.set||{};const rows=aiMatchOrders(a.where);const clean={};
+      if(OSTAT.includes(set.status))clean.status=set.status;if(PRI.includes(set.priority))clean.priority=set.priority;if(set.assignee)clean.assignee=set.assignee;if(set.dueDate)clean.dueDate=set.dueDate;
+      const recs=rows.map(o=>{const n={...o,...clean};if(clean.status==="완료"&&!n.doneAt)n.doneAt=today();return n});if(await putMany("orders",recs))log.push(`작업지시 ${recs.length}건 수정`)}
+    else if(a.type==="create_routine"){const f=a.fields||{};const rec={id:nid("r"),site:UI.site,freq:["매일","매주","매월","매년"].includes(f.freq)?f.freq:"매월",dom:+f.dom||1,nth:"",dows:Array.isArray(f.dows)?f.dows:[],months:Array.isArray(f.months)?f.months:[],
+        zone:f.zone||ZN()[0],category:CATS.includes(f.category)?f.category:"기타",legal:!!f.legal,assignee:f.assignee||"",title:String(f.title||"AI 지시 정기 업무").slice(0,80),detail:f.detail||"",basis:f.basis||"AI 지시",since:today(),src:"AI 지시"};
+      if(rec.freq==="매주"&&!rec.dows.length)rec.dows=[1];if(await put("routines",rec))log.push(`정기 업무 "${rec.title}" 추가`)}
+    a._done=true}
+    AIS.done=log.join(" · ")||"실행할 변경이 없었습니다.";toast(AIS.done)}
+  finally{if(AIS){AIS.busy=false;renderAI()}}}
+function renderAI(){if(!AIS)return;const writes=AIS.actions.filter(a=>AI_WRITE.has(a.type));
+  const hist=S.ailog.filter(inSite).sort((a,b)=>String(b.at).localeCompare(String(a.at))).slice(0,6);
+  $("#modalRoot").innerHTML=`<div class="ov" data-act="aiClose"><div class="modal photo-modal" role="dialog" aria-modal="true" aria-label="AI 지시">
+  <h3>AI 지시</h3>
+  <form id="aiForm" class="row"><input id="aiQ" value="${esc(AIS.prompt||"")}" placeholder="예) 계절놀이장 올해 에어바운스 문제 모두 조치 필요로 바꾸고 작업지시 만들어줘" style="flex:1;min-width:200px"><button class="btn pri" type="submit" ${AIS.busy?"disabled":""}>${AIS.busy?"처리 중…":"보내기"}</button></form>
+  ${AIS.err?`<div class="banner" style="margin-top:12px;background:var(--danger-bg);color:var(--danger)">${esc(AIS.err)}</div>`:""}
+  ${AIS.reply?`<div class="ai" style="margin-top:12px;padding:10px 12px;background:var(--sunk);border-radius:10px;font-size:14px;white-space:pre-wrap">${esc(AIS.reply)}</div>`:""}
+  ${AIS.actions.length?`<div class="panel" style="margin-top:12px">${AIS.actions.map((a,k)=>`<div class="item"><div class="body"><div class="row">${AI_WRITE.has(a.type)?`<label class="mchk"><input type="checkbox" data-aisel="${k}" ${a._sel?"checked":""} ${a._done||!canWrite?"disabled":""}>${a._done?"완료":"실행"}</label>`:`<span class="chip">${a.type==="query"?"조회":a.type==="view"?"화면":"안내"}</span>`}<span class="t">${esc(aiDescribe(a))}</span></div>
+    ${a._res?`<div class="tbl-wrap" style="margin-top:8px"><table style="min-width:0"><thead><tr>${a._res.head.map(h=>`<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${a._res.rows.map(r=>`<tr>${r.map(c=>`<td>${esc(c)}</td>`).join("")}</tr>`).join("")||`<tr><td colspan="${a._res.head.length}" class="hint">결과 없음</td></tr>`}</tbody></table></div><div class="hint" style="margin-top:4px">합계 ${a._res.total.toLocaleString()}건</div>
+      ${a._res.photos&&a._res.photos.length?`<div class="row" style="gap:4px;margin-top:6px">${a._res.photos.map(i=>`<button class="pt sm" style="${tStyle(i,52)}" data-act="pOpen" data-i="${i}" aria-label="사진"></button>`).join("")}</div>`:""}`:""}</div></div>`).join("")}</div>`:""}
+  ${AIS.done?`<div class="hint" style="margin-top:8px;color:var(--leaf-ink)">${esc(AIS.done)}</div>`:""}
+  <div class="mfoot">${hist.length?`<details style="flex:1"><summary class="hint" style="cursor:pointer">최근 지시 ${hist.length}개</summary>${hist.map(h=>`<button class="mtask" style="width:100%;margin-top:4px" data-act="aiReuse" data-v="${esc(h.prompt)}"><b>${esc(h.prompt)}</b><span>${esc(String(h.at).slice(0,16).replace("T"," "))}${h.by?" · "+esc(h.by):""}</span></button>`).join("")}</details>`:'<span class="sp"></span>'}
+   <button class="btn" data-act="aiCloseBtn">닫기</button>${writes.length&&canWrite?`<button class="btn pri" data-act="aiExec" ${AIS.busy||writes.every(a=>a._done||!a._sel)?"disabled":""}>선택한 변경 실행</button>`:""}</div></div></div>`;
+  ensureSprites();setTimeout(()=>{const q=$("#aiQ");if(q&&!AIS.busy&&!AIS.actions.length)q.focus()},20)}
+function openAI(prompt){PM=null;IR=null;AIS={prompt:prompt||"",busy:false,actions:[],reply:"",err:""};renderAI();if(prompt)aiRun()}
+function closeAI(){AIS=null;$("#modalRoot").innerHTML=""}
+
 /* ---------- events ---------- */
 document.addEventListener("click",async e=>{
   const b=e.target.closest("[data-tab],[data-act],[data-zone],[data-site]");if(!b)return;
-  if(["ovClose","ovStudio","pClose","iClose"].includes(b.dataset.act)&&e.target!==b)return;
+  if(["ovClose","ovStudio","pClose","iClose","aiClose"].includes(b.dataset.act)&&e.target!==b)return;
   const sa=b.dataset.act;
+  if(sa==="aiOpen"){openAI();return}
+  if(sa==="aiClose"||sa==="aiCloseBtn"){if(!AIS?.busy)closeAI();return}
+  if(sa==="aiExec"){aiExec();return}
+  if(sa==="aiReuse"){AIS.prompt=b.dataset.v;renderAI();aiRun();return}
+  if(sa==="pDim"){UI.pdim=b.dataset.v;render();return}
+  if(sa==="pGran"){UI.pg=b.dataset.v;render();return}
+  if(sa==="pMet"){UI.pmet=b.dataset.v;render();return}
+  if(sa==="pTagF"){UI.ptag=b.dataset.v;UI.plim=0;UI.ppage=0;render();return}
+  if(sa==="pCell"){const r=b.dataset.r,[f,t]=perRange(b.dataset.c);if((UI.pdim||"zone")==="zone")UI.pz=r;else UI.pc=r;UI.pf=f;UI.pt=t;UI.pv="edit";UI.ppage=0;UI.pi=(UI.pmet||"issue")!=="all";if(UI.pmet==="open")UI.pst="미처리";render();window.scrollTo({top:0});return}
+  if(sa==="pPage"){UI.ppage=Math.max(0,+b.dataset.v);render();window.scrollTo({top:0});return}
+  if(sa==="bApply"){bulkApply(b.dataset.v);return}
   if(sa==="sbLogout"){sbLogout();return}
   if(sa==="pClose"||sa==="pCloseBtn"){closePhoto();return}
   if(sa==="iClose"||sa==="iCloseBtn"){closeInsp();return}
@@ -1171,7 +1368,7 @@ document.addEventListener("click",async e=>{
   if(sa==="pTag"){closePhoto();UI.gq="";$("#gQ").value="";UI.tab="photos";UI.pv="grid";UI.pq=b.dataset.v;UI.plim=0;render();window.scrollTo({top:0});return}
   if(sa==="pSt"){const i=+b.dataset.i;b.disabled=true;await pSave(i,{st:b.dataset.v});if(PM)renderPhoto();return}
   if(sa==="pNoteSave"){await pSave(+b.dataset.i,{note:($("#pNote")?.value||"").trim()});toast("메모를 저장했습니다.");return}
-  if(sa==="pFix"){const i=+b.dataset.i,v=$("#pFixIssue").value;await pSave(i,{ov:{zone:$("#pFixZone").value,cat:$("#pFixCat").value,issue:v!=="0",sev:v==="0"?"":v}});toast("분류를 고쳤습니다.");if(PM)setTimeout(renderPhoto,300);return}
+  if(sa==="pFix"){const i=+b.dataset.i,v=$("#pFixIssue").value;await pSaveMany([{i,patch:{ov:{zone:$("#pFixZone").value,cat:$("#pFixCat").value,issue:v!=="0",sev:v==="0"?"":v,subj:$("#pFixSubj").value.trim(),desc:$("#pFixDesc").value.trim()}}}]);toast("분류를 고쳤습니다.");if(PM)setTimeout(renderPhoto,300);return}
   if(sa==="pOrder"){const p=PHV.find(x=>x.i===+b.dataset.i);if(!p)return;closePhoto();openForm.pre=photoOrderPre(p);openForm("order");return}
   if(sa==="pAI"){photoAI(+b.dataset.i);return}
   if(sa==="iSet"){IR.res[+b.dataset.j]=IR.res[+b.dataset.j]===b.dataset.v?"":b.dataset.v;IR.date=$("#iDate")?.value||IR.date;IR.by=$("#iBy")?.value||IR.by;renderInsp();return}
@@ -1242,6 +1439,11 @@ document.addEventListener("click",async e=>{
     for(const k of ["orders","assets","projects"])for(const r of S[k].filter(r=>r.sample))await del(k,r.id);toast("예시 데이터를 지웠습니다.")}
 });
 document.addEventListener("change",async e=>{const t=e.target;
+  if(t.dataset.pe){t.disabled=true;await pEditField(+t.dataset.i,t.dataset.pe,t.value);t.disabled=false;return}
+  if(t.dataset.psel){const s=UI.psel||(UI.psel=new Set());const i=+t.dataset.psel;t.checked?s.add(i):s.delete(i);render();return}
+  if(t.dataset.psall){const s=UI.psel||(UI.psel=new Set());document.querySelectorAll("[data-psel]").forEach(x=>{const i=+x.dataset.psel;t.checked?s.add(i):s.delete(i)});render();return}
+  if(t.dataset.aisel&&AIS){AIS.actions[+t.dataset.aisel]._sel=t.checked;renderAI();return}
+  if(["bZone","bCat","bSev","bSt"].includes(t.id))return;
   if(t.id==="fOStatus"){UI.oStatus=t.value;render()}else if(t.id==="fOZone"){UI.oZone=t.value;render()}
   else if(["fPZ","fPC","fPF","fPT","fPS","fPST"].includes(t.id)){UI[{fPZ:"pz",fPC:"pc",fPF:"pf",fPT:"pt",fPS:"ps",fPST:"pst"}[t.id]]=t.value;UI.plim=0;render()}
   else if(t.id==="fPI"){UI.pi=t.checked;UI.plim=0;render()}
@@ -1251,9 +1453,9 @@ document.addEventListener("change",async e=>{const t=e.target;
 });
 document.addEventListener("input",e=>{const t=e.target;if(/^im_\d+$/.test(t.id)&&IR){IR.memo[+t.id.slice(3)]=t.value;return}
   if(!["fOQ","fVQ","fPQ","fSQ","gQ"].includes(t.id))return;clearTimeout(window._qt);window._qt=setTimeout(()=>{if(t.id==="fOQ")UI.oQ=t.value;else if(t.id==="fVQ")UI.vQ=t.value;else if(t.id==="fPQ"){UI.pq=t.value;UI.plim=0}else if(t.id==="fSQ")UI.sq=t.value;else UI.gq=t.value;const pos=t.selectionStart;render();const n=$("#"+t.id);if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(_){}}},250)});
-document.addEventListener("submit",e=>{if(e.target.id==="mform")submitForm(e)});
+document.addEventListener("submit",e=>{if(e.target.id==="mform")submitForm(e);else if(e.target.id==="aiForm"){e.preventDefault();aiRun()}});
 document.addEventListener("keydown",e=>{if(PM&&(e.key==="ArrowLeft"||e.key==="ArrowRight")&&!/INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName||"")){const k=PH.cur.indexOf(PM.i)+(e.key==="ArrowRight"?1:-1);if(k>=0&&k<PH.cur.length){PM.i=PH.cur[k];renderPhoto()}return}
-  if(e.key!=="Escape")return;if(PM){closePhoto();return}if(IR){closeInsp();return}if(editing)closeForm();else if(ST&&!ST.busy&&!ST.hfBusy)closeStudio()});
+  if(e.key!=="Escape")return;if(AIS){if(!AIS.busy)closeAI();return}if(PM){closePhoto();return}if(IR){closeInsp();return}if(editing)closeForm();else if(ST&&!ST.busy&&!ST.hfBusy)closeStudio()});
 
 /* ---------- boot ---------- */
 (function(){const h=(location.hash||"").slice(1);if(TABS.some(t=>t[0]===h))UI.tab=h})();
@@ -1266,7 +1468,7 @@ render();if(!SBX){loadPhotos();loadKB()}
   if(u){try{const w=await u.can("data.write");if(w===false)canWrite=false}catch(_){}}
   if(!d){mode="local";loadLocal();render();return}
   db=d;mode="db";
-  for(const k of ["assets","orders","projects","reports","vendors","routines","checks","wx","pchk","insp"]){
+  for(const k of ["assets","orders","projects","reports","vendors","routines","checks","wx","pchk","insp","ailog"]){
     db.collection(k).onSnapshot(sn=>{S[k]=sn.docs.map(x=>({id:x.id,...x.data()}));UI.ready[k]=true;render()},
       err=>{if(err?.code==="revoked"){canWrite=false;render()}});
   }

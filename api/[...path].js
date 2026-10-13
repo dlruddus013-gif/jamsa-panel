@@ -13,6 +13,7 @@ import dataBulk from '../api_handlers/data-bulk.js';
 import dataKey from '../api_handlers/data/[key].js';
 import forecastKpi from '../api_handlers/forecast-kpi.js';
 import inventoryAiAnalyze from '../api_handlers/inventory-ai-analyze.js';
+import facilityAi from '../api_handlers/facility-ai.js';
 import keys from '../api_handlers/keys.js';
 import laborAdvice from '../api_handlers/labor-advice.js';
 import smsSend from '../api_handlers/sms-send.js';
@@ -56,6 +57,7 @@ const routes = {
   'cctv-ai-analyze': cctvAiAnalyze,
   'spot-layout-vision': spotLayoutVision,
   'ai-status': aiStatus,
+  'facility-ai': facilityAi,
   'staff-manage': staffManage,
   'chatbot': chatbot,
   'config': config,
