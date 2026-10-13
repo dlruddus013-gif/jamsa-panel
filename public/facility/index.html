@@ -1,0 +1,1276 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><base href="/facility/"><meta name="robots" content="noindex,nofollow">
+<script>window.FAC_SB={url:"https://ewxquecxsxsfhyzfaaci.supabase.co",key:"sb_publishable_G2wWHOhRazQUn2nkNr7ZWg_xasgzW_O"};</script>
+<style>body{margin:0}</style></head><body>
+<title>잠사 시설관리</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=Noto+Serif+KR:wght@600;800&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* 레이아웃: 상단 명판 + 탭 레일, 본문은 현황판 / 작업지시 / 설비대장 / 시설개발 / 비용 5개 화면 */
+:root{
+  --bg:#F8F4E9; --surface:#FFFDF7; --sunk:#F1EBDC; --ink:#2B1A26; --muted:#7A6872; --line:#E3D9C6;
+  --accent:#5B2C4F; --accent-ink:#FFFDF7; --gold:#C9A961; --gold-ink:#7A5E1C; --leaf:#B8D158; --leaf-ink:#4F6A0E;
+  --danger:#B23A3A; --danger-bg:#F6E1DE; --warn:#9A6A12; --warn-bg:#F5E9CC; --ok-bg:#EAF2D2;
+  --f-display:"Noto Serif KR","Pretendard",serif;
+  --f-body:"Pretendard","IBM Plex Sans KR","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  --f-num:"IBM Plex Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#1C1318; --surface:#261B22; --sunk:#20171D; --ink:#F3ECE0; --muted:#B4A3AD; --line:#3D2E37;
+  --accent:#D79CC6; --accent-ink:#1C1318; --gold:#D9BD7E; --gold-ink:#E2C88E; --leaf:#C3DC6A; --leaf-ink:#C3DC6A;
+  --danger:#EE8A84; --danger-bg:#3E2224; --warn:#E6BE68; --warn-bg:#3A2E1A; --ok-bg:#2A3218; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#1C1318; --surface:#261B22; --sunk:#20171D; --ink:#F3ECE0; --muted:#B4A3AD; --line:#3D2E37;
+  --accent:#D79CC6; --accent-ink:#1C1318; --gold:#D9BD7E; --gold-ink:#E2C88E; --leaf:#C3DC6A; --leaf-ink:#C3DC6A;
+  --danger:#EE8A84; --danger-bg:#3E2224; --warn:#E6BE68; --warn-bg:#3A2E1A; --ok-bg:#2A3218; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.55}
+.wrap{max-width:1180px;margin:0 auto;padding-inline:16px;padding-block:18px 60px}
+header.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px;padding-bottom:14px;border-bottom:2px solid var(--accent)}
+.brand small{display:block;font-size:12px;letter-spacing:.12em;color:var(--muted)}
+.brand h1{font-family:var(--f-display);font-weight:800;font-size:clamp(24px,4vw,32px);margin:2px 0 0;color:var(--accent);text-wrap:balance}
+.meta{font-size:13px;color:var(--muted);text-align:right;display:flex;flex-direction:column;align-items:flex-end}
+.meta b{font-family:var(--f-num);color:var(--ink);font-weight:500}
+nav.tabs{display:flex;gap:4px;overflow-x:auto;margin:14px 0 20px;scrollbar-width:none}
+nav.tabs button{flex:0 0 auto;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:9px 16px;border-radius:999px;font:600 14px var(--f-body);cursor:pointer}
+nav.tabs button[aria-current="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+nav.tabs .n{font-family:var(--f-num);font-size:12px;margin-left:6px;opacity:.75}
+button{font-family:var(--f-body)}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+.btn{border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:7px 12px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
+.btn:hover{border-color:var(--accent)}
+.btn.pri{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.gold{background:var(--gold);color:#2B1A26;border-color:var(--gold)}
+.btn.ghost{background:transparent}
+.btn.danger{color:var(--danger);border-color:var(--danger)}
+.btn:disabled{opacity:.5;cursor:default}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.sp{flex:1}
+h2.sec{font-family:var(--f-display);font-size:20px;font-weight:600;margin:0;text-wrap:balance}
+.sec-head{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:26px 0 12px}
+.sec-head:first-child{margin-top:0}
+.hint{color:var(--muted);font-size:13px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;cursor:pointer;text-align:left;color:var(--ink)}
+.kpi .l{font-size:12.5px;color:var(--muted);font-weight:600}
+.kpi .v{font-family:var(--f-num);font-size:28px;line-height:1.2;margin-top:4px;font-variant-numeric:tabular-nums}
+.kpi .s{font-size:12px;color:var(--muted)}
+.kpi.alert .v{color:var(--danger)}
+.kpi.warnk .v{color:var(--warn)}
+.grid2{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:18px}
+@media (max-width:820px){.grid2{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:6px 0;min-width:0}
+.item{display:flex;gap:12px;align-items:flex-start;padding:11px 16px;border-top:1px solid var(--line)}
+.item:first-child{border-top:0}
+.item .body{flex:1;min-width:0}
+.item .t{font-weight:600}
+.item .d{font-size:13px;color:var(--muted)}
+.stripe{width:4px;align-self:stretch;border-radius:4px;background:var(--line);flex:0 0 4px}
+.stripe.긴급,.stripe.over{background:var(--danger)}
+.stripe.높음,.stripe.soon{background:var(--warn)}
+.stripe.보통{background:var(--gold)}
+.stripe.낮음,.stripe.ok{background:var(--leaf)}
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;padding:2px 9px;border-radius:999px;background:var(--sunk);color:var(--muted);white-space:nowrap}
+.chip.red{background:var(--danger-bg);color:var(--danger)}
+.chip.amber{background:var(--warn-bg);color:var(--warn)}
+.chip.green{background:var(--ok-bg);color:var(--leaf-ink)}
+.chip.plum{background:var(--accent);color:var(--accent-ink)}
+.chip.ex{background:transparent;border:1px dashed var(--muted);font-weight:500}
+.num{font-family:var(--f-num);font-variant-numeric:tabular-nums}
+.zones{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
+.zone{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;border-left:5px solid var(--leaf);cursor:pointer;text-align:left;color:var(--ink)}
+.zone.warn{border-left-color:var(--warn)}
+.zone.bad{border-left-color:var(--danger)}
+.zone .zn{font-weight:700}
+.zone .zs{font-size:12.5px;color:var(--muted);margin-top:4px}
+.filters{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+select,input,textarea{font:inherit;font-size:14px;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0}
+textarea{width:100%;min-height:80px;resize:vertical}
+.tbl-wrap{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:14px}
+table{border-collapse:collapse;width:100%;min-width:720px;font-size:14px}
+th{font-size:12px;color:var(--muted);text-align:left;font-weight:600;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap;background:var(--sunk)}
+td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+tr:last-child td{border-bottom:0}
+td.r,th.r{text-align:right}
+.ocards{display:grid;gap:10px}
+.ocard{background:var(--surface);border:1px solid var(--line);border-radius:12px;display:flex;gap:12px;padding:12px 14px}
+.ocard .body{flex:1;min-width:0}
+.ocard .t{font-weight:700;font-size:15.5px}
+.ocard .d{font-size:13px;color:var(--muted);margin-top:2px}
+.ocard .desc{font-size:13.5px;margin-top:6px;white-space:pre-wrap;overflow-wrap:anywhere}
+.ocard .ai{font-size:13px;margin-top:8px;padding:8px 10px;background:var(--sunk);border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere}
+.ocard .acts{display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+@media (max-width:560px){.ocard{flex-wrap:wrap}.ocard .acts{flex-direction:row;width:100%;justify-content:flex-end}}
+.pcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
+@media (max-width:420px){.pcards{grid-template-columns:minmax(0,1fr)}}
+.pcard{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;min-width:0;display:flex;flex-direction:column;gap:10px}
+.pcard h3{font-family:var(--f-display);font-size:18px;margin:0;font-weight:600;text-wrap:balance}
+.stepper{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.stepper span{height:6px;border-radius:3px;background:var(--line)}
+.stepper span.on{background:var(--accent)}
+.stepper span.cur{background:var(--gold)}
+.steplab{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted)}
+.bar{height:8px;background:var(--sunk);border-radius:4px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--gold)}
+.checks{list-style:none;margin:0;padding:0;display:grid;gap:4px}
+.checks label{display:flex;gap:8px;align-items:flex-start;font-size:13.5px;cursor:pointer}
+.checks input{margin-top:3px;accent-color:var(--accent)}
+.checks .done{color:var(--muted);text-decoration:line-through}
+.chart{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;align-items:end;height:200px;padding:18px 16px 0}
+.chart .col{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;gap:4px}
+.chart .b{width:100%;max-width:46px;background:var(--accent);border-radius:6px 6px 0 0;min-height:2px}
+.chart .col.now .b{background:var(--gold)}
+.chart .lv{font-family:var(--f-num);font-size:11.5px;color:var(--muted)}
+.chart .lm{font-size:12px;color:var(--muted);padding:6px 0 10px;border-top:1px solid var(--line);width:100%;text-align:center}
+.empty{padding:28px 18px;text-align:center;color:var(--muted)}
+.empty b{display:block;color:var(--ink);margin-bottom:4px}
+.banner{font-size:13px;padding:9px 14px;border-radius:10px;background:var(--warn-bg);color:var(--warn);margin-bottom:14px}
+/* modal */
+.ov{position:fixed;inset:0;background:rgba(20,10,16,.45);display:flex;align-items:flex-start;justify-content:center;padding:max(24px,env(safe-area-inset-top,0px)) 12px 24px;overflow-y:auto;z-index:20}
+.modal{background:var(--surface);color:var(--ink);width:100%;max-width:640px;border-radius:16px;border:1px solid var(--line);padding:18px}
+.modal h3{font-family:var(--f-display);margin:0 0 14px;font-size:19px}
+.fgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px}
+.fgrid .full{grid-column:1/-1}
+@media (max-width:520px){.fgrid{grid-template-columns:1fr}}
+.fld{display:flex;flex-direction:column;gap:4px;min-width:0}
+.fld>span{font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.02em}
+.fld input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent)}
+.aibox{grid-column:1/-1;border:1px dashed var(--gold);border-radius:12px;padding:12px;display:grid;gap:8px;background:var(--sunk)}
+.aibox .res{font-size:13.5px;white-space:pre-wrap;overflow-wrap:anywhere}
+.mfoot{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:999px;font-size:13.5px;z-index:30}
+footer.foot{margin-top:40px;padding-top:14px;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+/* infographic */
+.thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.thumbs img{width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid var(--line);background:var(--sunk)}
+.ig{border:1px solid var(--line);border-radius:16px;overflow:hidden;background:var(--surface);min-width:0}
+.ig-head{background:var(--accent);color:var(--accent-ink);padding:18px 20px 16px;display:grid;gap:4px}
+.ig-head .eb{font-size:11.5px;letter-spacing:.14em;opacity:.8}
+.ig-head h4{font-family:var(--f-display);font-size:clamp(19px,3.2vw,24px);font-weight:800;margin:0;line-height:1.3;text-wrap:balance}
+.ig-head p{margin:0;font-size:13.5px;opacity:.88}
+.ig-body{padding:16px 18px;display:grid;gap:16px}
+.ig-verdict{display:grid;grid-template-columns:auto minmax(0,1fr);gap:14px;align-items:center}
+.gauge{display:flex;gap:3px}
+.gauge i{width:30px;height:12px;border-radius:3px;background:var(--line)}
+.gauge.l1 i:nth-child(1){background:var(--leaf)}
+.gauge.l2 i:nth-child(-n+2){background:var(--warn)}
+.gauge.l3 i{background:var(--danger)}
+.ig-verdict b{font-size:15px}
+.ig-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px}
+.ig-metrics div{background:var(--sunk);border-radius:10px;padding:10px 12px}
+.ig-metrics span{display:block;font-size:11.5px;color:var(--muted);font-weight:600}
+.ig-metrics strong{font-family:var(--f-num);font-size:18px;font-weight:500;overflow-wrap:anywhere}
+.ig-sec h5{margin:0 0 8px;font-size:12px;letter-spacing:.1em;color:var(--muted)}
+.ig-find{display:grid;gap:6px;list-style:none;margin:0;padding:0}
+.ig-find li{display:grid;grid-template-columns:10px minmax(0,1fr);gap:10px;font-size:13.5px}
+.ig-find li i{width:10px;height:10px;border-radius:50%;margin-top:6px;background:var(--leaf)}
+.ig-find li i.중{background:var(--warn)}.ig-find li i.상{background:var(--danger)}
+.ig-steps{display:grid;gap:0;counter-reset:s;list-style:none;margin:0;padding:0}
+.ig-steps li{counter-increment:s;display:grid;grid-template-columns:28px minmax(0,1fr);gap:10px;font-size:13.5px;padding-bottom:10px;position:relative}
+.ig-steps li::before{content:counter(s);width:24px;height:24px;border-radius:50%;background:var(--gold);color:#2B1A26;font:600 12px var(--f-num);display:grid;place-items:center}
+.ig-steps li:not(:last-child)::after{content:"";position:absolute;left:11px;top:26px;bottom:2px;width:2px;background:var(--line)}
+.ig-cost .track{position:relative;height:10px;background:var(--sunk);border-radius:5px;margin:8px 0 4px}
+.ig-cost .track i{position:absolute;top:0;bottom:0;background:var(--gold);border-radius:5px}
+.ig-safety{border-left:4px solid var(--danger);background:var(--danger-bg);color:var(--ink);padding:10px 12px;border-radius:0 10px 10px 0;font-size:13.5px}
+.ig-foot{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px 18px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
+.hfbox{border:1px solid var(--gold);border-radius:12px;padding:12px;display:grid;gap:8px;background:var(--sunk)}
+.hfbox a{color:var(--accent);font-weight:700}
+.igrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+@media (max-width:400px){.igrid{grid-template-columns:minmax(0,1fr)}}
+.studio{max-width:760px}
+.drop{border:2px dashed var(--line);border-radius:12px;padding:14px;text-align:center;color:var(--muted);font-size:13.5px}
+.drop.on{border-color:var(--gold)}
+.sites{display:inline-flex;gap:2px;background:var(--sunk);border:1px solid var(--line);border-radius:999px;padding:2px;margin-bottom:6px}
+.site{border:0;background:transparent;color:var(--muted);font:600 12.5px var(--f-body);padding:5px 10px;border-radius:999px;cursor:pointer}
+.site.on{background:var(--accent);color:var(--accent-ink)}
+.mchk{display:inline-flex;gap:4px;align-items:center;font-size:13px;padding:4px 8px;border:1px solid var(--line);border-radius:8px;cursor:pointer}
+.mchk input{accent-color:var(--accent)}
+.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+.mcol{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.mcol.now{border-color:var(--gold);box-shadow:inset 0 3px 0 var(--gold)}
+.mcol h3{margin:0 0 2px;font-family:var(--f-display);font-size:16px}
+.mtask{display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left;background:var(--sunk);border:0;border-radius:8px;padding:7px 9px;color:var(--ink);cursor:pointer;font-family:var(--f-body)}
+.mtask b{font-size:13.5px;font-weight:600}.mtask span{font-size:12px;color:var(--muted)}
+.seg{display:inline-flex;gap:2px;background:var(--sunk);border:1px solid var(--line);border-radius:10px;padding:2px;flex-wrap:wrap}
+.seg button{border:0;background:transparent;color:var(--muted);font:600 13px var(--f-body);padding:6px 11px;border-radius:8px;cursor:pointer}
+.seg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.seg.wide{display:flex;margin-top:4px}
+h3.sub{font-family:var(--f-display);font-size:16px;font-weight:600;margin:0}
+.ck{width:26px;height:26px;flex:0 0 26px;border-radius:7px;border:2px solid var(--line);background:var(--surface);color:var(--accent-ink);font-weight:700;cursor:pointer;margin-top:1px}
+.ck.on{background:var(--accent);border-color:var(--accent)}
+.item.isdone .t{text-decoration:line-through;color:var(--muted)}
+.item.late{background:var(--danger-bg)}
+.basis{font-size:12px;color:var(--gold-ink);margin-top:3px}
+.wxgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px}
+.wxday{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;display:grid;gap:8px;min-width:0}
+.wxh{display:flex;gap:8px;align-items:baseline}.wxh b{font-family:var(--f-display);font-size:17px}.wxh span{color:var(--muted);font-size:13px}
+.wxnums{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+@media (max-width:420px){.wxnums{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.wxnums div{background:var(--sunk);border-radius:8px;padding:6px 8px}.wxnums span{display:block;font-size:11px;color:var(--muted)}.wxnums b{font-size:14px;font-weight:500}
+.cond{border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:999px;padding:6px 12px;font:600 13px var(--f-body);cursor:pointer}
+.cond.on{background:var(--warn-bg);color:var(--warn);border-color:var(--warn)}
+.cond.auto{cursor:default}
+details.rules{margin-top:18px}details.rules summary{cursor:pointer;color:var(--muted);font-size:13px;margin-bottom:8px}
+.vgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
+@media (max-width:400px){.vgrid{grid-template-columns:minmax(0,1fr)}}
+.vcard{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.vc{font-size:14px;user-select:all}
+@media (prefers-reduced-motion:no-preference){.kpi,.zone,.btn{transition:border-color .15s,transform .15s}.kpi:hover,.zone:hover{transform:translateY(-1px)}}
+.gsearch{margin:-8px 0 16px;display:flex;gap:8px}.gsearch input{flex:1}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fill,104px);gap:6px}
+.pt{position:relative;border:0;padding:0;border-radius:8px;overflow:hidden;cursor:pointer;background-color:var(--sunk);background-repeat:no-repeat;flex:0 0 auto}
+.pt.sm{border-radius:6px}
+.pt .dot{position:absolute;top:5px;right:5px;width:12px;height:12px;border-radius:50%;border:2px solid #fff;background:var(--leaf)}
+.pt .dot.상{background:#C9302C}.pt .dot.중{background:#E09A1A}.pt .dot.하{background:#E8D25A}.pt .dot.ok{background:#3C8D2F}
+.pt .cap{position:absolute;left:0;right:0;bottom:0;font-size:11px;color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.72));padding:12px 6px 4px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mimg{width:100%;aspect-ratio:4/3;border-radius:12px;background-color:#141414;background-repeat:no-repeat}
+.photo-modal{max-width:820px}
+.pdet{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:16px}
+@media (max-width:640px){.pdet{grid-template-columns:minmax(0,1fr)}}
+.path{font-family:var(--f-num);font-size:11px;color:var(--muted);overflow-wrap:anywhere}
+.irow{display:grid;grid-template-columns:64px minmax(0,1fr) auto;gap:12px;align-items:start;padding:10px 14px;border-top:1px solid var(--line)}
+.irow:first-child{border-top:0}
+.irow.isdone .t{text-decoration:line-through;color:var(--muted)}
+@media (max-width:640px){.irow{grid-template-columns:64px minmax(0,1fr)}.irow .acts{grid-column:1/-1;align-items:flex-start!important}}
+.seg.sm button{padding:4px 8px;font-size:12px}
+.seg button.bad.on{background:var(--danger-bg);color:var(--danger)}.seg button.good.on{background:var(--ok-bg);color:var(--leaf-ink)}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><small>한국잠사박물관 · 청주역로 213-52</small><h1>시설 유지보수 · 개발 관리</h1></div>
+    <div class="meta" id="meta">불러오는 중…</div>
+  </header>
+  <nav class="tabs" id="tabs" aria-label="화면 전환"></nav>
+  <div class="gsearch"><input id="gQ" type="search" placeholder="통합 검색: 작업·설비·사진·점검표·법규를 한 번에 (예: 누수, 에어바운스, 소화기)" aria-label="통합 검색"></div>
+  <div id="banner"></div>
+  <main id="main"><div class="empty"><b>데이터를 불러오는 중입니다</b>잠시만 기다려 주세요.</div></main>
+  <footer class="foot" id="foot"></footer>
+</div>
+<div id="modalRoot"></div>
+<div id="toastRoot"></div>
+
+<script>
+const ZONES_J=["실크박물관","누에체험농장","누에쉼터·매점","양떼정원·온실","디지털 키즈카페","6차산업 복합체험장","단체식당","계절놀이장","오두막·카라반","관사","주차장·외곽","공용 설비"];
+const SITES=["잠사박물관","부천아쿠아리움","대전아쿠아리움"];
+const inSite=r=>(r.site||"잠사박물관")===UI.site;
+function ZN(){if(UI.site==="잠사박물관")return ZONES_J;const z=new Set();for(const k of ["orders","assets","projects"])for(const r of V[k]||[])if(r.zone)z.add(r.zone);z.add("공용 설비");return[...z].sort((a,b)=>a.localeCompare(b,"ko"))}
+const CATS=["전기","가스","소방","공조·냉난방","급배수","건축·구조","전시·영상","조경·축사","주방","통신·CCTV","놀이기구","기타"];
+const STAGES=["기획","설계","견적","승인","시공","준공","사후관리"];
+const PRI=["긴급","높음","보통","낮음"];
+const OSTAT=["접수","진행","보류","완료","기록"];
+const MONTHS=[1,2,3,4,5,6,7,8,9,10,11,12];
+const OTYPE=["고장수리","정기점검","개선","청소·미화","안전조치","공사"];
+const ASTAT=["정상","주의","고장","사용중지"];
+const TABS=[["dash","현황판"],["orders","작업지시"],["assets","설비대장"],["photos","사진 보관함"],["safety","안전·점검표"],["projects","시설개발"],["weather","날씨 점검"],["routine","정기 업무"],["vendors","업체"],["info","인포그래픽"],["cost","비용"]];
+const HF="힉스필드";
+
+const S={assets:[],orders:[],projects:[],reports:[],vendors:[],routines:[],checks:[],wx:[],pchk:[],insp:[]};
+let V={assets:[],orders:[],projects:[],reports:[],vendors:[],routines:[],checks:[],wx:[],pchk:[],insp:[]};
+const UI={site:(()=>{try{return localStorage.getItem("jamsa-fac-site")||"잠사박물관"}catch(e){return"잠사박물관"}})(),tab:"dash",oStatus:"미완료",oZone:"전체",aZone:"전체",aDue:"전체",ready:{assets:false,orders:false,projects:false}};
+let db=null, mode="loading", canWrite=true, sample=null, sampleImg=false, mcp=null, store=null;
+
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const won=n=>(Number(n)||0).toLocaleString("ko-KR")+"원";
+const man=n=>{n=Number(n)||0;if(n>=1e8)return(n/1e8).toFixed(n%1e8?2:0)+"억";if(n>=1e4)return Math.round(n/1e4).toLocaleString("ko-KR")+"만";return n.toLocaleString("ko-KR")};
+const today=()=>new Date(Date.now()+9*3600e3).toISOString().slice(0,10);
+const addDays=(d,n)=>{const t=new Date(d+"T00:00:00Z");t.setUTCDate(t.getUTCDate()+n);return t.toISOString().slice(0,10)};
+const diff=(a,b)=>Math.round((new Date(a+"T00:00:00Z")-new Date(b+"T00:00:00Z"))/864e5);
+const nid=p=>p+"-"+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+const $=s=>document.querySelector(s);
+
+function nextDue(a){if(!a.lastCheck||!a.cycleDays)return null;return addDays(a.lastCheck,Number(a.cycleDays))}
+function dday(a){const n=nextDue(a);return n==null?null:diff(n,today())}
+function ddChip(a){const d=dday(a);if(d==null)return a.cycleDays?'<span class="chip amber">첫 점검 필요</span>':'<span class="chip">주기 미정</span>';
+  if(d<0)return`<span class="chip red">${-d}일 초과</span>`;if(d===0)return'<span class="chip red">오늘</span>';
+  if(d<=7)return`<span class="chip amber">D-${d}</span>`;return`<span class="chip green">D-${d}</span>`}
+function priChip(p){return`<span class="chip ${p==="긴급"?"red":p==="높음"?"amber":p==="낮음"?"green":""}">${esc(p)}</span>`}
+function stChip(s){return`<span class="chip ${s==="완료"?"green":s==="진행"?"plum":s==="보류"||s==="기록"?"":"amber"}">${esc(s)}</span>`}
+const srcChip=r=>r.src?`<span class="chip" title="${esc(r.srcRef||"")}">자료 ${esc(r.src)}</span>`:"";
+function aStChip(s){return`<span class="chip ${s==="정상"?"green":s==="주의"?"amber":s?"red":""}">${esc(s||"-")}</span>`}
+const ex=r=>r.sample?' <span class="chip ex">예시</span>':"";
+const assetName=id=>(V.assets.find(a=>a.id===id)||{}).name||"";
+
+/* ---------- Supabase 저장소 (Vercel 배포판) ---------- */
+const SBX=window.FAC_SB||null;let sbTok=null,sbSince=null,sbTimer=null,sbUser=null,sbBusy=false;
+function sbGetTok(){try{return localStorage.getItem("jamsa-fac-tok")}catch(_){return null}}
+function sbSetTok(t){sbTok=t;try{t?localStorage.setItem("jamsa-fac-tok",t):localStorage.removeItem("jamsa-fac-tok")}catch(_){}}
+async function sbRpc(fn,args){const r=await fetch(SBX.url+"/rest/v1/rpc/"+fn,{method:"POST",headers:{apikey:SBX.key,"Content-Type":"application/json"},body:JSON.stringify(args||{})});
+  const t=await r.text();let j=null;try{j=t?JSON.parse(t):null}catch(_){}
+  if(!r.ok){const m=(j&&(j.message||j.hint))||t||"오류";const e=new Error(m);e.status=r.status;e.code=/unauthorized/.test(m)?"unauthorized":"sb";e.msg=m;throw e}return j}
+function sbLogin(msg){mode="sb-login";render();$("#modalRoot").innerHTML=`<div class="ov"><form class="modal" id="sbForm" style="max-width:380px" aria-label="로그인"><h3>시설관리 로그인</h3>
+  <div class="hint" style="margin-bottom:12px">창고 재고관리와 같은 관리자 아이디·비밀번호로 들어갑니다.</div>
+  <div style="display:grid;gap:10px"><label class="fld"><span>아이디</span><input id="sbU" autocomplete="username" required></label><label class="fld"><span>비밀번호</span><input id="sbP" type="password" autocomplete="current-password" required></label></div>
+  <div class="hint" id="sbMsg" style="color:var(--danger);margin-top:8px">${esc(msg||"")}</div>
+  <div class="mfoot"><span class="sp"></span><button class="btn pri" type="submit">로그인</button></div></form></div>`;setTimeout(()=>$("#sbU")?.focus(),30)}
+async function sbDoLogin(e){e.preventDefault();const b=e.target.querySelector("button[type=submit]");b.disabled=true;$("#sbMsg").textContent="";
+  try{const j=await sbRpc("inv_login",{p_username:$("#sbU").value.trim(),p_password:$("#sbP").value});
+    if(!j||j.error||!j.token){$("#sbMsg").textContent=(j&&j.error)||"로그인하지 못했습니다.";b.disabled=false;return}
+    sbSetTok(j.token);$("#modalRoot").innerHTML="";await sbStart()}catch(err){$("#sbMsg").textContent="서버에 연결하지 못했습니다.";b.disabled=false}}
+async function sbSync(full){if(sbBusy||!sbTok)return;sbBusy=true;
+  try{const j=await sbRpc("fac_sync",{p_token:sbTok,p_since:full?null:sbSince});sbSince=j.now;sbUser=j.user;canWrite=sbUser&&sbUser.role!=="viewer";
+    if(full)for(const k of Object.keys(S))S[k]=[];
+    for(const d of j.docs||[]){if(!S[d.c])continue;const arr=S[d.c];const i=arr.findIndex(r=>r.id===d.i);
+      if(d.x){if(i>=0)arr.splice(i,1)}else{const rec={id:d.i,...d.d};if(i>=0)arr[i]=rec;else arr.push(rec)}}
+    mode="sb";if(full||(j.docs||[]).length)render()}
+  catch(e){if(e.code==="unauthorized"){sbSetTok(null);clearInterval(sbTimer);sbLogin("다시 로그인해 주세요.")}}
+  finally{sbBusy=false}}
+async function sbStart(){sbTok=sbGetTok();if(!sbTok){sbLogin();return}await sbSync(true);if(mode!=="sb")return;
+  if(!ENCK){try{const k=await sbRpc("fac_key",{p_token:sbTok});const raw=Uint8Array.from(atob(k),c=>c.charCodeAt(0));ENCK=await crypto.subtle.importKey("raw",raw,"AES-GCM",false,["decrypt"]);loadPhotos();loadKB()}catch(_){PH.err=true;PH.kbErr=true;render()}}
+  clearInterval(sbTimer);sbTimer=setInterval(()=>sbSync(false),15000);setTimeout(()=>wxRefresh(false),1200)}
+async function sbLogout(){try{await sbRpc("inv_logout",{p_token:sbTok})}catch(_){}sbSetTok(null);clearInterval(sbTimer);for(const k of Object.keys(S))S[k]=[];sbLogin()}
+document.addEventListener("visibilitychange",()=>{if(mode==="sb"&&!document.hidden)sbSync(false)});
+document.addEventListener("submit",e=>{if(e.target.id==="sbForm")sbDoLogin(e)});
+
+/* ---------- storage ---------- */
+function loadLocal(){try{const j=JSON.parse(localStorage.getItem("jamsa-fac")||"{}");for(const k of Object.keys(S))S[k]=j[k]||[]}catch(e){}}
+function saveLocal(){try{localStorage.setItem("jamsa-fac",JSON.stringify(S))}catch(e){}}
+async function put(coll,rec){
+  const {id,...data}=rec;
+  if(mode==="sb"){try{await sbRpc("fac_put",{p_token:sbTok,p_coll:coll,p_id:id,p_data:data})}catch(e){if(e.code==="unauthorized"){sbLogin("다시 로그인해 주세요.");return false}toast(/보기 전용/.test(e.msg)?"보기 전용 계정은 수정할 수 없습니다.":"저장하지 못했습니다. 잠시 후 다시 시도해 주세요.");return false}
+    const arr=S[coll];const i=arr.findIndex(r=>r.id===id);if(i>=0)arr[i]=rec;else arr.push(rec);render()}
+  else if(db){try{await db.collection(coll).doc(id).set(data)}catch(e){fail(e);return false}}
+  else{const arr=S[coll];const i=arr.findIndex(r=>r.id===id);if(i>=0)arr[i]=rec;else arr.push(rec);saveLocal();render()}
+  return true}
+async function del(coll,id){
+  if(mode==="sb"){try{await sbRpc("fac_del",{p_token:sbTok,p_coll:coll,p_id:id})}catch(e){toast("삭제하지 못했습니다.");return false}S[coll]=S[coll].filter(r=>r.id!==id);render()}
+  else if(db){try{await db.collection(coll).doc(id).delete()}catch(e){fail(e);return false}}
+  else{S[coll]=S[coll].filter(r=>r.id!==id);saveLocal();render()}
+  return true}
+function fail(e){const c=e&&e.code;
+  if(c==="invalid_argument"){canWrite=false;toast("이 문서는 보기 전용입니다. 편집 권한이 있는 계정으로 열어 주세요.");render()}
+  else if(c==="quota_exceeded")toast("저장 공간이 가득 찼습니다. 오래된 완료 건을 정리해 주세요.");
+  else toast("저장하지 못했습니다. 잠시 후 다시 시도해 주세요.")}
+function toast(m){const r=$("#toastRoot");r.innerHTML=`<div class="toast" role="status">${esc(m)}</div>`;clearTimeout(toast.t);toast.t=setTimeout(()=>r.innerHTML="",2600)}
+
+/* ---------- render ---------- */
+function counts(){
+  const t=today();
+  const open=V.orders.filter(o=>o.status!=="완료"&&o.status!=="기록");
+  const urgent=open.filter(o=>o.priority==="긴급");
+  const over=V.assets.filter(a=>{const d=dday(a);return d!=null&&d<0&&a.status!=="사용중지"});
+  const soon=V.assets.filter(a=>{const d=dday(a);return d!=null&&d>=0&&d<=7&&a.status!=="사용중지"});
+  const ym=t.slice(0,7);
+  const monthCost=V.orders.filter(o=>o.status==="완료"&&(o.doneAt||"").startsWith(ym)).reduce((s,o)=>s+(Number(o.cost)||0),0);
+  const activeP=V.projects.filter(p=>p.stage!=="사후관리"&&!p.halted);
+  return{open,urgent,over,soon,monthCost,activeP}}
+
+function render(){
+  for(const k of Object.keys(S))V[k]=S[k].filter(inSite);
+  PCK=new Map(S.pchk.map(x=>[x.id,x]));PHV=PH.rows?PH.rows.filter(p=>p.site===UI.site).map(pv):[];
+  const c=counts();
+  $("#meta").innerHTML=`<div class="sites" role="group" aria-label="사업장">${SITES.map(x=>`<button class="site ${UI.site===x?"on":""}" data-site="${x}">${x.replace("아쿠아리움"," 아쿠아")}</button>`).join("")}</div><div><b>${today()}</b> 기준 · ${mode==="db"?"공유 저장됨":mode==="sb"?`Supabase 저장 · ${esc(sbUser?.name||sbUser?.username||"")} <button class="btn ghost" style="padding:2px 8px;font-size:12px" data-act="sbLogout">로그아웃</button>`:mode==="local"?"이 기기에만 저장":"연결 중"}</div>`;
+  $(".brand small").textContent=UI.site==="잠사박물관"?"한국잠사박물관 · 청주역로 213-52":UI.site+" · 연계 사업장";
+  const badge={weather:UI.site==="잠사박물관"?wxItems(today()).filter(x=>!x.done).length:0,routine:rtToday().filter(x=>!x.done).length,orders:c.open.length,assets:c.over.length+c.soon.length,projects:c.activeP.length,info:allInfo().length,photos:PHV.filter(openIssue).length};
+  $("#tabs").innerHTML=TABS.map(([k,l])=>`<button data-tab="${k}" aria-current="${UI.tab===k}">${l}${badge[k]?`<span class="n">${badge[k]}</span>`:""}</button>`).join("");
+  $("#banner").innerHTML=mode==="local"?'<div class="banner">공유 저장소에 연결되지 않아 이 브라우저에만 저장됩니다. claude.ai에서 열면 모든 기기에서 같은 데이터를 봅니다.</div>':(!canWrite?'<div class="banner">보기 전용으로 열려 있습니다. 내용 수정은 편집 권한이 필요합니다.</div>':"");
+  const v={dash:vDash,orders:vOrders,assets:vAssets,projects:vProjects,weather:vWeather,routine:vRoutine,vendors:vVendors,info:vInfo,cost:vCost,photos:vPhotos,safety:vSafety}[UI.tab];
+  $("#main").innerHTML=(UI.gq||"").trim()?vSearch():v(c);ensureSprites();
+  const hasEx=["assets","orders","projects"].some(k=>S[k].some(r=>r.sample));
+  $("#foot").innerHTML=`<span>${esc(UI.site)} · 설비 ${V.assets.length} · 작업 ${V.orders.length}(기록 포함) · 개발사업 ${V.projects.length} · 업체 ${V.vendors.length}</span><span class="sp"></span>${hasEx&&canWrite?`<button class="btn ghost" data-act="clearEx">${UI.clearArm?"예시 데이터 모두 삭제 확인":"예시 데이터 지우기"}</button>`:""}`;
+}
+
+function vDash(c){
+  const t=today();
+  const todo=[
+    ...c.urgent.map(o=>({k:"o",id:o.id,cls:"긴급",t:o.title,d:`${o.zone} · ${o.status} · 긴급 작업`,r:o})),
+    ...c.over.map(a=>({k:"a",id:a.id,cls:"over",t:a.name+" 점검",d:`${a.zone} · ${a.category}${a.legal?" · 법정점검":""} · 예정일 ${nextDue(a)}`,r:a})),
+    ...V.orders.filter(o=>!["완료","기록"].includes(o.status)&&o.priority!=="긴급"&&o.dueDate&&o.dueDate<=addDays(t,3)).map(o=>({k:"o",id:o.id,cls:"높음",t:o.title,d:`${o.zone} · 기한 ${o.dueDate}`,r:o})),
+    ...c.soon.map(a=>({k:"a",id:a.id,cls:"soon",t:a.name+" 점검",d:`${a.zone} · 예정일 ${nextDue(a)}`,r:a})),
+  ];
+  const zoneRows=ZN().map(z=>{
+    const o=c.open.filter(x=>x.zone===z), ov=c.over.filter(a=>a.zone===z), bad=V.assets.filter(a=>a.zone===z&&a.status==="고장");
+    const lvl=o.some(x=>x.priority==="긴급")||ov.length||bad.length?"bad":o.length||c.soon.some(a=>a.zone===z)?"warn":"";
+    return`<button class="zone ${lvl}" data-zone="${esc(z)}"><div class="zn">${esc(z)}</div><div class="zs">작업 ${o.length}건 · 점검초과 ${ov.length} · 설비 ${V.assets.filter(a=>a.zone===z).length}</div></button>`}).join("");
+  const projs=c.activeP.map(p=>{const i=STAGES.indexOf(p.stage);return`<div class="item"><div class="stripe ok"></div><div class="body"><div class="t">${esc(p.name)}${ex(p)}</div><div class="d">${esc(p.stage)} 단계 (${i+1}/7) · 예산 ${man(p.budget)}원${p.subsidy?" · 보조사업":""}</div></div></div>`}).join("");
+  return`
+  <div class="kpis">
+    <button class="kpi ${c.urgent.length?"alert":""}" data-tab="orders"><div class="l">미완료 작업</div><div class="v">${c.open.length}</div><div class="s">긴급 ${c.urgent.length}건</div></button>
+    <button class="kpi ${c.over.length?"alert":""}" data-tab="assets" data-adue="초과"><div class="l">점검 기한 초과</div><div class="v">${c.over.length}</div><div class="s">법정점검 ${c.over.filter(a=>a.legal).length}건 포함</div></button>
+    <button class="kpi ${c.soon.length?"warnk":""}" data-tab="assets" data-adue="7일"><div class="l">7일 내 점검</div><div class="v">${c.soon.length}</div><div class="s">설비 ${V.assets.length}개 중</div></button>
+    <button class="kpi" data-tab="projects"><div class="l">진행 중 시설개발</div><div class="v">${c.activeP.length}</div><div class="s">예산 ${man(c.activeP.reduce((s,p)=>s+(Number(p.budget)||0),0))}원</div></button>
+    <button class="kpi" data-tab="cost"><div class="l">${t.slice(5,7)*1}월 유지보수비</div><div class="v">${man(c.monthCost)}</div><div class="s">완료 작업 기준</div></button>
+  </div>
+  <div class="grid2" style="margin-top:22px">
+    <div style="min-width:0">
+      <div class="sec-head"><h2 class="sec">오늘 챙길 일</h2><span class="sp"></span>${canWrite?'<button class="btn pri" data-act="newOrder">+ 하자 접수</button>':""}</div>
+      <div class="panel">${todo.length?todo.map(x=>`<div class="item"><div class="stripe ${x.cls}"></div><div class="body"><div class="t">${esc(x.t)}${ex(x.r)}</div><div class="d">${esc(x.d)}</div></div>${canWrite?(x.k==="a"?`<button class="btn" data-act="checkDone" data-id="${x.id}">점검완료</button>`:`<button class="btn" data-act="editOrder" data-id="${x.id}">열기</button>`):""}</div>`).join(""):'<div class="empty"><b>급한 일이 없습니다</b>긴급 작업과 점검 기한이 모두 여유 있습니다.</div>'}</div>
+    </div>
+    <div style="min-width:0">
+      <div class="sec-head"><h2 class="sec">시설개발 진행</h2></div>
+      <div class="panel">${projs||'<div class="empty"><b>진행 중인 개발사업이 없습니다</b>시설개발 탭에서 새 사업을 등록하세요.</div>'}</div>
+    </div>
+  </div>
+  ${vWeatherPanel()}
+  ${vRoutinePanel()}
+  ${vPhotoPanel()}
+  ${V.projects.some(p=>p.halted)?`<div class="sec-head"><h2 class="sec">분쟁·중단 사업</h2><span class="hint">합의·소송·정산이 남은 건</span></div><div class="panel">${V.projects.filter(p=>p.halted).map(p=>`<div class="item"><div class="stripe 긴급"></div><div class="body"><div class="t">${esc(p.name)}</div><div class="d">${esc((p.checklist||[]).filter(x=>!x.done).map(x=>x.t).slice(0,2).join(" · ")||p.desc||"")}</div></div><button class="btn" data-tab="projects">보기</button></div>`).join("")}</div>`:""}
+  <div class="hfbox" style="margin-top:22px"><div class="row"><b>오늘 현황 인포그래픽</b><span class="hint">작업·점검·개발사업 숫자와 현장 사진을 분석해 한 장으로 만들고, 힉스필드로 포스터 이미지를 생성합니다</span><span class="sp"></span>${canWrite?'<button class="btn gold" data-act="studio" data-coll="reports">현황 인포그래픽 만들기</button>':""}</div></div>
+  <div class="sec-head"><h2 class="sec">구역별 상태</h2><span class="hint">구역을 누르면 해당 구역 작업만 봅니다</span></div>
+  <div class="zones">${zoneRows}</div>`}
+
+function vOrders(){
+  let list=V.orders.slice();
+  if(UI.oStatus==="미완료")list=list.filter(o=>!["완료","기록"].includes(o.status));else if(UI.oStatus!=="전체")list=list.filter(o=>o.status===UI.oStatus);
+  if(UI.oZone!=="전체")list=list.filter(o=>o.zone===UI.oZone);
+  const q=(UI.oQ||"").trim();if(q)list=list.filter(o=>[o.title,o.desc,o.assignee,o.zone].join(" ").includes(q));
+  const closed=x=>["완료","기록"].includes(x.status);
+  list.sort((a,b)=>closed(a)-closed(b)||(closed(a)?String(b.doneAt||b.createdAt||"").localeCompare(String(a.doneAt||a.createdAt||"")):0)||PRI.indexOf(a.priority)-PRI.indexOf(b.priority)||String(a.dueDate||"9").localeCompare(String(b.dueDate||"9"))||String(b.createdAt||"").localeCompare(String(a.createdAt||"")));
+  const nxt={"접수":"진행 시작","진행":"완료 처리","보류":"재개"};
+  return`<div class="sec-head"><h2 class="sec">작업지시 · 하자 접수</h2><span class="sp"></span>${canWrite?'<button class="btn pri" data-act="newOrder">+ 하자 접수</button>':""}</div>
+  <div class="filters">
+    <select id="fOStatus" aria-label="상태">${["미완료","전체",...OSTAT].map(s=>`<option ${UI.oStatus===s?"selected":""}>${s}</option>`).join("")}</select>
+    <select id="fOZone" aria-label="구역">${["전체",...ZN()].map(s=>`<option ${UI.oZone===s?"selected":""}>${esc(s)}</option>`).join("")}</select>
+    <input id="fOQ" type="search" placeholder="검색: 에어컨, 누수, 업체명…" value="${esc(UI.oQ||"")}" aria-label="작업 검색" style="flex:1;min-width:160px">
+    <span class="hint" style="align-self:center">${list.length}건</span>
+  </div>
+  <div class="ocards">${list.length?list.slice(0,UI.oLimit||120).map(o=>`<div class="ocard"><div class="stripe ${closed(o)?"ok":esc(o.priority)}"></div><div class="body">
+    <div class="row">${priChip(o.priority)}${stChip(o.status)}<span class="chip">${esc(o.type||"")}</span>${o.category?`<span class="chip">${esc(o.category)}</span>`:""}${srcChip(o)}${ex(o)}</div>
+    <div class="t" style="margin-top:6px">${esc(o.title)}</div>
+    <div class="d">${esc(o.zone)}${o.assetId?" · "+esc(assetName(o.assetId)):""}${o.assignee?" · 담당 "+esc(o.assignee):""}${o.dueDate?" · 기한 "+esc(o.dueDate):""}${o.cost?' · <span class="num">'+won(o.cost)+"</span>":""}${o.doneAt?" · 완료 "+esc(o.doneAt):(o.createdAt&&closed(o)?" · "+esc(o.createdAt):"")}</div>
+    ${o.desc?`<div class="desc">${esc(o.desc)}</div>`:""}
+    ${o.aiNote?`<div class="ai"><b>AI 진단</b>\n${esc(o.aiNote)}</div>`:""}
+    ${thumbs(o)}${infoLine(o)}
+  </div><div class="acts">${canWrite&&!closed(o)?`<button class="btn pri" data-act="advance" data-id="${o.id}">${nxt[o.status]||"진행 시작"}</button>`:""}${studioBtn("orders",o)}${canWrite?`<button class="btn" data-act="editOrder" data-id="${o.id}">수정</button>`:""}</div></div>`).join(""):'<div class="panel"><div class="empty"><b>조건에 맞는 작업이 없습니다</b>고장·하자를 발견하면 “하자 접수”로 등록하세요. 사진을 넣으면 AI가 원인과 조치, 예상 비용을 정리합니다.</div></div>'}</div>
+  ${list.length>(UI.oLimit||120)?`<div class="row" style="justify-content:center;margin-top:12px"><button class="btn" data-act="more">${list.length-(UI.oLimit||120)}건 더 보기</button></div>`:""}`}
+
+function vAssets(){
+  let list=V.assets.slice();
+  if(UI.aZone!=="전체")list=list.filter(a=>a.zone===UI.aZone);
+  if(UI.aDue==="초과")list=list.filter(a=>{const d=dday(a);return d!=null&&d<0});
+  if(UI.aDue==="7일")list=list.filter(a=>{const d=dday(a);return d!=null&&d>=0&&d<=7});
+  if(UI.aDue==="법정점검")list=list.filter(a=>a.legal);
+  list.sort((a,b)=>(dday(a)??1e9)-(dday(b)??1e9));
+  return`<div class="sec-head"><h2 class="sec">설비대장 · 정기점검</h2><span class="sp"></span>${canWrite?'<button class="btn pri" data-act="newAsset">+ 설비 등록</button>':""}</div>
+  <div class="filters">
+    <select id="fAZone" aria-label="구역">${["전체",...ZN()].map(s=>`<option ${UI.aZone===s?"selected":""}>${esc(s)}</option>`).join("")}</select>
+    <select id="fADue" aria-label="점검">${["전체","초과","7일","법정점검"].map(s=>`<option value="${s}" ${UI.aDue===s?"selected":""}>${s==="전체"?"점검 전체":s==="초과"?"기한 초과":s==="7일"?"7일 이내":"법정점검 대상"}</option>`).join("")}</select>
+    <span class="hint" style="align-self:center">${list.length}개 · 다음 점검일 = 최근 점검일 + 점검 주기</span>
+  </div>
+  ${list.length?`<div class="tbl-wrap"><table><thead><tr><th>설비</th><th>구역</th><th>분류</th><th>상태</th><th class="r">주기</th><th>최근 점검</th><th>다음 점검</th><th></th></tr></thead><tbody>
+  ${list.map(a=>`<tr><td><b>${esc(a.name)}</b>${ex(a)}${a.vendor?`<div class="hint">${esc(a.vendor)}</div>`:""}</td><td>${esc(a.zone)}</td><td>${esc(a.category)}${a.legal?' <span class="chip plum">법정</span>':""}</td><td>${aStChip(a.status)}</td><td class="r num">${a.cycleDays?a.cycleDays+"일":"-"}</td><td class="num">${esc(a.lastCheck||"-")}</td><td><span class="num">${esc(nextDue(a)||"")}</span> ${ddChip(a)}</td><td><div class="row" style="flex-wrap:nowrap">${canWrite?`<button class="btn" data-act="checkDone" data-id="${a.id}">점검완료</button>`:""}${studioBtn("assets",a)}${canWrite?`<button class="btn ghost" data-act="editAsset" data-id="${a.id}">수정</button>`:""}</div></td></tr>`).join("")}
+  </tbody></table></div>`:'<div class="panel"><div class="empty"><b>등록된 설비가 없습니다</b>수배전반, 소화설비, 가스배관, 항온항습기처럼 정기 점검이 필요한 설비를 등록하면 다음 점검일을 자동으로 계산합니다.</div></div>'}`}
+
+function vProjects(){
+  const list=V.projects.slice().sort((a,b)=>(!!a.halted)-(!!b.halted)||(a.stage==="사후관리")-(b.stage==="사후관리")||STAGES.indexOf(a.stage)-STAGES.indexOf(b.stage));
+  return`<div class="sec-head"><h2 class="sec">시설개발 사업</h2><span class="hint">기획 → 설계 → 견적 → 승인 → 시공 → 준공 → 사후관리</span><span class="sp"></span>${canWrite?'<button class="btn pri" data-act="newProject">+ 개발사업 등록</button>':""}</div>
+  ${list.length?`<div class="pcards">${list.map(p=>{const i=STAGES.indexOf(p.stage);const ck=p.checklist||[];const dn=ck.filter(x=>x.done).length;const rate=p.budget?Math.min(100,Math.round((Number(p.spent)||0)/p.budget*100)):0;
+  return`<div class="pcard">
+    <div class="row">${p.halted?'<span class="chip red">중단·분쟁</span>':""}${p.subsidy?'<span class="chip plum">보조사업</span>':""}${srcChip(p)}<span class="chip">${esc(p.zone)}</span>${ex(p)}<span class="sp"></span>${canWrite?`<button class="btn ghost" data-act="editProject" data-id="${p.id}">수정</button>`:""}</div>
+    <h3>${esc(p.name)}</h3>
+    ${p.desc?`<div class="hint" style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(p.desc)}</div>`:""}
+    <div><div class="stepper">${STAGES.map((s,j)=>`<span class="${j<i?"on":j===i?"cur":""}" title="${s}"></span>`).join("")}</div>
+    <div class="steplab"><span>${esc(p.stage)} 단계</span><span>${i+1} / 7</span></div></div>
+    <div class="row" style="font-size:13px"><span>예산 <b class="num">${won(p.budget)}</b></span><span class="sp"></span><span>집행 <b class="num">${rate}%</b></span></div>
+    <div class="bar"><i style="width:${rate}%"></i></div>
+    ${p.subsidy?`<div class="hint">보조 50% <span class="num">${won(Math.round((Number(p.budget)||0)/2))}</span> · 자부담 50%</div>`:""}
+    <div class="hint">${esc(p.owner?"담당 "+p.owner:"")}${p.start?" · "+esc(p.start):""}${p.end?" ~ "+esc(p.end):""}</div>
+    ${ck.length?`<div><div class="row" style="margin-bottom:6px"><b style="font-size:13px">남은 일</b><span class="hint">${dn}/${ck.length} 완료</span></div><ul class="checks">${ck.map((x,j)=>`<li><label><input type="checkbox" data-act="ck" data-id="${p.id}" data-j="${j}" ${x.done?"checked":""} ${canWrite?"":"disabled"}><span class="${x.done?"done":""}">${esc(x.t)}</span></label></li>`).join("")}</ul></div>`:""}
+    ${thumbs(p)}${infoLine(p)}
+    <div class="row">${studioBtn("projects",p)}<span class="sp"></span>${canWrite&&i<6?`<button class="btn gold" data-act="stage" data-id="${p.id}">${STAGES[i+1]} 단계로</button>`:""}</div>
+  </div>`}).join("")}</div>`:'<div class="panel"><div class="empty"><b>등록된 개발사업이 없습니다</b>개축, 신규 체험시설, 보조사업처럼 단계별로 진행되는 시설 개발을 등록해 예산과 남은 일을 관리하세요.</div></div>'}`}
+
+function vCost(){
+  const t=today();const months=[];for(let k=5;k>=0;k--){const d=new Date(t+"T00:00:00Z");d.setUTCDate(1);d.setUTCMonth(d.getUTCMonth()-k);months.push(d.toISOString().slice(0,7))}
+  const done=V.orders.filter(o=>o.status==="완료"&&o.cost);
+  const per=months.map(m=>done.filter(o=>(o.doneAt||"").startsWith(m)).reduce((s,o)=>s+Number(o.cost),0));
+  const max=Math.max(1,...per);
+  const pend=V.orders.filter(o=>!["완료","기록"].includes(o.status)&&o.cost).reduce((s,o)=>s+Number(o.cost),0);
+  const since=months[0];
+  const byZone=ZN().map(z=>({z,v:done.filter(o=>o.zone===z&&(o.doneAt||"")>=since).reduce((s,o)=>s+Number(o.cost),0),p:V.orders.filter(o=>o.zone===z&&!["완료","기록"].includes(o.status)).reduce((s,o)=>s+(Number(o.cost)||0),0)})).filter(x=>x.v||x.p).sort((a,b)=>b.v-a.v);
+  const zmax=Math.max(1,...byZone.map(x=>x.v));
+  const pb=V.projects.reduce((s,p)=>s+(Number(p.budget)||0),0), ps=V.projects.reduce((s,p)=>s+(Number(p.spent)||0),0);
+  return`<div class="kpis">
+    <div class="kpi"><div class="l">최근 6개월 유지보수비</div><div class="v">${man(per.reduce((a,b)=>a+b,0))}</div><div class="s">완료 ${done.filter(o=>(o.doneAt||"")>=since).length}건</div></div>
+    <div class="kpi warnk"><div class="l">진행 중 예상비용</div><div class="v">${man(pend)}</div><div class="s">미완료 작업 견적 합계</div></div>
+    <div class="kpi"><div class="l">시설개발 총예산</div><div class="v">${man(pb)}</div><div class="s">집행 ${man(ps)}원</div></div>
+  </div>
+  <div class="grid2" style="margin-top:20px">
+    <div style="min-width:0"><div class="sec-head"><h2 class="sec">월별 유지보수비</h2><span class="hint">완료일 기준</span></div>
+      <div class="panel"><div class="chart">${months.map((m,i)=>`<div class="col ${m===t.slice(0,7)?"now":""}"><span class="lv">${per[i]?man(per[i]):"0"}</span><div class="b" style="height:${Math.round(per[i]/max*140)}px"></div><span class="lm">${+m.slice(5)}월</span></div>`).join("")}</div></div></div>
+    <div style="min-width:0"><div class="sec-head"><h2 class="sec">구역별 지출</h2><span class="hint">6개월 · 완료</span></div>
+      <div class="panel">${byZone.length?byZone.map(x=>`<div class="item"><div class="body"><div class="row"><span class="t">${esc(x.z)}</span><span class="sp"></span><span class="num">${won(x.v)}</span></div><div class="bar" style="margin-top:6px"><i style="width:${Math.round(x.v/zmax*100)}%;background:var(--accent)"></i></div>${x.p?`<div class="d">진행 중 예상 ${won(x.p)}</div>`:""}</div></div>`).join(""):'<div class="empty"><b>지출 기록이 없습니다</b>작업을 완료 처리할 때 비용을 입력하면 여기에 집계됩니다.</div>'}</div></div>
+  </div>
+  <div class="sec-head"><h2 class="sec">시설개발 예산 집행</h2></div>
+  ${V.projects.length?`<div class="tbl-wrap"><table><thead><tr><th>사업</th><th>단계</th><th class="r">예산</th><th class="r">보조금(50%)</th><th class="r">집행액</th><th class="r">집행률</th></tr></thead><tbody>${V.projects.map(p=>`<tr><td><b>${esc(p.name)}</b>${ex(p)}</td><td>${esc(p.stage)}</td><td class="r num">${won(p.budget)}</td><td class="r num">${p.subsidy?won(Math.round((Number(p.budget)||0)/2)):"-"}</td><td class="r num">${won(p.spent)}</td><td class="r num">${p.budget?Math.round((Number(p.spent)||0)/p.budget*100):0}%</td></tr>`).join("")}</tbody></table></div>`:'<div class="panel"><div class="empty"><b>등록된 사업이 없습니다</b></div></div>'}`}
+
+/* ---------- forms ---------- */
+const F={
+  order:[["title","제목","text","full"],["zone","구역","zone"],["assetId","관련 설비","asset"],["type","유형",OTYPE],["category","분류",CATS],["priority","우선순위",PRI],["status","상태",OSTAT],["dueDate","처리 기한","date"],["assignee","담당(직원·업체)","text"],["reporter","접수자","text"],["cost","비용(원, 견적·실비)","number"],["doneAt","완료일","date"],["desc","증상·위치 설명","textarea","full"],["aiNote","AI 진단 메모","textarea","full"]],
+  asset:[["name","설비명","text","full"],["zone","구역","zone"],["category","분류",CATS],["status","상태",ASTAT],["cycleDays","점검 주기(일)","number"],["lastCheck","최근 점검일","date"],["legal","법정점검 대상(소방·전기·가스 등)","check"],["vendor","관리 업체·연락처","text","full"],["note","메모","textarea","full"]],
+  project:[["name","사업명","text","full"],["zone","구역","zone"],["stage","단계",STAGES],["budget","총예산(원)","number"],["spent","집행액(원)","number"],["subsidy","보조사업","check"],["owner","담당","text"],["start","시작일","date"],["end","목표 준공일","date"],["desc","사업 개요","textarea","full"],["halted","중단·분쟁 중","check"],["checklistText","남은 일 (한 줄에 하나, 완료는 맨 앞에 [x])","textarea","full"]],
+  vendor:[["name","업체·담당자","text","full"],["trade","분야(전기·설비·소방 등)","text"],["contact","연락처","text"],["jobs","맡긴 일·견적 이력","textarea","full"],["note","메모(평가·주의점)","textarea","full"]],
+  routine:[["title","업무","text","full"],["freq","주기",["매일","매주","매월","매년"]],["dom","날짜(매월·매년)","number"],["nth","몇째 주(매월·매년, 비우면 날짜 기준)",["","첫째","둘째","셋째","넷째","마지막"]],["dows","요일(매주·몇째 주)","dows","full"],["months","해당 월(비우면 매월·연중)","months","full"],["zone","구역","zone"],["category","분류",CATS],["legal","법정·행정 점검","check"],["assignee","담당","text"],["detail","점검 항목·방법","textarea","full"],["basis","근거(과거 이력)","textarea","full"]],
+};
+let editing=null, aiCtl=null, aiResult=null;
+function openForm(kind,rec){PM=null;IR=null;
+  const coll=kind+"s";
+  const base={vendor:{},routine:{freq:"매월",dom:1,nth:"",dows:[],months:[],zone:ZN()[0],category:"기타",legal:false,since:today()},order:{zone:ZN()[0],type:"고장수리",priority:"보통",status:"접수"},asset:{zone:ZN()[0],category:"전기",status:"정상",cycleDays:30,lastCheck:today()},project:{zone:ZN()[0],stage:"기획",subsidy:false}}[kind];
+  const r=rec?{...rec}:{id:nid(kind[0]),site:UI.site,...base,...(openForm.pre||{})};openForm.pre=null;
+  if(kind==="project")r.checklistText=(r.checklist||[]).map(x=>(x.done?"[x] ":"")+x.t).join("\n");
+  editing={kind,coll,rec:r,isNew:!rec,arm:false};aiResult=null;
+  const fld=([k,l,t,cls])=>{const v=r[k]??"";let inp;
+    if(t==="zone"){const zs=ZN().includes(v)||!v?ZN():[v,...ZN()];inp=`<select id="f_${k}">${zs.map(o=>`<option ${o===v?"selected":""}>${esc(o)}</option>`).join("")}</select>`}
+    else if(t==="dows")inp=`<div class="row">${DOWS.map((d,i)=>`<label class="mchk"><input type="checkbox" name="f_${k}" value="${i}" ${(v||[]).includes(i)?"checked":""}>${d}</label>`).join("")}</div>`;
+    else if(t==="months")inp=`<div class="row">${MONTHS.map(m=>`<label class="mchk"><input type="checkbox" name="f_${k}" value="${m}" ${(v||[]).includes(m)?"checked":""}>${m}월</label>`).join("")}</div>`;
+    else if(Array.isArray(t))inp=`<select id="f_${k}">${t.map(o=>`<option ${o===v?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
+    else if(t==="asset")inp=`<select id="f_${k}"><option value="">없음</option>${V.assets.map(a=>`<option value="${a.id}" ${a.id===v?"selected":""}>${esc(a.zone+" · "+a.name)}</option>`).join("")}</select>`;
+    else if(t==="textarea")inp=`<textarea id="f_${k}">${esc(v)}</textarea>`;
+    else if(t==="check")return`<label class="fld ${cls||""}" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="f_${k}" ${v?"checked":""}><span>${l}</span></label>`;
+    else inp=`<input id="f_${k}" type="${t}" value="${esc(v)}" ${t==="number"?'inputmode="numeric" min="0" step="1"':""}>`;
+    return`<label class="fld ${cls||""}"><span>${l}</span>${inp}</label>`};
+  const ai=rec&&["order","asset","project"].includes(kind)?`<div class="aibox"><div class="row"><b style="font-size:14px">사진 분석 · 인포그래픽</b><span class="sp"></span><button class="btn gold" type="button" data-act="studio" data-coll="${coll}" data-id="${r.id}">열기</button></div><span class="hint">현장 사진을 올리면 원인·조치·비용을 분석해 인포그래픽으로 만들고 힉스필드 이미지까지 생성합니다</span></div>`:"";
+  const title={order:rec?"작업 수정":"하자 접수",asset:rec?"설비 수정":"설비 등록",project:rec?"개발사업 수정":"개발사업 등록",vendor:rec?"업체 수정":"업체 등록",routine:rec?"정기 업무 수정":"정기 업무 추가"}[kind];
+  $("#modalRoot").innerHTML=`<div class="ov" data-act="ovClose"><form class="modal" id="mform" role="dialog" aria-modal="true" aria-label="${title}"><h3>${title}${r.sample?' <span class="chip ex">예시</span>':""}</h3>
+    <div class="fgrid">${F[kind].map(fld).join("")}${ai}</div>
+    <div class="mfoot">${rec?`<button class="btn danger" type="button" data-act="del">${"삭제"}</button>`:""}<span class="sp"></span><button class="btn" type="button" data-act="close">취소</button><button class="btn pri" type="submit">저장</button></div></form></div>`;
+  setTimeout(()=>{const f=$("#f_"+F[kind][0][0]);f&&f.focus()},30);
+}
+function closeForm(){aiCtl?.abort();$("#modalRoot").innerHTML="";editing=null}
+async function submitForm(e){
+  e.preventDefault();if(!editing)return;
+  const {kind,coll,rec}=editing;const out={...rec};
+  for(const [k,,t] of F[kind]){if(t==="months"||t==="dows"){out[k]=[...document.querySelectorAll(`input[name="f_${k}"]:checked`)].map(x=>+x.value);continue}const el=$("#f_"+k);if(!el)continue;
+    if(t==="check")out[k]=el.checked;else if(t==="number")out[k]=el.value===""?0:Math.max(0,Math.round(Number(el.value)||0));else out[k]=el.value.trim()}
+  if(kind==="project"){out.checklist=out.checklistText.split("\n").map(s=>s.trim()).filter(Boolean).map(s=>({t:s.replace(/^\[x\]\s*/i,""),done:/^\[x\]/i.test(s)}));delete out.checklistText}
+  const nameKey=kind==="order"||kind==="routine"?"title":"name";
+  if(kind==="routine"){out.dom=Math.min(31,Math.max(0,out.dom||0));if(out.freq==="매주"&&!(out.dows||[]).length){toast("요일을 하나 이상 고르세요.");return}if(out.nth&&!(out.dows||[]).length){toast("몇째 주를 쓰려면 요일을 고르세요.");return}}
+  if(!out[nameKey]){toast((kind==="order"?"제목":"이름")+"을 입력해 주세요.");return}
+  if(kind==="order"){if(!out.createdAt)out.createdAt=today();if(out.status==="완료"&&!out.doneAt)out.doneAt=today();if(out.status!=="완료")out.doneAt=""}
+  if(await put(coll,out)){closeForm();toast("저장했습니다.");if(kind==="order"&&out.photoRef!=null&&!PCK.get("p"+out.photoRef)?.orderId){const p=PH.rows&&PH.rows.find(x=>x.i===out.photoRef);if(p)await pSave(p.i,{orderId:out.id,st:["미확인","조치 필요",""].includes(pStat(pv(p)))?"조치중":pStat(pv(p))})}}
+}
+async function runAI(){
+  const title=$("#f_title").value.trim(),desc=$("#f_desc").value.trim(),zone=$("#f_zone").value,asset=$("#f_assetId").selectedOptions[0]?.textContent||"";
+  const files=sampleImg&&$("#f_photo")?.files?.length?[...$("#f_photo").files].slice(0,4):[];
+  if(!title&&!desc&&!files.length){toast("제목이나 증상 설명을 먼저 적어 주세요.");return}
+  const res=$("#aiRes"),stop=$("#aiStop");res.textContent="진단하는 중…";stop.hidden=false;
+  aiCtl=new AbortController();
+  const prompt=`당신은 한국잠사박물관(청주; 실크박물관·누에체험농장·양떼정원·디지털 키즈카페·단체식당·계절놀이장 운영, 어린이 단체 관람객 많음)의 시설 유지보수 전문가다. 아래 고장/하자${files.length?"와 첨부한 현장 사진":""}을 보고 진단하라. 한국 시세 기준 비용을 원 단위 정수로 추정하라.
+반드시 JSON 객체 하나만 답하라. 형식:
+{"cause":"추정 원인 1~2문장","risk":"상|중|하","safety":"관람객·직원 안전을 위한 즉시 조치 1문장","steps":["조치 단계(최대 5개)"],"diy":true,"vendor":"자체 처리 불가 시 필요한 업체 종류, 가능하면 빈 문자열","parts":["필요 자재"],"cost_min":0,"cost_max":0}
+구역: ${zone}
+관련 설비: ${asset==="없음"?"-":asset}
+제목: ${title||"-"}
+증상: ${desc||"-"}`;
+  try{
+    const j=await sample.json(prompt,{signal:aiCtl.signal,...(files.length?{images:files}:{})});
+    aiResult=j;
+    const lines=[`원인: ${j.cause||"-"}`,`위험도: ${j.risk||"-"}`,`즉시 조치: ${j.safety||"-"}`,...(j.steps||[]).map((s,i)=>`${i+1}. ${s}`),`처리: ${j.diy?"자체 처리 가능":"업체 필요"}${j.vendor?" ("+j.vendor+")":""}`,(j.parts||[]).length?`자재: ${j.parts.join(", ")}`:"",`예상비용: ${won(j.cost_min)} ~ ${won(j.cost_max)}`].filter(Boolean);
+    res.innerHTML=esc(lines.join("\n"))+`<div class="row" style="margin-top:8px"><button class="btn pri" type="button" data-act="aiApply">진단 내용 반영</button><span class="hint">메모·우선순위·예상비용 칸을 채웁니다</span></div>`;
+    aiResult.text=lines.join("\n");
+  }catch(e){
+    const m={cancelled:"",not_granted:"AI 사용이 허용되지 않아 진단을 건너뜁니다.",rate_limited:"요청이 많습니다. 잠시 후 다시 눌러 주세요.",image_rejected:"사진을 읽지 못했습니다. JPG나 PNG로 다시 올려 주세요.",invalid_json:"진단 결과 형식이 맞지 않았습니다. 다시 눌러 주세요.",refused:"이 내용으로는 진단할 수 없습니다. 설명을 바꿔 주세요."};
+    res.textContent=m[e?.code]??"진단하지 못했습니다. 다시 시도해 주세요.";
+    if(e?.code==="not_granted"||e?.code==="sampling_disabled")sample=null;
+  }finally{stop.hidden=true}
+}
+function applyAI(){if(!aiResult)return;
+  $("#f_aiNote").value=aiResult.text;
+  const pr={상:"긴급",중:"높음",하:"보통"}[aiResult.risk];if(pr)$("#f_priority").value=pr;
+  const c=Math.round(((Number(aiResult.cost_min)||0)+(Number(aiResult.cost_max)||0))/2/1000)*1000;if(c&&!Number($("#f_cost").value))$("#f_cost").value=c;
+  if(aiResult.vendor&&!$("#f_assignee").value)$("#f_assignee").value=aiResult.vendor;
+  toast("진단 내용을 반영했습니다. 저장을 눌러 주세요.")}
+
+/* ---------- seasonal + vendors ---------- */
+const curMonth=()=>+today().slice(5,7);
+const DOWS=["일","월","화","수","목","금","토"];
+const NTH={"첫째":1,"둘째":2,"셋째":3,"넷째":4,"마지막":-1};
+const FREQ_ORDER={"매일":0,"매주":1,"매월":2,"매년":3};
+function dowOf(d){return new Date(d+"T00:00:00Z").getUTCDay()}
+function lastDay(y,m){return new Date(Date.UTC(y,m,0)).getUTCDate()}
+function rtHits(r,d){const m=+d.slice(5,7),day=+d.slice(8,10),y=+d.slice(0,4),w=dowOf(d);const ms=r.months||[];
+  if(r.freq==="매일")return !ms.length||ms.includes(m);
+  if(r.freq==="매주")return (!ms.length||ms.includes(m))&&(r.dows||[]).includes(w);
+  if(r.freq==="매월"||r.freq==="매년"){if(r.freq==="매년"&&!ms.length)return false;if(ms.length&&!ms.includes(m))return false;
+    if(r.nth){const n=NTH[r.nth];if(!(r.dows||[]).includes(w))return false;if(n===-1)return day+7>lastDay(y,m);return Math.ceil(day/7)===n}
+    const dd=Math.min(r.dom||1,lastDay(y,m));return day===dd}
+  return false}
+function rtRange(from,to){const out=[];for(let d=from;d<=to;d=addDays(d,1))for(const r of V.routines)if(rtHits(r,d))out.push({r,d,done:!!S.checks.find(c=>c.id===r.id+"_"+d)});return out}
+function rtToday(){return rtRange(today(),today())}
+function rtOverdue(){const t=today();return rtRange(addDays(t,-30),addDays(t,-1)).filter(x=>!x.done&&x.r.freq!=="매일"&&x.d>=(x.r.since||"2026-10-13"))}
+function freqLabel(r){const ms=(r.months||[]);const mtxt=ms.length&&ms.length<12?ms.join("·")+"월":"";
+  if(r.freq==="매일")return"매일"+(mtxt?" ("+mtxt+")":"");
+  if(r.freq==="매주")return"매주 "+(r.dows||[]).map(i=>DOWS[i]).join("·")+(mtxt?" ("+mtxt+")":"");
+  const when=r.nth?`${r.nth} ${(r.dows||[]).map(i=>DOWS[i]).join("·")}요일`:`${r.dom||1}일`;
+  if(r.freq==="매월")return"매월 "+when+(mtxt?" ("+mtxt+")":"");
+  return(mtxt||"매년")+" "+when}
+function rtRow(x,showDate){const r=x.r;
+  return`<div class="item rt ${x.done?"isdone":""}"><button class="ck ${x.done?"on":""}" data-act="rCheck" data-id="${r.id}" data-d="${x.d}" aria-label="${x.done?"완료 취소":"완료 표시"}" ${canWrite?"":"disabled"}>${x.done?"✓":""}</button>
+  <div class="body"><div class="row"><span class="t">${esc(r.title)}</span>${r.legal?'<span class="chip plum">법정</span>':""}<span class="chip">${esc(freqLabel(r))}</span></div>
+  <div class="d">${showDate?`<span class="num">${x.d.slice(5)}(${DOWS[dowOf(x.d)]})</span> · `:""}${esc(r.zone)} · ${esc(r.category)}${r.assignee?" · "+esc(r.assignee):""}</div>
+  ${r.detail?`<div class="d" style="color:var(--ink)">${esc(r.detail)}</div>`:""}
+  ${r.basis?`<div class="basis">근거 · ${esc(r.basis)}</div>`:""}</div>
+  ${canWrite&&r.tplId?`<button class="btn" data-act="iRun" data-id="${esc(r.tplId)}" data-rid="${r.id}" data-d="${x.d}">점검표</button>`:""}${canWrite?`<button class="btn ghost" data-act="rOrder" data-id="${r.id}" data-d="${x.d}">작업지시로</button>`:""}</div>`}
+function vRoutinePanel(){const td=rtToday(),od=rtOverdue();if(!td.length&&!od.length)return"";
+  const left=td.filter(x=>!x.done).length;
+  return`<div class="sec-head"><h2 class="sec">오늘 정기 업무</h2><span class="hint">${td.length-left}/${td.length} 완료${od.length?` · 지난 미완료 ${od.length}건`:""}</span><span class="sp"></span><button class="btn ghost" data-tab="routine">기간별 업무 보기</button></div>
+  <div class="panel">${od.slice(0,5).map(x=>rtRow(x,true).replace('class="item rt','class="item rt late')).join("")}${td.sort((a,b)=>a.done-b.done||FREQ_ORDER[b.r.freq]-FREQ_ORDER[a.r.freq]).map(x=>rtRow(x,false)).join("")}</div>`}
+function rangeOf(k){const t=today(),w=dowOf(t),y=+t.slice(0,4),m=+t.slice(5,7);
+  if(k==="today")return[t,t,"오늘"];
+  if(k==="week"){const mon=addDays(t,-((w+6)%7));return[mon,addDays(mon,6),"이번 주"]}
+  if(k==="nextweek"){const mon=addDays(t,7-((w+6)%7));return[mon,addDays(mon,6),"다음 주"]}
+  if(k==="month")return[t.slice(0,8)+"01",t.slice(0,8)+String(lastDay(y,m)).padStart(2,"0"),m+"월"];
+  if(k==="q3")return[t,addDays(t,92),"앞으로 3개월"];
+  return[t,`${y}-12-31`,`${y}년 남은 기간`]}
+function vRoutine(){
+  const mode=UI.rMode||"plan";
+  const head=`<div class="sec-head"><h2 class="sec">정기 업무</h2><span class="hint">점검 주기·법정 기한·과거 고장 이력으로 만든 반복 업무 ${V.routines.length}개</span><span class="sp"></span>
+   <div class="seg">${[["plan","기간별 일정"],["list","업무 목록"]].map(([k,l])=>`<button class="${mode===k?"on":""}" data-act="rMode" data-v="${k}">${l}</button>`).join("")}</div>${canWrite?'<button class="btn pri" data-act="newRoutine">+ 정기 업무</button>':""}</div>`;
+  if(!V.routines.length)return head+'<div class="panel"><div class="empty"><b>등록된 정기 업무가 없습니다</b>매일 개장 점검, 매월 소화기 점검처럼 반복되는 일을 등록하면 기간을 고를 때마다 할 일이 자동으로 만들어집니다.</div></div>';
+  if(mode==="list"){const groups=["매일","매주","매월","매년"];
+    return head+groups.map(g=>{const l=V.routines.filter(r=>r.freq===g).sort((a,b)=>String(a.zone).localeCompare(String(b.zone),"ko"));if(!l.length)return"";
+      return`<div class="sec-head"><h3 class="sub">${g} · ${l.length}개</h3></div><div class="panel">${l.map(r=>`<div class="item"><div class="body"><div class="row"><span class="t">${esc(r.title)}</span>${r.legal?'<span class="chip plum">법정</span>':""}<span class="chip">${esc(freqLabel(r))}</span></div><div class="d">${esc(r.zone)} · ${esc(r.category)}${r.assignee?" · "+esc(r.assignee):""}</div>${r.basis?`<div class="basis">근거 · ${esc(r.basis)}</div>`:""}</div>${canWrite?`<button class="btn ghost" data-act="editRoutine" data-id="${r.id}">수정</button>`:""}</div>`).join("")}</div>`}).join("")}
+  const k=UI.rRange||"week";const [from,to,label]=rangeOf(k);
+  const all=rtRange(from,to);const od=rtOverdue();
+  const long=["month","q3","year"].includes(k);
+  const daily=all.filter(x=>x.r.freq==="매일"), other=long?all.filter(x=>x.r.freq!=="매일"):all;
+  const done=all.filter(x=>x.done).length;
+  const ranges=[["today","오늘"],["week","이번 주"],["nextweek","다음 주"],["month","이번 달"],["q3","3개월"],["year","올해 남은 기간"]];
+  let body="";
+  if(!long){const byD={};for(const x of other)(byD[x.d]=byD[x.d]||[]).push(x);
+    body=Object.keys(byD).sort().map(d=>{const l=byD[d].sort((a,b)=>a.done-b.done||FREQ_ORDER[b.r.freq]-FREQ_ORDER[a.r.freq]);const n=l.filter(x=>x.done).length;
+      return`<div class="sec-head"><h3 class="sub">${d.slice(5).replace("-","/")} (${DOWS[dowOf(d)]})${d===today()?" · 오늘":""}</h3><span class="hint">${n}/${l.length}</span></div><div class="panel">${l.map(x=>rtRow(x,false)).join("")}</div>`}).join("")}
+  else{const byM={};for(const x of other)(byM[x.d.slice(0,7)]=byM[x.d.slice(0,7)]||[]).push(x);
+    const dset=[...new Set(daily.map(x=>x.r.id))].map(id=>V.routines.find(r=>r.id===id));
+    body=(dset.length?`<div class="sec-head"><h3 class="sub">매일 반복 ${dset.length}개</h3><span class="hint">날짜별 체크는 ‘오늘·이번 주’ 보기에서</span></div><div class="panel">${dset.map(r=>`<div class="item"><div class="body"><div class="row"><span class="t">${esc(r.title)}</span><span class="chip">${esc(freqLabel(r))}</span></div><div class="d">${esc(r.zone)} · 기간 중 ${daily.filter(x=>x.r.id===r.id).length}회</div></div></div>`).join("")}</div>`:"")+
+    Object.keys(byM).sort().map(mk=>{const l=byM[mk].sort((a,b)=>a.d.localeCompare(b.d));
+      return`<div class="sec-head"><h3 class="sub">${+mk.slice(5)}월</h3><span class="hint">${l.filter(x=>x.done).length}/${l.length} · 법정 ${l.filter(x=>x.r.legal).length}건</span></div><div class="panel">${l.map(x=>rtRow(x,true)).join("")}</div>`}).join("")}
+  return head+`<div class="seg wide">${ranges.map(([kk,l])=>`<button class="${k===kk?"on":""}" data-act="rRange" data-v="${kk}">${l}</button>`).join("")}</div>
+  <div class="kpis" style="margin-top:12px"><div class="kpi"><div class="l">${esc(label)} 업무</div><div class="v">${all.length}</div><div class="s">${from.slice(5)} ~ ${to.slice(5)}</div></div>
+  <div class="kpi"><div class="l">완료</div><div class="v">${done}</div><div class="s">${all.length?Math.round(done/all.length*100):0}%</div></div>
+  <div class="kpi"><div class="l">법정·행정 점검</div><div class="v">${all.filter(x=>x.r.legal).length}</div><div class="s">소방·전기·승강기·유기시설</div></div>
+  <div class="kpi ${od.length?"alert":""}"><div class="l">지난 미완료</div><div class="v">${od.length}</div><div class="s">최근 30일, 매일 업무 제외</div></div></div>
+  ${od.length?`<div class="sec-head"><h3 class="sub" style="color:var(--danger)">지난 미완료</h3></div><div class="panel">${od.map(x=>rtRow(x,true).replace('class="item rt','class="item rt late')).join("")}</div>`:""}
+  ${body||'<div class="panel"><div class="empty"><b>이 기간에 잡힌 업무가 없습니다</b></div></div>'}`}
+function vVendors(){const q=(UI.vQ||"").trim();let l=V.vendors.slice();if(q)l=l.filter(v=>[v.name,v.trade,v.jobs,v.note].join(" ").includes(q));
+  l.sort((a,b)=>String(a.trade||"").localeCompare(String(b.trade||""),"ko")||String(a.name).localeCompare(String(b.name),"ko"));
+  return`<div class="sec-head"><h2 class="sec">협력 업체 · 담당자</h2><span class="hint">누가 무엇을 고쳤는지, 다음에 누구를 부를지</span><span class="sp"></span>${canWrite?'<button class="btn pri" data-act="newVendor">+ 업체 등록</button>':""}</div>
+  <div class="filters"><input id="fVQ" type="search" placeholder="검색: 전기, 에어컨, 소방, 업체명…" value="${esc(UI.vQ||"")}" aria-label="업체 검색" style="flex:1;min-width:160px"><span class="hint" style="align-self:center">${l.length}곳</span></div>
+  ${l.length?`<div class="vgrid">${l.map(v=>{const n=V.orders.filter(o=>o.assignee&&v.name&&(o.assignee.includes(v.name)||v.name.includes(o.assignee))).length;
+  return`<div class="vcard"><div class="row"><b>${esc(v.name)}</b>${v.trade?`<span class="chip plum">${esc(v.trade)}</span>`:""}${n?`<span class="chip">작업 ${n}건</span>`:""}${srcChip(v)}</div>
+  ${v.contact?`<div class="num vc">${esc(v.contact)}</div>`:""}
+  ${v.jobs?`<div class="hint" style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(v.jobs)}</div>`:""}
+  ${v.note?`<div class="ai">${esc(v.note)}</div>`:""}
+  ${canWrite?`<div class="row"><span class="sp"></span><button class="btn" data-act="vendorOrder" data-id="${v.id}">작업 맡기기</button><button class="btn ghost" data-act="editVendor" data-id="${v.id}">수정</button></div>`:""}</div>`}).join("")}</div>`:'<div class="panel"><div class="empty"><b>등록된 업체가 없습니다</b>전기·설비·소방·에어컨처럼 자주 부르는 업체를 등록해 두세요.</div></div>'}`}
+
+/* ---------- weather-driven checklist ---------- */
+const SB_PROJECT="ewxquecxsxsfhyzfaaci";
+const WX_CODE={0:"맑음",1:"대체로 맑음",2:"구름 조금",3:"흐림",45:"안개",48:"안개",51:"이슬비",53:"이슬비",55:"이슬비",56:"어는 비",57:"어는 비",61:"비",63:"비",65:"강한 비",66:"어는 비",67:"어는 비",71:"눈",73:"눈",75:"많은 눈",77:"싸락눈",80:"소나기",81:"소나기",82:"강한 소나기",85:"눈 소나기",86:"눈 소나기",95:"뇌우",96:"뇌우·우박",99:"뇌우·우박"};
+const PHASE={prep:"전날·개장 전 준비",open:"개장 직후",run:"운영 중",close:"마감·야간"};
+const WX_COND={
+ rain:{label:"비",why:"강수량 1mm 이상 또는 강수확률 60% 이상",test:x=>x.precip>=1||x.pop>=60,items:[
+  ["prep","온실 천장·측창 닫기, 개폐기 확인","양떼정원·온실","건축·구조","온실 이력 30건, 2023-06 온실 근처 누전"],
+  ["prep","야외 콘센트 방수캡, 물놀이장·야외 조명 전원 차단","공용 설비","전기","우천 시 누전차단기 트립 반복"],
+  ["open","출입구·데크·계단 미끄럼 매트, 물기 제거, 우산꽂이","공용 설비","건축·구조","미끄럼 사고 후 보험 분쟁(2024-01, 2025-02)"],
+  ["open","박물관 천장 누수 부위 받침통·사진 기록","실크박물관","건축·구조","2026-04 박물관 천장 누수"],
+  ["run","카트·골프카트 충전기 실내 이동","주차장·외곽","전기","우천 방치 어댑터 고장(2026-05)"],
+  ["run","에어바운스 운영 중지·송풍기 덮개","계절놀이장","놀이기구","에어바운스 찢어짐·송풍기 이력"],
+  ["close","배수로·우수관 막힘, 진입로 물고임 확인","공용 설비","급배수","급배수 이력 51건"]]},
+ heavy:{label:"호우",why:"일 강수 30mm 이상 또는 시간당 10mm 이상",test:x=>x.precip>=30||x.p1h>=10,items:[
+  ["prep","단체 예약 운영 변경 안내 여부 결정","공용 설비","기타","2023-07 침수·진입로 막힘"],
+  ["open","진입로·주차장 침수 구간 통제","주차장·외곽","급배수","2023-07 침수"],
+  ["run","지하 물탱크실·양수 펌프 침수 확인","공용 설비","급배수","펌프 이력 25건"],
+  ["run","야외 시설 운영 중단, 고객 실내 유도","계절놀이장","기타",""],
+  ["close","비닐하우스·온실 배수, 누전 여부 확인","양떼정원·온실","전기","온실 근처 누전"]]},
+ wind:{label:"강풍",why:"순간풍속 10m/s 이상",test:x=>x.gust>=10,items:[
+  ["prep","몽골텐트·타프·그늘막 결속, 필요 시 철거","계절놀이장","건축·구조","2025-06 텐트 휨, 2026-04 타프 강풍 유실"],
+  ["prep","현수막·입간판·가벼운 집기 실내로","주차장·외곽","건축·구조",""],
+  ["open","에어바운스 운영 중지(고정 말뚝·송풍기 확인)","계절놀이장","놀이기구","유기시설 검사 지적: 핀말뚝 6개 이상"],
+  ["run","온실 측창·출입문 닫기","양떼정원·온실","건축·구조",""],
+  ["close","텐트·비닐하우스 찢어짐 사진 기록","계절놀이장","건축·구조",""]]},
+ gale:{label:"폭풍",why:"순간풍속 15m/s 이상",test:x=>x.gust>=15,items:[
+  ["prep","야외 시설 운영 중단 결정·고객 안내","공용 설비","기타",""],
+  ["prep","몽골텐트·타프 철거","계절놀이장","건축·구조","태풍 취약 구조"]]},
+ snow:{label:"눈",why:"적설 예보",test:x=>x.snow>0,items:[
+  ["prep","염화칼슘·제설도구 준비","주차장·외곽","기타",""],
+  ["open","진입로·계단·데크 제설","주차장·외곽","건축·구조","빙판 낙상(2025-02)"],
+  ["run","비닐하우스·텐트 지붕 눈 털기(적설 하중)","양떼정원·온실","건축·구조",""],
+  ["close","썰매장 슬로프·펜스 상태 확인","계절놀이장","놀이기구",""]]},
+ freeze:{label:"영하",why:"최저기온 0℃ 이하",test:x=>x.tmin<=0,items:[
+  ["prep","외부 수전 물빼기","공용 설비","급배수","동파 5년 연속"],
+  ["open","결빙 구간 염화칼슘(계단·데크·진입로)","주차장·외곽","건축·구조","2025-02 빙판 낙상 사고"],
+  ["close","카트 배터리 실내 보관","주차장·외곽","전기",""]]},
+ cold:{label:"한파",why:"최저기온 -5℃ 이하",test:x=>x.tmin<=-5,items:[
+  ["prep","매점 급수호스·손씻는곳 열선 작동, 퇴근 전 물빼기","누에쉼터·매점","급배수","매점 급수 동파 매년 반복"],
+  ["prep","제설기 배수·밸브 개방(동결 방지)","계절놀이장","놀이기구","썰매장 운영 루틴"],
+  ["open","오락기 사전 전원·예열(한파 미기동)","누에쉼터·매점","놀이기구","한파 시 오락기 미기동"],
+  ["run","난방기 주변 가연물·과열 점검","공용 설비","소방","2024-06 관사 화재, 2024-01 화상"]]},
+ hot:{label:"폭염",why:"최고기온 33℃ 이상",test:x=>x.tmax>=33,items:[
+  ["prep","식당·키즈카페·몽골텐트 에어컨 사전 가동","공용 설비","공조·냉난방","냉방 부족 민원 매년(7월 최다)"],
+  ["open","실외기 그늘·과부하, 차단기 트립 확인","공용 설비","전기","여름 에어컨 전원 트립"],
+  ["run","냉풍기·선풍기·생수 비치, 야외 안전요원 휴식","계절놀이장","기타",""],
+  ["close","냉동창고·쇼케이스 온도 확인","6차산업 복합체험장","공조·냉난방","2024-07 냉동창고 컴프레서 고장"]]},
+ warm:{label:"더위",why:"최고기온 28℃ 이상",test:x=>x.tmax>=28&&x.tmax<33,items:[
+  ["open","에어컨 필터·선풍기 배치 확인","공용 설비","공조·냉난방","에어컨 이력 42건"]]},
+ thunder:{label:"뇌우",why:"뇌우 예보",test:x=>x.codes.some(c=>c>=95),items:[
+  ["prep","물놀이장·야외 운영 중단 기준 공유","계절놀이장","기타",""],
+  ["run","빔프로젝터·PC 등 민감 장비 전원 보호","디지털 키즈카페","전시·영상","빔프로젝터 고장 반복"],
+  ["close","낙뢰 후 CCTV·네트워크 정상 확인","공용 설비","통신·CCTV",""]]},
+ dust:{label:"미세먼지",why:"PM10 81㎍ 이상 또는 PM2.5 36㎍ 이상",test:x=>x.pm10>=81||x.pm25>=36,items:[
+  ["prep","단체 야외 체험 실내 전환 안내","공용 설비","기타",""],
+  ["open","공기청정기 가동, 창문·출입문 닫기","실크박물관","공조·냉난방",""]]},
+ humid:{label:"결로",why:"습도 85% 이상·일교차 10℃ 이상",test:x=>x.rhMax>=85&&(x.tmax-x.tmin)>=10,items:[
+  ["open","단체식당 천장 결로 점검·환기","단체식당","건축·구조","식당 비닐하우스형 천장 결로"],
+  ["run","전시실 습도·항온항습기 확인","실크박물관","공조·냉난방",""]]},
+};
+const wxDoc=id=>S.wx.find(x=>x.id===id);
+function wxStats(d){const L=wxDoc("latest");if(!L||!L.forecast)return null;const f=L.forecast,h=f.hourly||{},dl=f.daily||{};
+  const di=(dl.time||[]).indexOf(d);if(di<0)return null;
+  const idx=(h.time||[]).map((t,i)=>t.startsWith(d)?i:-1).filter(i=>i>=0);const op=idx.filter(i=>{const hr=+h.time[i].slice(11,13);return hr>=8&&hr<=19});
+  const mx=(a,ii)=>ii.length?Math.max(...ii.map(i=>+a[i]||0)):0;
+  const aq=L.air&&L.air.hourly||{};const ai=(aq.time||[]).map((t,i)=>t.startsWith(d)?i:-1).filter(i=>i>=0&&+aq.time[i].slice(11,13)>=8&&+aq.time[i].slice(11,13)<=19);
+  return{d,tmax:+dl.temperature_2m_max[di],tmin:+dl.temperature_2m_min[di],precip:+dl.precipitation_sum[di]||0,pop:+(dl.precipitation_probability_max||[])[di]||0,snow:+(dl.snowfall_sum||[])[di]||0,
+    gust:Math.max(+(dl.wind_gusts_10m_max||[])[di]||0,mx(h.wind_gusts_10m||[],op)),p1h:mx(h.precipitation||[],idx),rhMax:mx(h.relative_humidity_2m||[],op),
+    codes:[+dl.weather_code[di],...op.map(i=>+(h.weather_code||[])[i])],code:+dl.weather_code[di],
+    pm10:ai.length?Math.max(...ai.map(i=>+aq.pm10[i]||0)):0,pm25:ai.length?Math.max(...ai.map(i=>+aq.pm2_5[i]||0)):0}}
+function wxConds(d){const st=wxStats(d);const auto=st?Object.keys(WX_COND).filter(k=>WX_COND[k].test(st)):[];
+  const m=wxDoc("manual");const man=m&&m.date===d?(m.keys||[]):[];return{st,auto,man,all:[...new Set([...auto,...man])]}}
+function wxFind(id){const [k,i]=id.slice(2).split(".");const r=WX_COND[k]&&WX_COND[k].items[+i];return r?{k,t:r[1],z:r[2],c:r[3],why:r[4]}:null}
+function wxItems(d){const {all}=wxConds(d);const out=[];for(const k of all)WX_COND[k].items.forEach((it,i)=>{const id=`w-${k}.${i}`;out.push({id,k,ph:it[0],t:it[1],z:it[2],c:it[3],why:it[4],d,done:!!S.checks.find(c=>c.id===id+"_"+d)})});return out}
+async function wxRefresh(force){
+  if(!mcp&&mode!=="sb"){if(force)toast("날씨 연동은 claude.ai에서 이 페이지를 열었을 때 작동합니다.");return}
+  const L=wxDoc("latest");const age=L&&L.fetched?(Date.now()-Date.parse(L.fetched))/6e4:1e9;
+  if(!force&&age<25)return;
+  UI.wxBusy=true;UI.wxMsg=force?"기상 API에서 새로 받는 중…":"";render();
+  const run=mode==="sb"?async q=>{if(/jamsa_weather_request/.test(q)){await sbRpc("fac_weather_request",{p_token:sbTok});return[]}if(/jamsa_weather_store/.test(q))return[];return(await sbRpc("fac_weather",{p_token:sbTok,p_refresh:true}))||[]}:async q=>{const res=await mcp.callTool("Supabase","execute_sql",{project_id:SB_PROJECT,query:q},{cache:false});let t=res.payload;if(t&&typeof t==="object"&&t.result)t=t.result;if(typeof t!=="string")t=JSON.stringify(t);const a=t.indexOf("["),b=t.lastIndexOf("]");return a>=0?JSON.parse(t.slice(a,b+1)):[]};
+  try{
+    if(force){await run("select public.jamsa_weather_request()");await new Promise(r=>setTimeout(r,5000));await run("select public.jamsa_weather_store()")}
+    const rows=await run("select kind, payload, fetched_at from public.jamsa_weather");
+    const f=rows.find(r=>r.kind==="forecast"),a=rows.find(r=>r.kind==="air");
+    if(!f){UI.wxMsg="아직 수집된 날씨가 없습니다. 잠시 뒤 다시 눌러 주세요.";return}
+    const pick=(o,keys)=>{const r={};for(const k of keys)if(o&&o[k])r[k]=o[k];return r};
+    const doc={id:"latest",fetched:new Date(Date.parse(String(f.fetched_at).replace(" ","T").replace(/\+00$/,"Z"))||Date.now()).toISOString(),
+      forecast:pick(f.payload,["current","hourly","daily"]),air:a?pick(a.payload,["current","hourly"]):null};
+    if(canWrite)await put("wx",doc);else{const i=S.wx.findIndex(x=>x.id==="latest");if(i>=0)S.wx[i]=doc;else S.wx.push(doc)}
+    UI.wxMsg="";
+  }catch(e){const c=e&&e.code;
+    UI.wxMsg={server_not_connected:"Supabase 커넥터가 연결되어 있지 않습니다. claude.ai 설정 → 커넥터에서 연결해 주세요.",needs_reauth:"Supabase 연결이 만료되었습니다. 설정 → 커넥터에서 다시 연결해 주세요.",not_in_manifest:"이 페이지의 Supabase 사용이 허용되지 않았습니다.",approval_required:"Supabase 실행 승인이 필요합니다. '지금 갱신'을 눌러 승인해 주세요.",tool_error:"날씨 테이블을 읽지 못했습니다. 수집 설정이 완료됐는지 확인해 주세요."}[c]||"날씨를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
+  }finally{UI.wxBusy=false;render()}}
+function wxStrip(st,label){if(!st)return"";const c=wxConds(st.d);
+  return`<div class="wxday"><div class="wxh"><b>${label}</b><span>${esc(WX_CODE[st.code]||"")}</span></div>
+  <div class="wxnums"><div><span>최고/최저</span><b class="num">${Math.round(st.tmax)}° / ${Math.round(st.tmin)}°</b></div><div><span>강수</span><b class="num">${st.precip.toFixed(1)}mm · ${st.pop}%</b></div><div><span>순간풍속</span><b class="num">${st.gust.toFixed(1)}m/s</b></div><div><span>미세먼지</span><b class="num">${st.pm10?Math.round(st.pm10):"-"} / ${st.pm25?Math.round(st.pm25):"-"}</b></div></div>
+  <div class="row">${c.auto.length?c.auto.map(k=>`<span class="chip amber" title="${esc(WX_COND[k].why)}">${WX_COND[k].label}</span>`).join(""):'<span class="chip green">특이 기상 없음</span>'}${c.man.filter(k=>!c.auto.includes(k)).map(k=>`<span class="chip plum">${WX_COND[k].label}(수동)</span>`).join("")}</div></div>`}
+function wxRow(x){return`<div class="item rt ${x.done?"isdone":""}"><button class="ck ${x.done?"on":""}" data-act="rCheck" data-id="${x.id}" data-d="${x.d}" ${canWrite?"":"disabled"} aria-label="완료 표시">${x.done?"✓":""}</button>
+  <div class="body"><div class="row"><span class="t">${esc(x.t)}</span><span class="chip amber">${WX_COND[x.k].label}</span></div><div class="d">${esc(x.z)} · ${esc(x.c)}</div>${x.why?`<div class="basis">근거 · ${esc(x.why)}</div>`:""}</div>
+  ${canWrite?`<button class="btn ghost" data-act="wxOrder" data-id="${x.id}" data-d="${x.d}">작업지시로</button>`:""}</div>`}
+function vWeatherPanel(){if(UI.site!=="잠사박물관")return"";const L=wxDoc("latest");const t=today(),tm=addDays(t,1);
+  const it=wxItems(t),nx=wxItems(tm).filter(x=>x.ph==="prep");
+  if(!L&&!it.length)return`<div class="hfbox" style="margin-top:18px"><div class="row"><b>날씨 연동 점검</b><span class="hint">기상 데이터가 들어오면 비·강풍·한파·폭염에 맞춘 점검 리스트가 자동으로 생깁니다</span><span class="sp"></span><button class="btn" data-tab="weather">설정 보기</button></div></div>`;
+  const left=it.filter(x=>!x.done).length;
+  return`<div class="sec-head"><h2 class="sec">날씨 점검</h2><span class="hint">${it.length?`오늘 ${it.length-left}/${it.length} 완료`:"오늘 특이 기상 없음"}${nx.length?` · 내일 대비 ${nx.length}건`:""}</span><span class="sp"></span><button class="btn ghost" data-tab="weather">자세히</button></div>
+  <div class="wxgrid">${wxStrip(wxStats(t),"오늘")}${wxStrip(wxStats(tm),"내일")}</div>
+  ${it.filter(x=>!x.done).length?`<div class="panel" style="margin-top:10px">${it.filter(x=>!x.done).slice(0,6).map(wxRow).join("")}</div>`:""}`}
+function vWeather(){
+  if(UI.site!=="잠사박물관")return'<div class="panel"><div class="empty"><b>날씨 점검은 잠사박물관(청주) 기준입니다</b>위에서 잠사박물관을 선택해 주세요.</div></div>';
+  const L=wxDoc("latest");const dayK=UI.wxDay||"today";const d=dayK==="tomorrow"?addDays(today(),1):today();
+  const c=wxConds(d);const items=wxItems(d);const cur=L&&L.forecast&&L.forecast.current;
+  const age=L&&L.fetched?Math.round((Date.now()-Date.parse(L.fetched))/6e4):null;
+  const head=`<div class="sec-head"><h2 class="sec">날씨 연동 점검</h2><span class="hint">Open-Meteo(기상청 모델 포함) · 30분마다 자동 수집 · 청주 강내면</span><span class="sp"></span>${mcp?`<button class="btn" data-act="wxRefresh" ${UI.wxBusy?"disabled":""}>${UI.wxBusy?"받는 중…":"지금 갱신"}</button>`:""}</div>
+  ${UI.wxMsg?`<div class="banner">${esc(UI.wxMsg)}</div>`:""}
+  <div class="hint" style="margin:-4px 0 10px">${L?`마지막 수집 ${age!=null?(age<60?age+"분 전":Math.round(age/60)+"시간 전"):""}${cur?` · 현재 ${Math.round(cur.temperature_2m)}° · 습도 ${cur.relative_humidity_2m}% · 바람 ${(+cur.wind_speed_10m).toFixed(1)}m/s(순간 ${(+cur.wind_gusts_10m).toFixed(1)}) · ${esc(WX_CODE[cur.weather_code]||"")}`:""}`:"아직 받은 기상 데이터가 없습니다. 아래에서 오늘 날씨를 직접 골라도 점검 리스트가 만들어집니다."}</div>`;
+  const tabs=`<div class="seg">${[["today","오늘"],["tomorrow","내일"]].map(([k,l])=>`<button class="${dayK===k?"on":""}" data-act="wxDay" data-v="${k}">${l}</button>`).join("")}</div>`;
+  const strip=`<div class="wxgrid" style="margin-top:10px">${wxStrip(wxStats(d),dayK==="tomorrow"?"내일":"오늘")}</div>`;
+  const manual=`<div class="sec-head"><h3 class="sub">기상 조건</h3><span class="hint">자동 판정 + 현장 판단으로 직접 켜고 끄기</span></div>
+   <div class="row">${Object.entries(WX_COND).map(([k,v])=>{const on=c.all.includes(k),auto=c.auto.includes(k);return`<button class="cond ${on?"on":""} ${auto?"auto":""}" data-act="wxManual" data-v="${k}" ${auto||!canWrite?"disabled":""} title="${esc(v.why)}">${v.label}${auto?" · 예보":""}</button>`}).join("")}</div>`;
+  const byP=Object.keys(PHASE).map(ph=>{const l=items.filter(x=>x.ph===ph);if(!l.length)return"";return`<div class="sec-head"><h3 class="sub">${PHASE[ph]}</h3><span class="hint">${l.filter(x=>x.done).length}/${l.length}</span></div><div class="panel">${l.map(wxRow).join("")}</div>`}).join("");
+  const rules=`<details class="rules"><summary>판정 기준과 점검 항목 전체 보기</summary><div class="panel">${Object.entries(WX_COND).map(([k,v])=>`<div class="item"><div class="body"><div class="row"><b>${v.label}</b><span class="hint">${esc(v.why)}</span></div><div class="d">${v.items.map(x=>esc(x[1])).join(" · ")}</div></div></div>`).join("")}</div></details>`;
+  return head+tabs+strip+manual+(byP||'<div class="panel" style="margin-top:12px"><div class="empty"><b>해당 날짜엔 날씨 때문에 추가로 할 점검이 없습니다</b>정기 업무만 진행하면 됩니다.</div></div>')+rules}
+
+/* ---------- photo analysis + infographic studio ---------- */
+const KIND={orders:"작업지시",assets:"설비 점검",projects:"시설개발",reports:"시설 현황"};
+const recOf=(coll,id)=>(S[coll]||[]).find(r=>r.id===id);
+const recName=(coll,r)=>coll==="orders"?r.title:r.name||r.title||"";
+const lvlCls=l=>l>=3?"red":l===2?"amber":"green";
+function thumbs(r){const p=r.photos||[];return p.length?`<div class="thumbs">${p.slice(0,6).map(id=>`<img src="/_blob/${esc(id)}" alt="현장 사진" loading="lazy">`).join("")}</div>`:""}
+function hfLink(r){return r.hf&&r.hf.url?`<a class="chip plum" href="${esc(r.hf.url)}" target="_blank" rel="noopener">힉스필드 이미지 열기</a>`:(r.hf&&r.hf.jobId?'<span class="chip">힉스필드 생성 확인 필요</span>':"")}
+function infoLine(r){if(!r.info&&!r.hf)return"";return`<div class="row" style="margin-top:8px">${r.info?`<span class="chip ${lvlCls(r.info.level)}">인포그래픽 · ${esc(r.info.verdict||"")}</span>`:""}${hfLink(r)}</div>`}
+function studioBtn(coll,r){return canWrite||r.info?`<button class="btn" data-act="studio" data-coll="${coll}" data-id="${r.id}">${r.info?"인포그래픽":"사진 분석"}</button>`:""}
+function allInfo(){const out=[];for(const c of ["reports","orders","assets","projects"])for(const r of V[c])if(r.info)out.push({coll:c,r});
+  return out.sort((a,b)=>String(b.r.info.at||"").localeCompare(String(a.r.info.at||"")))}
+
+function infoHTML(coll,r){const i=r.info;if(!i)return"";
+  const lv=Math.min(3,Math.max(1,Number(i.level)||1));
+  const cmin=Number(i.cost_min)||0,cmax=Number(i.cost_max)||0,scale=Math.max(cmax,1)*1.15;
+  return`<article class="ig">
+  <div class="ig-head"><span class="eb">${esc(KIND[coll])} · ${esc(r.zone||"잠사박물관 전체")}</span><h4>${esc(i.headline||recName(coll,r))}</h4>${i.subtitle?`<p>${esc(i.subtitle)}</p>`:""}</div>
+  <div class="ig-body">
+    <div class="ig-verdict"><div class="gauge l${lv}" aria-label="위험도 ${lv}단계"><i></i><i></i><i></i></div><div><b>${esc(i.verdict||"")}</b><div class="hint">위험도 ${["","낮음","보통","높음"][lv]}</div></div></div>
+    ${(i.metrics||[]).length?`<div class="ig-metrics">${i.metrics.slice(0,4).map(m=>`<div><span>${esc(m.label)}</span><strong>${esc(m.value)}</strong></div>`).join("")}</div>`:""}
+    ${i.safety?`<div class="ig-safety"><b>즉시 안전조치</b> ${esc(i.safety)}</div>`:""}
+    ${(i.findings||[]).length?`<div class="ig-sec"><h5>확인된 내용</h5><ul class="ig-find">${i.findings.slice(0,6).map(f=>`<li><i class="${esc(f.level||"하")}"></i><span><b>${esc(f.label)}</b> ${esc(f.detail||"")}</span></li>`).join("")}</ul></div>`:""}
+    ${(i.steps||[]).length?`<div class="ig-sec"><h5>조치 순서</h5><ol class="ig-steps">${i.steps.slice(0,6).map(s=>`<li><span>${esc(s)}</span></li>`).join("")}</ol></div>`:""}
+    ${cmax?`<div class="ig-sec ig-cost"><h5>예상 비용</h5><div class="row"><b class="num">${won(cmin)} ~ ${won(cmax)}</b><span class="sp"></span><span class="hint">${esc(i.vendor||"자체 처리 가능")}</span></div><div class="track"><i style="left:${cmin/scale*100}%;width:${Math.max(2,(cmax-cmin)/scale*100)}%"></i></div></div>`:""}
+    ${thumbs(r)}
+  </div>
+  <div class="ig-foot"><span>한국잠사박물관 시설관리 · 분석 ${esc(i.at||"")}</span><span class="sp"></span>${hfLink(r)}</div>
+  </article>`}
+
+function vInfo(){const list=allInfo();
+  return`<div class="sec-head"><h2 class="sec">인포그래픽</h2><span class="hint">사진 분석으로 만든 카드 ${list.length}장 · 힉스필드 이미지는 링크로 열립니다</span><span class="sp"></span>${canWrite?'<button class="btn gold" data-act="studio" data-coll="reports">현황 인포그래픽 만들기</button>':""}</div>
+  ${list.length?`<div class="igrid">${list.map(x=>`<div style="display:grid;gap:6px;min-width:0">${infoHTML(x.coll,x.r)}<div class="row"><span class="hint">${esc(recName(x.coll,x.r))}</span><span class="sp"></span><button class="btn" data-act="studio" data-coll="${x.coll}" data-id="${x.r.id}">다시 분석 · 힉스필드</button></div></div>`).join("")}</div>`
+  :'<div class="panel"><div class="empty"><b>아직 만든 인포그래픽이 없습니다</b>작업지시·설비대장·시설개발에서 “사진 분석”을 누르고 현장 사진을 올리면, 원인·조치·비용을 정리한 인포그래픽이 여기에 모입니다.</div></div>'}`}
+
+let ST=null;
+function openStudio(coll,id){PM=null;IR=null;
+  let rec=id?recOf(coll,id)||(openStudio.draft&&openStudio.draft.id===id?openStudio.draft:null):null;
+  if(!rec&&coll==="reports")rec={id:"r-"+today()+"-"+Math.random().toString(36).slice(2,6),title:today()+" 시설 현황",zone:"잠사박물관 전체",createdAt:today()};
+  if(!rec)return;
+  ST={coll,id:rec.id,draft:rec,files:[],busy:false,hfBusy:false,msg:"",hfMsg:"",cost:null,ctl:null};
+  renderStudio();
+}
+function curRec(){return recOf(ST.coll,ST.id)||ST.draft}
+function renderStudio(){if(!ST)return;const r=curRec();
+  const prev=ST.files.map(f=>`<img src="${f.url}" alt="선택한 사진">`).join("");
+  const canPhoto=sampleImg;
+  $("#modalRoot").innerHTML=`<div class="ov" data-act="ovStudio"><div class="modal studio" role="dialog" aria-modal="true" aria-label="사진 분석 인포그래픽">
+  <h3>${esc(KIND[ST.coll])} 인포그래픽 <span class="hint" style="font-family:var(--f-body);font-size:13px">${esc(recName(ST.coll,r))}</span></h3>
+  <div style="display:grid;gap:14px">
+   ${canWrite?`<div style="display:grid;gap:8px">
+    ${canPhoto?`<label class="drop" id="drop"><input type="file" id="stFiles" accept="image/*" multiple hidden>현장 사진을 누르거나 끌어다 놓으세요 (최대 4장)${ST.files.length?`<div class="thumbs" style="justify-content:center">${prev}</div>`:""}</label>`:`<div class="hint">${sample?"이 화면에서는 사진 전송이 꺼져 있어 기록 내용만으로 분석합니다.":"AI 분석은 claude.ai에서 열었을 때 사용할 수 있습니다."}</div>`}
+    ${(r.photos||[]).length?`<div><span class="hint">저장된 사진 ${r.photos.length}장</span>${thumbs(r)}</div>`:""}
+    <div class="row"><button class="btn pri" data-act="stAnalyze" ${ST.busy||!sample?"disabled":""}>${r.info?"사진 다시 분석":"사진 분석해서 인포그래픽 만들기"}</button>${ST.busy?'<button class="btn ghost" data-act="stStop">중지</button>':""}<span class="hint" id="stMsg">${esc(ST.msg)}</span></div>
+   </div>`:""}
+   ${r.info?infoHTML(ST.coll,r):""}
+   ${r.info?`<div class="hfbox"><div class="row"><b>힉스필드 인포그래픽 이미지</b><span class="hint">위 분석 내용으로 세로형(3:4) 포스터를 생성합니다 · GPT Image 2.5</span></div>
+     ${!mcp?'<div class="hint">힉스필드 연결은 claude.ai에서 이 페이지를 열었을 때 사용할 수 있습니다.</div>':canWrite?`<div class="row"><button class="btn" data-act="hfCost" ${ST.hfBusy?"disabled":""}>크레딧 확인</button><button class="btn gold" data-act="hfGen" ${ST.hfBusy?"disabled":""}>${ST.cost!=null?`${esc(ST.cost)} 크레딧으로 생성`:"힉스필드로 생성"}</button></div>`:""}
+     ${ST.hfMsg?`<div class="hint">${esc(ST.hfMsg)}</div>`:""}
+     ${r.hf?`<div class="row">${hfLink(r)}<span class="hint">${esc(r.hf.at||"")}</span>${r.hf.jobId&&!r.hf.url&&canWrite&&mcp?'<button class="btn" data-act="hfCheck">결과 다시 확인</button>':""}</div>`:""}
+   </div>`:""}
+  </div>
+  <div class="mfoot"><span class="sp"></span><button class="btn" data-act="stClose">닫기</button></div></div></div>`;
+  const fi=$("#stFiles"),dr=$("#drop");
+  if(fi)fi.onchange=()=>addFiles(fi.files);
+  if(dr){dr.ondragover=e=>{e.preventDefault();dr.classList.add("on")};dr.ondragleave=()=>dr.classList.remove("on");dr.ondrop=e=>{e.preventDefault();addFiles(e.dataTransfer.files)}}
+}
+function addFiles(list){for(const f of [...list].filter(f=>/^image\//.test(f.type)))if(ST.files.length<4)ST.files.push({f,url:URL.createObjectURL(f)});renderStudio()}
+function closeStudio(){if(ST){ST.ctl?.abort();ST.files.forEach(x=>URL.revokeObjectURL(x.url))}ST=null;$("#modalRoot").innerHTML=""}
+function setMsg(m){if(!ST)return;ST.msg=m;const el=$("#stMsg");if(el)el.textContent=m}
+
+function contextFor(coll,r){
+  if(coll==="orders")return`[하자·작업지시] 제목: ${r.title}\n구역: ${r.zone}\n관련 설비: ${assetName(r.assetId)||"-"}\n유형: ${r.type} / 우선순위: ${r.priority} / 상태: ${r.status}\n설명: ${r.desc||"-"}\n기존 메모: ${r.aiNote||"-"}`;
+  if(coll==="assets")return`[설비 정기점검] 설비: ${r.name}\n구역: ${r.zone} / 분류: ${r.category}${r.legal?" (법정점검 대상)":""}\n점검주기 ${r.cycleDays}일, 최근 점검 ${r.lastCheck||"-"}, 다음 점검 ${nextDue(r)||"-"}\n현재 상태: ${r.status}\n메모: ${r.note||"-"}`;
+  if(coll==="projects")return`[시설개발 사업] ${r.name}\n구역: ${r.zone} / 단계: ${r.stage} (기획→설계→견적→승인→시공→준공→사후관리)\n예산 ${won(r.budget)}, 집행 ${won(r.spent)}${r.subsidy?" (보조사업, 보조 50%)":""}\n개요: ${r.desc||"-"}\n남은 일: ${(r.checklist||[]).filter(x=>!x.done).map(x=>x.t).join(" / ")||"-"}`;
+  const c=counts();
+  return`[시설 전체 현황 ${today()}]\n미완료 작업 ${c.open.length}건 (긴급 ${c.urgent.length}): ${c.open.slice(0,8).map(o=>`${o.zone} ${o.title}(${o.priority},${o.status})`).join("; ")||"-"}\n점검 기한 초과 ${c.over.length}: ${c.over.map(a=>a.name+(a.legal?"(법정)":"")).join(", ")||"-"}\n7일 내 점검 ${c.soon.length}: ${c.soon.map(a=>a.name).join(", ")||"-"}\n개발사업: ${V.projects.map(p=>`${p.name} ${p.stage}단계 예산 ${man(p.budget)}원`).join("; ")||"-"}\n이번 달 유지보수비 ${won(c.monthCost)}\n구역별 미완료: ${ZN().map(z=>z+" "+c.open.filter(o=>o.zone===z).length).join(", ")}`}
+
+async function analyze(){
+  if(!ST||ST.busy||!sample)return;const coll=ST.coll,r=curRec();
+  ST.busy=true;ST.ctl=new AbortController();renderStudio();
+  try{
+    const files=sampleImg?ST.files.map(x=>x.f):[];
+    let newIds=[];
+    if(files.length&&store){setMsg("사진 저장하는 중…");
+      for(const f of files){try{const u=await store.upload(f);newIds.push(u.id)}catch(e){if(e?.code==="too_large")toast("20MB 넘는 사진은 저장하지 못했습니다.")}}}
+    setMsg(files.length?`사진 ${files.length}장 분석하는 중… (30초~1분)`:"기록 내용 분석하는 중…");
+    const prompt=`당신은 한국잠사박물관(청주; 실크박물관·누에체험농장·양떼정원·디지털 키즈카페·6차산업 복합체험장·단체식당·계절놀이장 운영, 어린이 단체 관람객이 많음)의 시설 유지보수·안전 전문가이자 인포그래픽 편집자다.
+아래 자료${files.length?"와 첨부한 현장 사진":""}을 분석해 한 장짜리 인포그래픽 내용을 만들어라. 사진에서 실제로 보이는 것(파손 부위, 부식, 누수 흔적, 배선 상태, 청결 상태, 공정 진척 등)을 근거로 쓰고, 보이지 않는 것은 추정이라고 밝혀라. 비용은 한국 시세 기준 원 단위 정수.
+반드시 JSON 객체 하나만 답하라:
+{"headline":"인포그래픽 제목 18자 이내","subtitle":"한 줄 요약 40자 이내","verdict":"판정 2~8자(예: 즉시 수리, 주의 관찰, 양호, 공정 지연)","level":1,"metrics":[{"label":"지표명","value":"짧은 값"}],"findings":[{"label":"항목 6자 이내","detail":"근거 한 문장","level":"상|중|하"}],"steps":["조치·다음 단계 한 문장"],"cost_min":0,"cost_max":0,"vendor":"필요 업체 종류, 자체 처리 가능하면 빈 문자열","safety":"관람객·직원 안전 즉시조치, 없으면 빈 문자열","poster":"In English, 1-2 sentences describing the main illustration for an infographic poster of this facility and its issue"}
+level: 1=양호, 2=주의, 3=위험. metrics 3~4개, findings 3~5개, steps 3~5개.
+
+${contextFor(coll,r)}`;
+    const j=await sample.json(prompt,{signal:ST.ctl.signal,...(files.length?{images:files}:{})});
+    if(!j||typeof j!=="object")throw{code:"invalid_json"};
+    const info={headline:String(j.headline||""),subtitle:String(j.subtitle||""),verdict:String(j.verdict||""),level:Number(j.level)||1,
+      metrics:(j.metrics||[]).slice(0,4).map(m=>({label:String(m.label||""),value:String(m.value??"")})),
+      findings:(j.findings||[]).slice(0,6).map(f=>({label:String(f.label||""),detail:String(f.detail||""),level:["상","중","하"].includes(f.level)?f.level:"하"})),
+      steps:(j.steps||[]).slice(0,6).map(String),cost_min:Math.max(0,Math.round(Number(j.cost_min)||0)),cost_max:Math.max(0,Math.round(Number(j.cost_max)||0)),
+      vendor:String(j.vendor||""),safety:String(j.safety||""),poster:String(j.poster||""),at:today(),photoCount:files.length};
+    const base={...r};delete base.id;
+    const out={id:r.id,...base,photos:[...(r.photos||[]),...newIds].slice(-12),info};
+    if(coll==="reports")delete out.hf;
+    if(await put(coll,out)){ST.draft=out;ST.files.forEach(x=>URL.revokeObjectURL(x.url));ST.files=[];ST.cost=null;ST.msg="인포그래픽을 만들었습니다.";}
+  }catch(e){
+    const m={cancelled:"분석을 멈췄습니다.",not_granted:"AI 사용이 허용되지 않았습니다.",sampling_disabled:"이 계정에서는 AI를 쓸 수 없습니다.",rate_limited:"요청이 많습니다. 잠시 후 다시 눌러 주세요.",image_rejected:"사진을 읽지 못했습니다. JPG나 PNG로 다시 올려 주세요.",invalid_json:"결과 형식이 맞지 않았습니다. 다시 눌러 주세요.",refused:"이 자료로는 분석할 수 없습니다. 설명을 바꿔 주세요.",prompt_too_large:"자료가 너무 깁니다. 설명을 줄여 주세요."};
+    ST&&(ST.msg=m[e?.code]??"분석하지 못했습니다. 다시 시도해 주세요.");
+    if(e?.code==="not_granted"||e?.code==="sampling_disabled")sample=null;
+  }finally{if(ST){ST.busy=false;ST.ctl=null;renderStudio()}}
+}
+
+/* Higgsfield */
+function walk(o,f,k){if(o==null)return;if(typeof o==="string"||typeof o==="number"||typeof o==="boolean"){f(k||"",o);return}
+  if(Array.isArray(o)){o.forEach(x=>walk(x,f,k));return}if(typeof o==="object")for(const [kk,v] of Object.entries(o))walk(v,f,kk)}
+function scanHF(p){if(typeof p==="string"){try{p=JSON.parse(p)}catch(_){}}
+  const ids=[],urls=[];let status="",terminal=null,cost=null;
+  walk(p,(k,v)=>{const s=String(v);
+    if(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)&&/job|^id$/i.test(k))ids.push(s);
+    if(/^https:\/\//.test(s)&&!/thumb|preview|avatar|icon/i.test(k+s)&&(/\.(png|jpe?g|webp)(\?|$)/i.test(s)||/url|result|image|output/i.test(k)))urls.push(s);
+    if(/status|state/i.test(k)&&typeof v==="string")status=s;
+    if(/all_terminal/i.test(k))terminal=v===true;
+    if(/cost|credit/i.test(k)&&typeof v==="number"&&cost==null)cost=v});
+  if(typeof p==="string"){(p.match(/https:\/\/[^\s"')]+\.(?:png|jpe?g|webp)[^\s"')]*/gi)||[]).forEach(u=>urls.push(u));
+    const m=p.match(/(\d+(?:\.\d+)?)\s*credits?/i);if(m&&cost==null)cost=+m[1]}
+  return{ids:[...new Set(ids)],urls:[...new Set(urls)],status,terminal,cost}}
+function hfPrompt(coll,r){const i=r.info||{};
+  return`Vertical Korean-language infographic poster (3:4) for 한국잠사박물관 (Korean Sericulture Museum) facility management. Clean flat vector illustration, editorial layout, generous whitespace. Palette: cream background #F8F4E9, deep mulberry #5B2C4F header band and headings, gold #C9A961 accents, leaf green #B8D158 for good status, muted red only for danger. No blue. Bold modern Korean sans-serif typography; render every Korean text exactly as written below, no extra text.
+Main illustration: ${i.poster||"a museum facility with maintenance tools"}.
+Header (mulberry band): "${i.headline||recName(coll,r)}"
+Subtitle: "${i.subtitle||""}"
+Status badge (${["","green","gold","red"][Math.min(3,Math.max(1,i.level||1))]}): "${i.verdict||""}"
+Key number tiles: ${(i.metrics||[]).map(m=>`"${m.label} ${m.value}"`).join(", ")}
+Icon list "확인된 내용": ${(i.findings||[]).map(f=>`"${f.label}: ${f.detail}"`).join(" / ")}
+Numbered flow "조치 순서": ${(i.steps||[]).map((s,n)=>`${n+1}. "${s}"`).join(" ")}
+${i.cost_max?`Cost bar: "예상 비용 ${man(i.cost_min)}~${man(i.cost_max)}원"`:""}
+${i.safety?`Red caution box: "즉시 안전조치: ${i.safety}"`:""}
+Footer small text: "한국잠사박물관 시설관리 · ${i.at||today()} · ${r.zone||""}"`}
+function hfParams(extra){const r=curRec();return{params:{model:"gpt_image_2_5",prompt:hfPrompt(ST.coll,r),aspect_ratio:"3:4",quality:"high",resolution:"2k",count:1,use_unlim:false,...extra}}}
+function hfErr(e){const c=e?.code;return({needs_reauth:"힉스필드 연결이 만료되었습니다. claude.ai 설정 → 커넥터에서 힉스필드를 다시 연결해 주세요.",server_not_connected:"힉스필드 커넥터가 없습니다. claude.ai 설정 → 커넥터에서 추가해 주세요.",not_in_manifest:"이 페이지에서 힉스필드 사용이 허용되지 않았습니다.",approval_required:"힉스필드 실행 승인이 필요합니다. 버튼을 다시 눌러 승인해 주세요.",server_unavailable:"힉스필드 서버가 응답하지 않습니다. 잠시 후 다시 시도해 주세요.",tool_error:"힉스필드가 요청을 거절했습니다: "+(e?.message||"").slice(0,160)}[c])||"힉스필드 호출에 실패했습니다. 잠시 후 다시 시도해 주세요."}
+async function hfCost(){if(!ST||!mcp)return;ST.hfBusy=true;ST.hfMsg="크레딧 확인 중…";renderStudio();
+  try{const res=await mcp.callTool(HF,"generate_image",hfParams({get_cost:true}),{cache:false});const s=scanHF(res.payload??res.content?.[0]?.text);
+    ST.cost=s.cost;ST.hfMsg=s.cost!=null?`이 이미지는 약 ${s.cost} 크레딧이 듭니다.`:"비용 정보를 읽지 못했습니다. 생성하면 힉스필드 크레딧이 차감됩니다.";}
+  catch(e){ST.hfMsg=hfErr(e)}finally{if(ST){ST.hfBusy=false;renderStudio()}}}
+async function hfSave(patch){const r=curRec();const out={...r,hf:{...(r.hf||{}),...patch}};if(await put(ST.coll,out))ST.draft=out}
+async function hfPoll(jobId){
+  for(let n=0;n<16&&ST;n++){
+    ST.hfMsg=`힉스필드에서 그리는 중… (${(n+1)*15}초까지 대기)`;renderStudio();
+    let s;try{const res=await mcp.callTool(HF,"jobs_wait",{jobs:[{index:0,job_id:jobId}],timeout_seconds:15},{cache:false});s=scanHF(res.payload??res.content?.[0]?.text)}
+    catch(e){if(e?.retryable){await new Promise(r=>setTimeout(r,(e.retryAfterMs||3000)));continue}ST.hfMsg=hfErr(e);return}
+    if(/fail|error|cancel|nsfw|reject/i.test(s.status)){ST.hfMsg="힉스필드 생성이 실패했습니다("+s.status+"). 다시 시도해 주세요.";await hfSave({status:"failed"});return}
+    if(s.urls.length){await hfSave({url:s.urls[s.urls.length-1],status:"completed",at:today()});ST.hfMsg="이미지가 완성되었습니다. ‘힉스필드 이미지 열기’로 확인하세요.";return}
+    if(s.terminal){ST.hfMsg="생성은 끝났지만 이미지 주소를 찾지 못했습니다. 힉스필드 라이브러리에서 확인해 주세요.";return}
+  }
+  if(ST)ST.hfMsg="아직 생성 중입니다. 잠시 후 ‘결과 다시 확인’을 눌러 주세요.";
+}
+async function hfGen(){if(!ST||!mcp)return;ST.hfBusy=true;ST.hfMsg="힉스필드에 생성 요청 중…";renderStudio();
+  try{const res=await mcp.callTool(HF,"generate_image",hfParams({}),{cache:false});const s=scanHF(res.payload??res.content?.[0]?.text);
+    if(!s.ids.length&&!s.urls.length){ST.hfMsg="요청은 보냈지만 작업 번호를 받지 못했습니다. 힉스필드 라이브러리를 확인해 주세요.";return}
+    await hfSave({jobId:s.ids[0]||"",url:s.urls.length&&s.terminal!==false&&/complet|succe/i.test(s.status)?s.urls[s.urls.length-1]:"",status:"queued",at:today()});
+    if(s.ids[0])await hfPoll(s.ids[0]);}
+  catch(e){ST&&(ST.hfMsg=hfErr(e)+(e?.code==="server_unavailable"||e?.code==="upstream_error"?" (요청이 이미 접수됐을 수 있으니 힉스필드 라이브러리를 먼저 확인하세요)":""))}
+  finally{if(ST){ST.hfBusy=false;ST.cost=null;renderStudio()}}}
+async function hfCheck(){const r=curRec();if(!r.hf?.jobId||!mcp)return;ST.hfBusy=true;renderStudio();try{await hfPoll(r.hf.jobId)}finally{if(ST){ST.hfBusy=false;renderStudio()}}}
+
+/* ---------- 사진 보관함 (카톡 백업 사진 AI 분류) ---------- */
+const PH={rows:null,err:false,kb:null,kbErr:false,mN:0,cur:[]};
+let PCK=new Map(), PHV=[];
+const PSTAT=["미확인","조치 필요","조치중","조치완료","해당없음"];
+const PCATS=["전기","가스","소방","공조·냉난방","급배수","건축·구조","전시·영상","조경·축사","주방","통신·CCTV","놀이기구","위생","기타"];
+const PHOTO_ROOT="C:\\Users\\pc\\TalkCloudBackup\\photo\\";
+const TS=104;
+const pad3=n=>String(n).padStart(3,"0");
+async function loadPhotos(){try{const j=await encJSON("photos.json");
+  PH.rows=j.rows.map(a=>({i:a[0],d:a[1],site:a[2],zone:a[3],subj:a[4],tags:a[5]?a[5].split(","):[],issue:!!a[6],desc:a[7],sev:a[8],cat:a[9],file:a[10],m:a[11]}));
+  PH.mN=PH.rows.reduce((s,p)=>Math.max(s,p.m+1),0)}catch(e){PH.err=true}render()}
+async function loadKB(){try{PH.kb=await encJSON("kb.json")}catch(e){PH.kbErr=true}render()}
+function pv(p){const o=PCK.get("p"+p.i);return o&&o.ov?{...p,...o.ov}:p}
+function pStat(p){const o=PCK.get("p"+p.i);return(o&&o.st)||(p.issue?"미확인":"")}
+const openIssue=p=>p.issue&&!["조치완료","해당없음"].includes(pStat(p));
+let ENCK=null;const SPNEED=new Set(),SPLOAD=new Set(),BLOBS={};
+async function encFetch(path){const r=await fetch(path+".enc",{cache:"force-cache"});if(!r.ok)throw 0;const buf=new Uint8Array(await r.arrayBuffer());return crypto.subtle.decrypt({name:"AES-GCM",iv:buf.slice(0,12)},ENCK,buf.slice(12))}
+function spr(n){if(!SBX)return`url(sprites/${n}.jpg)`;if(!SPLOAD.has(n))SPNEED.add(n);return`var(--sp-${n},none)`}
+function ensureSprites(){if(!SBX||!ENCK)return;for(const n of [...SPNEED]){SPNEED.delete(n);if(SPLOAD.has(n))continue;SPLOAD.add(n);
+  encFetch("sprites/"+n+".jpg").then(b=>{const u=URL.createObjectURL(new Blob([b],{type:"image/jpeg"}));BLOBS[n]=u;document.documentElement.style.setProperty("--sp-"+n,`url(${u})`)}).catch(()=>SPLOAD.delete(n))}}
+async function spriteSrc(n){if(!SBX)return`sprites/${n}.jpg`;if(!BLOBS[n]){const b=await encFetch("sprites/"+n+".jpg");BLOBS[n]=URL.createObjectURL(new Blob([b],{type:"image/jpeg"}))}return BLOBS[n]}
+async function encJSON(name){if(!SBX){const r=await fetch(name);if(!r.ok)throw 0;return r.json()}return JSON.parse(new TextDecoder().decode(await encFetch(name)))}
+function tStyle(i,sz=TS){const k=i%100;return`background-image:${spr("t"+pad3(Math.floor(i/100)))};background-size:${sz*10}px auto;background-position:-${(k%10)*sz}px -${Math.floor(k/10)*sz}px;width:${sz}px;height:${sz}px`}
+function mStyle(m){const s=Math.floor(m/16),k=m%16,n=Math.min(16,PH.mN-s*16),rows=Math.ceil(n/4),r=Math.floor(k/4),c=k%4;
+  return`background-image:${spr("m"+pad3(s))};background-size:400% auto;background-position:${c/3*100}% ${rows>1?r/(rows-1)*100:0}%`}
+const pPath=p=>PHOTO_ROOT+p.file.replace(/\//g,"\\");
+const zoneOrder=z=>{const i=ZONES_J.indexOf(z);return i<0?99:i};
+function pZones(list){return[...new Set(list.map(p=>p.zone))].sort((a,b)=>zoneOrder(a)-zoneOrder(b)||a.localeCompare(b,"ko"))}
+function pText(p){return(p.subj+" "+p.tags.join(" ")+" "+p.desc+" "+p.zone+" "+p.cat+" "+p.d).toLowerCase()}
+function pMatch(p,q){const t=(q||"").trim().toLowerCase().split(/\s+/).filter(Boolean);if(!t.length)return true;const s=pText(p);return t.every(x=>s.includes(x))}
+function pFilter(list,{issueOnly}={}){
+  return list.filter(p=>(!UI.pz||UI.pz==="전체"||p.zone===UI.pz)&&(!UI.pc||UI.pc==="전체"||p.cat===UI.pc)&&(!UI.pf||p.d.slice(0,7)>=UI.pf)&&(!UI.pt||p.d.slice(0,7)<=UI.pt)
+   &&(!(issueOnly||UI.pi)||p.issue)&&(!UI.ps||UI.ps==="전체"||p.sev===UI.ps)&&pMatch(p,UI.pq))}
+function issueSeq(){const l=PHV.filter(p=>p.issue).sort((a,b)=>a.d.localeCompare(b.d)||a.i-b.i);const m=new Map();l.forEach((p,k)=>m.set(p.i,k+1));return m}
+function stChipP(s){return s?`<span class="chip ${s==="조치완료"?"green":s==="해당없음"?"":s==="조치중"?"plum":s==="조치 필요"?"red":"amber"}">${esc(s)}</span>`:""}
+const sevChip=s=>s?`<span class="chip ${s==="상"?"red":s==="중"?"amber":"green"}">심각도 ${esc(s)}</span>`:"";
+function ptile(p){const st=pStat(p);return`<button class="pt" style="${tStyle(p.i)}" data-act="pOpen" data-i="${p.i}" title="${esc(p.d+" · "+p.subj)}" aria-label="${esc(p.d+" "+p.zone+" "+p.subj)}">${p.issue?`<i class="dot ${["조치완료","해당없음"].includes(st)?"ok":esc(p.sev)}"></i>`:""}<span class="cap">${esc(p.subj)}</span></button>`}
+function pRange(k){const t=today(),y=+t.slice(0,4);
+  if(k==="3m"){const d=new Date(t+"T00:00:00Z");d.setUTCMonth(d.getUTCMonth()-2);return[d.toISOString().slice(0,7),t.slice(0,7)]}
+  if(k==="y")return[y+"-01",t.slice(0,7)];if(k==="ly")return[(y-1)+"-01",(y-1)+"-12"];return["",""]}
+
+function derivedChecks(list){ // 시설별 반복 문제 → 점검 항목
+  const g={};for(const p of list.filter(x=>x.issue)){const k=p.cat;(g[k]=g[k]||[]).push(p)}
+  return Object.entries(g).map(([cat,ps])=>{const tc={};for(const p of ps)for(const t of p.tags)tc[t]=(tc[t]||0)+1;
+    const top=Object.entries(tc).sort((a,b)=>b[1]-a[1]).slice(0,3).map(x=>x[0]);ps.sort((a,b)=>b.d.localeCompare(a.d));
+    return{cat,n:ps.length,open:ps.filter(openIssue).length,last:ps[0].d,top,ex:ps[0].desc||ps[0].subj,sev:ps.some(p=>p.sev==="상")?"상":ps.some(p=>p.sev==="중")?"중":"하"}}).sort((a,b)=>b.n-a.n)}
+
+function vPhotos(){
+  const head=`<div class="sec-head"><h2 class="sec">사진 보관함</h2><span class="hint">카톡 백업 사진을 AI가 시설별로 분류·점검한 기록</span></div>`;
+  if(!PH.rows)return head+(PH.err?'<div class="panel"><div class="empty"><b>사진 목록을 불러오지 못했습니다</b>페이지를 새로고침해 주세요.</div></div>':'<div class="panel"><div class="empty"><b>사진 목록을 불러오는 중입니다</b></div></div>');
+  const all=PHV;if(!all.length)return head+`<div class="panel"><div class="empty"><b>${esc(UI.site)} 사진이 없습니다</b>카톡 백업에서 이 사업장으로 분류된 사진이 없습니다.</div></div>`;
+  const mode=UI.pv||"grid";const iss=all.filter(p=>p.issue),open=iss.filter(openIssue),dn=iss.filter(p=>pStat(p)==="조치완료").length;
+  const ds=all.map(p=>p.d).sort();
+  const zs=pZones(all);
+  const kp=`<div class="kpis"><div class="kpi"><div class="l">보관 사진</div><div class="v">${all.length.toLocaleString()}</div><div class="s">${ds[0].slice(0,7)} ~ ${ds[ds.length-1].slice(0,7)}</div></div>
+   <button class="kpi" data-act="pv" data-v="list"><div class="l">문제 발견 사진</div><div class="v">${iss.length}</div><div class="s">상 ${iss.filter(p=>p.sev==="상").length} · 중 ${iss.filter(p=>p.sev==="중").length} · 하 ${iss.filter(p=>p.sev==="하").length}</div></button>
+   <button class="kpi ${open.length?"alert":""}" data-act="pv" data-v="list" data-st="미처리"><div class="l">미처리 문제</div><div class="v">${open.length}</div><div class="s">조치완료 ${dn}건</div></button>
+   <button class="kpi" data-act="pv" data-v="zone"><div class="l">분류된 시설</div><div class="v">${zs.length}</div><div class="s">시설별 요약 보기</div></button></div>`;
+  const seg=`<div class="seg" style="margin-top:14px">${[["grid","사진"],["list","문제점 점검리스트"],["zone","시설별 요약"]].map(([k,l])=>`<button class="${mode===k?"on":""}" data-act="pv" data-v="${k}">${l}</button>`).join("")}</div>`;
+  const cats=[...new Set(all.map(p=>p.cat))].sort((a,b)=>PCATS.indexOf(a)-PCATS.indexOf(b));
+  const filt=mode==="zone"?"":`<div class="filters" style="margin-top:12px">
+    <select id="fPZ" aria-label="시설">${["전체",...zs].map(s=>`<option ${UI.pz===s?"selected":""}>${esc(s)}</option>`).join("")}</select>
+    <select id="fPC" aria-label="분류">${["전체",...cats].map(s=>`<option ${UI.pc===s?"selected":""}>${esc(s)}</option>`).join("")}</select>
+    <input id="fPF" type="month" value="${esc(UI.pf||"")}" aria-label="시작 월" title="시작 월"><input id="fPT" type="month" value="${esc(UI.pt||"")}" aria-label="끝 월" title="끝 월">
+    <div class="seg">${[["3m","최근 3개월"],["y","올해"],["ly","작년"],["all","전체"]].map(([k,l])=>{const [f,t]=pRange(k);return`<button class="${(UI.pf||"")===f&&(UI.pt||"")===t?"on":""}" data-act="pRange" data-v="${k}">${l}</button>`}).join("")}</div>
+    <select id="fPS" aria-label="심각도">${["전체","상","중","하"].map(s=>`<option ${(UI.ps||"전체")===s?"selected":""} value="${s}">${s==="전체"?"심각도 전체":"심각도 "+s}</option>`).join("")}</select>
+    ${mode==="list"?`<select id="fPST" aria-label="처리 상태">${["전체","미처리",...PSTAT].map(s=>`<option ${(UI.pst||"전체")===s?"selected":""}>${s}</option>`).join("")}</select>`:`<label class="mchk"><input type="checkbox" id="fPI" ${UI.pi?"checked":""}>문제 사진만</label>`}
+    <input id="fPQ" type="search" placeholder="검색: 누수, 에어바운스, 전선, 2024-07…" value="${esc(UI.pq||"")}" aria-label="사진 검색" style="flex:1;min-width:180px">
+  </div>`;
+  let body="";
+  if(mode==="grid"){const list=pFilter(all).sort((a,b)=>b.d.localeCompare(a.d)||b.i-a.i);PH.cur=list.map(p=>p.i);
+    const lim=UI.plim||300;const byM={};for(const p of list.slice(0,lim))(byM[p.d.slice(0,7)]=byM[p.d.slice(0,7)]||[]).push(p);
+    body=`<div class="hint" style="margin-bottom:8px">${list.length.toLocaleString()}장 · 문제 ${list.filter(p=>p.issue).length}장 · 사진을 누르면 크게 보고 조치 상태를 기록합니다</div>`+
+     (list.length?Object.keys(byM).sort().reverse().map(mk=>`<div class="sec-head" style="margin:16px 0 8px"><h3 class="sub">${mk.slice(0,4)}년 ${+mk.slice(5)}월</h3><span class="hint">${byM[mk].length}장${byM[mk].some(p=>p.issue)?` · 문제 ${byM[mk].filter(p=>p.issue).length}`:""}</span></div><div class="pgrid">${byM[mk].map(ptile).join("")}</div>`).join(""):'<div class="panel"><div class="empty"><b>조건에 맞는 사진이 없습니다</b>기간이나 검색어를 바꿔 보세요.</div></div>')+
+     (list.length>lim?`<div class="row" style="justify-content:center;margin-top:14px"><button class="btn" data-act="pMore">${(list.length-lim).toLocaleString()}장 더 보기</button></div>`:"");}
+  else if(mode==="list"){const seq=issueSeq();let list=pFilter(all,{issueOnly:true});const st=UI.pst||"전체";
+    if(st==="미처리")list=list.filter(openIssue);else if(st!=="전체")list=list.filter(p=>pStat(p)===st);
+    list.sort((a,b)=>a.d.localeCompare(b.d)||a.i-b.i);if(UI.pDesc)list.reverse();PH.cur=list.map(p=>p.i);
+    const done=list.filter(p=>["조치완료","해당없음"].includes(pStat(p))).length;const lim=UI.plim||150;
+    body=`<div class="row" style="margin-bottom:8px"><span class="hint">${list.length}건 · 처리 ${done}건 (${list.length?Math.round(done/list.length*100):0}%)</span><span class="sp"></span><button class="btn ghost" data-act="pOrderDir">${UI.pDesc?"최근 순":"오래된 순(발견 순서)"}</button></div>
+     <div class="bar" style="margin-bottom:12px"><i style="width:${list.length?done/list.length*100:0}%"></i></div>
+     <div class="panel">${list.length?list.slice(0,lim).map(p=>{const s=pStat(p),o=PCK.get("p"+p.i);return`<div class="irow ${["조치완료","해당없음"].includes(s)?"isdone":""}">
+      <button class="pt sm" style="${tStyle(p.i,64)}" data-act="pOpen" data-i="${p.i}" aria-label="사진 크게 보기"></button>
+      <div class="body" style="min-width:0"><div class="row"><span class="num" style="font-size:12px;color:var(--muted)">No.${pad3(seq.get(p.i)||0)}</span>${sevChip(p.sev)}${stChipP(s)}<span class="chip">${esc(p.cat)}</span>${o&&o.orderId?'<span class="chip plum">작업지시 연결</span>':""}</div>
+       <div class="t" style="margin-top:4px">${esc(p.subj)}</div><div class="d">${esc(p.d)} · ${esc(p.zone)}</div>${p.desc?`<div class="d" style="color:var(--ink)">${esc(p.desc)}</div>`:""}${o&&o.note?`<div class="basis">메모 · ${esc(o.note)}</div>`:""}</div>
+      <div class="acts" style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">${canWrite?`<div class="seg sm">${["조치 필요","조치중","조치완료","해당없음"].map(x=>`<button class="${s===x?"on":""}" data-act="pSt" data-i="${p.i}" data-v="${x}">${x}</button>`).join("")}</div>${o&&o.orderId?`<button class="btn ghost" data-act="editOrder" data-id="${esc(o.orderId)}">작업지시 보기</button>`:`<button class="btn ghost" data-act="pOrder" data-i="${p.i}">작업지시로</button>`}`:""}</div></div>`}).join(""):'<div class="empty"><b>조건에 맞는 문제 사진이 없습니다</b></div>'}</div>
+     ${list.length>lim?`<div class="row" style="justify-content:center;margin-top:12px"><button class="btn" data-act="pMore">${list.length-lim}건 더 보기</button></div>`:""}`}
+  else{body=`<div class="vgrid" style="margin-top:12px">${zs.map(z=>{const l=all.filter(p=>p.zone===z),zi=l.filter(p=>p.issue),zo=zi.filter(openIssue),d=l.map(p=>p.d).sort();
+      const tc={};for(const p of l)for(const t of p.tags)tc[t]=(tc[t]||0)+1;const top=Object.entries(tc).sort((a,b)=>b[1]-a[1]).slice(0,6).map(x=>x[0]);
+      const dc=derivedChecks(l).slice(0,5);const rep=l.slice().sort((a,b)=>b.issue-a.issue||b.d.localeCompare(a.d)).slice(0,5);
+      return`<div class="vcard"><div class="row"><b style="font-size:16px">${esc(z)}</b><span class="sp"></span>${zo.length?`<span class="chip red">미처리 ${zo.length}</span>`:zi.length?'<span class="chip green">처리 완료</span>':""}</div>
+       <div class="d hint">사진 ${l.length}장 · 문제 ${zi.length}건 · ${d[0].slice(0,7)} ~ ${d[d.length-1].slice(0,7)}</div>
+       <div class="row" style="gap:4px">${rep.map(p=>`<button class="pt sm" style="${tStyle(p.i,56)}" data-act="pOpen" data-i="${p.i}" aria-label="${esc(p.subj)}"></button>`).join("")}</div>
+       ${top.length?`<div class="row" style="gap:4px">${top.map(t=>`<span class="chip">${esc(t)}</span>`).join("")}</div>`:""}
+       ${dc.length?`<div><div style="font-size:12px;font-weight:700;color:var(--muted);margin:4px 0">사진에서 도출한 점검 항목</div><ul class="checks">${dc.map(x=>`<li style="font-size:13px"><b>${esc(x.cat)}</b> — ${esc(x.top.join("·"))} 상태 확인 <span class="hint">(${x.n}건, 최근 ${esc(x.last.slice(0,7))}${x.open?`, 미처리 ${x.open}`:""})</span></li>`).join("")}</ul></div>`:""}
+       <div class="row"><button class="btn" data-act="pZoneGo" data-z="${esc(z)}" data-v="grid">사진 보기</button>${zi.length?`<button class="btn" data-act="pZoneGo" data-z="${esc(z)}" data-v="list">점검리스트</button>`:""}${canWrite&&dc.length?`<button class="btn ghost" data-act="pZoneRoutine" data-z="${esc(z)}">정기 업무로</button>`:""}</div></div>`}).join("")}</div>`}
+  return head+kp+seg+filt+body}
+
+/* 사진 상세 */
+let PM=null;
+function openPhoto(i){PM={i};renderPhoto()}
+function closePhoto(){PM=null;$("#modalRoot").innerHTML=""}
+function renderPhoto(){if(!PM)return;const p=PHV.find(x=>x.i===PM.i);if(!p){closePhoto();return}
+  const o=PCK.get("p"+p.i)||{},s=pStat(p),k=PH.cur.indexOf(p.i),seq=p.issue?issueSeq().get(p.i):0;
+  const img=p.m>=0?`<div class="mimg" style="${mStyle(p.m)}" role="img" aria-label="${esc(p.subj)}"></div>`:`<div class="mimg" style="display:grid;place-items:center"><div style="${tStyle(p.i,240)};border-radius:8px" role="img" aria-label="${esc(p.subj)}"></div></div>`;
+  $("#modalRoot").innerHTML=`<div class="ov" data-act="pClose"><div class="modal photo-modal" role="dialog" aria-modal="true" aria-label="사진 상세">
+   <div class="row" style="margin-bottom:10px"><h3 style="margin:0">${esc(p.subj)}</h3><span class="sp"></span>${k>=0?`<span class="hint num">${k+1}/${PH.cur.length}</span><button class="btn" data-act="pNav" data-v="-1" ${k<=0?"disabled":""} aria-label="이전 사진">‹</button><button class="btn" data-act="pNav" data-v="1" ${k>=PH.cur.length-1?"disabled":""} aria-label="다음 사진">›</button>`:""}</div>
+   <div class="pdet"><div style="min-width:0">${img}<div class="path" style="margin-top:6px">${esc(pPath(p))}</div><div class="row" style="margin-top:6px"><button class="btn ghost" data-act="pCopy" data-i="${p.i}">원본 경로 복사</button></div></div>
+   <div style="min-width:0;display:grid;gap:8px;align-content:start">
+    <div class="row">${p.issue?`<span class="chip">No.${pad3(seq||0)}</span>${sevChip(p.sev)}${stChipP(s)}`:'<span class="chip green">이상 없음</span>'}<span class="chip">${esc(p.cat)}</span></div>
+    <div class="d"><span class="num">${esc(p.d)}</span> · ${esc(p.site)} · ${esc(p.zone)}</div>
+    ${p.desc?`<div class="ig-safety" style="border-left-color:${p.sev==="상"?"var(--danger)":"var(--warn)"};background:var(--sunk)">${esc(p.desc)}</div>`:""}
+    <div class="row" style="gap:4px">${p.tags.map(t=>`<button class="chip" style="border:0;cursor:pointer" data-act="pTag" data-v="${esc(t)}">#${esc(t)}</button>`).join("")}</div>
+    ${canWrite&&p.issue?`<div><div class="hint" style="margin-bottom:4px">조치 상태</div><div class="seg sm">${PSTAT.slice(1).map(x=>`<button class="${s===x?"on":""}" data-act="pSt" data-i="${p.i}" data-v="${x}">${x}</button>`).join("")}</div></div>
+     <div class="row"><input id="pNote" placeholder="조치 메모 (업체, 일자, 비용 등)" value="${esc(o.note||"")}" style="flex:1;min-width:140px"><button class="btn" data-act="pNoteSave" data-i="${p.i}">메모 저장</button></div>`:""}
+    ${canWrite?`<details><summary class="hint" style="cursor:pointer">분류 고치기</summary><div class="row" style="margin-top:6px">
+      <select id="pFixZone" aria-label="시설">${[...new Set([p.zone,...ZONES_J,"수조·LSS","기타"])].map(z=>`<option ${z===p.zone?"selected":""}>${esc(z)}</option>`).join("")}</select>
+      <select id="pFixCat" aria-label="분류">${PCATS.map(c=>`<option ${c===p.cat?"selected":""}>${c}</option>`).join("")}</select>
+      <select id="pFixIssue" aria-label="문제 여부">${[["0","이상 없음"],["상","문제 · 상"],["중","문제 · 중"],["하","문제 · 하"]].map(([v,l])=>`<option value="${v}" ${(p.issue?p.sev:"0")===v?"selected":""}>${l}</option>`).join("")}</select>
+      <button class="btn" data-act="pFix" data-i="${p.i}">적용</button></div></details>`:""}
+    <div class="row" style="margin-top:4px">${canWrite?(o.orderId?`<button class="btn" data-act="editOrder" data-id="${esc(o.orderId)}">연결된 작업지시</button>`:`<button class="btn pri" data-act="pOrder" data-i="${p.i}">작업지시로</button>`)+(sample?`<button class="btn gold" data-act="pAI" data-i="${p.i}">AI 정밀분석 · 인포그래픽</button>`:""):""}</div>
+   </div></div>
+   <div class="mfoot"><span class="sp"></span><button class="btn" data-act="pCloseBtn">닫기</button></div></div></div>`;ensureSprites()}
+async function pSave(i,patch){const p=PH.rows.find(x=>x.i===i);if(!p)return false;const o=PCK.get("p"+i)||{};const rec={...o,id:"p"+i,site:p.site,at:today(),...patch};if(db){const k=S.pchk.findIndex(x=>x.id===rec.id);if(k>=0)S.pchk[k]=rec;else S.pchk.push(rec);render()}return put("pchk",rec)}
+function photoOrderPre(p){const sevPri={상:"긴급",중:"높음",하:"보통"};
+  return{title:("[사진] "+p.subj).slice(0,60),zone:p.zone,type:p.sev==="상"||p.cat==="소방"||p.cat==="전기"?"안전조치":"고장수리",priority:sevPri[p.sev]||"보통",category:CATS.includes(p.cat)?p.cat:"기타",
+    desc:`${p.desc||p.subj}\n사진 ${p.d} · No.${pad3(issueSeq().get(p.i)||0)}\n원본: ${pPath(p)}`,photoRef:p.i,status:"접수",src:"사진 분석",createdAt:today()}}
+async function photoFile(p){const im=new Image();im.src=await spriteSrc(p.m>=0?"m"+pad3(Math.floor(p.m/16)):"t"+pad3(Math.floor(p.i/100)));await im.decode();
+  const [w,h,cols,k]=p.m>=0?[480,360,4,p.m%16]:[120,120,10,p.i%100];const c=document.createElement("canvas");c.width=w;c.height=h;
+  c.getContext("2d").drawImage(im,(k%cols)*w,Math.floor(k/cols)*h,w,h,0,0,w,h);const b=await new Promise(r=>c.toBlob(r,"image/jpeg",.92));return new File([b],`사진-${p.i}.jpg`,{type:"image/jpeg"})}
+async function photoAI(i){const p=PHV.find(x=>x.i===i);if(!p)return;const o=PCK.get("p"+i)||{};
+  let rec=o.orderId?S.orders.find(r=>r.id===o.orderId):null;
+  if(!rec){rec={id:nid("o"),site:UI.site,...photoOrderPre(p)};if(!await put("orders",rec))return;await pSave(i,{orderId:rec.id,st:["미확인","조치 필요",""].includes(pStat(p))?"조치중":pStat(p)})}
+  closePhoto();openStudio.draft=rec;openStudio("orders",rec.id);openStudio.draft=null;
+  try{const f=await photoFile(p);if(ST){ST.files=[{f,url:URL.createObjectURL(f)}];renderStudio();if(sampleImg)analyze()}}catch(e){toast("사진을 불러오지 못했습니다.")}}
+
+/* ---------- 안전·점검표 (문서·영상 자료) ---------- */
+let IR=null;
+const tplOf=id=>(PH.kb?.checklists||[]).find(c=>c.id===id);
+const FREQ_RT={매일:{freq:"매일"},매주:{freq:"매주",dows:[1]},매월:{freq:"매월",dom:4},분기:{freq:"매년",months:[1,4,7,10],dom:4},반기:{freq:"매년",months:[1,7],dom:4},매년:{freq:"매년",months:[3],dom:4}};
+const kbSite=x=>x.site===UI.site||x.site==="공통"||!x.site;
+function kbMatch(o,q){const t=(q||"").trim().toLowerCase().split(/\s+/).filter(Boolean);if(!t.length)return true;const s=JSON.stringify(o).toLowerCase();return t.every(x=>s.includes(x))}
+function vSafety(){
+  const head=`<div class="sec-head"><h2 class="sec">안전 · 점검표</h2><span class="hint">시설관리·안전 문서와 안전교육 영상에서 뽑은 점검표·법규 기준</span></div>`;
+  if(!PH.kb)return head+(PH.kbErr?'<div class="panel"><div class="empty"><b>자료를 불러오지 못했습니다</b>새로고침해 주세요.</div></div>':'<div class="panel"><div class="empty"><b>자료를 불러오는 중입니다</b></div></div>');
+  const kb=PH.kb,mode=UI.sv||"tpl",q=UI.sq||"";
+  const tpls=kb.checklists.filter(kbSite),rules=kb.rules.filter(kbSite),facts=kb.facts.filter(kbSite),hist=V.insp.slice().sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  const seg=`<div class="seg">${[["tpl","점검표 "+tpls.length],["rules","법규·기준 "+rules.length],["facts","계약·인허가·하자 "+facts.length],["videos","교육 영상 "+kb.videos.length],["hist","점검 기록 "+hist.length]].map(([k,l])=>`<button class="${mode===k?"on":""}" data-act="sv" data-v="${k}">${l}</button>`).join("")}</div>`;
+  const search=`<div class="filters" style="margin-top:12px">${mode==="tpl"?`<select id="fSC" aria-label="분류">${["전체",...new Set(tpls.map(t=>t.category))].map(s=>`<option ${(UI.sc||"전체")===s?"selected":""}>${esc(s)}</option>`).join("")}</select><select id="fSF" aria-label="주기">${["전체","매일","매주","매월","분기","반기","매년","수시"].map(s=>`<option ${(UI.sf||"전체")===s?"selected":""}>${s}</option>`).join("")}</select><label class="mchk"><input type="checkbox" id="fSL" ${UI.sl?"checked":""}>법정만</label>`:""}
+    ${mode==="facts"?`<select id="fST" aria-label="유형">${["전체",...new Set(facts.map(t=>t.type))].map(s=>`<option ${(UI.stp||"전체")===s?"selected":""}>${esc(s)}</option>`).join("")}</select>`:""}
+    ${UI.ssrc?`<button class="chip plum" style="border:0;cursor:pointer" data-act="sSrcClear">영상 ${esc(UI.ssrc)} 점검표만 · 해제 ✕</button>`:""}
+    <input id="fSQ" type="search" placeholder="검색: 소화기, 에어바운스, 가스, 중대재해…" value="${esc(q)}" aria-label="자료 검색" style="flex:1;min-width:180px"></div>`;
+  let body="";
+  if(mode==="tpl"){let l=tpls.filter(t=>(!UI.sc||UI.sc==="전체"||t.category===UI.sc)&&(!UI.sf||UI.sf==="전체"||t.freq===UI.sf)&&(!UI.sl||t.legal)&&(!UI.ssrc||t.source===UI.ssrc)&&kbMatch(t,q));
+    l.sort((a,b)=>b.legal-a.legal||["매일","매주","매월","분기","반기","매년","수시"].indexOf(a.freq)-["매일","매주","매월","분기","반기","매년","수시"].indexOf(b.freq));
+    body=`<div class="hint" style="margin-bottom:8px">${l.length}개 · ‘점검 시작’으로 항목별 양호/불량을 기록하고, 불량은 바로 작업지시로 넘깁니다</div><div class="vgrid">${l.map(t=>{const last=hist.find(h=>h.tid===t.id);const reg=V.routines.find(r=>r.tplId===t.id);
+      return`<div class="vcard"><div class="row">${t.legal?'<span class="chip plum">법정</span>':""}<span class="chip">${esc(t.freq)}</span><span class="chip">${esc(t.category)}</span><span class="chip ex">${esc(t.kind)}</span></div>
+      <b style="font-size:15px">${esc(t.name)}</b><div class="d hint">${esc(t.zone)} · 항목 ${t.items.length}개${last?` · 최근 점검 ${esc(last.date)}${last.bad?` (불량 ${last.bad})`:""}`:""}</div>
+      ${t.basis?`<div class="basis">근거 · ${esc(t.basis)}</div>`:""}
+      <details><summary class="hint" style="cursor:pointer">항목 보기</summary><ol style="margin:6px 0 0;padding-left:18px;font-size:13px">${t.items.map(x=>`<li>${esc(x)}</li>`).join("")}</ol><div class="path" style="margin-top:6px">출처: ${esc(t.srcName||t.source)}</div></details>
+      <div class="row">${canWrite?`<button class="btn pri" data-act="iRun" data-id="${t.id}">점검 시작</button>`:""}${canWrite&&FREQ_RT[t.freq]?(reg?'<span class="chip green">정기 업무 등록됨</span>':`<button class="btn ghost" data-act="iRoutine" data-id="${t.id}">정기 업무로</button>`):""}</div></div>`}).join("")||'<div class="empty"><b>조건에 맞는 점검표가 없습니다</b></div>'}</div>`}
+  else if(mode==="rules"){const l=rules.filter(r=>kbMatch(r,q));
+    body=`<div class="panel">${l.map(r=>`<div class="item"><div class="stripe ${/법|의무|과태료|처벌|검사/.test(r.title+r.detail)?"긴급":"보통"}"></div><div class="body"><div class="row"><span class="t">${esc(r.title)}</span>${r.cycle?`<span class="chip amber">${esc(r.cycle)}</span>`:""}<span class="chip ex">${esc(r.kind)}</span>${r.site&&r.site!=="공통"?`<span class="chip">${esc(r.site)}</span>`:""}</div><div class="d" style="color:var(--ink)">${esc(r.detail)}</div><div class="path">출처: ${esc(r.srcName||r.source||"")}</div></div></div>`).join("")||'<div class="empty"><b>검색 결과가 없습니다</b></div>'}</div>`}
+  else if(mode==="facts"){const l=facts.filter(f=>(!UI.stp||UI.stp==="전체"||f.type===UI.stp)&&kbMatch(f,q)).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
+    body=`<div class="panel">${l.map(f=>`<div class="item"><div class="body"><div class="row"><span class="chip ${f.type==="하자"||f.type==="사고"?"red":f.type==="인허가"||f.type==="보험"?"amber":""}">${esc(f.type)}</span><span class="t">${esc(f.title)}</span>${f.date?`<span class="num hint">${esc(f.date)}</span>`:""}${f.amount?`<span class="chip num">${won(f.amount)}</span>`:""}</div><div class="d" style="color:var(--ink)">${esc(f.detail)}</div><div class="d">${esc([f.zone,f.vendor].filter(Boolean).join(" · "))}</div><div class="path">원본: ${esc("C:\\Users\\pc\\TalkCloudBackup\\file\\"+String(f.source||"").replace(/\//g,"\\"))}</div></div>${canWrite&&(f.type==="하자"||f.type==="사고")?`<button class="btn ghost" data-act="fOrder" data-t="${esc(f.title)}">작업지시로</button>`:""}</div>`).join("")||'<div class="empty"><b>검색 결과가 없습니다</b></div>'}</div>`}
+  else if(mode==="videos"){const l=kb.videos.filter(v=>kbMatch(v,q));
+    body=`<div class="vgrid">${l.map(v=>{const n=kb.checklists.filter(c=>c.source===v.id).length,nr=kb.rules.filter(c=>c.source===v.id).length;return`<div class="vcard"><div class="row"><span class="chip">${esc(v.id)}</span>${n?`<span class="chip green">점검표 ${n}</span>`:""}${nr?`<span class="chip">기준 ${nr}</span>`:""}</div><b>${esc(v.title)}</b><div class="d" style="font-size:13px">${esc(v.summary)}</div>${n?`<div class="row"><button class="btn" data-act="sVid" data-v="${esc(v.id)}">이 영상의 점검표</button></div>`:""}</div>`}).join("")}</div>`}
+  else{body=`<div class="panel">${hist.length?hist.map(h=>`<div class="item"><div class="stripe ${h.bad?"긴급":"ok"}"></div><div class="body"><div class="row"><span class="t">${esc(h.name)}</span>${h.bad?`<span class="chip red">불량 ${h.bad}</span>`:'<span class="chip green">이상 없음</span>'}</div><div class="d"><span class="num">${esc(h.date)}</span> · ${esc(h.zone||"")}${h.by?" · 점검자 "+esc(h.by):""} · 양호 ${h.ok||0} · 해당없음 ${h.na||0}</div></div><button class="btn ghost" data-act="iView" data-id="${h.id}">열기</button></div>`).join(""):'<div class="empty"><b>아직 점검 기록이 없습니다</b>점검표 탭에서 ‘점검 시작’을 누르면 결과가 여기에 쌓입니다.</div>'}</div>`}
+  return head+seg+search+body}
+function openInsp(tid,rec,ctx){const t=tplOf(tid);if(!t){toast("점검표를 찾지 못했습니다.");return}
+  IR={t,id:rec?.id||null,date:rec?.date||ctx?.d||today(),by:rec?.by||"",res:rec?.res?[...rec.res]:t.items.map(()=>""),memo:rec?.memo?[...rec.memo]:t.items.map(()=>""),rid:rec?.rid||ctx?.rid||"",ordered:!!rec?.ordered};renderInsp()}
+function closeInsp(){IR=null;$("#modalRoot").innerHTML=""}
+function renderInsp(){if(!IR)return;const t=IR.t,n=k=>IR.res.filter(x=>x===k).length;
+  $("#modalRoot").innerHTML=`<div class="ov" data-act="iClose"><div class="modal photo-modal" role="dialog" aria-modal="true" aria-label="점검 실행">
+  <h3>${esc(t.name)}</h3><div class="row" style="margin-bottom:8px">${t.legal?'<span class="chip plum">법정</span>':""}<span class="chip">${esc(t.freq)}</span><span class="chip">${esc(t.zone)}</span><span class="hint">${esc(t.basis||"")}</span></div>
+  <div class="row"><label class="fld"><span>점검일</span><input type="date" id="iDate" value="${esc(IR.date)}"></label><label class="fld" style="flex:1"><span>점검자</span><input id="iBy" value="${esc(IR.by)}" placeholder="이름"></label>
+   <div class="hint" style="align-self:flex-end">양호 ${n("양호")} · 불량 ${n("불량")} · 해당없음 ${n("해당없음")} · 남음 ${n("")}</div></div>
+  <div class="row" style="margin:8px 0"><button class="btn ghost" data-act="iAllOk">남은 항목 모두 양호</button></div>
+  <div class="panel">${t.items.map((x,j)=>`<div class="irow" style="grid-template-columns:24px minmax(0,1fr)"><span class="num hint">${j+1}</span><div style="min-width:0"><div style="font-size:14px">${esc(x)}</div>
+   <div class="row" style="margin-top:4px"><div class="seg sm">${["양호","불량","해당없음"].map(v=>`<button type="button" class="${IR.res[j]===v?"on":""} ${v==="양호"?"good":v==="불량"?"bad":""}" data-act="iSet" data-j="${j}" data-v="${v}">${v}</button>`).join("")}</div>${IR.res[j]==="불량"?`<input id="im_${j}" value="${esc(IR.memo[j]||"")}" placeholder="불량 내용" style="flex:1;min-width:140px">`:""}</div></div></div>`).join("")}</div>
+  <div class="mfoot"><button class="btn" type="button" data-act="iCloseBtn">닫기</button><span class="sp"></span>${canWrite?`<button class="btn" data-act="iSave" data-v="0">저장</button>${n("불량")&&!IR.ordered?`<button class="btn pri" data-act="iSave" data-v="1">저장 + 불량 ${n("불량")}건 작업지시</button>`:""}`:""}</div></div></div>`}
+async function saveInsp(mk){if(!IR)return;const t=IR.t;IR.date=$("#iDate")?.value||IR.date;IR.by=($("#iBy")?.value||"").trim();
+  const n=k=>IR.res.filter(x=>x===k).length;const id=IR.id||nid("i");
+  const rec={id,tid:t.id,name:t.name,zone:t.zone,site:UI.site,date:IR.date,by:IR.by,res:IR.res,memo:IR.memo,ok:n("양호"),bad:n("불량"),na:n("해당없음"),left:n(""),rid:IR.rid,ordered:IR.ordered||!!mk,at:today()};
+  if(!await put("insp",rec))return;
+  if(IR.rid&&!n(""))await put("checks",{id:IR.rid+"_"+IR.date,rid:IR.rid,date:IR.date,site:UI.site,done:true,at:today(),insp:id});
+  if(mk){let c=0;const zone=ZN().includes(t.zone)?t.zone:(UI.site==="잠사박물관"?"공용 설비":t.zone);
+    for(let j=0;j<t.items.length;j++)if(IR.res[j]==="불량"){c++;await put("orders",{id:nid("o"),site:UI.site,title:("[점검] "+t.items[j]).slice(0,70),zone,type:"안전조치",category:CATS.includes(t.category)?t.category:"기타",priority:t.legal?"높음":"보통",status:"접수",dueDate:addDays(IR.date,t.legal?3:7),desc:`${t.name} 점검(${IR.date}) 불량${IR.memo[j]?": "+IR.memo[j]:""}\n근거: ${t.basis||"-"}`,createdAt:today(),src:"점검표",srcRef:t.srcName||""})}
+    toast(`저장하고 작업지시 ${c}건을 만들었습니다.`)}else toast("점검 결과를 저장했습니다.");
+  closeInsp()}
+
+/* ---------- 통합 검색 ---------- */
+function vSearch(){const q=UI.gq.trim();const m=o=>kbMatch(o,q);
+  const g=(title,arr,row,more)=>arr.length?`<div class="sec-head"><h3 class="sub">${title} · ${arr.length}</h3><span class="sp"></span>${more||""}</div><div class="panel">${arr.slice(0,8).map(row).join("")}</div>`:"";
+  const it=(t,d,btn)=>`<div class="item"><div class="body"><div class="t">${t}</div><div class="d">${d}</div></div>${btn||""}</div>`;
+  const ord=V.orders.filter(o=>m([o.title,o.desc,o.zone,o.assignee,o.category])),ast=V.assets.filter(a=>m([a.name,a.zone,a.note,a.vendor])),prj=V.projects.filter(p=>m([p.name,p.desc,p.zone])),
+    rt=V.routines.filter(r=>m([r.title,r.detail,r.zone,r.basis])),vd=V.vendors.filter(v=>m([v.name,v.trade,v.jobs,v.note])),ph=PHV.filter(p=>pMatch(p,q)).sort((a,b)=>b.issue-a.issue||b.d.localeCompare(a.d)),
+    kb=PH.kb||{checklists:[],rules:[],facts:[],videos:[]},tp=kb.checklists.filter(kbSite).filter(m),ru=kb.rules.filter(kbSite).filter(m),fa=kb.facts.filter(kbSite).filter(m),vi=kb.videos.filter(m);
+  const total=ord.length+ast.length+prj.length+rt.length+vd.length+ph.length+tp.length+ru.length+fa.length+vi.length;
+  PH.cur=ph.map(p=>p.i);
+  return`<div class="sec-head"><h2 class="sec">‘${esc(q)}’ 검색 결과</h2><span class="hint">${total.toLocaleString()}건</span><span class="sp"></span><button class="btn ghost" data-act="gClear">검색 닫기</button></div>
+  ${ph.length?`<div class="sec-head"><h3 class="sub">사진 · ${ph.length.toLocaleString()}</h3><span class="sp"></span><button class="btn ghost" data-act="gPhotos">사진 보관함에서 모두 보기</button></div><div class="pgrid">${ph.slice(0,24).map(ptile).join("")}</div>`:""}
+  ${g("작업지시",ord,o=>it(esc(o.title),`${esc(o.zone)} · ${esc(o.status)}${o.doneAt?" · 완료 "+esc(o.doneAt):""}`,`<button class="btn ghost" data-act="editOrder" data-id="${o.id}">열기</button>`))}
+  ${g("점검표",tp,t=>it(esc(t.name),`${esc(t.freq)} · ${esc(t.zone)} · 항목 ${t.items.length}개${t.legal?" · 법정":""}`,canWrite?`<button class="btn ghost" data-act="iRun" data-id="${t.id}">점검 시작</button>`:""))}
+  ${g("법규·기준",ru,r=>it(esc(r.title),esc(r.detail)))}
+  ${g("정기 업무",rt,r=>it(esc(r.title),`${esc(freqLabel(r))} · ${esc(r.zone)}`,canWrite?`<button class="btn ghost" data-act="editRoutine" data-id="${r.id}">열기</button>`:""))}
+  ${g("설비",ast,a=>it(esc(a.name),`${esc(a.zone)} · ${esc(a.status)}`,canWrite?`<button class="btn ghost" data-act="editAsset" data-id="${a.id}">열기</button>`:""))}
+  ${g("시설개발",prj,p=>it(esc(p.name),`${esc(p.stage)} · ${esc(p.zone)}`,canWrite?`<button class="btn ghost" data-act="editProject" data-id="${p.id}">열기</button>`:""))}
+  ${g("계약·인허가·하자 기록",fa,f=>it(`${esc(f.type)} · ${esc(f.title)}`,esc(f.detail)))}
+  ${g("업체",vd,v=>it(esc(v.name),esc(v.trade||""),canWrite?`<button class="btn ghost" data-act="editVendor" data-id="${v.id}">열기</button>`:""))}
+  ${g("교육 영상",vi,v=>it(esc(v.title),esc(v.summary.slice(0,120))+"…"))}
+  ${total?"":'<div class="panel"><div class="empty"><b>검색 결과가 없습니다</b>다른 낱말로 찾아보세요.</div></div>'}`}
+
+/* 대시보드 패널: 사진에서 나온 미처리 문제 */
+function vPhotoPanel(){if(!PHV.length)return"";const open=PHV.filter(openIssue).sort((a,b)=>({상:0,중:1,하:2}[a.sev]-{상:0,중:1,하:2}[b.sev])||b.d.localeCompare(a.d));if(!open.length)return"";
+  return`<div class="sec-head"><h2 class="sec">사진에서 나온 미처리 문제</h2><span class="hint">${open.length}건 · 상 ${open.filter(p=>p.sev==="상").length} · 중 ${open.filter(p=>p.sev==="중").length}</span><span class="sp"></span><button class="btn ghost" data-act="pGoList">점검리스트 보기</button></div>
+  <div class="panel">${open.slice(0,5).map(p=>`<div class="item"><button class="pt sm" style="${tStyle(p.i,56)}" data-act="pOpen" data-i="${p.i}" aria-label="사진 보기"></button><div class="body"><div class="row"><span class="t">${esc(p.subj)}</span>${sevChip(p.sev)}</div><div class="d">${esc(p.d)} · ${esc(p.zone)} · ${esc(p.desc)}</div></div>${canWrite?`<button class="btn ghost" data-act="pOrder" data-i="${p.i}">작업지시로</button>`:""}</div>`).join("")}</div>`}
+
+/* ---------- events ---------- */
+document.addEventListener("click",async e=>{
+  const b=e.target.closest("[data-tab],[data-act],[data-zone],[data-site]");if(!b)return;
+  if(["ovClose","ovStudio","pClose","iClose"].includes(b.dataset.act)&&e.target!==b)return;
+  const sa=b.dataset.act;
+  if(sa==="sbLogout"){sbLogout();return}
+  if(sa==="pClose"||sa==="pCloseBtn"){closePhoto();return}
+  if(sa==="iClose"||sa==="iCloseBtn"){closeInsp();return}
+  if(sa==="pOpen"){if(editing)closeForm();openPhoto(+b.dataset.i);return}
+  if(sa==="pNav"){const k=PH.cur.indexOf(PM?.i)+(+b.dataset.v);if(k>=0&&k<PH.cur.length){PM.i=PH.cur[k];renderPhoto()}return}
+  if(sa==="pCopy"){const p=PH.rows.find(x=>x.i===+b.dataset.i);try{await navigator.clipboard.writeText(pPath(p));toast("원본 경로를 복사했습니다.")}catch(_){toast(pPath(p))}return}
+  if(sa==="pTag"){closePhoto();UI.gq="";$("#gQ").value="";UI.tab="photos";UI.pv="grid";UI.pq=b.dataset.v;UI.plim=0;render();window.scrollTo({top:0});return}
+  if(sa==="pSt"){const i=+b.dataset.i;b.disabled=true;await pSave(i,{st:b.dataset.v});if(PM)renderPhoto();return}
+  if(sa==="pNoteSave"){await pSave(+b.dataset.i,{note:($("#pNote")?.value||"").trim()});toast("메모를 저장했습니다.");return}
+  if(sa==="pFix"){const i=+b.dataset.i,v=$("#pFixIssue").value;await pSave(i,{ov:{zone:$("#pFixZone").value,cat:$("#pFixCat").value,issue:v!=="0",sev:v==="0"?"":v}});toast("분류를 고쳤습니다.");if(PM)setTimeout(renderPhoto,300);return}
+  if(sa==="pOrder"){const p=PHV.find(x=>x.i===+b.dataset.i);if(!p)return;closePhoto();openForm.pre=photoOrderPre(p);openForm("order");return}
+  if(sa==="pAI"){photoAI(+b.dataset.i);return}
+  if(sa==="iSet"){IR.res[+b.dataset.j]=IR.res[+b.dataset.j]===b.dataset.v?"":b.dataset.v;IR.date=$("#iDate")?.value||IR.date;IR.by=$("#iBy")?.value||IR.by;renderInsp();return}
+  if(sa==="iAllOk"){IR.res=IR.res.map(x=>x||"양호");IR.date=$("#iDate")?.value||IR.date;IR.by=$("#iBy")?.value||IR.by;renderInsp();return}
+  if(sa==="iSave"){b.disabled=true;await saveInsp(b.dataset.v==="1");return}
+  if(sa==="studio"){if(editing)closeForm();openStudio(b.dataset.coll,b.dataset.id);return}
+  if(sa==="ovStudio"||sa==="stClose"){if(!ST?.busy&&!ST?.hfBusy)closeStudio();return}
+  if(sa==="stAnalyze"){analyze();return}
+  if(sa==="stStop"){ST?.ctl?.abort();return}
+  if(sa==="hfCost"){hfCost();return}
+  if(sa==="hfGen"){hfGen();return}
+  if(sa==="hfCheck"){hfCheck();return}
+  if(b.dataset.tab){if(UI.gq){UI.gq="";$("#gQ").value=""}UI.tab=b.dataset.tab;if(b.dataset.adue)UI.aDue=b.dataset.adue;else if(b.dataset.tab==="assets"&&b.classList.contains("kpi"))UI.aDue="전체";try{history.replaceState(null,"","#"+UI.tab)}catch(_){}render();window.scrollTo({top:0});return}
+  if(b.dataset.site){UI.site=b.dataset.site;UI.oZone="전체";UI.aZone="전체";try{localStorage.setItem("jamsa-fac-site",UI.site)}catch(_){}render();return}
+  if(b.dataset.zone){UI.tab="orders";UI.oZone=b.dataset.zone;UI.oStatus="미완료";render();window.scrollTo({top:0});return}
+  const a=b.dataset.act,id=b.dataset.id;
+  if(a==="pv"){UI.pv=b.dataset.v;UI.plim=0;if(b.dataset.st)UI.pst=b.dataset.st;render()}
+  else if(a==="pRange"){const [f,t]=pRange(b.dataset.v);UI.pf=f;UI.pt=t;UI.plim=0;render()}
+  else if(a==="pMore"){UI.plim=(UI.plim||(UI.pv==="list"?150:300))+300;render()}
+  else if(a==="pOrderDir"){UI.pDesc=!UI.pDesc;render()}
+  else if(a==="pZoneGo"){UI.pz=b.dataset.z;UI.pv=b.dataset.v;UI.pq="";UI.pf="";UI.pt="";UI.plim=0;render();window.scrollTo({top:0})}
+  else if(a==="pGoList"){UI.tab="photos";UI.pv="list";UI.pst="미처리";UI.pz="전체";render();window.scrollTo({top:0})}
+  else if(a==="pZoneRoutine"){const z=b.dataset.z;const dc=derivedChecks(PHV.filter(p=>p.zone===z)).slice(0,6);openForm.pre={title:`${z} 사진 기반 정기 점검`,freq:"매월",dom:4,zone:ZN().includes(z)?z:ZN()[0],category:"건축·구조",detail:dc.map(x=>`${x.cat}: ${x.top.join("·")} 상태 확인`).join(" / "),basis:`카톡 백업 사진 AI 분석 — 반복 문제 ${dc.reduce((s,x)=>s+x.n,0)}건 (${dc.map(x=>x.cat+" "+x.n).join(", ")})`,src:"사진 분석"};openForm("routine")}
+  else if(a==="sv"){UI.sv=b.dataset.v;render()}
+  else if(a==="sVid"){UI.sv="tpl";UI.ssrc=b.dataset.v;UI.sc="전체";UI.sf="전체";UI.sq="";render();window.scrollTo({top:0})}
+  else if(a==="sSrcClear"){UI.ssrc="";render()}
+  else if(a==="iRun"){if(editing)closeForm();openInsp(id,null,{rid:b.dataset.rid||"",d:b.dataset.d||""})}
+  else if(a==="iView"){const h=V.insp.find(x=>x.id===id);if(h)openInsp(h.tid,h)}
+  else if(a==="iRoutine"){const t=tplOf(id);if(!t)return;openForm.pre={title:t.name,...FREQ_RT[t.freq],zone:ZN().includes(t.zone)?t.zone:(UI.site==="잠사박물관"?"공용 설비":t.zone),category:CATS.includes(t.category)?t.category:"기타",legal:!!t.legal,detail:t.items.slice(0,6).join(" · ")+(t.items.length>6?` 외 ${t.items.length-6}개 (점검표 참고)`:""),basis:t.basis||"",tplId:t.id,src:t.kind==="영상"?"안전교육 영상":"시설 문서"};openForm("routine")}
+  else if(a==="fOrder"){const f=(PH.kb?.facts||[]).find(x=>x.title===b.dataset.t);if(!f)return;openForm.pre={title:f.title.slice(0,60),zone:f.zone&&ZN().includes(f.zone)?f.zone:ZN()[0],type:"고장수리",priority:"높음",desc:f.detail+(f.source?`\n자료: ${f.source}`:""),src:"문서 분석"};openForm("order")}
+  else if(a==="gClear"){UI.gq="";$("#gQ").value="";render()}
+  else if(a==="gPhotos"){UI.pq=UI.gq;UI.gq="";$("#gQ").value="";UI.tab="photos";UI.pv="grid";UI.pz="전체";UI.pc="전체";UI.pf="";UI.pt="";UI.pi=false;UI.plim=0;render();window.scrollTo({top:0})}
+  else if(a==="newOrder")openForm("order");
+  else if(a==="editOrder")openForm("order",V.orders.find(o=>o.id===id));
+  else if(a==="newAsset")openForm("asset");
+  else if(a==="newVendor")openForm("vendor");
+  else if(a==="editVendor")openForm("vendor",V.vendors.find(o=>o.id===id));
+  else if(a==="newRoutine")openForm("routine");
+  else if(a==="editRoutine")openForm("routine",V.routines.find(o=>o.id===id));
+  else if(a==="wxRefresh"){wxRefresh(true)}
+  else if(a==="wxDay"){UI.wxDay=b.dataset.v;render()}
+  else if(a==="wxManual"){const k=b.dataset.v;const d=UI.wxDay==="tomorrow"?addDays(today(),1):today();const doc=S.wx.find(x=>x.id==="manual");let keys=doc&&doc.date===d?[...(doc.keys||[])]:[];keys=keys.includes(k)?keys.filter(x=>x!==k):[...keys,k];await put("wx",{id:"manual",date:d,keys})}
+  else if(a==="wxOrder"){const it=wxFind(b.dataset.id);if(!it)return;openForm.pre={title:it.t,zone:it.z,type:"안전조치",priority:"높음",category:it.c,desc:`날씨 점검(${WX_COND[it.k].label}) · ${b.dataset.d}`+(it.why?` · ${it.why}`:""),dueDate:b.dataset.d};openForm("order")}
+  else if(a==="rRange"){UI.rRange=b.dataset.v;render()}
+  else if(a==="rMode"){UI.rMode=b.dataset.v;render()}
+  else if(a==="rCheck"){if(!canWrite)return;const cid=b.dataset.id+"_"+b.dataset.d;const ex=S.checks.find(c=>c.id===cid);b.disabled=true;
+    if(ex)await del("checks",cid);else await put("checks",{id:cid,rid:b.dataset.id,date:b.dataset.d,site:UI.site,done:true,at:today()});}
+  else if(a==="more"){UI.oLimit=(UI.oLimit||120)+200;render()}
+  else if(a==="vendorOrder"){const v=V.vendors.find(o=>o.id===id);openForm.pre={assignee:v?.name||""};openForm("order")}
+  else if(a==="rOrder"){const x=V.routines.find(o=>o.id===id);if(!x)return;openForm.pre={title:x.title,zone:x.zone,type:x.legal?"안전조치":"정기점검",priority:x.legal?"높음":"보통",desc:(x.detail||"")+(b.dataset.d?` (정기 업무 ${b.dataset.d})`:""),category:x.category,assignee:x.assignee||"",dueDate:b.dataset.d||today()};openForm("order")}
+  else if(a==="editAsset")openForm("asset",V.assets.find(o=>o.id===id));
+  else if(a==="newProject")openForm("project");
+  else if(a==="editProject")openForm("project",V.projects.find(o=>o.id===id));
+  else if(a==="close"||a==="ovClose")closeForm();
+  else if(a==="ai")runAI();
+  else if(a==="aiStop")aiCtl?.abort();
+  else if(a==="aiApply")applyAI();
+  else if(a==="del"){if(!editing.arm){editing.arm=true;b.textContent="정말 삭제";return}
+    if(await del(editing.coll,editing.rec.id)){closeForm();toast("삭제했습니다.")}}
+  else if(a==="advance"){const o=V.orders.find(x=>x.id===id);if(!o)return;
+    const ns={"접수":"진행","진행":"완료","보류":"진행"}[o.status]||"진행";
+    if(ns==="완료"&&!o.cost){openForm("order",{...o,status:"완료",doneAt:today()});toast("완료 비용을 입력하고 저장해 주세요.");return}
+    const n={...o,status:ns};if(ns==="완료")n.doneAt=today();b.disabled=true;if(await put("orders",n))toast(ns==="완료"?"완료 처리했습니다.":"진행으로 바꿨습니다.")}
+  else if(a==="checkDone"){const x=V.assets.find(r=>r.id===id);if(!x)return;b.disabled=true;
+    const h=[today(),...(x.history||[])].slice(0,12);if(await put("assets",{...x,lastCheck:today(),history:h}))toast(`${x.name} 점검 완료 · 다음 ${addDays(today(),Number(x.cycleDays)||0)}`)}
+  else if(a==="stage"){const p=V.projects.find(r=>r.id===id);const i=STAGES.indexOf(p.stage);if(i<6){b.disabled=true;await put("projects",{...p,stage:STAGES[i+1]})}}
+  else if(a==="clearEx"){if(!UI.clearArm){UI.clearArm=true;render();return}UI.clearArm=false;
+    for(const k of ["orders","assets","projects"])for(const r of S[k].filter(r=>r.sample))await del(k,r.id);toast("예시 데이터를 지웠습니다.")}
+});
+document.addEventListener("change",async e=>{const t=e.target;
+  if(t.id==="fOStatus"){UI.oStatus=t.value;render()}else if(t.id==="fOZone"){UI.oZone=t.value;render()}
+  else if(["fPZ","fPC","fPF","fPT","fPS","fPST"].includes(t.id)){UI[{fPZ:"pz",fPC:"pc",fPF:"pf",fPT:"pt",fPS:"ps",fPST:"pst"}[t.id]]=t.value;UI.plim=0;render()}
+  else if(t.id==="fPI"){UI.pi=t.checked;UI.plim=0;render()}
+  else if(t.id==="fSC"){UI.sc=t.value;render()}else if(t.id==="fSF"){UI.sf=t.value;render()}else if(t.id==="fSL"){UI.sl=t.checked;render()}else if(t.id==="fST"){UI.stp=t.value;render()}
+  else if(t.id==="fAZone"){UI.aZone=t.value;render()}else if(t.id==="fADue"){UI.aDue=t.value;render()}
+  else if(t.dataset.act==="ck"){const p=V.projects.find(r=>r.id===t.dataset.id);if(!p)return;const ck=(p.checklist||[]).map(x=>({...x}));ck[+t.dataset.j].done=t.checked;await put("projects",{...p,checklist:ck})}
+});
+document.addEventListener("input",e=>{const t=e.target;if(/^im_\d+$/.test(t.id)&&IR){IR.memo[+t.id.slice(3)]=t.value;return}
+  if(!["fOQ","fVQ","fPQ","fSQ","gQ"].includes(t.id))return;clearTimeout(window._qt);window._qt=setTimeout(()=>{if(t.id==="fOQ")UI.oQ=t.value;else if(t.id==="fVQ")UI.vQ=t.value;else if(t.id==="fPQ"){UI.pq=t.value;UI.plim=0}else if(t.id==="fSQ")UI.sq=t.value;else UI.gq=t.value;const pos=t.selectionStart;render();const n=$("#"+t.id);if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(_){}}},250)});
+document.addEventListener("submit",e=>{if(e.target.id==="mform")submitForm(e)});
+document.addEventListener("keydown",e=>{if(PM&&(e.key==="ArrowLeft"||e.key==="ArrowRight")&&!/INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName||"")){const k=PH.cur.indexOf(PM.i)+(e.key==="ArrowRight"?1:-1);if(k>=0&&k<PH.cur.length){PM.i=PH.cur[k];renderPhoto()}return}
+  if(e.key!=="Escape")return;if(PM){closePhoto();return}if(IR){closeInsp();return}if(editing)closeForm();else if(ST&&!ST.busy&&!ST.hfBusy)closeStudio()});
+
+/* ---------- boot ---------- */
+(function(){const h=(location.hash||"").slice(1);if(TABS.some(t=>t[0]===h))UI.tab=h})();
+render();if(!SBX){loadPhotos();loadKB()}
+(async()=>{
+  const c=window.claude;
+  if(!c||!c.use){if(SBX){sbStart();return}mode="local";loadLocal();render();return}
+  const [d,u,s,m,as]=await Promise.all(["db","user","sample","mcp","assets"].map(n=>c.use(n).catch(()=>null)));
+  sample=s;mcp=m;store=as;if(m)setTimeout(()=>wxRefresh(false),1500);if(s){try{const l=await s.limits();sampleImg=!!l?.images}catch(_){}}
+  if(u){try{const w=await u.can("data.write");if(w===false)canWrite=false}catch(_){}}
+  if(!d){mode="local";loadLocal();render();return}
+  db=d;mode="db";
+  for(const k of ["assets","orders","projects","reports","vendors","routines","checks","wx","pchk","insp"]){
+    db.collection(k).onSnapshot(sn=>{S[k]=sn.docs.map(x=>({id:x.id,...x.data()}));UI.ready[k]=true;render()},
+      err=>{if(err?.code==="revoked"){canWrite=false;render()}});
+  }
+})();
+</script>
+
+</body></html>

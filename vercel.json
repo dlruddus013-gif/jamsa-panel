@@ -106,6 +106,7 @@
     { "source": "/manual/beacon", "destination": "/beacon-manual.html" },
     { "source": "/minew-setup", "destination": "/minew-setup.html" },
     { "source": "/manual/minew", "destination": "/minew-setup.html" },
+    { "source": "/facility", "destination": "/facility/index.html" },
     { "source": "/", "destination": "/index.html" }
   ],
   "crons": [
